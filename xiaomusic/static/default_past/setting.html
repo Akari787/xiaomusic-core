@@ -120,6 +120,18 @@ var vConsole = new window.VConsole();
         <label for="proxy">XIAOMUSIC_PROXY(ytsearch需要):</label>
         <input id="proxy" type="text" placeholder="http://192.168.2.5:8080" />
 
+        <label for="jellyfin_base_url">Jellyfin 地址:</label>
+        <input id="jellyfin_base_url" type="text" placeholder="http://192.168.2.5:8096" />
+
+        <label for="jellyfin_api_key">Jellyfin API Key:</label>
+        <input id="jellyfin_api_key" type="text" placeholder="填入 Jellyfin API Key" />
+
+        <label for="jellyfin_user_id">Jellyfin 用户ID(可选):</label>
+        <input id="jellyfin_user_id" type="text" placeholder="为空则自动选择首个可用用户" />
+
+        <label for="jellyfin_playlist_prefix">Jellyfin 歌单前缀:</label>
+        <input id="jellyfin_playlist_prefix" type="text" value="Jellyfin" />
+
         <label for="loudnorm">均衡歌曲音量大小(loudnorm滤镜):</label>
         <input id="loudnorm" type="text" placeholder="loudnorm=I=-14:TP=-1.5:LRA=6" />
 
