@@ -908,6 +908,12 @@ class XiaoMusic:
         """搜索音乐（委托给 music_library）"""
         return self._music_library.searchmusic(name)
 
+    def get_music_duration(self, name: str) -> int:
+        """获取音乐时长（秒）"""
+        if self._music_library.is_jellyfin_music(name):
+            return self._music_library.get_jellyfin_duration(name)
+        return 0
+
     # 获取播放列表
     def get_music_list(self):
         """获取播放列表（委托给 music_library）"""

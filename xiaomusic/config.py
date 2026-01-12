@@ -99,6 +99,12 @@ class Config:
     port: int = int(os.getenv("XIAOMUSIC_PORT", "8090"))  # 监听端口
     public_port: int = int(os.getenv("XIAOMUSIC_PUBLIC_PORT", 0))  # 歌曲访问端口
     proxy: str = os.getenv("XIAOMUSIC_PROXY", None)
+    jellyfin_base_url: str = os.getenv("XIAOMUSIC_JELLYFIN_BASE_URL", "")
+    jellyfin_api_key: str = os.getenv("XIAOMUSIC_JELLYFIN_API_KEY", "")
+    jellyfin_user_id: str = os.getenv("XIAOMUSIC_JELLYFIN_USER_ID", "")
+    jellyfin_playlist_prefix: str = os.getenv(
+        "XIAOMUSIC_JELLYFIN_PLAYLIST_PREFIX", "Jellyfin"
+    )
     loudnorm: str = os.getenv("XIAOMUSIC_LOUDNORM", None)  # 均衡音量参数
     search_prefix: str = os.getenv(
         "XIAOMUSIC_SEARCH", "bilisearch:"

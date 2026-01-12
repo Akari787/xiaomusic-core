@@ -14,6 +14,7 @@ from collections import OrderedDict
 from dataclasses import asdict
 
 from xiaomusic.const import SUPPORT_MUSIC_TYPE
+from xiaomusic.jellyfin_client import JellyfinClient
 from xiaomusic.utils import (
     custom_sort_key,
     extract_audio_metadata,
@@ -79,6 +80,9 @@ class MusicLibrary:
         # 网络音乐相关
         self._all_radio = {}  # 所有电台
         self._web_music_api = {}  # 需要通过API获取的网络音乐
+
+        # Jellyfin 相关
+        self._jellyfin_items = {}  # name -> metadata
 
         # 搜索索引
         self._extra_index_search = {}  # 额外搜索索引 {filepath: name}
@@ -154,6 +158,12 @@ class MusicLibrary:
         except Exception as e:
             self.log.exception(f"Execption {e}")
 
+        # 补充 Jellyfin 歌单
+        try:
+            self._append_jellyfin_music_list()
+        except Exception as e:
+            self.log.exception(f"Execption {e}")
+
         # 全部，所有歌曲（排除电台）
         self.music_list["全部"] = list(self.all_music.keys())
         self.music_list["所有歌曲"] = [
@@ -225,6 +235,81 @@ class MusicLibrary:
                 self.music_list["所有电台"] = list(self._all_radio.keys())
         except Exception as e:
             self.log.exception(f"Execption {e}")
+
+    def _append_jellyfin_music_list(self):
+        """补充 Jellyfin 歌单"""
+        if not self._is_jellyfin_enabled():
+            return
+
+        self._jellyfin_items = {}
+
+        client = JellyfinClient(
+            base_url=self.config.jellyfin_base_url,
+            api_key=self.config.jellyfin_api_key,
+            user_id=self.config.jellyfin_user_id,
+            log=self.log,
+        )
+
+        playlists = client.list_playlists()
+        if not playlists:
+            self.log.info("Jellyfin playlists empty.")
+            return
+
+        for playlist in playlists:
+            playlist_id = playlist.get("Id")
+            playlist_name = playlist.get("Name") or "Jellyfin"
+            if not playlist_id:
+                continue
+
+            list_name = self._format_jellyfin_playlist_name(playlist_name)
+            track_items = client.list_playlist_tracks(playlist_id)
+            track_names = []
+            for item in track_items:
+                item_id = item.get("Id")
+                if not item_id:
+                    continue
+                display_name = self._build_jellyfin_track_name(item)
+                unique_name = self._ensure_unique_music_name(display_name, item_id)
+                stream_url = client.build_stream_url(item_id)
+                self.all_music[unique_name] = stream_url
+                self._jellyfin_items[unique_name] = {
+                    "id": item_id,
+                    "duration": self._jellyfin_ticks_to_seconds(
+                        item.get("RunTimeTicks")
+                    ),
+                    "artists": item.get("Artists", []),
+                    "title": item.get("Name", ""),
+                }
+                track_names.append(unique_name)
+
+            if track_names:
+                self.music_list[list_name] = track_names
+
+    def _is_jellyfin_enabled(self) -> bool:
+        return bool(self.config.jellyfin_base_url and self.config.jellyfin_api_key)
+
+    def _format_jellyfin_playlist_name(self, playlist_name: str) -> str:
+        prefix = self.config.jellyfin_playlist_prefix or "Jellyfin"
+        return f"{prefix}:{playlist_name}"
+
+    @staticmethod
+    def _build_jellyfin_track_name(item: dict) -> str:
+        title = item.get("Name") or "未知歌曲"
+        artists = item.get("Artists") or []
+        if artists:
+            return f"{title} - {', '.join(artists)}"
+        return title
+
+    def _ensure_unique_music_name(self, name: str, item_id: str) -> str:
+        if name not in self.all_music:
+            return name
+        return f"{name} ({item_id})"
+
+    @staticmethod
+    def _jellyfin_ticks_to_seconds(runtime_ticks: int | None) -> int:
+        if not runtime_ticks:
+            return 0
+        return int(runtime_ticks / 10_000_000)
 
     def refresh_custom_play_list(self):
         """刷新自定义歌单"""
@@ -641,6 +726,13 @@ class MusicLibrary:
             return False
         url = self.all_music[name]
         return url.startswith(("http://", "https://"))
+
+    def is_jellyfin_music(self, name: str) -> bool:
+        return name in self._jellyfin_items
+
+    def get_jellyfin_duration(self, name: str) -> int:
+        item = self._jellyfin_items.get(name, {})
+        return int(item.get("duration", 0))
 
     def is_need_use_play_music_api(self, name):
         """是否是需要通过api获取播放链接的网络歌曲

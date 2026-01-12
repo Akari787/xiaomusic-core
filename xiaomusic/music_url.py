@@ -65,6 +65,9 @@ class MusicUrlHandler:
         # 在线歌曲：时长、播放链接获取
         if self.music_library.is_online_music(cur_playlist):
             return await self._get_online_music_sec_url(name, url, origin_url)
+        if self.music_library.is_jellyfin_music(name):
+            sec = self.music_library.get_jellyfin_duration(name)
+            return sec, url
         if self.music_library.is_web_music(name):
             sec = await self._get_web_music_duration(name, url, origin_url)
         else:

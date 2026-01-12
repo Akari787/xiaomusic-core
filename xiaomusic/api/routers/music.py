@@ -219,10 +219,12 @@ async def musicinfo(
 ):
     """音乐信息"""
     url, _ = await xiaomusic.get_music_url(name)
+    duration = xiaomusic.get_music_duration(name)
     info = {
         "ret": "OK",
         "name": name,
         "url": url,
+        "duration": duration,
     }
     if musictag:
         info["tags"] = xiaomusic.get_music_tags(name)
@@ -239,9 +241,11 @@ async def musicinfos(
     ret = []
     for music_name in name:
         url, _ = await xiaomusic.get_music_url(music_name)
+        duration = xiaomusic.get_music_duration(music_name)
         info = {
             "name": music_name,
             "url": url,
+            "duration": duration,
         }
         if musictag:
             info["tags"] = xiaomusic.get_music_tags(music_name)
