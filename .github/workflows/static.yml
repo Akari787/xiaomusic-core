@@ -2,27 +2,14 @@
 name: Deploy static content to Pages
 
 on:
-  # Runs on pushes targeting the default branch
+  # Runs on pushes targeting documentation branches
   push:
-    branches: ["main"]
+    branches: ["main", "fork/oauth2-only-stable"]
     paths:
       - 'docs/**'
       - 'README.md'
       - 'CHANGELOG.md'
       - '.github/workflows/static.yml'
-  # Runs on issue events
-  issues:
-    types: [opened, edited, reopened]  # Specify events you're interested in
-
-  release:
-    types:
-      - uploaded
-
-  workflow_run:
-    workflows:
-      - CI Workflow
-    types:
-      - completed
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -42,6 +29,7 @@ concurrency:
 jobs:
   # Single deploy job since we're just deploying
   deploy:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -52,6 +40,19 @@ jobs:
         with:
           fetch-depth: 0
           submodules: true
+
+      - name: Check Pages availability
+        id: pages_check
+        run: |
+          status=$(curl -s -o /tmp/pages.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pages")
+          if [ "$status" = "200" ]; then
+            echo "enabled=true" >> $GITHUB_OUTPUT
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v2
@@ -102,12 +103,15 @@ jobs:
           fi
 
       - name: Setup Pages
+        if: steps.pages_check.outputs.enabled == 'true'
         uses: actions/configure-pages@v5
       - name: Upload artifact
+        if: steps.pages_check.outputs.enabled == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           # Upload entire repository
           path: './docs/.vitepress/dist'
       - name: Deploy to GitHub Pages
+        if: steps.pages_check.outputs.enabled == 'true'
         id: deployment
         uses: actions/deploy-pages@v4
