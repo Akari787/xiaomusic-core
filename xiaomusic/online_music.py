@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from xiaomusic.const import PLAY_TYPE_ALL
+from xiaomusic.jellyfin_client import JellyfinClient
 
 
 def _build_keyword(song_name, artist):
@@ -58,6 +59,11 @@ class OnlineMusicService:
         self.log = log
         self.js_plugin_manager = js_plugin_manager
         self.xiaomusic = xiaomusic_instance
+        self.jellyfin_client = (
+            JellyfinClient(self.xiaomusic.config, self.log)
+            if self.xiaomusic is not None
+            else None
+        )
 
     async def get_music_list_online(
         self, plugin="all", keyword="", page=1, limit=20, **kwargs
@@ -75,20 +81,28 @@ class OnlineMusicService:
             dict: 搜索结果
         """
         self.log.info("在线获取歌曲列表!")
-        if not self.js_plugin_manager:
+        if plugin != "Jellyfin" and plugin != "all" and not self.js_plugin_manager:
             return {"success": False, "error": "JS Plugin Manager not available"}
 
         # 解析关键词和艺术家
         keyword, artist = await self._parse_keyword_and_artist(keyword)
 
         # 获取API配置信息
-        openapi_info = self.js_plugin_manager.get_openapi_info()
+        openapi_info = (
+            self.js_plugin_manager.get_openapi_info()
+            if self.js_plugin_manager
+            else {"enabled": False, "search_url": ""}
+        )
 
         if plugin == "all":
             # 并发执行插件搜索和OpenAPI搜索
             return await self._execute_concurrent_searches(
                 keyword, artist, page, limit, openapi_info
             )
+        elif plugin == "Jellyfin":
+            result_data = await self._execute_jellyfin_search(keyword, limit)
+            result_data["artist"] = artist or "佚名"
+            return result_data
         elif plugin == "OpenAPI":
             # OpenAPI搜索
             return await self._execute_openapi_search(openapi_info, keyword, artist)
@@ -111,13 +125,15 @@ class OnlineMusicService:
         """执行并发搜索 - 插件和OpenAPI"""
         tasks = []
 
-        # 插件在线搜索任务
-        plugin_task = asyncio.create_task(
-            self.get_music_list_mf(
-                "all", keyword=keyword, artist=artist, page=page, limit=limit
+        plugin_task = None
+        if self.js_plugin_manager:
+            # 插件在线搜索任务
+            plugin_task = asyncio.create_task(
+                self.get_music_list_mf(
+                    "all", keyword=keyword, artist=artist, page=page, limit=limit
+                )
             )
-        )
-        tasks.append(plugin_task)
+            tasks.append(plugin_task)
 
         # OpenAPI搜索任务（只有在配置正确时才创建）
         if (
@@ -131,22 +147,52 @@ class OnlineMusicService:
             )
             tasks.append(openapi_task)
 
+        jellyfin_task = None
+        if self.jellyfin_client and self.jellyfin_client.enabled():
+            jellyfin_task = asyncio.create_task(
+                self.jellyfin_client.search_music(keyword=keyword, limit=limit)
+            )
+            tasks.append(jellyfin_task)
+
         # 并发执行任务
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        plugin_result = results[0]
-        openapi_result = results[1] if len(results) > 1 else None
+        plugin_result = {"success": False, "error": "No plugin manager"}
+        openapi_result = None
+        jellyfin_result = None
+        result_index = 0
+        if plugin_task is not None and len(results) > 0:
+            plugin_result = results[result_index]
+            result_index += 1
+        if (
+            openapi_info.get("enabled", False)
+            and openapi_info.get("search_url", "") != ""
+        ):
+            openapi_result = results[result_index]
+            result_index += 1
+        if jellyfin_task is not None and len(results) > result_index:
+            jellyfin_result = results[result_index]
 
         # 处理异常情况
         plugin_result = self._handle_search_exception(plugin_result, "插件")
         openapi_result = self._handle_search_exception(openapi_result, "OpenAPI")
+        jellyfin_result = self._handle_search_exception(jellyfin_result, "Jellyfin")
 
         # 合并结果
         combined_result = self._merge_search_results(
-            plugin_result, openapi_result, keyword, artist, limit
+            plugin_result, openapi_result, jellyfin_result, keyword, artist, limit
         )
         combined_result["artist"] = artist or "佚名"
         return combined_result
+
+    async def _execute_jellyfin_search(self, keyword, limit):
+        if not self.jellyfin_client or not self.jellyfin_client.enabled():
+            return {"success": False, "error": "Jellyfin 未启用或配置不完整"}
+        try:
+            return await self.jellyfin_client.search_music(keyword=keyword, limit=limit)
+        except Exception as e:
+            self.log.error(f"Jellyfin 搜索异常: {e}")
+            return {"success": False, "error": str(e)}
 
     def _handle_search_exception(self, result, source_name):
         """处理搜索异常"""
@@ -180,7 +226,7 @@ class OnlineMusicService:
         return result_data
 
     def _merge_search_results(
-        self, plugin_result, openapi_result, keyword, artist, limit
+        self, plugin_result, openapi_result, jellyfin_result, keyword, artist, limit
     ):
         merged_data = []
         sources = {}
@@ -204,14 +250,22 @@ class OnlineMusicService:
                 merged_data.extend(plugin_data)
                 sources.update(plugin_result.get("sources", {}))
 
+        # 最后处理 Jellyfin 结果
+        if jellyfin_result and jellyfin_result.get("success"):
+            jellyfin_data = jellyfin_result.get("data", [])
+            if jellyfin_data:
+                for item in jellyfin_data:
+                    item["source"] = "jellyfin"
+                merged_data.extend(jellyfin_data)
+                sources.update(jellyfin_result.get("sources", {}))
+
         # 如果都没有成功结果，返回错误
-        if not plugin_result.get("success") and not (
-            openapi_result and openapi_result.get("success")
-        ):
+        has_plugin_success = plugin_result and plugin_result.get("success")
+        has_openapi_success = openapi_result and openapi_result.get("success")
+        has_jellyfin_success = jellyfin_result and jellyfin_result.get("success")
+        if not has_plugin_success and not has_openapi_success and not has_jellyfin_success:
             # 优先返回第一个错误
-            error_result = (
-                plugin_result if not plugin_result.get("success") else openapi_result
-            )
+            error_result = plugin_result or openapi_result or jellyfin_result
             return error_result
 
         # 优化合并后的结果
@@ -321,6 +375,8 @@ class OnlineMusicService:
             tuple: (parsed_keyword, parsed_artist)
         """
         # 获取AI配置信息
+        if not self.js_plugin_manager:
+            return _parse_keyword_by_dash(keyword)
         ai_info = self.js_plugin_manager.get_aiapi_info()
         # 如果AI启用且配置完整
         if ai_info.get("enabled", False) and ai_info.get("api_key", "") != "":

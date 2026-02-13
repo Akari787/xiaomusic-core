@@ -98,6 +98,7 @@ def deepcopy_data_no_sensitive_info(data, fields_to_anonymize: list = None):
             "account",
             "password",
             "cookie",
+            "jellyfin_api_key",
             "httpauth_username",
             "httpauth_password",
         ]

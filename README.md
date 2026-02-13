@@ -101,6 +101,7 @@ docker run -p 58090:8090 -v /xiaomusic_music:/app/music -v /xiaomusic_conf:/app/
 
 > [!NOTE]
 > docker 和 docker compose 二选一即可，启动成功后，在 web 页面可以配置其他参数，带有 `*` 号的配置是必须要配置的，其他的用不上时不用修改。登录方式为 OAuth2 扫码登录，Token 默认保存在 `conf/auth.json`。
+> 另外可选开启 Jellyfin 客户端能力：在设置页填写 `Jellyfin 地址`、`API Key`（可选 `User ID`），开启后在线播放会把 Jellyfin 结果一起纳入搜索。
 
 > [!TIP]
 > 目前安装步骤已经是最简化了，如果还是嫌安装麻烦，可以微信或者 QQ 约我远程安装，我一般周末和晚上才有时间，需要赞助个辛苦费 :moneybag: 50 元一次。

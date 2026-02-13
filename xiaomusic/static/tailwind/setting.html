@@ -196,6 +196,37 @@
                   </label>
                   <input id="public_port" type="number" value="0" class="mt-1 block w-full rounded-md border border-gray-300 bg-white px-4 py-2.5 text-gray-900 placeholder:text-gray-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 hover:border-gray-400" />
                 </div>
+
+                <div class="mb-4">
+                  <label for="jellyfin_enabled" class="block text-sm font-medium text-gray-700">
+                    启用 Jellyfin 客户端
+                  </label>
+                  <select id="jellyfin_enabled" class="mt-1 block w-full rounded-md border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 hover:border-gray-400">
+                    <option value="false" selected>关闭</option>
+                    <option value="true">开启</option>
+                  </select>
+                </div>
+
+                <div class="mb-4">
+                  <label for="jellyfin_base_url" class="block text-sm font-medium text-gray-700">
+                    Jellyfin 地址
+                  </label>
+                  <input id="jellyfin_base_url" type="text" placeholder="例如 http://192.168.1.10:8096" class="mt-1 block w-full rounded-md border border-gray-300 bg-white px-4 py-2.5 text-gray-900 placeholder:text-gray-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 hover:border-gray-400" />
+                </div>
+
+                <div class="mb-4">
+                  <label for="jellyfin_api_key" class="block text-sm font-medium text-gray-700">
+                    Jellyfin API Key
+                  </label>
+                  <input id="jellyfin_api_key" type="text" placeholder="Jellyfin 控制台生成的 API Key" class="mt-1 block w-full rounded-md border border-gray-300 bg-white px-4 py-2.5 text-gray-900 placeholder:text-gray-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 hover:border-gray-400" />
+                </div>
+
+                <div class="mb-4">
+                  <label for="jellyfin_user_id" class="block text-sm font-medium text-gray-700">
+                    Jellyfin User ID(可选)
+                  </label>
+                  <input id="jellyfin_user_id" type="text" placeholder="留空自动选择第一个用户" class="mt-1 block w-full rounded-md border border-gray-300 bg-white px-4 py-2.5 text-gray-900 placeholder:text-gray-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 hover:border-gray-400" />
+                </div>
               </div>
             </div>
           </div>

@@ -104,6 +104,29 @@
                         </label>
                         <input id="public_port" type="number" value="58090" aria-required="true" />
                     </div>
+
+                    <div class="form-item">
+                        <label for="jellyfin_enabled">启用 Jellyfin 客户端:</label>
+                        <select id="jellyfin_enabled">
+                            <option value="true">开启</option>
+                            <option value="false" selected>关闭</option>
+                        </select>
+                    </div>
+
+                    <div class="form-item">
+                        <label for="jellyfin_base_url">Jellyfin 地址:</label>
+                        <input id="jellyfin_base_url" type="text" placeholder="例如 http://192.168.1.10:8096" />
+                    </div>
+
+                    <div class="form-item">
+                        <label for="jellyfin_api_key">Jellyfin API Key:</label>
+                        <input id="jellyfin_api_key" type="text" placeholder="Jellyfin 控制台生成的 API Key" />
+                    </div>
+
+                    <div class="form-item">
+                        <label for="jellyfin_user_id">Jellyfin User ID(可选):</label>
+                        <input id="jellyfin_user_id" type="text" placeholder="留空自动选择第一个用户" />
+                    </div>
                 </div>
             </div>
         </div>

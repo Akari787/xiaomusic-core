@@ -231,6 +231,12 @@ class Config:
         os.getenv("XIAOMUSIC_ENABLE_AUTO_CLEAN_TEMP", "true").lower() == "true"
     )
     qrcode_timeout: int = os.getenv("QRCODE_TIMEOUT", 120)
+    jellyfin_enabled: bool = (
+        os.getenv("XIAOMUSIC_JELLYFIN_ENABLED", "false").lower() == "true"
+    )
+    jellyfin_base_url: str = os.getenv("XIAOMUSIC_JELLYFIN_BASE_URL", "")
+    jellyfin_api_key: str = os.getenv("XIAOMUSIC_JELLYFIN_API_KEY", "")
+    jellyfin_user_id: str = os.getenv("XIAOMUSIC_JELLYFIN_USER_ID", "")
     def append_keyword(self, keys, action):
         for key in keys.split(","):
             if key:
