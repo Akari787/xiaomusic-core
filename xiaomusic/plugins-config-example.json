@@ -1,0 +1,10 @@
+{
+  "account": "",
+  "password": "",
+  "openapi_info": {
+    "search_url": "",
+    "enabled": false
+  },
+  "enabled_plugins": [],
+  "plugins_info": []
+}

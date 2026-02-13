@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Weapp QRCode</title>
+  <style>
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #qrcode {
+      flex: 1;
+      max-width: 180px;
+      border-radius: 12px;
+      background-color: white;
+      padding: 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <img id="qrcode" src="https://assets-1251785959.cos.ap-beijing.myqcloud.com/xiaoplayer/weappcode.jpg" />
+  <script>
+    fetch('https://xiaoplayer.f-loat.site/qrcode', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        host: location.host,
+        protocol: location.protocol
+      })
+    })
+      .then(res => {
+        return res.ok ? res.blob() : null
+      })
+      .then(blob => {
+        if (!blob) return
+        const url = URL.createObjectURL(blob)
+        document.querySelector('#qrcode').setAttribute('src', url)
+      })
+  </script>
+</body>
+
+</html>
