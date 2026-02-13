@@ -571,8 +571,6 @@ class JSPluginManager:
                 shutil.copy2(example_config_path, self.plugins_config_path)
             else:
                 base_config = {
-                    "account": "",
-                    "password": "",
                     "auto_add_song": True,
                     "aiapi_info": {"enabled": False, "api_key": ""},
                     "enabled_plugins": [],
@@ -1384,8 +1382,6 @@ class JSPluginManager:
             # 如果配置文件不存在，创建一个基础配置
             if not os.path.exists(config_file_path):
                 base_config = {
-                    "account": "",
-                    "password": "",
                     "enabled_plugins": [],
                     "plugins_info": [],
                 }

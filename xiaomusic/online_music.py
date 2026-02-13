@@ -194,6 +194,43 @@ class OnlineMusicService:
             self.log.error(f"Jellyfin 搜索异常: {e}")
             return {"success": False, "error": str(e)}
 
+    async def sync_jellyfin_music_lists(self):
+        if not self.jellyfin_client or not self.jellyfin_client.enabled():
+            return {"success": False, "error": "Jellyfin 未启用或配置不完整"}
+        if not self.xiaomusic or not self.xiaomusic.music_library:
+            return {"success": False, "error": "MusicLibrary 不可用"}
+
+        exported_lists = await self.jellyfin_client.export_music_lists()
+        if not exported_lists:
+            return {"success": False, "error": "Jellyfin 未返回可导入歌单"}
+
+        if self.xiaomusic.config.music_list_json:
+            music_lists = json.loads(self.xiaomusic.config.music_list_json)
+        else:
+            music_lists = []
+
+        filtered = []
+        for item in music_lists:
+            name = str(item.get("name", ""))
+            if item.get("source") == "jellyfin" or name.startswith("Jellyfin"):
+                continue
+            filtered.append(item)
+
+        filtered.extend(exported_lists)
+        self.xiaomusic.config.music_list_json = json.dumps(filtered, ensure_ascii=False)
+        self.xiaomusic.music_library.gen_all_music_list()
+        self.xiaomusic.update_all_playlist()
+        self.xiaomusic.save_cur_config()
+
+        total_tracks = 0
+        for one_list in exported_lists:
+            total_tracks += len(one_list.get("musics", []))
+        return {
+            "success": True,
+            "list_count": len(exported_lists),
+            "track_count": total_tracks,
+        }
+
     def _handle_search_exception(self, result, source_name):
         """处理搜索异常"""
         if result and isinstance(result, Exception):

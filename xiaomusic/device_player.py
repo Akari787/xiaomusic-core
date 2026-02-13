@@ -772,28 +772,20 @@ class XiaoMusicDevice:
         await self.cancel_next_timer()
 
         async def _do_next():
-            await asyncio.sleep(sec)
             try:
+                await asyncio.sleep(sec)
                 self.log.info(f"定时器时间到了 did: {self.did}")
-                current_timer = self._next_timer
-                if current_timer:
-                    # 取消任务（防止任务被重复触发，即使sleep已结束）
-                    current_timer.cancel()
-                    try:
-                        await current_timer  # 等待任务取消完成，避免警告
-                    except asyncio.CancelledError:
-                        pass
-                    # 再置空引用
-                    self._next_timer = None
-                    if self.device.play_type == PLAY_TYPE_SIN:
-                        self.log.info(f"单曲播放不继续播放下一首 did: {self.did}")
-                        await self.stop(arg1="notts")
-                    else:
-                        await self._play_next()
-                else:
-                    self.log.info(f"定时器时间到了但是不见了 did: {self.did}")
+                # 定时器触发后先清理引用，避免任务自我取消导致逻辑混乱
+                self._next_timer = None
+                if self.device.play_type == PLAY_TYPE_SIN:
+                    self.log.info(f"单曲播放不继续播放下一首 did: {self.did}")
                     await self.stop(arg1="notts")
+                else:
+                    await self._play_next()
 
+            except asyncio.CancelledError:
+                self.log.info(f"定时器取消 did: {self.did}")
+                raise
             except Exception as e:
                 self.log.error(f"Execption {e}")
 

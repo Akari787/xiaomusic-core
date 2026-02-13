@@ -12,15 +12,6 @@
     <script src="./setting.js?version=1769383300"></script>
     <link rel="stylesheet" type="text/css" href="./setting.css?version=1769383300" />
 
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-Z09NC1K7ZW"></script>
-    <script>
-        window.dataLayer = window.dataLayer || [];
-        function gtag() {
-            dataLayer.push(arguments);
-        }
-        gtag("js", new Date());
-        gtag("config", "G-Z09NC1K7ZW");
-    </script>
 </head>
 
 <body>
@@ -28,7 +19,7 @@
         <div class="header-inner">
             <h2>
                 <span>小爱音箱设置面板</span>
-                (<a id="version" href="https://xdocs.hanxi.cc/issues/changelog.html" target="_blank">版本未知</a>)
+                (<a id="version" href="/docs/issues/changelog.html" target="_blank">版本未知</a>)
             </h2>
             <div class="header-buttons">
                 <button onclick="location.href = '/static/default/index.html'" aria-label="返回首页">
@@ -126,6 +117,10 @@
                     <div class="form-item">
                         <label for="jellyfin_user_id">Jellyfin User ID(可选):</label>
                         <input id="jellyfin_user_id" type="text" placeholder="留空自动选择第一个用户" />
+                    </div>
+                    <div class="form-item">
+                        <label>Jellyfin 歌单同步:</label>
+                        <button id="sync-jellyfin">立即同步 Jellyfin 歌单</button>
                     </div>
                 </div>
             </div>
@@ -400,7 +395,7 @@
                         </select>
 
                         <label for="yt_dlp_cookies_file">上传yt_dlp_cookies.txt文件:<a
-                                href="https://xdocs.hanxi.cc/issues/210.html" target="_blank">文档</a></label>
+                                href="/docs/issues/210.html" target="_blank">文档</a></label>
                         <div class="file-upload-section">
                             <input id="yt_dlp_cookies_file" name="file" type="file" />
                             <button id="upload_yt_dlp_cookie">
@@ -415,7 +410,7 @@
                 <div class="config-tab-content setting-panel" id="tab-device" role="tabpanel">
                     <div class="card-content">
                     <div class="rows">
-                        <label for="group_list">设备分组配置（不推荐，声音不同步）:<a href="https://xdocs.hanxi.cc/issues/366.html"
+                        <label for="group_list">设备分组配置（不推荐，声音不同步）:<a href="/docs/issues/366.html"
                                 target="_blank">文档</a></label>
                         <input id="group_list" type="text" placeholder="did1:组名1,did2:组名1,did3:组名2" />
 
@@ -449,11 +444,11 @@
                         <input id="music_list_url" type="text"
                             value="https://gist.githubusercontent.com/hanxi/dda82d964a28f8110f8fba81c3ff8314/raw/example.json" />
 
-                        <label for="music_list_json">歌单内容:<a href="https://xdocs.hanxi.cc/issues/78.html"
+                        <label for="music_list_json">歌单内容:<a href="/docs/issues/78.html"
                                 target="_blank">格式文档</a></label>
                         <textarea id="music_list_json" type="text"></textarea>
 
-                        <label for="crontab_json">定时任务:<a href="https://xdocs.hanxi.cc/issues/182.html"
+                        <label for="crontab_json">定时任务:<a href="/docs/issues/182.html"
                                 target="_blank">格式文档</a></label>
                         <textarea id="crontab_json" type="text"></textarea>
                     </div>
@@ -579,34 +574,10 @@
             </div>
         </div>
 
-        <div class="button-section">
-            <h3 class="button-section-title">社区支持</h3>
-            <div class="community-support-content">
-                <div class="community-buttons-grid">
-                    <a href="https://afdian.com/a/imhanxi" target="_blank">
-                        <button class="btn-sponsor">
-                            <span class="material-icons">favorite</span>
-                            <span>爱发电</span>
-                        </button>
-                    </a>
-                    <a href="https://github.com/hanxi/xiaomusic" target="_blank">
-                        <button class="btn-github">
-                            <span class="material-icons">star</span>
-                            <span>点个 Star</span>
-                        </button>
-                    </a>
-                </div>
-                <div class="qrcode-container">
-                    <img class="qrcode" src="./qrcode.png" alt="请涵曦喝奶茶🧋" />
-                </div>
-            </div>
-        </div>
+        <div class="button-section"></div>
     </div>
     <footer>
-        <p>
-            Powered by
-            <a href="https://xdocs.hanxi.cc" target="_blank">XiaoMusic</a>
-        </p>
+        <p>Powered by XiaoMusic</p>
     </footer>
 </body>
 

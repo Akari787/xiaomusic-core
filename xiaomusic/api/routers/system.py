@@ -129,7 +129,6 @@ async def getsetting(need_device_list: bool = False):
     """获取设置"""
     config_data = xiaomusic.getconfig()
     data = asdict(config_data)
-    data["password"] = "******"
     data["httpauth_password"] = "******"
     data["oauth2_token_available"] = os.path.isfile(config_data.oauth2_token_path)
     if need_device_list:
@@ -152,6 +151,14 @@ async def oauth2_status():
     }
 
 
+@router.post("/api/jellyfin/sync")
+async def jellyfin_sync():
+    ret = await xiaomusic.online_music_service.sync_jellyfin_music_lists()
+    if ret.get("success"):
+        return ret
+    raise HTTPException(status_code=400, detail=ret.get("error", "sync failed"))
+
+
 @router.post("/savesetting")
 async def savesetting(request: Request):
     """保存设置"""
@@ -161,8 +168,6 @@ async def savesetting(request: Request):
         debug_data = deepcopy_data_no_sensitive_info(data)
         log.info(f"saveconfig: {debug_data}")
         config_obj = xiaomusic.getconfig()
-        if data.get("password") == "******" or data.get("password", "") == "":
-            data["password"] = config_obj.password
         if (
             data.get("httpauth_password") == "******"
             or data.get("httpauth_password", "") == ""
@@ -193,10 +198,6 @@ async def modifiysetting(request: Request):
         config_obj = xiaomusic.getconfig()
 
         # 处理密码字段，如果是 ****** 或空字符串则保持原值
-        if "password" in data and (
-            data["password"] == "******" or data["password"] == ""
-        ):
-            data["password"] = config_obj.password
         if "httpauth_password" in data and (
             data["httpauth_password"] == "******" or data["httpauth_password"] == ""
         ):

@@ -9,6 +9,7 @@
 
 import json
 import os
+import time
 
 from aiohttp import ClientSession
 from miservice import MiAccount, MiIOService, MiNAService
@@ -45,6 +46,8 @@ class AuthManager:
         self.login_acount = None
         self.login_signature = None
         self.cookie_jar = None
+        self._last_login_ts = 0
+        self._login_cooldown_sec = 300
 
         # 当前设备DID（用于设备ID更新）
         self._cur_did = None
@@ -60,11 +63,22 @@ class AuthManager:
         """
         self.mi_token_home = os.path.join(self.config.conf_path, ".mi.token")
         self.oauth2_token_path = self.config.oauth2_token_path
+
+        # 先注入 OAuth2 cookie，避免后续健康检查触发不必要的账号登录流程
+        cookie_jar = self.get_cookie()
+        if cookie_jar:
+            self.mi_session.cookie_jar.update_cookies(cookie_jar)
+
         is_need_login = await self.need_login()
         is_can_login = await self.can_login()
         if is_need_login and is_can_login:
-            self.log.info("try login")
-            await self.login_miboy()
+            now = int(time.time())
+            if now - self._last_login_ts >= self._login_cooldown_sec:
+                self.log.info("try login")
+                self._last_login_ts = now
+                await self.login_miboy()
+            else:
+                self.log.info("skip login due cooldown")
         else:
             self.log.info(
                 f"Maybe already logined is_need_login:{is_need_login} is_can_login:{is_can_login}"
@@ -91,12 +105,6 @@ class AuthManager:
             return True
         if self.login_signature != self._get_login_signature():
             return True
-
-        try:
-            await self.mina_service.device_list()
-        except Exception as e:
-            self.log.warning(f"可能登录失败. {e}")
-            return True
         return False
 
     def _get_login_signature(self):
@@ -122,9 +130,16 @@ class AuthManager:
                 "",
                 str(self.mi_token_home),
             )
-            # Forced login to refresh to refresh token
             self.set_token(mi_account)
-            await mi_account.login("micoapi")
+
+            # OAuth2 扫码场景优先使用 serviceToken，避免触发账号二次风控验证
+            has_service_token = bool(
+                auth_data.get("serviceToken")
+                or auth_data.get("yetAnotherServiceToken")
+            )
+            if not has_service_token:
+                await mi_account.login("micoapi")
+
             self.mina_service = MiNAService(mi_account)
             self.miio_service = MiIOService(mi_account)
             self.login_acount = account_name
@@ -215,11 +230,13 @@ class AuthManager:
         )
         if service_token and auth_data.get("userId"):
             device_id = auth_data.get("deviceId") or self.config.get_one_device_id()
+            c_user_id = auth_data.get("cUserId") or auth_data.get("userId")
             cookie_string = COOKIE_TEMPLATE.format(
                 device_id=device_id,
                 service_token=service_token,
                 user_id=auth_data.get("userId"),
             )
+            cookie_string += f"; cUserId={c_user_id}; yetAnotherServiceToken={service_token}"
             return parse_cookie_string(cookie_string)
 
         if not os.path.exists(self.mi_token_home):
@@ -228,7 +245,6 @@ class AuthManager:
 
         with open(self.mi_token_home, encoding="utf-8") as f:
             user_data = json.loads(f.read())
-        self.log.info(f"get_cookie user_data:{user_data}")
         user_id = user_data.get("userId")
         service_token = user_data.get("micoapi")[1]
         device_id = self.config.get_one_device_id()

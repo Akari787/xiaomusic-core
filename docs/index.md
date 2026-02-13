@@ -3,26 +3,25 @@
 layout: home
 
 hero:
-  name: "XiaoMusic"
-  text: "无限听歌<br>解放小爱音箱"
-  tagline: 使用小爱音箱播放音乐，音乐使用 yt-dlp 下载
+  name: "xiaomusic-oauth2"
+  text: "OAuth2 + Jellyfin"
+  tagline: 独立维护分支，专注稳定播放与自托管体验
   actions:
     - theme: brand
-      text: 快速开始
+      text: 使用指南
       link: /issues/index
     - theme: alt
       text: FAQ
       link: /issues/99
     - theme: alt
       text: GitHub
-      link: https://github.com/hanxi/xiaomusic
+      link: https://github.com/Akari787/xiaomusic-oauth2
 
 features:
   - title: MIT 开源
     details: 完全开源，自主可控
-  - title: 一键部署
-    details: 支持 Docker 部署，兼容各大 NAS 平台
-  - title: 口令自定义
-    details: 可以完全自定义语音口令，可以写自己的插件
+  - title: OAuth2-only
+    details: 仅保留 OAuth2 扫码登录，登录链路更聚焦
+  - title: Jellyfin 联动
+    details: 支持 Jellyfin 搜索与歌单同步
 ---
-

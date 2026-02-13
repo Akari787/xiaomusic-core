@@ -250,6 +250,7 @@ class XiaoMusic:
         assert (
             analytics_task is not None
         )  # to keep the reference to task, do not remove this
+        await self.sync_jellyfin_music_lists_if_needed()
         await self.auth_manager.init_all_data()
         # 启动对话循环，传递回调函数
         await self.conversation_poller.run_conversation_loop(
@@ -595,10 +596,22 @@ class XiaoMusic:
         """保存配置并重新启动"""
         # 更新配置
         self.update_config_from_setting(data)
+        await self.sync_jellyfin_music_lists_if_needed()
         # 配置文件落地
         self.save_cur_config()
         # 重新初始化
         await self.reinit()
+
+    async def sync_jellyfin_music_lists_if_needed(self):
+        if not self.config.jellyfin_enabled:
+            return
+        if not self.online_music_service:
+            return
+        try:
+            ret = await self.online_music_service.sync_jellyfin_music_lists()
+            self.log.info(f"sync_jellyfin_music_lists_if_needed {ret}")
+        except Exception as e:
+            self.log.error(f"sync_jellyfin_music_lists_if_needed failed: {e}")
 
     # 把当前配置落地
     def save_cur_config(self):

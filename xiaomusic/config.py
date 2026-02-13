@@ -86,11 +86,8 @@ class Device:
 
 @dataclass
 class Config:
-    account: str = os.getenv("MI_USER", "")
-    password: str = os.getenv("MI_PASS", "")
     oauth2_token_file: str = os.getenv("XIAOMUSIC_OAUTH2_TOKEN_FILE", "auth.json")
     mi_did: str = os.getenv("MI_DID", "")  # 逗号分割支持多设备
-    cookie: str = ""
     verbose: bool = os.getenv("XIAOMUSIC_VERBOSE", "").lower() == "true"
     music_path: str = os.getenv("XIAOMUSIC_MUSIC_PATH", "music")
     temp_path: str = os.getenv("XIAOMUSIC_TEMP_PATH", "music/tmp")

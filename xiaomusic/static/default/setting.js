@@ -219,6 +219,37 @@ $(function () {
     refreshDevicesAfterOAuth();
   });
 
+  $("#sync-jellyfin").on("click", function () {
+    const $btn = $(this);
+    const oldText = $btn.text();
+    $btn.prop("disabled", true).text("同步中...");
+    $.ajax({
+      type: "POST",
+      url: "/api/jellyfin/sync",
+      success: function (res) {
+        alert(
+          "同步完成: 歌单 " +
+            (res.list_count || 0) +
+            " 个, 歌曲 " +
+            (res.track_count || 0) +
+            " 首"
+        );
+        location.reload();
+      },
+      error: function (xhr) {
+        alert(
+          "同步失败: " +
+            (xhr.responseJSON && xhr.responseJSON.detail
+              ? xhr.responseJSON.detail
+              : xhr.statusText)
+        );
+      },
+      complete: function () {
+        $btn.prop("disabled", false).text(oldText);
+      },
+    });
+  });
+
   // 初始加载：拉取配置并填充表单与设备列表
   fetchDeviceList(function (data, status) {
     console.log(data, status);

@@ -81,7 +81,7 @@ def is_mp3(url: str) -> bool:
 
 def is_m4a(url: str) -> bool:
     """判断是否为 M4A 文件"""
-    return url.endswith(".m4a")
+    return url.lower().endswith(".m4a")
 
 
 async def _get_web_music_duration(session, url: str, config) -> float:

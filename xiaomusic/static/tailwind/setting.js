@@ -279,6 +279,37 @@ $(function () {
     refreshDevicesAfterOAuth();
   });
 
+  $("#sync-jellyfin").on("click", () => {
+    const $btn = $("#sync-jellyfin");
+    const oldText = $btn.text();
+    $btn.prop("disabled", true).text("同步中...");
+    $.ajax({
+      type: "POST",
+      url: "/api/jellyfin/sync",
+      success: (res) => {
+        alert(
+          "同步完成: 歌单 " +
+            (res.list_count || 0) +
+            " 个, 歌曲 " +
+            (res.track_count || 0) +
+            " 首"
+        );
+        location.reload();
+      },
+      error: (xhr) => {
+        alert(
+          "同步失败: " +
+            (xhr.responseJSON && xhr.responseJSON.detail
+              ? xhr.responseJSON.detail
+              : xhr.statusText)
+        );
+      },
+      complete: () => {
+        $btn.prop("disabled", false).text(oldText);
+      },
+    });
+  });
+
 });
 
 function fetchQRCode() {

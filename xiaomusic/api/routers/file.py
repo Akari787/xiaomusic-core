@@ -42,7 +42,12 @@ from xiaomusic.utils.file_utils import (
     remove_common_prefix,
     safe_join_path,
 )
-from xiaomusic.utils.music_utils import convert_file_to_mp3, is_mp3, remove_id3_tags
+from xiaomusic.utils.music_utils import (
+    convert_file_to_mp3,
+    is_m4a,
+    is_mp3,
+    remove_id3_tags,
+)
 from xiaomusic.utils.network_utils import (
     check_bili_fav_list,
     download_one_music,
@@ -366,10 +371,14 @@ async def music_file(request: Request, file_path: str, key: str = "", code: str 
         else:
             log.info(f"No ID3 tag remove needed: {absolute_file_path}")
 
-    if config.convert_to_mp3 and not is_mp3(file_path):
+    force_convert_m4a = is_m4a(file_path)
+    if force_convert_m4a or (config.convert_to_mp3 and not is_mp3(file_path)):
         temp_mp3_file = convert_file_to_mp3(absolute_file_path, config)
         if temp_mp3_file:
-            log.info(f"Converted file: {absolute_file_path} to {temp_mp3_file}")
+            if force_convert_m4a:
+                log.info(f"M4A auto converted: {absolute_file_path} to {temp_mp3_file}")
+            else:
+                log.info(f"Converted file: {absolute_file_path} to {temp_mp3_file}")
             redirect = safe_redirect(f"/music/{temp_mp3_file}")
             if redirect:
                 return redirect

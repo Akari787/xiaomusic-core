@@ -204,6 +204,15 @@ class MusicLibrary:
                     self.all_music[name] = url
                     one_music_list.append(name)
 
+                    # 网络音乐预置时长（例如 Jellyfin RunTimeTicks 转换结果）
+                    duration = music.get("duration", 0)
+                    try:
+                        duration = float(duration)
+                    except Exception:
+                        duration = 0
+                    if duration > 0:
+                        self._web_music_duration_cache[name] = duration
+
                     # 处理电台列表
                     if music_type == "radio":
                         self._all_radio[name] = url

@@ -1,13 +1,10 @@
 {
-  "account": "",
-  "password": "",
   "oauth2_token_file": "auth.json",
   "jellyfin_enabled": false,
   "jellyfin_base_url": "",
   "jellyfin_api_key": "",
   "jellyfin_user_id": "",
   "mi_did": "",
-  "cookie": "",
   "verbose": false,
   "music_path": "music",
   "temp_path": "music/tmp",
@@ -61,7 +58,7 @@
     "播放列表": "play_music_list",
     "播放歌单": "play_music_list",
     "测试自定义口令": "exec#code1(\"hello\")",
-    "测试链接": "exec#httpget(\"https://github.com/hanxi/xiaomusic\")"
+    "测试链接": "exec#httpget(\"https://github.com/Akari787/xiaomusic-oauth2\")"
   },
   "key_match_order": [
     "分钟后关机",
@@ -109,7 +106,7 @@
   "keywords_playlist": "播放列表,播放歌单",
   "user_key_word_dict": {
     "测试自定义口令": "exec#code1(\"hello\")",
-    "测试链接": "exec#httpget(\"https://github.com/hanxi/xiaomusic\")"
+    "测试链接": "exec#httpget(\"https://github.com/Akari787/xiaomusic-oauth2\")"
   },
   "enable_force_stop": false,
   "devices": {},

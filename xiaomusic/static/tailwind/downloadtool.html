@@ -9,19 +9,6 @@
 	<script src="./libs/tailwind.js"></script>
 	<link rel="icon" href="./favicon.ico">
 
-	<!-- Google tag (gtag.js) -->
-	<script async src="https://www.googletagmanager.com/gtag/js?id=G-Z09NC1K7ZW"></script>
-	<script>
-		window.dataLayer = window.dataLayer || [];
-		function gtag() { dataLayer.push(arguments) };
-		gtag('js', new Date());
-		gtag('config', 'G-Z09NC1K7ZW');
-	</script>
-
-	<!-- umami -->
-	<script async defer src="https://umami.hanxi.cc/script.js"
-		data-website-id="7bfb0890-4115-4260-8892-b391513e7e99"></script>
-
 </head>
 
 <body class="bg-gray-100 min-h-screen p-6">
@@ -99,8 +86,7 @@
 							</ul>
 						</li>
 						<li>• 歌单名称用于创建保存文件夹，建议每次使用新的名称</li>
-						<li>• YouTube下载需要上传cookies.txt文件（<a href="https://github.com/hanxi/xiaomusic/issues/210"
-								class="text-blue-600 hover:text-blue-800 underline" target="_blank">查看详细说明</a>）</li>
+						<li>• YouTube下载需要上传cookies.txt文件，建议先在设置页面上传后再执行下载</li>
 						<li>• 也支持下载单个视频的音频</li>
 					</ul>
 				</div>
@@ -142,34 +128,13 @@
 								<span class="sm:hidden">调试</span>
 							</button>
 						</a>
-						<a href="https://github.com/hanxi/xiaomusic" target="_blank" class="flex-1 sm:flex-none">
-							<button
-								class="w-full px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50">
-								GitHub
-							</button>
-						</a>
-						<a href="https://afdian.com/a/imhanxi" target="_blank" class="flex-1 sm:flex-none">
-							<button
-								class="w-full px-4 py-2 bg-blue-500 border border-gray-300 text-white rounded-md hover:bg-blue-600">
-								<span class="hidden sm:inline">💰 爱发电</span>
-								<span class="sm:hidden">💰爱发电</span>
-							</button>
-						</a>
 					</div>
 				</div>
 			</div>
 		</div>
-		<!-- 二维码 -->
-		<div class="text-center mt-12 mb-24">
-			<div class="bg-white p-6 rounded-lg border inline-block">
-				<img class="qrcode mx-auto w-40 sm:w-64 h-40 sm:h-64" src="./qrcode.png" alt="请涵曦喝奶茶🧋">
-				<p class="mt-4 text-gray-600 font-medium">扫码请涵曦喝奶茶🧋</p>
-			</div>
-			<footer class="mt-6 text-sm sm:text-base text-gray-600">
-				<p>Powered by <a href="https://xdocs.hanxi.cc" target="_blank"
-						class="text-blue-600 hover:text-blue-800">XiaoMusic</a></p>
-			</footer>
-		</div>
+		<footer class="text-center mt-12 mb-24 text-sm sm:text-base text-gray-600">
+			<p>Powered by XiaoMusic</p>
+		</footer>
 	</div>
 	</div>
 
