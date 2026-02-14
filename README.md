@@ -81,7 +81,7 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 
 当前维护版本: `1.0.1`
 
-更新记录: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/CHANGELOG.md>
+更新记录: `CHANGELOG.md`
 
 ## AI 开发说明
 
