@@ -50,17 +50,18 @@ RUN if [ -f /etc/alpine-release ]; then \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# 安装PDM（固定版本便于复现构建）
-RUN pip install -U "pdm==2.15.4"
+# 安装PDM
+# NOTE: Alpine + Python 3.12 的 argparse 兼容性在部分 PDM 版本上存在问题；
+# 这里使用最新可用版本以确保构建可用。
+RUN pip install -U pdm
 ENV PDM_CHECK_UPDATE=false
 
 WORKDIR /app
 COPY pyproject.toml README.md package.json package-lock.json ./
 
 # 安装Python和Node.js依赖
-# 生成/校验 lock 后再安装，避免随时间漂移
-RUN pdm lock --check || pdm lock
-RUN pdm sync --prod --no-editable -v
+# 安装 Python 依赖
+RUN pdm install --prod --no-editable -v
 RUN npm ci --loglevel=verbose
 
 # 复制应用代码
