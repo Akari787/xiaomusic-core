@@ -1,3 +1,19 @@
+## v1.0.1 (2026-02-14)
+
+### Feat
+
+- 安全默认：默认禁用 `exec#...`，加入白名单与参数校验，并加固 `http_get` 出站请求策略
+- Token 治理：支持环境变量优先，支持 `persist_token=false` 的不落盘模式
+- 日志脱敏：统一对 token/Authorization/api_key 等敏感字段做 best-effort 脱敏
+
+### Docs
+
+- 增加 `SECURITY.md`，补充内网安全部署与迁移说明，清理文档里不安全的 `exec#` 示例
+
+### Build
+
+- Docker 构建改为 `npm ci`，并固定 PDM 版本/锁定依赖以提升可复现性
+
 ## v1.0.0 (2026-02-13)
 
 ### Feat
