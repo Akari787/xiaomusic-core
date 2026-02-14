@@ -5,7 +5,7 @@ from xiaomusic.utils.file_utils import traverse_music_directory
 from xiaomusic.utils.music_utils import get_local_music_duration
 
 
-async def test_one_music(filename):
+async def check_one_music(filename):
     # 获取播放时长
     duration = await get_local_music_duration(filename)
     sec = math.ceil(duration)
@@ -18,7 +18,7 @@ async def main(directory):
     print(local_musics)
     for _, files in local_musics.items():
         for file in files:
-            await test_one_music(file)
+            await check_one_music(file)
 
 
 if __name__ == "__main__":

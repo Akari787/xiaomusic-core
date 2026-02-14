@@ -13,7 +13,7 @@ from xiaomusic.utils.music_utils import extract_audio_metadata
 # lyrics 歌词
 
 
-async def test_one_music(filename):
+async def check_one_music(filename):
     # 获取播放时长
     try:
         metadata = extract_audio_metadata(filename, "cache/picture_cache")
@@ -32,8 +32,8 @@ async def main(directory):
             # await test_one_music(file)
             pass
 
-    await test_one_music("music/4 In Love - 一千零一个愿望.mp3")
-    # await test_one_music("./music/程响-人间烟火.flac")
+    await check_one_music("music/4 In Love - 一千零一个愿望.mp3")
+    # await check_one_music("./music/程响-人间烟火.flac")
 
 
 if __name__ == "__main__":
