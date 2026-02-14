@@ -7,10 +7,9 @@ import signal
 
 import sentry_sdk
 from sentry_sdk.integrations.asyncio import AsyncioIntegration
-from sentry_sdk.integrations.logging import (
-    LoggingIntegration,
-    ignore_logger,
-)
+from sentry_sdk.integrations.logging import LoggingIntegration, ignore_logger
+
+from xiaomusic.security.redaction import redact_text
 
 LOGO = r"""
  __  __  _                   __  __                 _
@@ -22,17 +21,30 @@ LOGO = r"""
 """
 
 
-sentry_sdk.init(
-    dsn="https://ffe4962642d04b29afe62ebd1a065231@glitchtip.hanxi.cc/1",
-    integrations=[
-        AsyncioIntegration(),
-        LoggingIntegration(
-            level=logging.WARNING,
-            event_level=logging.ERROR,
-        ),
-    ],
-    # debug=True,
-)
+def _sentry_before_send(event, hint):
+    try:
+        # Best-effort redact strings inside the event payload
+        event_json = json.dumps(event, ensure_ascii=False)
+        redacted = redact_text(event_json)
+        return json.loads(redacted)
+    except Exception:
+        return event
+
+
+if os.getenv("XIAOMUSIC_ENABLE_SENTRY", "false").lower() == "true":
+    sentry_sdk.init(
+        dsn="https://ffe4962642d04b29afe62ebd1a065231@glitchtip.hanxi.cc/1",
+        integrations=[
+            AsyncioIntegration(),
+            LoggingIntegration(
+                level=logging.WARNING,
+                event_level=logging.ERROR,
+            ),
+        ],
+        before_send=_sentry_before_send,
+        # debug=True,
+    )
+
 ignore_logger("miservice")
 
 
@@ -101,16 +113,21 @@ def main():
                     return False
             return True
 
+    formatter_class = "logging.Formatter"
+    if config.log_redact:
+        formatter_class = "xiaomusic.security.logging.RedactingLogFormatter"
+
     LOGGING_CONFIG = {
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": {
             "default": {
+                "()": formatter_class,
                 "format": f"%(asctime)s [{__version__}] [%(levelname)s] %(message)s",
                 "datefmt": "[%Y-%m-%d %H:%M:%S]",
-                "use_colors": False,
             },
             "access": {
+                "()": formatter_class,
                 "format": f"%(asctime)s [{__version__}] [%(levelname)s] %(message)s",
                 "datefmt": "[%Y-%m-%d %H:%M:%S]",
             },

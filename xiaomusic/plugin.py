@@ -48,26 +48,16 @@ class PluginManager:
 
     async def execute_plugin(self, code):
         """
-        执行指定的插件代码。插件函数可以是同步或异步。
-        :param code: 需要执行的插件函数代码（例如 'plugin1("hello")'）
+        执行指定的插件代码。
+
+        旧版本使用 eval 直接执行任意表达式，存在安全风险。
+        新版本仅允许 exec#<command>(<literal args>) 形式，并受配置控制。
         """
-        # 分解代码字符串以获取函数名
-        func_name = code.split("(")[0]
+        from xiaomusic.security.exec_plugin import ExecPluginEngine
 
-        # 根据解析出的函数名从插件字典中获取函数
-        plugin_func = self.get_func(func_name)
-
-        if not plugin_func:
-            raise ValueError(f"No plugin function named '{func_name}' found.")
-
-        # 检查函数是否是异步函数
-        global_namespace = globals().copy()
-        local_namespace = self.get_local_namespace()
-        if inspect.iscoroutinefunction(plugin_func):
-            # 如果是异步函数，构建执行用的协程对象
-            coroutine = eval(code, global_namespace, local_namespace)
-            # 等待协程执行
-            await coroutine
-        else:
-            # 如果是普通函数，直接执行代码
-            eval(code, global_namespace, local_namespace)
+        engine = ExecPluginEngine(
+            config=self.xiaomusic.config,
+            log=self.log,
+            plugin_manager=self,
+        )
+        return await engine.execute(code)

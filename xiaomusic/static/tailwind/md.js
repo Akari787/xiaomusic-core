@@ -440,6 +440,21 @@ $.get("/getversion", function (data, status) {
   console.log(data, status, data["version"]);
   $("#version").text(`${data.version}`);
 
+  // 版本号点击跳转到本项目 GitHub
+  const $v = $("#version");
+  if ($v.length) {
+    const url = "https://github.com/Akari787/xiaomusic-oauth2";
+    const $a = $v.closest("a");
+    if ($a.length) {
+      $a.attr("href", url).attr("target", "_blank").attr("rel", "noopener noreferrer");
+    } else {
+      // 极端情况下是普通元素，兜底绑定点击跳转
+      $v.off("click.xmoauth2").on("click.xmoauth2", function () {
+        window.open(url, "_blank", "noopener");
+      });
+    }
+  }
+
   $.get("/latestversion", function (ret, status) {
     console.log(ret, status);
     if (ret.ret == "OK") {
@@ -965,21 +980,7 @@ function timedShutDown(cmd) {
   }, 3000);
 }
 
-// 绑定点击事件，显示弹窗
-$('#version').on('click', function () {
-  $.get("https://xdocs.hanxi.cc/versions.json", function (data, status) {
-    console.log(data);
-    const versionSelect = document.getElementById("update-version");
-    versionSelect.innerHTML = "";
-    data.forEach((item) => {
-      const option = document.createElement("option");
-      option.value = item.version;
-      option.textContent = item.version;
-      versionSelect.appendChild(option);
-    });
-  });
-  $('#update-component').show();
-});
+// 版本号点击行为由页面链接本身决定（跳转到项目页面）
 
 // 关闭更新弹窗
 function toggleUpdate() {

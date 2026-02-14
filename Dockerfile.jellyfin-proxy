@@ -1,0 +1,11 @@
+FROM hanxi/xiaomusic:latest
+
+# Minimal overlay image: only copy changed sources/assets.
+
+COPY xiaomusic/config.py /app/xiaomusic/config.py
+COPY xiaomusic/music_library.py /app/xiaomusic/music_library.py
+COPY xiaomusic/api/routers/file.py /app/xiaomusic/api/routers/file.py
+
+COPY xiaomusic/static/default/setting.html /app/xiaomusic/static/default/setting.html
+COPY xiaomusic/static/default/setting.css /app/xiaomusic/static/default/setting.css
+COPY xiaomusic/static/tailwind/setting.html /app/xiaomusic/static/tailwind/setting.html

@@ -4,7 +4,7 @@ import asyncio
 import base64
 import os
 import shutil
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import aiohttp
 from fastapi import (
@@ -431,7 +431,19 @@ async def _proxy_handler(urlb64: str, is_radio: bool):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Base64解码失败: {str(e)}") from e
 
-    log.info(f"代理请求: {url}")
+    def _redact_url(u: str) -> str:
+        try:
+            parsed = urlparse(u)
+            q = parse_qs(parsed.query, keep_blank_values=True)
+            for k in list(q.keys()):
+                if k.lower() in ("api_key", "x-emby-token", "token", "access_token"):
+                    q[k] = ["***"]
+            redacted_query = urlencode(q, doseq=True)
+            return parsed._replace(query=redacted_query).geturl()
+        except Exception:
+            return u
+
+    log.info(f"代理请求: {_redact_url(url)}")
 
     parsed_url, url = xiaomusic.music_library.expand_self_url(url)
     log.info(f"链接处理后 ${parsed_url}")

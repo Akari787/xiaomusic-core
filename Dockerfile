@@ -1,5 +1,5 @@
 # 定义构建参数，用于指定架构和基础镜像
-ARG PYTHON_VERSION=3.14
+ARG PYTHON_VERSION=3.12
 
 # 根据不同架构选择对应的基础镜像
 FROM python:${PYTHON_VERSION}-alpine AS base-linux-amd64
@@ -50,16 +50,18 @@ RUN if [ -f /etc/alpine-release ]; then \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# 安装PDM
-RUN pip install -U pdm
+# 安装PDM（固定版本便于复现构建）
+RUN pip install -U "pdm==2.15.4"
 ENV PDM_CHECK_UPDATE=false
 
 WORKDIR /app
-COPY pyproject.toml README.md package.json ./
+COPY pyproject.toml README.md package.json package-lock.json ./
 
 # 安装Python和Node.js依赖
-RUN pdm install --prod --no-editable -v
-RUN npm install --loglevel=verbose
+# 生成/校验 lock 后再安装，避免随时间漂移
+RUN pdm lock --check || pdm lock
+RUN pdm sync --prod --no-editable -v
+RUN npm ci --loglevel=verbose
 
 # 复制应用代码
 COPY xiaomusic/ ./xiaomusic/

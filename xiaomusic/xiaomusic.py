@@ -26,6 +26,7 @@ from xiaomusic.file_watcher import FileWatcherManager
 from xiaomusic.music_library import MusicLibrary
 from xiaomusic.online_music import OnlineMusicService
 from xiaomusic.plugin import PluginManager
+from xiaomusic.security.token_store import TokenStore
 from xiaomusic.utils.network_utils import downloadfile
 from xiaomusic.utils.system_utils import deepcopy_data_no_sensitive_info
 from xiaomusic.utils.text_utils import chinese_to_number
@@ -69,6 +70,9 @@ class XiaoMusic:
 
         # 初始化日志
         self.setup_logger()
+
+        # Token store (env precedence + optional persistence)
+        self.token_store = TokenStore(self.config, self.log)
 
         # 计划任务
         self.crontab = Crontab(self.log)
@@ -132,6 +136,7 @@ class XiaoMusic:
             config=self.config,
             log=self.log,
             device_manager=self.device_manager,
+            token_store=self.token_store,
         )
 
         # 初始化插件
@@ -177,7 +182,12 @@ class XiaoMusic:
     def setup_logger(self):
         log_format = f"%(asctime)s [{__version__}] [%(levelname)s] %(filename)s:%(lineno)d: %(message)s"
         date_format = "[%Y-%m-%d %H:%M:%S]"
-        formatter = logging.Formatter(fmt=log_format, datefmt=date_format)
+        if getattr(self.config, "log_redact", True):
+            from xiaomusic.security.logging import RedactingLogFormatter
+
+            formatter = RedactingLogFormatter(fmt=log_format, datefmt=date_format)
+        else:
+            formatter = logging.Formatter(fmt=log_format, datefmt=date_format)
 
         self.log = logging.getLogger("xiaomusic")
         self.log.handlers.clear()  # 清除已有的 handlers
@@ -687,8 +697,24 @@ class XiaoMusic:
 
     async def exec(self, did="", arg1=None, **kwargs):
         self.auth_manager._cur_did = did
-        code = arg1 if arg1 else 'code1("hello")'
-        await self.plugin_manager.execute_plugin(code)
+        from xiaomusic.security.errors import ExecDisabledError, ExecNotAllowedError, ExecValidationError
+
+        code = arg1 if arg1 else ""
+        try:
+            await self.plugin_manager.execute_plugin(code)
+        except ExecDisabledError:
+            # Voice-friendly feedback
+            try:
+                await self.do_tts(did, "出于安全考虑，已禁用 exec 插件")
+            except Exception:
+                pass
+            raise
+        except (ExecNotAllowedError, ExecValidationError):
+            try:
+                await self.do_tts(did, "该 exec 命令未被允许")
+            except Exception:
+                pass
+            raise
 
     # 此接口用于插件中获取当前设备
     def get_cur_did(self):

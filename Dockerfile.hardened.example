@@ -1,0 +1,12 @@
+# Example hardened Dockerfile (non-root). This is a reference.
+#
+# It uses the upstream image and drops privileges.
+
+FROM hanxi/xiaomusic:latest
+
+RUN addgroup -g 10001 -S xiaomusic && adduser -u 10001 -S xiaomusic -G xiaomusic
+
+# Ensure mount points exist
+RUN mkdir -p /app/conf /app/music && chown -R xiaomusic:xiaomusic /app/conf /app/music
+
+USER xiaomusic

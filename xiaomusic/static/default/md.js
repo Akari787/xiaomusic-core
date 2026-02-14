@@ -900,6 +900,16 @@ $.get("/getversion", function (data, status) {
   console.log(data, status, data["version"]);
   $("#version").text(`${data.version}`);
 
+  // 版本号点击跳转到本项目 GitHub（避免被旧页面链接/缓存影响）
+  const $v = $("#version");
+  if ($v.length) {
+    const url = "https://github.com/Akari787/xiaomusic-oauth2";
+    const $a = $v.closest("a");
+    if ($a.length) {
+      $a.attr("href", url).attr("target", "_blank").attr("rel", "noopener noreferrer");
+    }
+  }
+
   $.get("/latestversion", function (ret, status) {
     console.log(ret, status);
     if (ret.ret == "OK") {

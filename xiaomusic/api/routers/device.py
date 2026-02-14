@@ -6,6 +6,7 @@ import urllib.parse
 from fastapi import (
     APIRouter,
     Depends,
+    HTTPException,
 )
 
 from xiaomusic.api.dependencies import (
@@ -18,6 +19,8 @@ from xiaomusic.api.models import (
     DidCmd,
     DidVolume,
 )
+
+from xiaomusic.security.exec_plugin import parse_exec_code
 
 router = APIRouter(dependencies=[Depends(verification)])
 
@@ -78,11 +81,28 @@ async def do_cmd(data: DidCmd):
 
     if len(cmd) > 0:
         try:
+            # Block exec# at HTTP layer when disabled/not allowed.
+            device = xiaomusic.device_manager.devices.get(did)
+            if device is not None and xiaomusic.command_handler is not None:
+                opvalue, oparg = xiaomusic.command_handler.match_cmd(
+                    device, cmd, ctrl_panel=True
+                )
+                if opvalue == "exec":
+                    if not xiaomusic.config.enable_exec_plugin:
+                        raise HTTPException(status_code=403, detail="exec plugin disabled")
+                    call = parse_exec_code(str(oparg))
+                    allowed = set(xiaomusic.config.allowed_exec_commands or [])
+                    if call.command not in allowed:
+                        raise HTTPException(status_code=403, detail="exec command not allowed")
+
             await xiaomusic.cancel_all_tasks()
             task = asyncio.create_task(xiaomusic.do_check_cmd(did=did, query=cmd))
             xiaomusic.append_running_task(task)
+        except HTTPException:
+            # Make sure FastAPI returns the intended HTTP error.
+            raise
         except Exception as e:
-            log.warning(f"Execption {e}")
+            log.warning(f"Exception {e}")
         return {"ret": "OK"}
     return {"ret": "Unknow cmd"}
 

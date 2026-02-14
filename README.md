@@ -52,9 +52,25 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 
 ## ⚠️ 安全建议
 
-- 若开放公网访问，请务必启用控制台认证并使用强密码。
-- 妥善保管 `conf/auth.json`，避免泄露登录凭据。
-- 建议通过设置页下载日志后再提交 issue，并先清理敏感信息。
+### 内网安全部署（默认安全）
+
+- 默认禁用危险能力：`exec#...`（需显式开启并配置白名单）。
+- 默认关闭遥测：`enable_analytics=false`。
+- 建议启用 HTTP Basic：设置 `disable_httpauth=false` 并配置强口令。
+- `conf/auth.json` 仅限容器/宿主可读写（Linux 推荐权限 `600`）。
+- Jellyfin 建议使用可被音箱访问的 HTTPS 域名；若是内网地址可启用自动代理降级。
+- Docker 推荐最小权限运行：非 root、`read_only`、`cap_drop: [ALL]`、`no-new-privileges`。
+- 限制出站网络：如使用 `http_get`，必须配置 `allowlist_domains`；未配置将拒绝。
+- 日志默认脱敏：`log_redact=true`，避免 token/api_key 泄露。
+- 如需排障，优先导出脱敏日志片段再提交 issue。
+- 永远不要把 GitHub Token / Jellyfin API Key / `auth.json` 内容贴到公开渠道。
+
+### 迁移说明（安全默认）
+
+- 之前配置里如包含 `exec#...`（如放在 `user_key_word_dict`），升级后会默认被拦截；需要手动设置 `enable_exec_plugin=true` 并配置 `allowed_exec_commands` 白名单。
+- 如需 `http_get`：同时加入 `allowed_exec_commands`，并配置 `allowlist_domains`；未配置域名白名单会拒绝出站请求。
+- Token 优先级变更为“环境变量 > `conf/auth.json`”：支持 `OAUTH2_ACCESS_TOKEN` / `OAUTH2_REFRESH_TOKEN`；若这些变量存在，删除 token 文件不会让其失效。
+- 如不希望落盘 token：设置 `persist_token=false`，扫码/刷新只会保存到内存（重启后需重新登录）。
 
 ## 🤝 贡献与反馈
 

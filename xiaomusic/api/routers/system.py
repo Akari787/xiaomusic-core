@@ -47,8 +47,21 @@ from xiaomusic.utils.system_utils import (
 )
 from xiaomusic.qrcode_login import MiJiaAPI
 router = APIRouter(dependencies=[Depends(verification)])
-auth_data_path = config.oauth2_token_path if config.oauth2_token_path else None
-mi_jia_api = MiJiaAPI(auth_data_path=auth_data_path)
+
+
+def _get_mijia_api():
+    # auth_data_path should be a directory
+    token_path = config.oauth2_token_path if config.oauth2_token_path else ""
+    auth_dir = os.path.dirname(token_path) if token_path else None
+    if not auth_dir:
+        auth_dir = None
+    return MiJiaAPI(
+        auth_data_path=auth_dir,
+        token_store=getattr(xiaomusic, "token_store", None),
+    )
+
+
+mi_jia_api = None
 qrcode_login_task = None
 
 @router.get("/")
@@ -63,7 +76,10 @@ async def read_index():
 async def get_qrcode():
     """生成小米账号扫码登录用二维码，返回 base64 图片 URL。"""
     global qrcode_login_task
+    global mi_jia_api
     try:
+        if mi_jia_api is None:
+            mi_jia_api = _get_mijia_api()
         qrcode_data = mi_jia_api.get_qrcode()
         # 已登录时 get_qrcode 返回 False，无需扫码
         if qrcode_data is False:
@@ -130,7 +146,27 @@ async def getsetting(need_device_list: bool = False):
     config_data = xiaomusic.getconfig()
     data = asdict(config_data)
     data["httpauth_password"] = "******"
-    data["oauth2_token_available"] = os.path.isfile(config_data.oauth2_token_path)
+
+    def _token_valid(j: dict) -> bool:
+        # oauth2 token must contain serviceToken to be usable
+        st = j.get("serviceToken") or j.get("yetAnotherServiceToken")
+        return bool(j.get("userId") and j.get("passToken") and j.get("ssecurity") and st)
+
+    # oauth2 token may come from env or file; prefer token_store when available
+    token_available = False
+    try:
+        ts = getattr(xiaomusic, "token_store", None)
+        if ts is not None:
+            j = ts.load().data
+        elif config_data.oauth2_token_path and os.path.isfile(config_data.oauth2_token_path):
+            with open(config_data.oauth2_token_path, encoding="utf-8") as f:
+                j = json.load(f)
+        else:
+            j = {}
+        token_available = _token_valid(j)
+    except Exception:
+        token_available = False
+    data["oauth2_token_available"] = token_available
     if need_device_list:
         device_list = await xiaomusic.getalldevices()
         log.info(f"getsetting device_list: {device_list}")
@@ -142,12 +178,110 @@ async def getsetting(need_device_list: bool = False):
 async def oauth2_status():
     global qrcode_login_task
     token_path = config.oauth2_token_path
+    token_exists = bool(token_path and os.path.isfile(token_path))
+    token_valid = False
+    try:
+        ts = getattr(xiaomusic, "token_store", None)
+        if ts is not None:
+            j = ts.load().data
+        elif token_exists:
+            with open(token_path, encoding="utf-8") as f:
+                j = json.load(f)
+        else:
+            j = {}
+        st = j.get("serviceToken") or j.get("yetAnotherServiceToken")
+        token_valid = bool(j.get("userId") and j.get("passToken") and j.get("ssecurity") and st)
+    except Exception:
+        token_valid = False
     return {
         "success": True,
         "token_file": token_path,
-        "token_exists": os.path.isfile(token_path),
-        "cloud_available": mi_jia_api.available,
+        "token_exists": token_exists,
+        "token_valid": token_valid,
+        # Used by frontend to decide if refresh loop should continue
+        "cloud_available": token_valid,
         "login_in_progress": bool(qrcode_login_task and not qrcode_login_task.done()),
+    }
+
+
+@router.post("/api/oauth2/logout")
+async def oauth2_logout():
+    """退出 OAuth2 登录并删除本地 token 文件。
+
+    仅删除 token 文件，不修改其它配置；删除后会触发 reinit 让服务重新读取认证状态。
+    """
+    global qrcode_login_task
+    token_path = config.oauth2_token_path
+
+    # 如果正在轮询扫码登录，先取消
+    if qrcode_login_task and not qrcode_login_task.done():
+        qrcode_login_task.cancel()
+
+    removed = False
+    removed_paths = []
+
+    # Best-effort remove token file (handle relative path ambiguity)
+    candidates = []
+    if token_path:
+        candidates.append(token_path)
+        candidates.append(os.path.abspath(token_path))
+        candidates.append(os.path.join(os.getcwd(), token_path))
+        candidates.append(os.path.join("/app", token_path.lstrip("/")))
+    for p in [c for c in candidates if c]:
+        if os.path.isfile(p):
+            try:
+                os.remove(p)
+                removed = True
+                removed_paths.append(p)
+            except OSError as e:
+                log.exception("remove oauth2 token file failed: %s", e)
+                raise HTTPException(status_code=500, detail=f"remove token failed: {e}")
+
+    # Clear in-memory token cache (e.g., persist_token=false)
+    try:
+        ts = getattr(xiaomusic, "token_store", None)
+        if ts is not None:
+            ts.clear()
+    except Exception:
+        pass
+
+    # Clear in-memory auth/session state so it stops being treated as logged-in.
+    try:
+        if getattr(xiaomusic, "auth_manager", None) is not None:
+            am = xiaomusic.auth_manager
+            am.mina_service = None
+            am.miio_service = None
+            am.login_acount = None
+            am.login_signature = None
+            am.cookie_jar = None
+            # clear aiohttp cookie jar
+            try:
+                am.mi_session.cookie_jar.clear()
+            except Exception:
+                pass
+            # remove cached miservice token store if exists
+            try:
+                mi_token_home = os.path.join(am.config.conf_path, ".mi.token")
+                if os.path.isfile(mi_token_home):
+                    os.remove(mi_token_home)
+            except Exception:
+                pass
+
+        # Reset MiJiaAPI cache so /api/get_qrcode won't think we're already logged-in.
+        global mi_jia_api
+        mi_jia_api = _get_mijia_api()
+
+        # Reinit to apply new auth state
+        await xiaomusic.reinit()
+    except Exception as e:
+        log.exception("cleanup after oauth2 logout failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"logout cleanup failed: {e}")
+
+    return {
+        "success": True,
+        "removed": removed,
+        "token_file": token_path,
+        "removed_paths": removed_paths,
     }
 
 

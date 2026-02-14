@@ -1,0 +1,28 @@
+services:
+  xiaomusic:
+    image: hanxi/xiaomusic:latest
+    container_name: xiaomusic
+    restart: unless-stopped
+    ports:
+      - "58090:8090"
+    environment:
+      TZ: Asia/Tokyo
+      XIAOMUSIC_PUBLIC_PORT: 58090
+      # Security defaults
+      XIAOMUSIC_ENABLE_EXEC_PLUGIN: "false"
+      XIAOMUSIC_ENABLE_ANALYTICS: "false"
+      XIAOMUSIC_LOG_REDACT: "true"
+      XIAOMUSIC_PERSIST_TOKEN: "true"
+    volumes:
+      - ./conf:/app/conf
+      - ./music:/app/music
+    # Harden runtime
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 200
+    # If you need plugin downloads or temp files, allow write only to /app/conf and /app/music.

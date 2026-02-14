@@ -28,7 +28,7 @@ class AuthManager:
     负责处理小米账号的登录、认证和会话管理。
     """
 
-    def __init__(self, config, log, device_manager):
+    def __init__(self, config, log, device_manager, token_store=None):
         """初始化认证管理器
 
         Args:
@@ -39,6 +39,7 @@ class AuthManager:
         self.log = log
         self.mi_token_home = os.path.join(self.config.conf_path, ".mi.token")
         self.oauth2_token_path = self.config.oauth2_token_path
+        self.token_store = token_store
 
         # 认证状态
         self.mina_service = None
@@ -132,11 +133,21 @@ class AuthManager:
             )
             self.set_token(mi_account)
 
-            # OAuth2 扫码场景优先使用 serviceToken，避免触发账号二次风控验证
-            has_service_token = bool(
-                auth_data.get("serviceToken")
-                or auth_data.get("yetAnotherServiceToken")
+            # If OAuth2 token file already contains micoapi serviceToken, inject it into MiAccount
+            # to avoid triggering MiAccount.login() (which may require captcha).
+            oauth_service_token = auth_data.get("serviceToken") or auth_data.get(
+                "yetAnotherServiceToken"
             )
+            oauth_ssecurity = auth_data.get("ssecurity")
+            if oauth_service_token and oauth_ssecurity:
+                try:
+                    mi_account.token["micoapi"] = (oauth_ssecurity, oauth_service_token)
+                except Exception:
+                    # keep fallback login path
+                    pass
+
+            # OAuth2 扫码场景优先使用 serviceToken，避免触发账号二次风控验证
+            has_service_token = bool(oauth_service_token and oauth_ssecurity)
             if not has_service_token:
                 await mi_account.login("micoapi")
 
@@ -204,10 +215,13 @@ class AuthManager:
             return
 
     def _get_oauth2_auth_data(self):
-        if not os.path.isfile(self.oauth2_token_path):
-            return {}
-        with open(self.oauth2_token_path, encoding="utf-8") as f:
-            user_data = json.loads(f.read())
+        if self.token_store is not None:
+            user_data = self.token_store.load().data
+        else:
+            if not os.path.isfile(self.oauth2_token_path):
+                return {}
+            with open(self.oauth2_token_path, encoding="utf-8") as f:
+                user_data = json.loads(f.read())
         required_fields = {"passToken", "userId"}
         if not required_fields.issubset(user_data):
             self.log.warning(

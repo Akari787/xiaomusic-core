@@ -1,12 +1,14 @@
 """FastAPI 应用实例和中间件配置"""
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 
 from xiaomusic import __version__
@@ -55,6 +57,36 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+
+# Map security-related errors (e.g. exec# governance) to a safe HTTP response.
+try:
+    from xiaomusic.security.errors import (
+        ExecDisabledError,
+        ExecNotAllowedError,
+        ExecValidationError,
+        SecurityError,
+    )
+
+    @app.exception_handler(SecurityError)
+    async def _handle_security_error(request, exc):
+        # Keep response and logs generic; details may contain user input.
+        logging.getLogger("xiaomusic.security").warning(
+            "SECURITY: blocked request: %s", exc.__class__.__name__
+        )
+        if isinstance(exc, ExecDisabledError):
+            detail = "exec plugin disabled"
+        elif isinstance(exc, ExecNotAllowedError):
+            detail = "exec command not allowed"
+        elif isinstance(exc, ExecValidationError):
+            detail = "invalid exec command"
+        else:
+            detail = "blocked by security policy"
+        return JSONResponse(status_code=403, content={"detail": detail})
+
+except Exception:
+    # If security modules are unavailable for some reason, don't break app import.
+    pass
 
 # 添加 CORS 中间件
 app.add_middleware(

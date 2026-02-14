@@ -38,10 +38,8 @@ def default_key_word_dict():
 
 
 def default_user_key_word_dict():
-    return {
-        "测试自定义口令": 'exec#code1("hello")',
-        "测试链接": 'exec#httpget("https://github.com/hanxi/xiaomusic")',
-    }
+    # Unsafe features (exec#) are disabled by default; keep this empty.
+    return {}
 
 
 # 命令参数在前面
@@ -97,8 +95,8 @@ class Config:
     hostname: str = os.getenv("XIAOMUSIC_HOSTNAME", "http://192.168.2.5")
     port: int = int(os.getenv("XIAOMUSIC_PORT", "8090"))  # 监听端口
     public_port: int = int(os.getenv("XIAOMUSIC_PUBLIC_PORT", 58090))  # 歌曲访问端口
-    proxy: str = os.getenv("XIAOMUSIC_PROXY", None)
-    loudnorm: str = os.getenv("XIAOMUSIC_LOUDNORM", None)  # 均衡音量参数
+    proxy: str | None = os.getenv("XIAOMUSIC_PROXY", None)
+    loudnorm: str | None = os.getenv("XIAOMUSIC_LOUDNORM", None)  # 均衡音量参数
     search_prefix: str = os.getenv(
         "XIAOMUSIC_SEARCH", "bilisearch:"
     )  # "bilisearch:" or "ytsearch:"
@@ -190,7 +188,34 @@ class Config:
         os.getenv("XIAOMUSIC_ENABLE_SAVE_TAG", "false").lower() == "true"
     )
     enable_analytics: bool = (
-        os.getenv("XIAOMUSIC_ENABLE_ANALYTICS", "true").lower() == "true"
+        os.getenv("XIAOMUSIC_ENABLE_ANALYTICS", "false").lower() == "true"
+    )
+
+    # ---- Security defaults (safe by default) ----
+    log_redact: bool = os.getenv("XIAOMUSIC_LOG_REDACT", "true").lower() == "true"
+
+    # Persist OAuth2 token to conf/auth.json (default true for backward compatibility)
+    persist_token: bool = (
+        os.getenv("XIAOMUSIC_PERSIST_TOKEN", "true").lower() == "true"
+    )
+
+    # Exec plugin (exec#...) is dangerous. Default disabled.
+    enable_exec_plugin: bool = (
+        os.getenv("XIAOMUSIC_ENABLE_EXEC_PLUGIN", "false").lower() == "true"
+    )
+    allowed_exec_commands: list[str] = field(
+        default_factory=lambda: [
+            x.strip()
+            for x in os.getenv("XIAOMUSIC_ALLOWED_EXEC_COMMANDS", "").split(",")
+            if x.strip()
+        ]
+    )
+    allowlist_domains: list[str] = field(
+        default_factory=lambda: [
+            x.strip().lower()
+            for x in os.getenv("XIAOMUSIC_ALLOWLIST_DOMAINS", "").split(",")
+            if x.strip()
+        ]
     )
     get_ask_by_mina: bool = (
         os.getenv("XIAOMUSIC_GET_ASK_BY_MINA", "false").lower() == "true"
@@ -221,13 +246,24 @@ class Config:
     web_music_proxy: bool = (
         os.getenv("XIAOMUSIC_WEB_MUSIC_PROXY", "true").lower() == "true"
     )
+
+    # Jellyfin 音频强制走 proxy（用于音箱无法访问 Jellyfin 内网地址的场景）
+    jellyfin_force_proxy: bool = (
+        os.getenv("XIAOMUSIC_JELLYFIN_FORCE_PROXY", "false").lower() == "true"
+    )
+
+    # Jellyfin 代理模式: auto|on|off
+    # - auto: 仅当 Jellyfin Base URL 是内网/本机地址时走代理
+    # - on: Jellyfin 始终走代理
+    # - off: Jellyfin 永不走代理
+    jellyfin_proxy_mode: str = os.getenv("XIAOMUSIC_JELLYFIN_PROXY_MODE", "auto")
     # edge-tts 语音角色
     edge_tts_voice: str = os.getenv("XIAOMUSIC_EDGE_TTS_VOICE", "zh-CN-XiaoyiNeural")
     # 是否启用定时清理临时文件
     enable_auto_clean_temp: bool = (
         os.getenv("XIAOMUSIC_ENABLE_AUTO_CLEAN_TEMP", "true").lower() == "true"
     )
-    qrcode_timeout: int = os.getenv("QRCODE_TIMEOUT", 120)
+    qrcode_timeout: int = int(os.getenv("QRCODE_TIMEOUT", "120"))
     jellyfin_enabled: bool = (
         os.getenv("XIAOMUSIC_JELLYFIN_ENABLED", "false").lower() == "true"
     )
@@ -264,6 +300,25 @@ class Config:
         # 转换数据
         self._active_cmd_arr = self.active_cmd.split(",") if self.active_cmd else []
         self._exclude_dirs_set = set(self.exclude_dirs.split(","))
+
+        # Normalize security fields
+        self.allowed_exec_commands = [x.strip() for x in self.allowed_exec_commands if x.strip()]
+        self.allowlist_domains = [x.strip().lower() for x in self.allowlist_domains if x.strip()]
+
+        if not isinstance(self.log_redact, bool):
+            self.log_redact = True
+        if not isinstance(self.persist_token, bool):
+            self.persist_token = True
+        if not isinstance(self.enable_exec_plugin, bool):
+            self.enable_exec_plugin = False
+
+        # Backward compatibility: legacy jellyfin_force_proxy
+        mode = (self.jellyfin_proxy_mode or "auto").strip().lower()
+        if mode not in ("auto", "on", "off"):
+            mode = "auto"
+        if self.jellyfin_force_proxy and mode == "auto":
+            mode = "on"
+        self.jellyfin_proxy_mode = mode
 
     def __post_init__(self) -> None:
         if self.proxy:

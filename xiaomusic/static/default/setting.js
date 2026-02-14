@@ -35,17 +35,25 @@ function startQRCodeCountdown($qrcodeStatus, $qrcodeImage, expireSeconds) {
   qrcodeCountdownTimer = setInterval(updateCountdownText, 1000);
 }
 
+function setJellyfinFieldsVisible(visible) {
+  const $fields = $("#jellyfin-fields");
+  if (!$fields.length) return;
+
+  $fields.prop("hidden", !visible);
+  // 仅在 UI 上禁用，避免误触发同步按钮
+  $fields.find("input, button, select, textarea").prop("disabled", !visible);
+}
+
 function fetchQRCode() {
   var $qrcodeImage = $("#qrcode-image");
   var $qrcodeStatus = $("#qrcode-status");
-  var $refreshBtn = $("#refresh-qrcode");
+  // refresh button removed; keep status updates only
 
   if (!$qrcodeImage.length || !$qrcodeStatus.length) return;
   stopQRCodeCountdown();
 
   $qrcodeImage.attr("src", "");
   $qrcodeStatus.text("正在生成二维码...");
-  $refreshBtn.text("刷新二维码");
 
   $.get("/api/get_qrcode")
     .done(function (data) {
@@ -53,6 +61,10 @@ function fetchQRCode() {
         if (data.already_logged_in) {
           $qrcodeStatus.text(data.message || "已登录，无需更新");
           $qrcodeImage.addClass("qrcode-image-hidden");
+          // 已登录时，切换按钮状态
+          if (typeof window.setOAuth2LoggedIn === "function") {
+            window.setOAuth2LoggedIn(true);
+          }
         } else {
           $qrcodeImage.attr("src", data.qrcode_url || "").removeClass("qrcode-image-hidden");
           startQRCodeCountdown($qrcodeStatus, $qrcodeImage, data.expire_seconds);
@@ -93,7 +105,112 @@ function fetchQRCode() {
 })();
 
 $(function () {
-  $("#refresh-qrcode").on("click", fetchQRCode);
+  // OAuth2 按钮状态（登录/刷新/退出）
+  let oauth2LoggedIn = false;
+
+  function fetchOAuth2Status() {
+    return $.get("/api/oauth2/status");
+  }
+
+  // Expose for fetchQRCode() callback
+  window.setOAuth2LoggedIn = function (loggedIn) {
+    oauth2LoggedIn = !!loggedIn;
+
+    const $action = $("#oauth2-action");
+    const $text = $("#oauth2-action-text");
+    const $logout = $("#oauth2-logout");
+    const $qrcodeImage = $("#qrcode-image");
+    const $qrcodeStatus = $("#qrcode-status");
+
+    if (!$action.length) return;
+
+    if (oauth2LoggedIn) {
+      $action.addClass("oauth2-ready");
+      $text.text("已扫码，刷新设备");
+      $logout.prop("hidden", false);
+      if ($qrcodeStatus.length) {
+        $qrcodeStatus.text("已登录，可点击上方按钮刷新设备列表");
+      }
+      if ($qrcodeImage.length) {
+        $qrcodeImage.addClass("qrcode-image-hidden");
+      }
+      stopQRCodeCountdown();
+    } else {
+      $action.removeClass("oauth2-ready");
+      $text.text("OAuth2 扫码登录");
+      $logout.prop("hidden", true);
+      if ($qrcodeStatus.length) {
+        $qrcodeStatus.text("点击上方按钮获取登录二维码");
+      }
+      if ($qrcodeImage.length) {
+        $qrcodeImage.attr("src", "").addClass("qrcode-image-hidden");
+      }
+      stopQRCodeCountdown();
+    }
+  };
+
+  $("#oauth2-action").on("click", function () {
+    const $btn = $(this);
+    $btn.prop("disabled", true);
+    fetchOAuth2Status()
+      .done(function (st) {
+        if (st && st.token_exists) {
+          refreshDevicesAfterOAuth();
+          return;
+        }
+        if (st && st.login_in_progress) {
+          refreshDevicesAfterOAuth();
+          return;
+        }
+        fetchQRCode();
+      })
+      .fail(function () {
+        // fallback: allow user to trigger QR
+        fetchQRCode();
+      })
+      .always(function () {
+        $btn.prop("disabled", false);
+      });
+  });
+
+  $("#oauth2-logout").on("click", function () {
+    const $btn = $(this);
+    const oldText = $btn.text();
+    $btn.prop("disabled", true).text("退出中...");
+    $.ajax({
+      type: "POST",
+      url: "/api/oauth2/logout",
+      success: function () {
+        window.setOAuth2LoggedIn(false);
+        // 重新拉取配置/设备列表，让 UI 及时反映状态
+        fetchDeviceList(function (data) {
+          const authReady = !!data.oauth2_token_available;
+          updateCheckbox("#mi_did", data.mi_did || "", data.device_list || [], authReady);
+          autoSelectOne();
+        });
+      },
+      error: function (xhr) {
+        alert(
+          "退出登录失败: " +
+            (xhr.responseJSON && xhr.responseJSON.detail
+              ? xhr.responseJSON.detail
+              : xhr.statusText)
+        );
+      },
+      complete: function () {
+        $btn.prop("disabled", false).text(oldText);
+      },
+    });
+  });
+
+  // 基于默认 select 值先设置一次
+  setJellyfinFieldsVisible($("#jellyfin_enabled").val() === "true");
+
+  $("#jellyfin_enabled").on("change", function () {
+    setJellyfinFieldsVisible($(this).val() === "true");
+  });
+
+  // 旧按钮已移除，二维码获取整合到上方 OAuth2 动作按钮
 
   // 拉取版本
   $.get("/getversion", function (data, status) {
@@ -184,14 +301,15 @@ $(function () {
   function refreshDevicesAfterOAuth() {
     const $qrcodeStatus = $("#qrcode-status");
     let retryCount = 0;
-    const maxRetry = 8;
+    // long polling login may take up to ~120s
+    const maxRetry = 90;
 
     const retryFetch = function () {
       $.get("/api/oauth2/status")
         .done(function (oauthStatus) {
           if ((oauthStatus.login_in_progress || !oauthStatus.cloud_available) && retryCount < maxRetry) {
             retryCount += 1;
-            $qrcodeStatus.text("登录处理中，正在同步设备列表...");
+            $qrcodeStatus.text("登录处理中，请在米家 App 完成确认...（" + retryCount + "/" + maxRetry + "）");
             setTimeout(retryFetch, 1500);
             return;
           }
@@ -200,6 +318,7 @@ $(function () {
             var authReady = !!data.oauth2_token_available;
             updateCheckbox("#mi_did", data.mi_did || "", data.device_list || [], authReady);
             $qrcodeStatus.text("登录状态已刷新，请勾选设备后保存配置");
+            window.setOAuth2LoggedIn(authReady);
           });
         })
         .fail(function () {
@@ -208,16 +327,14 @@ $(function () {
             setTimeout(retryFetch, 1500);
             return;
           }
-          $qrcodeStatus.text("刷新登录状态失败，请稍后重试");
+          $qrcodeStatus.text("刷新登录状态超时：请确认已在米家 App 完成扫码确认，或重新获取二维码");
         });
     };
 
     retryFetch();
   }
 
-  $("#comfit-qrcode").on("click", function () {
-    refreshDevicesAfterOAuth();
-  });
+  // 旧按钮已移除，逻辑整合到 #oauth2-action
 
   $("#sync-jellyfin").on("click", function () {
     const $btn = $(this);
@@ -256,6 +373,8 @@ $(function () {
     var authReady = !!data.oauth2_token_available;
     updateCheckbox("#mi_did", data.mi_did || "", data.device_list || [], authReady);
 
+    window.setOAuth2LoggedIn(authReady);
+
     for (const key in data) {
       const $element = $("#" + key);
       if ($element.length) {
@@ -270,6 +389,9 @@ $(function () {
     }
 
     autoSelectOne();
+
+    // 配置回填后再根据真实值刷新一次
+    setJellyfinFieldsVisible($("#jellyfin_enabled").val() === "true");
   });
 
     $("#update-devices").on("click", function () {

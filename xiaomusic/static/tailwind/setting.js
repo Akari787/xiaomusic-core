@@ -1,4 +1,58 @@
 $(function () {
+  // OAuth2 按钮状态（登录/刷新/退出）
+  let oauth2LoggedIn = false;
+
+  function fetchOAuth2Status() {
+    return $.get('/api/oauth2/status');
+  }
+
+  function setOAuth2LoggedIn(loggedIn) {
+    oauth2LoggedIn = !!loggedIn;
+
+    const $action = $("#oauth2-action");
+    const $text = $("#oauth2-action-text");
+    const $logout = $("#oauth2-logout");
+    const $qrcodeImage = $("#qrcode-image");
+    const $qrcodeStatus = $("#qrcode-status");
+
+    if (!$action.length) return;
+
+    if (oauth2LoggedIn) {
+      $action
+        .removeClass("border-blue-200 bg-white text-blue-700 hover:bg-blue-50")
+        .addClass("bg-blue-600 text-white hover:bg-blue-700 border-transparent");
+      if ($text.length) $text.text("已扫码，刷新设备");
+      $logout.prop("hidden", false);
+      if ($qrcodeStatus.length) $qrcodeStatus.text("已登录，可点击上方按钮刷新设备列表");
+      if ($qrcodeImage.length) $qrcodeImage.addClass("qrcode-image-hidden");
+    } else {
+      $action
+        .removeClass("bg-blue-600 text-white hover:bg-blue-700 border-transparent")
+        .addClass("border-blue-200 bg-white text-blue-700 hover:bg-blue-50");
+      if ($text.length) $text.text("OAuth2 扫码登录");
+      $logout.prop("hidden", true);
+      if ($qrcodeStatus.length) $qrcodeStatus.text("点击上方按钮获取登录二维码");
+      if ($qrcodeImage.length) $qrcodeImage.attr("src", "").addClass("qrcode-image-hidden");
+    }
+  }
+
+  // Allow global fetchQRCode() to update state
+  window.__oauth2SetLoggedIn = setOAuth2LoggedIn;
+
+  function setJellyfinFieldsVisible(visible) {
+    const $fields = $("#jellyfin-fields");
+    if (!$fields.length) return;
+    $fields.prop("hidden", !visible);
+    $fields.find("input, button, select, textarea").prop("disabled", !visible);
+  }
+
+  // 先按默认值隐藏/显示
+  setJellyfinFieldsVisible($("#jellyfin_enabled").val() === "true");
+
+  $("#jellyfin_enabled").on("change", function () {
+    setJellyfinFieldsVisible($(this).val() === "true");
+  });
+
   // 拉取版本
   $.get("/getversion", function (data, status) {
     console.log(data, status, data["version"]);
@@ -85,7 +139,8 @@ $(function () {
   function refreshDevicesAfterOAuth() {
     const qrcodeStatus = document.getElementById('qrcode-status');
     let retryCount = 0;
-    const maxRetry = 8;
+    // long polling login may take up to ~120s
+    const maxRetry = 90;
 
     const retryFetch = function () {
       $.get('/api/oauth2/status')
@@ -93,7 +148,7 @@ $(function () {
           if ((oauthStatus.login_in_progress || !oauthStatus.cloud_available) && retryCount < maxRetry) {
             retryCount += 1;
             if (qrcodeStatus) {
-              qrcodeStatus.textContent = '登录处理中，正在同步设备列表...';
+              qrcodeStatus.textContent = `登录处理中，请在米家 App 完成确认...（${retryCount}/${maxRetry}）`;
             }
             setTimeout(retryFetch, 1500);
             return;
@@ -105,6 +160,7 @@ $(function () {
             if (qrcodeStatus) {
               qrcodeStatus.textContent = '登录状态已刷新，请勾选设备后保存配置';
             }
+            setOAuth2LoggedIn(authReady);
           });
         })
         .fail(function () {
@@ -114,7 +170,7 @@ $(function () {
             return;
           }
           if (qrcodeStatus) {
-            qrcodeStatus.textContent = '刷新登录状态失败，请稍后重试';
+            qrcodeStatus.textContent = '刷新登录状态超时：请确认已在米家 App 完成扫码确认，或重新获取二维码';
           }
         });
     };
@@ -143,6 +199,59 @@ $(function () {
     }
 
     autoSelectOne();
+
+    // 配置回填后再根据真实值刷新一次
+    setJellyfinFieldsVisible($("#jellyfin_enabled").val() === "true");
+
+    setOAuth2LoggedIn(authReady);
+  });
+
+  $("#oauth2-action").on("click", function () {
+    const $btn = $(this);
+    $btn.prop('disabled', true);
+    fetchOAuth2Status()
+      .done(function (st) {
+        if (st && (st.token_exists || st.login_in_progress)) {
+          refreshDevicesAfterOAuth();
+          return;
+        }
+        fetchQRCode();
+      })
+      .fail(function () {
+        fetchQRCode();
+      })
+      .always(function () {
+        $btn.prop('disabled', false);
+      });
+  });
+
+  $("#oauth2-logout").on("click", function () {
+    const $btn = $(this);
+    const oldText = $btn.text();
+    $btn.prop("disabled", true).text("退出中...");
+    $.ajax({
+      type: "POST",
+      url: "/api/oauth2/logout",
+      success: function () {
+        setOAuth2LoggedIn(false);
+        fetchDeviceList(function (data) {
+          const authReady = !!data.oauth2_token_available;
+          updateCheckbox('#mi_did', data.mi_did || '', data.device_list || [], authReady);
+          autoSelectOne();
+        });
+      },
+      error: function (xhr) {
+        alert(
+          "退出登录失败: " +
+            (xhr.responseJSON && xhr.responseJSON.detail
+              ? xhr.responseJSON.detail
+              : xhr.statusText)
+        );
+      },
+      complete: function () {
+        $btn.prop("disabled", false).text(oldText);
+      },
+    });
   });
 
   $(".save-button").on("click", () => {
@@ -271,13 +380,7 @@ $(function () {
     $("#public_port").val(port);
   });
 
-  $("#refresh-qrcode").on("click", () => {
-    fetchQRCode();
-  });
-
-  $("#comfit-qrcode").on("click", () => {
-    refreshDevicesAfterOAuth();
-  });
+  // 旧按钮已移除，逻辑整合到 #oauth2-action
 
   $("#sync-jellyfin").on("click", () => {
     const $btn = $("#sync-jellyfin");
@@ -332,6 +435,9 @@ function fetchQRCode() {
       }
       if (data.already_logged_in) {
         qrcodeStatus.textContent = data.message || "已登录，无需扫码";
+        if (typeof window.__oauth2SetLoggedIn === "function") {
+          window.__oauth2SetLoggedIn(true);
+        }
         return;
       }
 

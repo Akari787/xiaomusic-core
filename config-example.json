@@ -56,9 +56,7 @@
     "停止": "stop",
     "停止播放": "stop",
     "播放列表": "play_music_list",
-    "播放歌单": "play_music_list",
-    "测试自定义口令": "exec#code1(\"hello\")",
-    "测试链接": "exec#httpget(\"https://github.com/Akari787/xiaomusic-oauth2\")"
+    "播放歌单": "play_music_list"
   },
   "key_match_order": [
     "分钟后关机",
@@ -87,8 +85,7 @@
     "停止",
     "停止播放",
     "播放歌单",
-    "测试自定义口令",
-    "测试链接"
+    "播放歌单"
   ],
   "use_music_api": false,
   "use_music_audio_id": "1582971365183456177",
@@ -104,10 +101,7 @@
   "keywords_singer_play": "播放歌手",
   "keywords_stop": "关机,暂停,停止,停止播放",
   "keywords_playlist": "播放列表,播放歌单",
-  "user_key_word_dict": {
-    "测试自定义口令": "exec#code1(\"hello\")",
-    "测试链接": "exec#httpget(\"https://github.com/Akari787/xiaomusic-oauth2\")"
-  },
+  "user_key_word_dict": {},
   "enable_force_stop": false,
   "devices": {},
   "group_list": "",
@@ -122,7 +116,12 @@
   "crontab_json": "",
   "enable_yt_dlp_cookies": false,
   "enable_save_tag": false,
-  "enable_analytics": true,
+  "enable_analytics": false,
+  "log_redact": true,
+  "persist_token": true,
+  "enable_exec_plugin": false,
+  "allowed_exec_commands": [],
+  "allowlist_domains": [],
   "get_ask_by_mina": false,
   "play_type_one_tts_msg": "已经设置为单曲循环",
   "play_type_all_tts_msg": "已经设置为全部循环",

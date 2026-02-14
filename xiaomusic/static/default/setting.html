@@ -4,13 +4,13 @@
 <head>
     <link rel="icon" href="/favicon.ico" />
     <meta name="viewport" content="width=device-width" />
-    <title>小爱音箱操控面板</title>
+    <title>XiaoMusic 设置面板</title>
     <!-- 预加载字体文件，减少加载延迟 -->
-    <link rel="preload" href="./materialicons.woff2" as="font" type="font/woff2" crossorigin>
-    <link rel="preload" href="./materialiconsoutlined.woff2" as="font" type="font/woff2" crossorigin>
-    <script src="./jquery-3.7.1.min.js?version=1769383300"></script>
-    <script src="./setting.js?version=1769383300"></script>
-    <link rel="stylesheet" type="text/css" href="./setting.css?version=1769383300" />
+    <link rel="preload" href="/static/default/materialicons.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/static/default/materialiconsoutlined.woff2" as="font" type="font/woff2" crossorigin>
+    <script src="/static/default/jquery-3.7.1.min.js?version=1769383300"></script>
+    <script src="/static/default/setting.js?version=1769383301"></script>
+    <link rel="stylesheet" type="text/css" href="/static/default/setting.css?version=1769383300" />
 
 </head>
 
@@ -18,8 +18,8 @@
     <div class="setting-header" role="banner">
         <div class="header-inner">
             <h2>
-                <span>小爱音箱设置面板</span>
-                (<a id="version" href="/docs/issues/changelog.html" target="_blank">版本未知</a>)
+                <span>XiaoMusic 设置面板</span>
+                (<a id="version" href="https://github.com/Akari787/xiaomusic-oauth2" target="_blank" rel="noopener noreferrer">版本未知</a>)
             </h2>
             <div class="header-buttons">
                 <button onclick="location.href = '/static/default/index.html'" aria-label="返回首页">
@@ -48,10 +48,14 @@
             <div class="card-content">
                 <!-- Tab 导航 -->
                 <div class="auth-tabs" role="tablist" aria-label="登录方式选择">
-                    <button class="auth-tab-button active" data-tab="qrcode" role="tab" aria-selected="true"
-                        aria-controls="tab-qrcode">
+                    <button id="oauth2-action" class="auth-tab-button active" type="button" data-tab="qrcode" role="tab"
+                        aria-selected="true" aria-controls="tab-qrcode">
                         <span class="material-icons" aria-hidden="true">qr_code_2</span>
-                        <span>OAuth2 扫码登录</span>
+                        <span id="oauth2-action-text">OAuth2 扫码登录</span>
+                    </button>
+                    <button id="oauth2-logout" class="auth-tab-button oauth2-logout" type="button" hidden>
+                        <span class="material-icons" aria-hidden="true">logout</span>
+                        <span>退出登录</span>
                     </button>
                 </div>
 
@@ -65,10 +69,8 @@
                                 <!-- 显示二维码的容器：点击按钮后再显示 -->
                                 <div id="qrcode-container">
                                     <img id="qrcode-image" src="" alt="二维码" class="qrcode-image-hidden" />
-                                    <p id="qrcode-status">点击下方按钮获取登录二维码</p>
+                                    <p id="qrcode-status">点击上方按钮获取登录二维码</p>
                                 </div>
-                                <button id="refresh-qrcode">获取二维码</button>
-                                <button id="comfit-qrcode">已扫码，刷新设备</button>
                             </div>
                         </div>
                     </div>
@@ -104,23 +106,35 @@
                         </select>
                     </div>
 
-                    <div class="form-item">
-                        <label for="jellyfin_base_url">Jellyfin 地址:</label>
-                        <input id="jellyfin_base_url" type="text" placeholder="例如 http://192.168.1.10:8096" />
-                    </div>
+                    <div id="jellyfin-fields">
+                        <div class="form-item">
+                            <label for="jellyfin_base_url">Jellyfin 地址:</label>
+                            <input id="jellyfin_base_url" type="text" placeholder="例如 http://192.168.1.10:8096" />
+                        </div>
 
-                    <div class="form-item">
-                        <label for="jellyfin_api_key">Jellyfin API Key:</label>
-                        <input id="jellyfin_api_key" type="text" placeholder="Jellyfin 控制台生成的 API Key" />
-                    </div>
+                        <div class="form-item">
+                            <label for="jellyfin_api_key">Jellyfin API Key:</label>
+                            <input id="jellyfin_api_key" type="text" placeholder="Jellyfin 控制台生成的 API Key" />
+                        </div>
 
-                    <div class="form-item">
-                        <label for="jellyfin_user_id">Jellyfin User ID(可选):</label>
-                        <input id="jellyfin_user_id" type="text" placeholder="留空自动选择第一个用户" />
-                    </div>
-                    <div class="form-item">
-                        <label>Jellyfin 歌单同步:</label>
-                        <button id="sync-jellyfin">立即同步 Jellyfin 歌单</button>
+                        <div class="form-item">
+                            <label for="jellyfin_user_id">Jellyfin User ID(可选):</label>
+                            <input id="jellyfin_user_id" type="text" placeholder="留空自动选择第一个用户" />
+                        </div>
+
+                        <div class="form-item">
+                            <label for="jellyfin_proxy_mode">Jellyfin 走代理:</label>
+                            <select id="jellyfin_proxy_mode">
+                                <option value="auto" selected>自动(内网才代理)</option>
+                                <option value="on">总是代理</option>
+                                <option value="off">从不代理</option>
+                            </select>
+                            <p class="form-hint">降级策略: 仅当 Jellyfin 地址为内网/本机地址时自动走代理。</p>
+                        </div>
+                        <div class="form-item">
+                            <label>Jellyfin 歌单同步:</label>
+                            <button id="sync-jellyfin" type="button">立即同步 Jellyfin 歌单</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -574,7 +588,6 @@
             </div>
         </div>
 
-        <div class="button-section"></div>
     </div>
     <footer>
         <p>Powered by XiaoMusic</p>

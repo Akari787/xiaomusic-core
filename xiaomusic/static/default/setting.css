@@ -235,6 +235,12 @@ body {
     box-shadow 0.2s ease;
 }
 
+.form-hint {
+  margin: 6px 0 0 0;
+  font-size: 12px;
+  color: #6c757d;
+}
+
 .setting-panel input[type="text"]:focus,
 .setting-panel input[type="password"]:focus,
 .setting-panel input[type="number"]:focus,
@@ -418,6 +424,7 @@ button.mini-button {
   background-color: #f8f9fa;
   border-radius: 12px;
   position: relative;
+  align-items: stretch;
 }
 
 .auth-tab-button {
@@ -438,6 +445,51 @@ button.mini-button {
   justify-content: center;
   gap: 8px;
   transform: none !important;
+}
+
+/* OAuth2 登录状态按钮（已登录） */
+.auth-tab-button.oauth2-ready {
+  color: #fff !important;
+  font-weight: 600 !important;
+}
+
+/* ensure text/icon inside stays readable on blue bg */
+.auth-tab-button.oauth2-ready * {
+  color: #fff !important;
+}
+
+.auth-tab-button.oauth2-ready::before {
+  opacity: 1;
+  transform: scale(1);
+  background: linear-gradient(135deg, #0d6efd 0%, #0b5ed7 100%);
+  box-shadow: 0 6px 16px rgba(13, 110, 253, 0.25);
+}
+
+.auth-tab-button.oauth2-ready:hover {
+  color: #fff !important;
+}
+
+.auth-tab-button.oauth2-ready:hover::before {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* 退出登录按钮（小按钮） */
+.auth-tab-button.oauth2-logout {
+  flex: 0 0 auto;
+  padding: 14px 16px !important;
+  color: #dc3545 !important;
+}
+
+.auth-tab-button.oauth2-logout::before {
+  background: #fff;
+  opacity: 1;
+  transform: scale(1);
+  box-shadow: 0 2px 8px rgba(220, 53, 69, 0.12);
+}
+
+.auth-tab-button.oauth2-logout:hover {
+  color: #b02a37 !important;
 }
 
 .auth-tab-button::before {

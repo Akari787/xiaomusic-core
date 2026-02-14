@@ -90,13 +90,17 @@ def decrypt(ssecurity, nonce, payload):
 
 
 class MiJiaAPI:
-    def __init__(self, auth_data_path: Optional[str] = None):
+    def __init__(self, auth_data_path: Optional[str] = None, token_store=None):
         self.locale = locale.getlocale()[0] if locale.getlocale()[0] else "zh_CN"
         if "_" not in self.locale:  # #57, make sure locale is in correct format
             self.locale = "zh_CN"
         self.api_base_url = "https://api.mijia.tech/app"
         self.login_url = "https://account.xiaomi.com/longPolling/loginUrl"
-        self.service_login_url = f"https://account.xiaomi.com/pass/serviceLogin?_json=true&sid=mijia&_locale={self.locale}"
+        # NOTE:
+        # - xiaomusic uses miservice with sid="micoapi" to fetch XiaoAi device list (api2.mina.mi.com).
+        # - If we login with sid="mijia" only, generated auth.json may not contain micoapi serviceToken,
+        #   which causes device list refresh to fail and may trigger captcha risk-control.
+        self.service_login_url = f"https://account.xiaomi.com/pass/serviceLogin?_json=true&sid=micoapi&_locale={self.locale}"
 
         if auth_data_path is None:
             self.auth_data_path = Path.home() / ".config" / "mijia-api" / "auth.json"
@@ -108,6 +112,8 @@ class MiJiaAPI:
         self._available_cache = None
         self._available_cache_time = 0
 
+        self.token_store = token_store
+
         if self.auth_data_path.exists():
             with open(self.auth_data_path, "r") as f:
                 self.auth_data = json.load(f)
@@ -117,6 +123,12 @@ class MiJiaAPI:
 
     def _init_session(self):
         self.session = requests.Session()
+        # serviceToken may be missing in partially-written auth.json; keep session usable without crashing.
+        st = self.auth_data.get("serviceToken") or self.auth_data.get(
+            "yetAnotherServiceToken"
+        )
+        if not st:
+            st = ""
         self.session.headers.update(
             {
                 "User-Agent": self.user_agent,
@@ -125,17 +137,17 @@ class MiJiaAPI:
                 "miot-accept-encoding": "GZIP",
                 "miot-encrypt-algorithm": "ENCRYPT-RC4",
                 "x-xiaomi-protocal-flag-cli": "PROTOCAL-HTTP2",
-                "Cookie": f"cUserId={self.auth_data['cUserId']};"
-                          f"yetAnotherServiceToken={self.auth_data['serviceToken']};"
-                          f"serviceToken={self.auth_data['serviceToken']};"
-                          f"timezone_id={tzlocal.get_localzone_name()};"
-                          f"timezone=GMT{datetime.now().astimezone().strftime('%z')[:3]}:{datetime.now().astimezone().strftime('%z')[3:]};"
-                          f"is_daylight={time.daylight};"
-                          f"dst_offset={time.localtime().tm_isdst * 60 * 60 * 1000};"
-                          f"channel=MI_APP_STORE;"
-                          f"countryCode={self.locale.split('_')[1] if self.locale else 'CN'};"
-                          f"PassportDeviceId={self.device_id};"
-                          f"locale={self.locale}",
+                "Cookie": f"cUserId={self.auth_data.get('cUserId','')};"
+                           f"yetAnotherServiceToken={st};"
+                           f"serviceToken={st};"
+                           f"timezone_id={tzlocal.get_localzone_name()};"
+                           f"timezone=GMT{datetime.now().astimezone().strftime('%z')[:3]}:{datetime.now().astimezone().strftime('%z')[3:]};"
+                           f"is_daylight={time.daylight};"
+                           f"dst_offset={time.localtime().tm_isdst * 60 * 60 * 1000};"
+                           f"channel=MI_APP_STORE;"
+                           f"countryCode={self.locale.split('_')[1] if self.locale else 'CN'};"
+                           f"PassportDeviceId={self.device_id};"
+                           f"locale={self.locale}",
             }
         )
 
@@ -234,8 +246,11 @@ class MiJiaAPI:
 
     def _save_auth_data(self):
         self.auth_data["saveTime"] = int(time.time() * 1000)
+        if self.token_store is not None:
+            self.token_store.save(self.auth_data)
+            return
         self.auth_data_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.auth_data_path, "w") as f:
+        with open(self.auth_data_path, "w", encoding="utf-8") as f:
             json.dump(self.auth_data, f, indent=2, ensure_ascii=False)
         print(f"已保存认证数据到 {self.auth_data_path}")
 
@@ -340,9 +355,27 @@ class MiJiaAPI:
         for key in auth_keys:
             self.auth_data[key] = lp_data[key]
         callback_url = lp_data["location"]
+        # Try to obtain serviceToken from securityTokenService flow
+        try:
+            nsec = "nonce=" + str(lp_data["nonce"]) + "&" + lp_data["ssecurity"]
+            client_sign = base64.b64encode(hashlib.sha1(nsec.encode()).digest()).decode()
+            r = session.get(callback_url + "&clientSign=" + parse.quote(client_sign), headers=headers)
+            st_cookie = r.cookies.get("serviceToken")
+            if st_cookie:
+                self.auth_data["serviceToken"] = st_cookie
+        except Exception:
+            pass
+
         session.get(callback_url, headers=headers)
         cookies = session.cookies.get_dict()
         self.auth_data.update(cookies)
+
+        # Ensure serviceToken exists (required by downstream APIs and our availability check).
+        # Some flows only return yetAnotherServiceToken.
+        st = self.auth_data.get("serviceToken") or self.auth_data.get("yetAnotherServiceToken")
+        if st:
+            self.auth_data["serviceToken"] = st
+            self.auth_data.setdefault("yetAnotherServiceToken", st)
         self.auth_data.update(
             {
                 "expireTime": int(

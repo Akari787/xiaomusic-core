@@ -8,6 +8,7 @@ import aiohttp
 from ga4mp import GtagMP
 
 from xiaomusic import __version__
+from xiaomusic.security.redaction import redact_text
 
 MAX_PARAM_LENGTH = 100
 
@@ -101,7 +102,8 @@ class Analytics:
                 "type": "event",
             }
 
-            self.log.info(f"umami data: {data}")
+            # Avoid leaking secrets in logs (best-effort redaction)
+            self.log.info(redact_text(f"umami data: {data}"))
             async with aiohttp.ClientSession() as session:
                 headers = {
                     "User-Agent": user_agent,
