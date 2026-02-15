@@ -23,6 +23,9 @@ class DummyMusicLibrary:
         assert origin_url == self._direct_url
         return self._proxy_url
 
+    def is_jellyfin_url(self, u: str) -> bool:
+        return True
+
     async def get_music_duration(self, name: str) -> float:
         return 0.0
 

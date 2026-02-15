@@ -374,8 +374,7 @@ class XiaoMusicDevice:
             jellyfin_mode == "auto"
             and origin_url
             and origin_url == url
-            and (self.config.jellyfin_base_url or "").rstrip("/")
-            and url.startswith((self.config.jellyfin_base_url or "").rstrip("/") + "/")
+            and self.xiaomusic.music_library.is_jellyfin_url(url)
         )
 
         async def _try_proxy_fallback(reason: str) -> str:

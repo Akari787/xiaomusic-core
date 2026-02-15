@@ -1066,10 +1066,7 @@ class MusicLibrary:
                 return "", None
 
         def is_jellyfin_url(u: str) -> bool:
-            base = (self.config.jellyfin_base_url or "").rstrip("/")
-            if not base:
-                return False
-            return u.startswith(base + "/")
+            return self.is_jellyfin_url(u)
 
         def is_private_base_url() -> bool:
             import ipaddress
@@ -1120,6 +1117,47 @@ class MusicLibrary:
             # Return origin URL so device layer can retry via proxy if needed.
             return url, url
         return url, None
+
+    def is_jellyfin_url(self, u: str) -> bool:
+        """Best-effort check whether a URL belongs to the configured Jellyfin.
+
+        Users may configure base_url with/without scheme, port, or a base path.
+        We compare hostname (and port if provided) and ensure the path is under
+        the base path (if any).
+        """
+
+        base_raw = (self.config.jellyfin_base_url or "").strip()
+        if not base_raw or not u:
+            return False
+
+        def _ensure_scheme(s: str) -> str:
+            if "://" in s:
+                return s
+            return "http://" + s
+
+        try:
+            base = urlparse(_ensure_scheme(base_raw))
+            cand = urlparse(u)
+            if not base.hostname or not cand.hostname:
+                return False
+
+            base_host = base.hostname.strip().lower().rstrip(".")
+            cand_host = cand.hostname.strip().lower().rstrip(".")
+            if base_host != cand_host:
+                return False
+
+            # If base explicitly sets a port, require it to match.
+            if base.port is not None and base.port != cand.port:
+                return False
+
+            base_path = (base.path or "").rstrip("/")
+            if base_path:
+                cand_path = cand.path or ""
+                if cand_path != base_path and not cand_path.startswith(base_path + "/"):
+                    return False
+            return True
+        except Exception:
+            return False
 
     def get_proxy_url(self, origin_url: str, *, name: str = "") -> str:
         """Public wrapper to build a proxy URL for a given origin URL."""
