@@ -71,7 +71,7 @@ jobs:
   push-docker:
     runs-on: ubuntu-latest
     needs: build
-    if: (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v')) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
@@ -82,6 +82,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -89,12 +90,13 @@ jobs:
 
       - name: Set Docker repo
         id: docker_repo
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
         run: echo "repo=${DOCKERHUB_REPOSITORY}" >> "$GITHUB_OUTPUT"
         env:
           DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY || format('{0}/xiaomusic-oauth2', secrets.DOCKERHUB_USERNAME) }}
 
       - name: Publish to Docker Hub (default branch tag)
-        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
         uses: docker/build-push-action@v6
         with:
           platforms: linux/amd64,linux/arm64,linux/arm/v7
@@ -107,7 +109,7 @@ jobs:
             type=gha,scope=armv7
 
       - name: Publish to Docker Hub latest and stable
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
         uses: docker/build-push-action@v6
         with:
           platforms: linux/amd64,linux/arm64,linux/arm/v7
@@ -175,7 +177,7 @@ jobs:
   publish-pypi:
     runs-on: ubuntu-latest
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') && secrets.PYPI_API_TOKEN != ''
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -196,6 +198,7 @@ jobs:
       - uses: pdm-project/setup-pdm@v3
 
       - name: Publish package distributions to PyPI
+        if: ${{ secrets.PYPI_API_TOKEN != '' }}
         env:
           PDM_PUBLISH_USERNAME: __token__
           PDM_PUBLISH_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
