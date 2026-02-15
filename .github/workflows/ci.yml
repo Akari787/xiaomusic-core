@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - "oauth2-only" # 仅默认分支触发，避免与 tag 发布重复跑
+    # Docs-only changes don't need full build matrix.
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
     tags:
       - "v*"
   workflow_dispatch:
