@@ -5,8 +5,7 @@ permissions:
 
 on:
   push:
-    branches:
-      - main
+    branches: ["**"]
     paths:
       - 'README.md'
       - '.github/workflows/dockerhub-description.yml'
@@ -15,6 +14,7 @@ on:
 jobs:
   update-description:
     runs-on: ubuntu-latest
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -23,4 +23,5 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: hanxi/xiaomusic
+          # Override via repo variable DOCKERHUB_REPOSITORY if needed.
+          repository: ${{ vars.DOCKERHUB_REPOSITORY || format('{0}/xiaomusic-oauth2', secrets.DOCKERHUB_USERNAME) }}

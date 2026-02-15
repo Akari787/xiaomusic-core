@@ -5,6 +5,9 @@ import GitHubIssuesPlugin from './vitepress-plugin-github-issues.mts';
 export default async ({ mode }) => {
   const env = loadEnv(mode || '', process.cwd())
   return defineConfig({
+    // GitHub Pages: for project pages you typically need "/<repo-name>/".
+    // Override via VITE_SITE_BASE in CI or locally.
+    base: env.VITE_SITE_BASE || '/',
     title: "XiaoMusic",
     description: "XiaoMusic doc",
     themeConfig: {
@@ -24,7 +27,7 @@ export default async ({ mode }) => {
       },
     },
     sitemap: {
-      hostname: 'https://xdocs.hanxi.cc'
+      hostname: env.VITE_SITE_HOSTNAME || 'https://xdocs.hanxi.cc'
     },
     head: [
       ['script', { defer: true, src: 'https://umami.hanxi.cc/script.js', 'data-website-id': '29cca3f5-e420-432b-adc7-8a1325d31c68' }]
@@ -55,7 +58,7 @@ export default async ({ mode }) => {
         }),
         GitHubIssuesPlugin({
           repo: 'hanxi/xiaomusic',
-          token: env.VITE_GITHUB_ISSUES_TOKEN,
+          token: env.VITE_GITHUB_ISSUES_TOKEN || '',
           replaceRules: [
             {
               baseUrl: 'https://github.com/hanxi/xiaomusic/issues',

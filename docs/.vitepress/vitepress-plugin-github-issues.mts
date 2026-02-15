@@ -12,7 +12,7 @@ interface ReplaceRule {
 
 interface GitHubIssuesPluginOptions {
   repo: string; // GitHub repository info in the format 'owner/repo'
-  token: string;
+  token?: string;
   replaceRules: ReplaceRule[];
   githubProxy: string;
 }
@@ -27,9 +27,7 @@ async function fetchAllIssues(repo: string, token: string): Promise<any[]> {
     while (attempt < maxRetries) {
       try {
         const response = await axios.get(`https://api.github.com/repos/${repo}/issues`, {
-          headers: {
-            Authorization: `token ${token}`
-          },
+          headers: token ? { Authorization: `token ${token}` } : {},
           params: {
             page: page,
             per_page: 100 // 每页最多返回100条记录
@@ -75,9 +73,7 @@ async function fetchIssueComments(repo: string, issueNumber: number, token: stri
         const response = await axios.get(
           `https://api.github.com/repos/${repo}/issues/${issueNumber}/comments`,
           {
-            headers: {
-              Authorization: `token ${token}`,
-            },
+            headers: token ? { Authorization: `token ${token}` } : {},
             params: {
               page: page,
               per_page: 100,
@@ -158,7 +154,7 @@ function replaceGithubAssetUrls(content: string, githubProxy: string): string {
 }
 
 export default function GitHubIssuesPlugin(options: GitHubIssuesPluginOptions): Plugin {
-  const { repo, token, replaceRules, githubProxy } = options;
+  const { repo, token = '', replaceRules, githubProxy } = options;
 
   return {
     name: 'vitepress-plugin-github-issues',
@@ -256,4 +252,3 @@ ${comment.body}
     },
     };
 }
-

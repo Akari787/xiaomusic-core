@@ -1,39 +1,32 @@
-# Simple workflow for deploying static content to GitHub Pages
-name: Deploy static content to Pages
+name: Deploy docs to GitHub Pages
 
 on:
-  # Runs on pushes targeting documentation branches
   push:
-    branches: ["main", "fork/oauth2-only-stable"]
+    branches: ["**"]
     paths:
-      - 'docs/**'
-      - 'README.md'
-      - 'CHANGELOG.md'
-      - '.github/workflows/static.yml'
-
-  # Allows you to run this workflow manually from the Actions tab
+      - "docs/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - ".github/workflows/static.yml"
   workflow_dispatch:
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
 concurrency:
   group: "pages"
   cancel-in-progress: false
 
 jobs:
-  # Single deploy job since we're just deploying
   deploy:
+    # Only deploy from the repository default branch.
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,77 +34,44 @@ jobs:
           fetch-depth: 0
           submodules: true
 
-      - name: Check Pages availability
-        id: pages_check
-        run: |
-          status=$(curl -s -o /tmp/pages.json -w "%{http_code}" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pages")
-          if [ "$status" = "200" ]; then
-            echo "enabled=true" >> $GITHUB_OUTPUT
-          else
-            echo "enabled=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v2
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
-      - name: Install dependencies
-        working-directory: ./docs  # 指定工作目录为 docs
-        run: |
-          npm install
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "docs/package-lock.json"
+
+      - name: Install docs dependencies
+        working-directory: ./docs
+        run: npm ci
 
       - name: Build VitePress
+        working-directory: ./docs
         env:
           VITE_GITHUB_ISSUES_TOKEN: ${{ secrets.VITE_GITHUB_ISSUES_TOKEN }}
-        working-directory: ./docs  # 指定工作目录为 docs
-        run: | # 有点小问题，得执行2次
-          npm run docs:build
-          npm run docs:build
+          # Override via repo variable if you use a custom domain.
+          VITE_SITE_BASE: ${{ vars.VITE_SITE_BASE || (github.event.repository.name == format('{0}.github.io', github.repository_owner) && '/' || format('/{0}/', github.event.repository.name)) }}
+        run: npm run docs:build
 
-      - uses: pdm-project/setup-pdm@v3
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-      - name: pdm
-        run: pdm install --prod --frozen-lockfile
-
-      - name: generate versions.json
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: pdm run get_release.py
-
-      - name: Check for changes
-        id: check_changes
+      - name: Generate versions.json
         run: |
-          if [ -n "$(git diff docs)" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
-          fi
-        continue-on-error: true
-
-      # Optionally, customize the user name and commit message, and can add an email as well such as Github Actions' email
-      - name: Set up Git and Commit Changes
-        run: |
-          if [ "${{ steps.check_changes.outputs.changed }}" == "true" ]; then
-            git config --local user.name "Issues Docs [BOT]"
-            git config --local user.email "github-actions[bot]@users.noreply.github.com"
-            git add .
-            git commit -m "Auto-Generate docs 🤖"
-            git push
-          fi
+          python -m pip install --upgrade pip
+          python -m pip install requests
+          python get_release.py
 
       - name: Setup Pages
-        if: steps.pages_check.outputs.enabled == 'true'
         uses: actions/configure-pages@v5
+
       - name: Upload artifact
-        if: steps.pages_check.outputs.enabled == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
-          # Upload entire repository
-          path: './docs/.vitepress/dist'
+          path: "./docs/.vitepress/dist"
+
       - name: Deploy to GitHub Pages
-        if: steps.pages_check.outputs.enabled == 'true'
         id: deployment
         uses: actions/deploy-pages@v4
