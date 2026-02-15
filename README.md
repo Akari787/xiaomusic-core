@@ -42,14 +42,35 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 
 ## 🐳 Docker 使用说明
 
-由于本仓库**未发布 Docker Hub 镜像**，请勿直接套用第三方镜像名称。
+本仓库已发布 Docker Hub 镜像：`akari787/xiaomusic-oauth2`（多架构：`linux/amd64`、`linux/arm64`、`linux/arm/v7`）。
 
-部署时请注意：
+推荐标签：
 
-- 容器内音乐目录为 `/app/music`。
-- 容器内配置目录为 `/app/conf`。
-- 默认服务端口为 `8090`。
-- OAuth2 Token 文件默认在 `conf/auth.json`。
+- `stable`：稳定版（推荐）
+- `latest`：最新构建
+- `v1.0.1`：指定版本
+
+快速启动（示例）：
+
+```bash
+docker pull akari787/xiaomusic-oauth2:stable
+
+docker run -d --name xiaomusic-oauth2 \
+  -p 58090:8090 \
+  -v /root/xiaomusic_conf:/app/conf \
+  -v /root/xiaomusic_music:/app/music \
+  -e TZ=Asia/Tokyo \
+  akari787/xiaomusic-oauth2:stable
+```
+
+容器路径与端口约定：
+
+- 音乐目录：`/app/music`
+- 配置目录：`/app/conf`
+- 服务端口：容器内 `8090`（示例映射到宿主 `58090`）
+- OAuth2 Token：默认 `conf/auth.json`
+
+更安全的部署方式：参考 `docker-compose.hardened.yml`（`read_only`、`cap_drop`、`no-new-privileges` 等）。
 
 ## ⚠️ 安全建议
 
