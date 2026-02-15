@@ -257,6 +257,30 @@ body {
   font-family: monospace;
 }
 
+/* Secret inputs (API keys, tokens) */
+.secret-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.secret-input-wrap input {
+  flex: 1 1 auto;
+}
+
+.toggle-secret {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+  background: #f7f7f7;
+  color: #333;
+}
+
+.toggle-secret:hover {
+  background: #efefef;
+}
+
 /* 按钮样式（面板内按钮与 header/footer 统一） */
 .setting-panel button,
 .header-buttons button,

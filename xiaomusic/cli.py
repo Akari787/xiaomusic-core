@@ -104,6 +104,56 @@ def main():
     options = parser.parse_args()
     config = Config.from_options(options)
 
+    # Load persisted settings early (affects logging/security defaults too).
+    try:
+        filename = config.getsettingfile()
+        if os.path.exists(filename):
+            with open(filename, encoding="utf-8") as f:
+                data = json.loads(f.read())
+                config.update_config(data)
+    except Exception as e:
+        print(f"Execption {e}")
+
+    # Environment variables should override persisted settings for operational
+    # controls like log_file (important for hardened containers).
+    env_log_file = os.getenv("XIAOMUSIC_LOG_FILE")
+    if env_log_file:
+        config.log_file = env_log_file
+
+    def _resolve_writable_log_file(cfg: Config) -> str:
+        # Keep backward compatibility:
+        # - absolute paths: use as-is
+        # - relative paths: try CWD first; if not writable (e.g. read_only rootfs)
+        #   fallback to conf/; last resort /tmp.
+        raw = (cfg.log_file or "xiaomusic.log.txt").strip() or "xiaomusic.log.txt"
+
+        candidates: list[str] = []
+        if os.path.isabs(raw):
+            candidates.append(raw)
+        else:
+            candidates.append(raw)
+            conf_dir = (getattr(cfg, "conf_path", "") or "conf").strip() or "conf"
+            candidates.append(os.path.join(conf_dir, raw))
+        candidates.append("/tmp/xiaomusic.log.txt")
+
+        for path in candidates:
+            try:
+                log_dir = os.path.dirname(path)
+                if log_dir:
+                    os.makedirs(log_dir, exist_ok=True)
+                with open(path, "a", encoding="utf-8"):
+                    pass
+                return path
+            except Exception:
+                continue
+
+        # Should be unreachable, but keep a safe default.
+        return "/tmp/xiaomusic.log.txt"
+
+    # In hardened containers we may run with read_only rootfs; make sure the
+    # uvicorn file handler points to a writable location.
+    config.log_file = _resolve_writable_log_file(config)
+
     # 自定义过滤器，过滤掉关闭时的 CancelledError
     class CancelledErrorFilter(logging.Filter):
         def filter(self, record):
@@ -181,14 +231,8 @@ def main():
         },
     }
 
-    try:
-        filename = config.getsettingfile()
-        if not os.path.exists(filename):
-            with open(filename, encoding="utf-8") as f:
-                data = json.loads(f.read())
-                config.update_config(data)
-    except Exception as e:
-        print(f"Execption {e}")
+    # Note: config is already loaded above; keep this section empty to avoid
+    # subtle ordering issues with logging config.
 
     import asyncio
 
@@ -199,10 +243,16 @@ def main():
         HttpInit(xiaomusic)
         port = int(config.port)
 
+        # XiaoMusic may adjust config.log_file (e.g. fallback to /tmp in read_only containers).
+        try:
+            LOGGING_CONFIG["handlers"]["file"]["filename"] = config.log_file
+        except Exception:
+            pass
+
         # 创建 uvicorn 配置，禁用其信号处理
         uvicorn_config = uvicorn.Config(
             HttpApp,
-            host=["0.0.0.0", "::"],
+            host="0.0.0.0",
             port=port,
             log_config=LOGGING_CONFIG,
         )

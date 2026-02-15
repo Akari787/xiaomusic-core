@@ -57,11 +57,14 @@ RUN pip install -U pdm
 ENV PDM_CHECK_UPDATE=false
 
 WORKDIR /app
-COPY pyproject.toml README.md package.json package-lock.json ./
+COPY pyproject.toml README.md package.json package-lock.json pdm.lock* ./
 
-# 安装Python和Node.js依赖
-# 安装 Python 依赖
-RUN pdm install --prod --no-editable -v
+# 安装 Python 依赖（优先使用 lockfile 以便复现）
+RUN if [ -f pdm.lock ]; then \
+        pdm sync --prod --no-editable -v; \
+    else \
+        pdm install --prod --no-editable -v; \
+    fi
 RUN npm ci --loglevel=verbose
 
 # 复制应用代码

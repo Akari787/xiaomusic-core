@@ -65,6 +65,8 @@ try:
         ExecDisabledError,
         ExecNotAllowedError,
         ExecValidationError,
+        OutboundBlockedError,
+        SelfUpdateDisabledError,
         SecurityError,
     )
 
@@ -80,6 +82,10 @@ try:
             detail = "exec command not allowed"
         elif isinstance(exc, ExecValidationError):
             detail = "invalid exec command"
+        elif isinstance(exc, OutboundBlockedError):
+            detail = "outbound blocked"
+        elif isinstance(exc, SelfUpdateDisabledError):
+            detail = "self update disabled"
         else:
             detail = "blocked by security policy"
         return JSONResponse(status_code=403, content={"detail": detail})
@@ -88,14 +94,19 @@ except Exception:
     # If security modules are unavailable for some reason, don't break app import.
     pass
 
-# 添加 CORS 中间件
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 允许访问的源
-    allow_credentials=False,  # 支持 cookie
-    allow_methods=["*"],  # 允许使用的请求方法
-    allow_headers=["*"],  # 允许携带的 Headers
-)
+def _configure_cors(app: FastAPI, allow_origins: list[str]):
+    # Remove existing CORSMiddleware (if any) and re-add with current config.
+    app.user_middleware = [
+        m for m in app.user_middleware if m.cls is not CORSMiddleware
+    ]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allow_origins,
+        allow_credentials=False,
+        allow_methods=["*"] ,
+        allow_headers=["*"],
+    )
+    app.middleware_stack = app.build_middleware_stack()
 
 # 添加 GZip 中间件
 app.add_middleware(GZipMiddleware, minimum_size=500)
@@ -109,6 +120,12 @@ def HttpInit(_xiaomusic: "XiaoMusic"):
     """
     # 初始化应用状态
     _state.initialize(_xiaomusic)
+
+    # Configure CORS based on config (default localhost-only).
+    origins = list(getattr(_xiaomusic.config, "cors_allow_origins", []) or [])
+    if not origins:
+        origins = ["http://localhost", "http://127.0.0.1"]
+    _configure_cors(app, origins)
 
     # 挂载静态文件
     folder = os.path.dirname(os.path.dirname(__file__))  # xiaomusic 目录

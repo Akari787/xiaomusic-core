@@ -1,18 +1,26 @@
 services:
   xiaomusic:
-    image: hanxi/xiaomusic:latest
-    container_name: xiaomusic
+    build: .
+    image: xiaomusic:oauth2-only
+    container_name: xiaomusic-oauth2
     restart: unless-stopped
     ports:
       - "58090:8090"
     environment:
-      TZ: Asia/Tokyo
+      TZ: Asia/Shanghai
       XIAOMUSIC_PUBLIC_PORT: 58090
+      # Persist logs under conf/ (writable even with read_only rootfs)
+      XIAOMUSIC_LOG_FILE: /app/conf/xiaomusic.log.txt
       # Security defaults
       XIAOMUSIC_ENABLE_EXEC_PLUGIN: "false"
       XIAOMUSIC_ENABLE_ANALYTICS: "false"
       XIAOMUSIC_LOG_REDACT: "true"
       XIAOMUSIC_PERSIST_TOKEN: "true"
+      XIAOMUSIC_ENABLE_SELF_UPDATE: "false"
+      # CORS (default localhost-only). Add your reverse-proxy/HA domains here if needed.
+      XIAOMUSIC_CORS_ALLOW_ORIGINS: "http://localhost,http://127.0.0.1"
+      # Outbound network access allowlist (empty -> deny). Required for web playlists / http_get / self-update.
+      XIAOMUSIC_OUTBOUND_ALLOWLIST_DOMAINS: ""
     volumes:
       - ./conf:/app/conf
       - ./music:/app/music

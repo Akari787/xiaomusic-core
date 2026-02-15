@@ -12,3 +12,11 @@ class ExecNotAllowedError(SecurityError):
 
 class ExecValidationError(SecurityError):
     pass
+
+
+class OutboundBlockedError(SecurityError):
+    pass
+
+
+class SelfUpdateDisabledError(SecurityError):
+    pass

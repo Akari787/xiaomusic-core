@@ -5,7 +5,7 @@ import base64
 import json
 import os
 from dataclasses import asdict, dataclass, field
-from typing import get_type_hints
+from typing import get_args, get_origin, get_type_hints
 
 from xiaomusic.const import (
     PLAY_TYPE_ALL,
@@ -217,6 +217,38 @@ class Config:
             if x.strip()
         ]
     )
+
+    # Unified outbound allowlist (exec http_get, web playlist fetch, self-update downloads, etc.)
+    # Default empty -> deny outbound unless explicitly configured.
+    outbound_allowlist_domains: list[str] = field(
+        default_factory=lambda: [
+            x.strip().lower()
+            for x in os.getenv("XIAOMUSIC_OUTBOUND_ALLOWLIST_DOMAINS", "").split(",")
+            if x.strip()
+        ]
+    )
+
+    # Self-update is dangerous. Default disabled.
+    enable_self_update: bool = (
+        os.getenv("XIAOMUSIC_ENABLE_SELF_UPDATE", "false").lower() == "true"
+    )
+
+    # CORS allowlist (default: localhost only)
+    cors_allow_origins: list[str] = field(
+        default_factory=lambda: [
+            x.strip()
+            for x in os.getenv(
+                "XIAOMUSIC_CORS_ALLOW_ORIGINS",
+                "http://localhost,http://127.0.0.1,http://localhost:8090,http://127.0.0.1:8090,http://localhost:58090,http://127.0.0.1:58090",
+            ).split(",")
+            if x.strip()
+        ]
+    )
+
+    # Keyword merging behavior: override(default) or append
+    keyword_override_mode: str = os.getenv(
+        "XIAOMUSIC_KEYWORD_OVERRIDE_MODE", "override"
+    )
     get_ask_by_mina: bool = (
         os.getenv("XIAOMUSIC_GET_ASK_BY_MINA", "false").lower() == "true"
     )
@@ -253,7 +285,7 @@ class Config:
     )
 
     # Jellyfin 代理模式: auto|on|off
-    # - auto: 仅当 Jellyfin Base URL 是内网/本机地址时走代理
+    # - auto: 默认直连；若设备实际播放未开始，则自动降级走 /proxy
     # - on: Jellyfin 始终走代理
     # - off: Jellyfin 永不走代理
     jellyfin_proxy_mode: str = os.getenv("XIAOMUSIC_JELLYFIN_PROXY_MODE", "auto")
@@ -270,6 +302,9 @@ class Config:
     jellyfin_base_url: str = os.getenv("XIAOMUSIC_JELLYFIN_BASE_URL", "")
     jellyfin_api_key: str = os.getenv("XIAOMUSIC_JELLYFIN_API_KEY", "")
     jellyfin_user_id: str = os.getenv("XIAOMUSIC_JELLYFIN_USER_ID", "")
+
+    # Computed / diagnostic fields (not user-configurable)
+    keyword_conflicts: list[str] = field(default_factory=list, init=False, repr=False)
     def append_keyword(self, keys, action):
         for key in keys.split(","):
             if key:
@@ -278,7 +313,16 @@ class Config:
                     self.key_match_order.append(key)
 
     def append_user_keyword(self):
-        for k, v in self.user_key_word_dict.items():
+        mode = (self.keyword_override_mode or "override").strip().lower()
+        if mode not in ("override", "append"):
+            mode = "override"
+
+        self.keyword_conflicts = []
+        for k, v in (self.user_key_word_dict or {}).items():
+            if k in self.key_word_dict:
+                self.keyword_conflicts.append(k)
+                if mode == "append":
+                    continue
             self.key_word_dict[k] = v
             if k not in self.key_match_order:
                 self.key_match_order.append(k)
@@ -304,6 +348,21 @@ class Config:
         # Normalize security fields
         self.allowed_exec_commands = [x.strip() for x in self.allowed_exec_commands if x.strip()]
         self.allowlist_domains = [x.strip().lower() for x in self.allowlist_domains if x.strip()]
+        self.outbound_allowlist_domains = [
+            x.strip().lower()
+            for x in (getattr(self, "outbound_allowlist_domains", []) or [])
+            if x.strip()
+        ]
+        if not self.outbound_allowlist_domains:
+            # Backward compatibility: reuse legacy allowlist_domains.
+            self.outbound_allowlist_domains = list(self.allowlist_domains)
+
+        self.cors_allow_origins = [x.strip() for x in (self.cors_allow_origins or []) if x.strip()]
+
+        mode = (self.keyword_override_mode or "override").strip().lower()
+        if mode not in ("override", "append"):
+            mode = "override"
+        self.keyword_override_mode = mode
 
         if not isinstance(self.log_redact, bool):
             self.log_redact = True
@@ -311,6 +370,9 @@ class Config:
             self.persist_token = True
         if not isinstance(self.enable_exec_plugin, bool):
             self.enable_exec_plugin = False
+
+        if not isinstance(getattr(self, "enable_self_update", False), bool):
+            self.enable_self_update = False
 
         # Backward compatibility: legacy jellyfin_force_proxy
         mode = (self.jellyfin_proxy_mode or "auto").strip().lower()
@@ -358,7 +420,18 @@ class Config:
                     for kk, vv in v.items():
                         converted_value[kk] = Device(**vv)
                 else:
-                    converted_value = expected_type(v)
+                    origin = get_origin(expected_type)
+                    args = get_args(expected_type)
+                    if origin is list and isinstance(v, list):
+                        inner = args[0] if args else None
+                        if inner is str:
+                            converted_value = [str(x) for x in v]
+                        else:
+                            converted_value = list(v)
+                    elif origin is dict and isinstance(v, dict):
+                        converted_value = dict(v)
+                    else:
+                        converted_value = expected_type(v)
                 return converted_value
             except (ValueError, TypeError) as e:
                 print(f"Error converting {k}:{v} to {expected_type}: {e}")

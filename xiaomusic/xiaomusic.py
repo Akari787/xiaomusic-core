@@ -21,6 +21,7 @@ from xiaomusic.const import (
 from xiaomusic.conversation import ConversationPoller
 from xiaomusic.crontab import Crontab
 from xiaomusic.device_manager import DeviceManager
+from xiaomusic.diagnostics import build_startup_diagnostics
 from xiaomusic.events import CONFIG_CHANGED, DEVICE_CONFIG_CHANGED, EventBus
 from xiaomusic.file_watcher import FileWatcherManager
 from xiaomusic.music_library import MusicLibrary
@@ -62,8 +63,15 @@ class XiaoMusic:
         # 初始化文件监控管理器
         self.file_watcher = None
 
+        # Coalesced refresh task for large libraries
+        self._library_refresh_task = None
+        self._library_refresh_pending = False
+
         # 初始化在线音乐服务（延迟初始化，在 js_plugin_manager 之后）
         self.online_music_service = None
+
+        # Diagnostics
+        self.startup_diagnostics = None
 
         # 初始化对话轮询器（延迟初始化，在配置和服务准备好之后）
         self.conversation_poller = None
@@ -204,12 +212,27 @@ class XiaoMusic:
             except Exception as e:
                 print(f"无法删除旧日志文件: {log_file} {e}")
 
-        file_handler = RotatingFileHandler(
-            self.config.log_file,
-            maxBytes=10 * 1024 * 1024,
-            backupCount=1,
-            encoding="utf-8",
-        )
+        # File logging may fail in hardened containers (read_only rootfs).
+        log_file = self.config.log_file
+        try:
+            file_handler = RotatingFileHandler(
+                log_file,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=1,
+                encoding="utf-8",
+            )
+        except OSError:
+            # Fallback to tmpfs.
+            log_file = "/tmp/xiaomusic.log.txt"
+            self.config.log_file = log_file
+            file_handler = RotatingFileHandler(
+                log_file,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=1,
+                encoding="utf-8",
+            )
+            self.log.warning("log file not writable, fallback to %s", log_file)
+
         file_handler.stream.flush()
         file_handler.setFormatter(formatter)
         self.log.addHandler(file_handler)
@@ -239,10 +262,31 @@ class XiaoMusic:
         self.file_watcher.start(loop)
 
     def _on_file_change(self):
-        self.log.info("检测到目录音乐文件变化，正在刷新歌曲列表。")
-        self.music_library.gen_all_music_list()
-        # 更新每个设备的歌单
-        self.update_all_playlist()
+        # FileWatcher already debounces filesystem events; here we further
+        # coalesce expensive refresh work into a single background task.
+        self.log.info("检测到目录音乐文件变化，已加入刷新队列。")
+        self._queue_library_refresh(reason="file_watch")
+
+    def _queue_library_refresh(self, reason: str = ""):
+        self._library_refresh_pending = True
+        if self._library_refresh_task is not None and not self._library_refresh_task.done():
+            return
+
+        async def _run():
+            while True:
+                self._library_refresh_pending = False
+                try:
+                    # Heavy scans should not block the event loop.
+                    await asyncio.to_thread(self.music_library.gen_all_music_list)
+                    self.update_all_playlist()
+                    self.log.info("library refresh ok (%s)", reason)
+                except Exception as e:
+                    self.log.exception("library refresh failed (%s): %s", reason, e)
+
+                if not self._library_refresh_pending:
+                    return
+
+        self._library_refresh_task = asyncio.create_task(_run())
 
     def stop_file_watch(self):
         if self.file_watcher:
@@ -250,6 +294,12 @@ class XiaoMusic:
 
     async def run_forever(self):
         self.log.info("run_forever start")
+        try:
+            self.startup_diagnostics = build_startup_diagnostics(self.config)
+            if not self.startup_diagnostics.ok:
+                self.log.warning("startup self-check failed: %s", self.startup_diagnostics)
+        except Exception as e:
+            self.log.exception("startup self-check error: %s", e)
         self.music_library.try_gen_all_music_tag()  # 事件循环开始后调用一次
         self.crontab.start()
         await asyncio.create_task(self.analytics.send_startup_event())
@@ -343,7 +393,7 @@ class XiaoMusic:
         url = self.config.music_list_url
         if url:
             self.log.debug(f"refresh_web_music_list begin url:{url}")
-            content = await downloadfile(url)
+            content = await downloadfile(url, self.config)
             self.config.music_list_json = content
             # 配置文件落地
             self.save_cur_config()

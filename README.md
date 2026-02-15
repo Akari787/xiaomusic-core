@@ -33,6 +33,7 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 - 新增 Jellyfin 客户端配置项（地址、API Key、可选用户信息）。
 - 在线搜索可聚合 Jellyfin 结果。
 - 支持 Jellyfin 歌单同步到本地播放列表。
+- Jellyfin 播放默认“先直连，失败自动走代理（/proxy）”，无需在 UI 里手动切换。
 
 ### 播放稳定性
 
@@ -60,7 +61,8 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 - `conf/auth.json` 仅限容器/宿主可读写（Linux 推荐权限 `600`）。
 - Jellyfin 建议使用可被音箱访问的 HTTPS 域名；若是内网地址可启用自动代理降级。
 - Docker 推荐最小权限运行：非 root、`read_only`、`cap_drop: [ALL]`、`no-new-privileges`。
-- 限制出站网络：如使用 `http_get`，必须配置 `allowlist_domains`；未配置将拒绝。
+- 限制出站网络：默认拒绝出站；如使用网络歌单/抓取/`http_get`，需配置 `outbound_allowlist_domains`。
+- CORS 默认收紧：只允许 localhost；如经由 Nginx/HA 域名访问需加入 `cors_allow_origins` 白名单。
 - 日志默认脱敏：`log_redact=true`，避免 token/api_key 泄露。
 - 如需排障，优先导出脱敏日志片段再提交 issue。
 - 永远不要把 GitHub Token / Jellyfin API Key / `auth.json` 内容贴到公开渠道。
@@ -68,7 +70,10 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 ### 迁移说明（安全默认）
 
 - 之前配置里如包含 `exec#...`（如放在 `user_key_word_dict`），升级后会默认被拦截；需要手动设置 `enable_exec_plugin=true` 并配置 `allowed_exec_commands` 白名单。
-- 如需 `http_get`：同时加入 `allowed_exec_commands`，并配置 `allowlist_domains`；未配置域名白名单会拒绝出站请求。
+- 如需 `http_get`：同时加入 `allowed_exec_commands`，并配置 `outbound_allowlist_domains`（旧字段 `allowlist_domains` 仍兼容）。
+- 如需通过反向代理访问 WebUI：配置 `cors_allow_origins`，否则浏览器可能被 CORS 拦截。
+- Jellyfin API Key 不再在设置页明文显示；`/getsetting` 也会返回脱敏值（`******`）。需要修改时请重新输入。
+- 口令合并模式新增：`keyword_override_mode` 默认 `override`（同名口令冲突时以用户自定义为准）；可改为 `append` 保留默认口令。
 - Token 优先级变更为“环境变量 > `conf/auth.json`”：支持 `OAUTH2_ACCESS_TOKEN` / `OAUTH2_REFRESH_TOKEN`；若这些变量存在，删除 token 文件不会让其失效。
 - 如不希望落盘 token：设置 `persist_token=false`，扫码/刷新只会保存到内存（重启后需重新登录）。
 

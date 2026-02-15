@@ -16,6 +16,10 @@ from urllib.parse import urlparse
 import aiohttp
 from requests.utils import cookiejar_from_dict
 
+from xiaomusic.security.errors import SelfUpdateDisabledError
+from xiaomusic.security.outbound import OutboundBlockedError, OutboundPolicy, fetch_bytes
+from xiaomusic.security.tar_safe import safe_extract_tar_gz
+
 log = logging.getLogger(__package__)
 
 
@@ -223,7 +227,7 @@ async def restart_xiaomusic() -> int:
     return exit_code
 
 
-async def update_version(version: str, lite: bool = True) -> str:
+async def update_version(config, version: str, lite: bool = True) -> str:
     """
     更新 xiaomusic 版本
 
@@ -234,6 +238,9 @@ async def update_version(version: str, lite: bool = True) -> str:
     Returns:
         结果消息
     """
+    if not getattr(config, "enable_self_update", False):
+        raise SelfUpdateDisabledError("self update disabled")
+
     if not is_docker():
         ret = "xiaomusic 更新只能在 docker 中进行"
         log.info(ret)
@@ -248,10 +255,10 @@ async def update_version(version: str, lite: bool = True) -> str:
     # https://github.com/hanxi/xiaomusic/releases/download/main/app-amd64-lite.tar.gz
     url = f"https://gproxy.hanxi.cc/proxy/hanxi/xiaomusic/releases/download/{version}/app-{arch}{lite_tag}.tar.gz"
     target_directory = "/app"
-    return await download_and_extract(url, target_directory)
+    return await download_and_extract(config, url, target_directory)
 
 
-async def download_and_extract(url: str, target_directory: str) -> str:
+async def download_and_extract(config, url: str, target_directory: str) -> str:
     """
     下载并解压文件
 
@@ -266,45 +273,50 @@ async def download_and_extract(url: str, target_directory: str) -> str:
     # 创建目标目录
     os.makedirs(target_directory, exist_ok=True)
 
-    # 使用 aiohttp 异步下载文件
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            if response.status == 200:
-                file_name = os.path.join(target_directory, url.split("/")[-1])
-                file_name = os.path.normpath(file_name)
-                if not file_name.startswith(target_directory):
-                    log.warning(f"Invalid file path: {file_name}")
-                    return "Invalid file path"
-                with open(file_name, "wb") as f:
-                    # 以块的方式下载文件，防止内存占用过大
-                    async for chunk in response.content.iter_any():
-                        f.write(chunk)
-                log.info(f"文件下载完成: {file_name}")
+    # Outbound allowlist is required for downloads.
+    domains = getattr(config, "outbound_allowlist_domains", None) or getattr(
+        config, "allowlist_domains", []
+    )
+    policy = OutboundPolicy(tuple(domains))
+    try:
+        policy.validate_url(url)
+    except OutboundBlockedError as e:
+        ret = f"Outbound blocked: {e}"
+        log.warning(ret)
+        return ret
 
-                # 解压下载的文件
-                if file_name.endswith(".tar.gz"):
-                    await extract_tar_gz(file_name, target_directory)
-                else:
-                    ret = f"下载失败, 包有问题: {file_name}"
-                    log.warning(ret)
+    try:
+        data = await fetch_bytes(
+            url,
+            policy=policy,
+            timeout_s=10.0,
+            max_bytes=200 * 1024 * 1024,
+            max_redirects=3,
+            user_agent="XiaoMusic/self-update",
+        )
+    except OutboundBlockedError as e:
+        ret = f"下载失败: {e}"
+        log.warning(ret)
+        return ret
 
-            else:
-                ret = f"下载失败, 状态码: {response.status}"
-                log.warning(ret)
+    file_name = os.path.join(target_directory, url.split("/")[-1])
+    file_name = os.path.normpath(file_name)
+    if not file_name.startswith(target_directory):
+        log.warning(f"Invalid file path: {file_name}")
+        return "Invalid file path"
+    with open(file_name, "wb") as f:
+        f.write(data)
+    log.info(f"文件下载完成: {file_name}")
+
+    # 解压下载的文件
+    if file_name.endswith(".tar.gz"):
+        safe_extract_tar_gz(file_name, target_directory)
+    else:
+        ret = f"下载失败, 包有问题: {file_name}"
+        log.warning(ret)
     return ret
 
 
 async def extract_tar_gz(file_name: str, target_directory: str) -> None:
-    """
-    解压 tar.gz 文件
-
-    Args:
-        file_name: 文件路径
-        target_directory: 目标目录
-    """
-    # 使用 asyncio.create_subprocess_exec 执行 tar 解压命令
-    command = ["tar", "-xzvf", file_name, "-C", target_directory]
-    # 启动子进程执行解压命令
-    await asyncio.create_subprocess_exec(*command)
-    # 不等待子进程完成
-    log.info(f"extract_tar_gz ing {file_name}")
+    # Backward compatible shim: keep name but do safe extraction.
+    safe_extract_tar_gz(file_name, target_directory)

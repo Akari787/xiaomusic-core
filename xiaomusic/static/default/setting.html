@@ -114,7 +114,11 @@
 
                         <div class="form-item">
                             <label for="jellyfin_api_key">Jellyfin API Key:</label>
-                            <input id="jellyfin_api_key" type="text" placeholder="Jellyfin 控制台生成的 API Key" />
+                            <div class="secret-input-wrap">
+                                <input id="jellyfin_api_key" type="password" placeholder="Jellyfin 控制台生成的 API Key" autocomplete="new-password" />
+                                <button type="button" class="toggle-secret" data-target="jellyfin_api_key">显示</button>
+                            </div>
+                            <p class="form-hint">已隐藏：保持为 ****** 表示不修改；清空表示移除。</p>
                         </div>
 
                         <div class="form-item">
@@ -122,15 +126,6 @@
                             <input id="jellyfin_user_id" type="text" placeholder="留空自动选择第一个用户" />
                         </div>
 
-                        <div class="form-item">
-                            <label for="jellyfin_proxy_mode">Jellyfin 走代理:</label>
-                            <select id="jellyfin_proxy_mode">
-                                <option value="auto" selected>自动(内网才代理)</option>
-                                <option value="on">总是代理</option>
-                                <option value="off">从不代理</option>
-                            </select>
-                            <p class="form-hint">降级策略: 仅当 Jellyfin 地址为内网/本机地址时自动走代理。</p>
-                        </div>
                         <div class="form-item">
                             <label>Jellyfin 歌单同步:</label>
                             <button id="sync-jellyfin" type="button">立即同步 Jellyfin 歌单</button>

@@ -45,8 +45,21 @@ from xiaomusic.utils.system_utils import (
     restart_xiaomusic,
     update_version,
 )
+from dataclasses import asdict
 from xiaomusic.qrcode_login import MiJiaAPI
 router = APIRouter(dependencies=[Depends(verification)])
+
+
+@router.get("/diagnostics")
+async def diagnostics():
+    """Runtime diagnostics (startup self-check, keyword conflicts, etc.)."""
+    startup = getattr(xiaomusic, "startup_diagnostics", None)
+    return {
+        "startup": asdict(startup) if startup is not None else None,
+        "keyword_override_mode": getattr(config, "keyword_override_mode", "override"),
+        "keyword_conflicts": list(getattr(config, "keyword_conflicts", []) or []),
+        "last_download_result": getattr(xiaomusic, "last_download_result", None),
+    }
 
 
 def _get_mijia_api():
@@ -146,6 +159,9 @@ async def getsetting(need_device_list: bool = False):
     config_data = xiaomusic.getconfig()
     data = asdict(config_data)
     data["httpauth_password"] = "******"
+    # Never expose secrets to the browser.
+    if data.get("jellyfin_api_key"):
+        data["jellyfin_api_key"] = "******"
 
     def _token_valid(j: dict) -> bool:
         # oauth2 token must contain serviceToken to be usable
@@ -307,6 +323,10 @@ async def savesetting(request: Request):
             or data.get("httpauth_password", "") == ""
         ):
             data["httpauth_password"] = config_obj.httpauth_password
+
+        # Jellyfin API key should not be displayed; keep existing unless user overrides.
+        if data.get("jellyfin_api_key") == "******":
+            data["jellyfin_api_key"] = config_obj.jellyfin_api_key
         await xiaomusic.saveconfig(data)
 
         # 重置 HTTP 服务器配置
@@ -336,6 +356,10 @@ async def modifiysetting(request: Request):
             data["httpauth_password"] == "******" or data["httpauth_password"] == ""
         ):
             data["httpauth_password"] = config_obj.httpauth_password
+
+        # Jellyfin API key should not be displayed; keep existing unless user overrides.
+        if "jellyfin_api_key" in data and data["jellyfin_api_key"] == "******":
+            data["jellyfin_api_key"] = config_obj.jellyfin_api_key
 
         # 检查是否有HTTP服务器相关配置被修改
         has_http_config_changed = any(
@@ -411,7 +435,11 @@ async def updateversion(version: str = "", lite: bool = True):
     """更新版本"""
     import asyncio
 
-    ret = await update_version(version, lite)
+    try:
+        ret = await update_version(config, version, lite)
+    except Exception as e:
+        return {"ret": str(e)}
+
     if ret != "OK":
         return {"ret": ret}
 

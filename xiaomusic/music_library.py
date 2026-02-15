@@ -1095,23 +1095,41 @@ class MusicLibrary:
                 return False
 
         # 是否需要代理
-        jellyfin_mode = (getattr(self.config, "jellyfin_proxy_mode", "auto") or "auto").lower()
-        jellyfin_needs_proxy = False
-        if is_jellyfin_url(url):
-            if jellyfin_mode == "on":
-                jellyfin_needs_proxy = True
-            elif jellyfin_mode == "auto":
-                jellyfin_needs_proxy = is_private_base_url()
+        jellyfin_mode = (
+            getattr(self.config, "jellyfin_proxy_mode", "auto") or "auto"
+        ).lower()
 
-        needs_proxy = self.config.web_music_proxy or url.startswith("self://") or jellyfin_needs_proxy
-
-        if needs_proxy:
-            # 判断是否为电台，传入 radio 参数
+        # For Jellyfin, we support an internal auto-fallback strategy:
+        # - on: always proxy
+        # - off: never proxy
+        # - auto: try direct first; if playback fails, device layer will retry via proxy
+        jellyfin_is = is_jellyfin_url(url)
+        if jellyfin_is and jellyfin_mode == "on":
             is_radio = self.is_web_radio_music(name)
             proxy_url = self._get_proxy_url(url, is_radio=is_radio)
             return proxy_url, url
 
+        needs_proxy = self.config.web_music_proxy or url.startswith("self://")
+        if needs_proxy:
+            is_radio = self.is_web_radio_music(name)
+            proxy_url = self._get_proxy_url(url, is_radio=is_radio)
+            return proxy_url, url
+
+        # Direct play.
+        if jellyfin_is and jellyfin_mode == "auto":
+            # Return origin URL so device layer can retry via proxy if needed.
+            return url, url
         return url, None
+
+    def get_proxy_url(self, origin_url: str, *, name: str = "") -> str:
+        """Public wrapper to build a proxy URL for a given origin URL."""
+        is_radio = False
+        try:
+            if name:
+                is_radio = self.is_web_radio_music(name)
+        except Exception:
+            is_radio = False
+        return self._get_proxy_url(origin_url, is_radio=is_radio)
 
     async def _get_url_from_api(self, name, url):
         """通过API获取真实播放地址

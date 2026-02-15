@@ -216,7 +216,11 @@
                     <label for="jellyfin_api_key" class="block text-sm font-medium text-gray-700">
                       Jellyfin API Key
                     </label>
-                    <input id="jellyfin_api_key" type="text" placeholder="Jellyfin 控制台生成的 API Key" class="mt-1 block w-full rounded-md border border-gray-300 bg-white px-4 py-2.5 text-gray-900 placeholder:text-gray-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 hover:border-gray-400" />
+                    <div class="mt-1 flex gap-2">
+                      <input id="jellyfin_api_key" type="password" placeholder="Jellyfin 控制台生成的 API Key" autocomplete="new-password" class="block w-full rounded-md border border-gray-300 bg-white px-4 py-2.5 text-gray-900 placeholder:text-gray-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 hover:border-gray-400" />
+                      <button type="button" class="toggle-secret shrink-0 px-3 py-2.5 rounded-md border border-gray-300 bg-gray-50 text-gray-700 hover:bg-gray-100">显示</button>
+                    </div>
+                    <p class="mt-1 text-xs text-gray-500">已隐藏：保持为 ****** 表示不修改；清空表示移除。</p>
                   </div>
 
                   <div class="mb-4">
@@ -226,17 +230,6 @@
                     <input id="jellyfin_user_id" type="text" placeholder="留空自动选择第一个用户" class="mt-1 block w-full rounded-md border border-gray-300 bg-white px-4 py-2.5 text-gray-900 placeholder:text-gray-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 hover:border-gray-400" />
                   </div>
 
-                  <div class="mb-4">
-                    <label for="jellyfin_proxy_mode" class="block text-sm font-medium text-gray-700">
-                      Jellyfin 走代理
-                    </label>
-                    <select id="jellyfin_proxy_mode" class="mt-1 block w-full rounded-md border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 hover:border-gray-400">
-                      <option value="auto" selected>自动(内网才代理)</option>
-                      <option value="on">总是代理</option>
-                      <option value="off">从不代理</option>
-                    </select>
-                    <p class="mt-1 text-xs text-gray-500">降级策略: 仅当 Jellyfin 地址为内网/本机地址时自动走代理。</p>
-                  </div>
 
                   <div class="mb-4">
                     <button id="sync-jellyfin" type="button" class="px-3 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700">

@@ -117,7 +117,7 @@ async def downloadjson(data: UrlInfo, Verifcation=Depends(verification)):
     content = ""
     try:
         ret = "OK"
-        content = await downloadfile(url)
+        content = await downloadfile(url, config)
     except Exception as e:
         log.exception(f"Execption {e}")
         ret = "Download JSON file failed."

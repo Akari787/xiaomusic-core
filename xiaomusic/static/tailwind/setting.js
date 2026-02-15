@@ -380,6 +380,17 @@ $(function () {
     $("#public_port").val(port);
   });
 
+  // Toggle masked secrets (API key, tokens)
+  $(document).on("click", ".toggle-secret", function () {
+    const $wrap = $(this).closest("div");
+    const $input = $wrap.find("input").first();
+    if (!$input.length) return;
+    const cur = $input.attr("type");
+    const next = cur === "password" ? "text" : "password";
+    $input.attr("type", next);
+    $(this).text(next === "password" ? "显示" : "隐藏");
+  });
+
   // 旧按钮已移除，逻辑整合到 #oauth2-action
 
   $("#sync-jellyfin").on("click", () => {

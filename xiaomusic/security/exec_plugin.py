@@ -3,7 +3,9 @@ import ipaddress
 import socket
 from typing import Any
 
-import requests
+from xiaomusic import __version__
+from xiaomusic.security.errors import OutboundBlockedError
+from xiaomusic.security.outbound import OutboundBlockedError as _OutboundBlocked, OutboundPolicy, fetch_text
 from pydantic import BaseModel, Field, ValidationError
 
 from xiaomusic.security.errors import (
@@ -28,10 +30,12 @@ def _ast_literal(node: ast.AST) -> Any:
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.Dict):
-        return {
-            _ast_literal(k): _ast_literal(v)
-            for k, v in zip(node.keys, node.values, strict=True)
-        }
+        out = {}
+        for k, v in zip(node.keys, node.values, strict=True):
+            if k is None:
+                raise ExecValidationError("**dict unpack is not allowed")
+            out[_ast_literal(k)] = _ast_literal(v)
+        return out
     if isinstance(node, ast.List):
         return [_ast_literal(x) for x in node.elts]
     if isinstance(node, ast.Tuple):
@@ -120,59 +124,28 @@ def _resolve_and_block_private(host: str, port: int) -> None:
             raise ExecNotAllowedError("Private/loopback/link-local IPs are not allowed")
 
 
-def http_get(
+async def http_get(
     *,
     url: str,
     allowlist_domains: list[str],
     timeout_sec: float = 5.0,
     max_bytes: int = 1024 * 1024,
     max_redirects: int = 3,
-):
+) -> str:
     if not allowlist_domains:
         raise ExecNotAllowedError("http_get requires allowlist_domains")
-
-    current = url
-    for _ in range(max_redirects + 1):
-        parsed = requests.utils.urlparse(current)
-        if parsed.scheme not in ("http", "https"):
-            raise ExecNotAllowedError("Only http/https URLs are allowed")
-
-        host = parsed.hostname or ""
-        if not host or host in ("localhost",):
-            raise ExecNotAllowedError("Host not allowed")
-        if _is_ip_literal(host):
-            raise ExecNotAllowedError("IP literal URLs are not allowed")
-        if not _domain_allowed(host, allowlist_domains):
-            raise ExecNotAllowedError("Domain not in allowlist")
-
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        _resolve_and_block_private(host, port)
-
-        resp = requests.get(
-            current,
-            timeout=timeout_sec,
-            allow_redirects=False,
-            stream=True,
-            headers={"User-Agent": "XiaoMusic/exec-http-get"},
+    policy = OutboundPolicy(tuple(allowlist_domains))
+    try:
+        return await fetch_text(
+            url,
+            policy=policy,
+            timeout_s=timeout_sec,
+            max_bytes=max_bytes,
+            max_redirects=max_redirects,
+            user_agent=f"XiaoMusic/{__version__} exec-http-get",
         )
-        if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
-            loc = resp.headers.get("Location")
-            if not loc:
-                raise ExecValidationError("Redirect without Location")
-            current = requests.compat.urljoin(current, loc)
-            continue
-
-        resp.raise_for_status()
-        buf = bytearray()
-        for chunk in resp.iter_content(chunk_size=8192):
-            if not chunk:
-                continue
-            buf.extend(chunk)
-            if len(buf) > max_bytes:
-                raise ExecValidationError("Response too large")
-        return buf.decode("utf-8", errors="replace")
-
-    raise ExecValidationError("Too many redirects")
+    except _OutboundBlocked as e:
+        raise OutboundBlockedError(str(e))
 
 
 class ExecPluginEngine:
@@ -213,10 +186,11 @@ class ExecPluginEngine:
             except ValidationError as e:
                 raise ExecValidationError(str(e)) from e
 
-            return http_get(
-                url=args.url,
-                allowlist_domains=list(getattr(self.config, "allowlist_domains", []) or []),
+            domains = (
+                list(getattr(self.config, "outbound_allowlist_domains", []) or [])
+                or list(getattr(self.config, "allowlist_domains", []) or [])
             )
+            return await http_get(url=args.url, allowlist_domains=domains)
 
         if not self.plugin_manager:
             raise ExecNotAllowedError("plugin manager not available")

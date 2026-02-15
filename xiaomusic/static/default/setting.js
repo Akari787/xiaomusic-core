@@ -544,6 +544,17 @@ $(function () {
     }
   });
 
+  // Toggle masked secrets (API key, tokens)
+  $(document).on("click", ".toggle-secret", function () {
+    const targetId = $(this).data("target");
+    const $input = targetId ? $("#" + targetId) : $(this).closest("div").find("input");
+    if (!$input.length) return;
+    const cur = $input.attr("type");
+    const next = cur === "password" ? "text" : "password";
+    $input.attr("type", next);
+    $(this).text(next === "password" ? "显示" : "隐藏");
+  });
+
   $("#auto-hostname").on("click", () => {
     const protocol = window.location.protocol;
     const hostname = window.location.hostname;

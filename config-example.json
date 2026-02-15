@@ -122,6 +122,18 @@
   "enable_exec_plugin": false,
   "allowed_exec_commands": [],
   "allowlist_domains": [],
+  "outbound_allowlist_domains": [],
+  "enable_self_update": false,
+  "cors_allow_origins": [
+    "http://localhost",
+    "http://127.0.0.1",
+    "http://localhost:8090",
+    "http://127.0.0.1:8090",
+    "http://localhost:58090",
+    "http://127.0.0.1:58090"
+  ],
+  "keyword_override_mode": "override",
+  "__comment_security": "Dangerous capabilities are disabled by default. To enable exec# you must set enable_exec_plugin=true AND configure allowed_exec_commands. Outbound network access is denied unless outbound_allowlist_domains is configured.",
   "get_ask_by_mina": false,
   "play_type_one_tts_msg": "已经设置为单曲循环",
   "play_type_all_tts_msg": "已经设置为全部循环",

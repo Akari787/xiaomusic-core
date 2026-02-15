@@ -9,6 +9,7 @@ import json
 import os
 import random
 import time
+from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 from miservice import miio_command
@@ -29,6 +30,7 @@ from xiaomusic.const import (
 from xiaomusic.events import DEVICE_CONFIG_CHANGED
 from xiaomusic.utils.file_utils import chmodfile
 from xiaomusic.utils.text_utils import custom_sort_key, list2str
+from xiaomusic.download_result import DownloadResult
 
 
 class XiaoMusicDevice:
@@ -69,6 +71,13 @@ class XiaoMusicDevice:
         self._duration = 0
         self._paused_time = 0
         self._play_failed_cnt = 0
+        self._play_fail_first_ts = 0.0
+        self._play_fail_last_reason = ""
+        self._degraded = False
+        self._degraded_notified = False
+
+        # Used to guard delayed tasks (next-song timer, auto-add, retries)
+        self._play_session_id = 0
 
         self._play_list = []
 
@@ -184,6 +193,7 @@ class XiaoMusicDevice:
     async def play(self, name="", search_key=""):
         """播放歌曲（外部接口）"""
         self._last_cmd = "play"
+        self._clear_degraded_state()
         return await self._play(name=name, search_key=search_key)
 
     async def _check_and_download_music(self, name, search_key, allow_download):
@@ -328,10 +338,22 @@ class XiaoMusicDevice:
     async def playlocal(self, name=""):
         """播放本地歌曲 - 不下载"""
         self._last_cmd = "playlocal"
+        self._clear_degraded_state()
         return await self._play_internal(name=name, search_key="", allow_download=False)
+
+    def _clear_degraded_state(self):
+        self._degraded = False
+        self._degraded_notified = False
+        self._play_failed_cnt = 0
+        self._play_fail_first_ts = 0.0
+        self._play_fail_last_reason = ""
 
     async def _playmusic(self, name):
         """播放音乐的核心实现"""
+        # New session: invalidate any pending delayed tasks from older sessions.
+        self._play_session_id += 1
+        sid = self._play_session_id
+
         # 取消组内所有的下一首歌曲的定时器
         await self.cancel_group_next_timer()
 
@@ -340,24 +362,75 @@ class XiaoMusicDevice:
         self.device.playlist2music[self.device.cur_playlist] = name
         cur_playlist = self.device.cur_playlist
         self.log.info(f"cur_music {self.get_cur_music()}")
-        url, _ = await self.xiaomusic.music_library.get_music_url(name)
+        url, origin_url = await self.xiaomusic.music_library.get_music_url(name)
         await self.group_force_stop_xiaoai()
         self.log.info(f"播放 {url}")
 
         results = await self.group_player_play(url, name)
+        jellyfin_mode = (
+            getattr(self.config, "jellyfin_proxy_mode", "auto") or "auto"
+        ).lower()
+        jellyfin_auto_candidate = (
+            jellyfin_mode == "auto"
+            and origin_url
+            and origin_url == url
+            and (self.config.jellyfin_base_url or "").rstrip("/")
+            and url.startswith((self.config.jellyfin_base_url or "").rstrip("/") + "/")
+        )
+
+        async def _try_proxy_fallback(reason: str) -> str:
+            try:
+                proxy_url = self.xiaomusic.music_library.get_proxy_url(origin_url, name=name)
+                self.log.info("Jellyfin direct failed (%s), retry via proxy: %s", reason, proxy_url)
+                await self.group_force_stop_xiaoai()
+                results2 = await self.group_player_play(proxy_url, name)
+                if all(ele is None for ele in results2):
+                    return ""
+                # Best-effort verify playback started.
+                await asyncio.sleep(1)
+                if sid != self._play_session_id:
+                    return proxy_url
+                try:
+                    if not await self.get_if_xiaoai_is_playing():
+                        return ""
+                except Exception:
+                    pass
+                return proxy_url
+            except Exception as e:
+                self.log.warning("proxy fallback failed: %s", e)
+                return ""
+
         if all(ele is None for ele in results):
-            self.log.info(f"播放 {name} 失败. 失败次数: {self._play_failed_cnt}")
+            if jellyfin_auto_candidate:
+                proxy_url = await _try_proxy_fallback("player_play_failed")
+                if proxy_url:
+                    url = proxy_url
+                    results = ["proxy"]
+                else:
+                    await self._handle_play_failure(name=name, sid=sid, reason="player_play_failed")
+                    return
+            else:
+                await self._handle_play_failure(name=name, sid=sid, reason="player_play_failed")
+                return
+            # Proxy fallback succeeded; continue with the normal success path.
+
+        # Even if the API call succeeds, the speaker may not be able to reach a
+        # direct Jellyfin URL. In auto mode, verify actual playback and fallback.
+        if jellyfin_auto_candidate:
             await asyncio.sleep(1)
-            if (
-                self.is_playing
-                and self._last_cmd != "stop"
-                and self._play_failed_cnt < 10
-            ):
-                self._play_failed_cnt = self._play_failed_cnt + 1
-                await self._play_next()
-            return
+            if sid == self._play_session_id:
+                try:
+                    if not await self.get_if_xiaoai_is_playing():
+                        proxy_url = await _try_proxy_fallback("not_playing")
+                        if proxy_url:
+                            url = proxy_url
+                except Exception:
+                    # If status check fails, keep the original success path.
+                    pass
         # 重置播放失败次数
         self._play_failed_cnt = 0
+        self._play_fail_first_ts = 0.0
+        self._play_fail_last_reason = ""
 
         self.log.info(f"【{name}】已经开始播放了")
 
@@ -461,6 +534,25 @@ class XiaoMusicDevice:
 
     async def download(self, search_key, name):
         """下载歌曲"""
+        # Outbound network access is denied unless explicitly allowlisted.
+        if not (
+            getattr(self.config, "outbound_allowlist_domains", [])
+            or getattr(self.config, "allowlist_domains", [])
+        ):
+            msg = "出站网络未允许，已禁止下载（请配置 outbound_allowlist_domains）"
+            self.log.warning(msg)
+            try:
+                await self.do_tts(msg)
+            except Exception:
+                pass
+            res = DownloadResult(
+                success=False,
+                reason="outbound not allowlisted",
+                provider="yt-dlp",
+            )
+            setattr(self.xiaomusic, "last_download_result", asdict(res))
+            return
+
         if self._download_proc:
             try:
                 self._download_proc.kill()
@@ -495,13 +587,34 @@ class XiaoMusicDevice:
 
         cmd = " ".join(sbp_args)
         self.log.info(f"download cmd: {cmd}")
-        self._download_proc = await asyncio.create_subprocess_exec(*sbp_args)
+
+        start = time.time()
+        self._download_proc = await asyncio.create_subprocess_exec(
+            *sbp_args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
         await self.do_tts(f"正在下载歌曲{search_key}")
         self.log.info(f"正在下载中 {search_key} {name}")
-        await self._download_proc.wait()
+        stdout, stderr = await self._download_proc.communicate()
+        elapsed_ms = int((time.time() - start) * 1000)
+        stderr_text = (stderr or b"").decode("utf-8", errors="replace")
+        stderr_tail = "\n".join(stderr_text.splitlines()[-20:])
         # 下载完成后，修改文件权限
         file_path = os.path.join(self.config.download_path, f"{name}.mp3")
         chmodfile(file_path)
+
+        ok = self._download_proc.returncode == 0 and os.path.isfile(file_path)
+        reason = "" if ok else f"yt-dlp exit={self._download_proc.returncode}"
+        res = DownloadResult(
+            success=ok,
+            reason=reason,
+            filepath=file_path if ok else "",
+            stderr_tail=stderr_tail,
+            provider="yt-dlp",
+            elapsed_ms=elapsed_ms,
+        )
+        setattr(self.xiaomusic, "last_download_result", asdict(res))
 
     async def check_replay(self):
         """检查是否需要继续播放被打断的歌曲"""
@@ -771,9 +884,13 @@ class XiaoMusicDevice:
         """设置下一首歌曲的播放定时器"""
         await self.cancel_next_timer()
 
+        sid = self._play_session_id
+
         async def _do_next():
             try:
                 await asyncio.sleep(sec)
+                if sid != self._play_session_id:
+                    return
                 self.log.info(f"定时器时间到了 did: {self.did}")
                 # 定时器触发后先清理引用，避免任务自我取消导致逻辑混乱
                 self._next_timer = None
@@ -791,6 +908,44 @@ class XiaoMusicDevice:
 
         self._next_timer = asyncio.create_task(_do_next())
         self.log.info(f"{sec} 秒后将会播放下一首歌曲 did: {self.did}")
+
+    async def _handle_play_failure(self, *, name: str, sid: int, reason: str):
+        now = time.time()
+        if self._play_fail_first_ts <= 0:
+            self._play_fail_first_ts = now
+        self._play_fail_last_reason = reason
+        self._play_failed_cnt += 1
+
+        self.log.info(
+            "播放 %s 失败. reason=%s cnt=%d", name, reason, self._play_failed_cnt
+        )
+
+        # Exponential backoff, capped.
+        delay = min(1.0 * (2 ** max(self._play_failed_cnt - 1, 0)), 8.0)
+        total_elapsed = now - self._play_fail_first_ts
+
+        # Degrade after too many failures or too long.
+        if self._play_failed_cnt >= 5 or total_elapsed >= 60:
+            self._degraded = True
+            if not self._degraded_notified:
+                self._degraded_notified = True
+                try:
+                    await self.do_tts("播放失败过多，已停止自动切歌，请稍后再试")
+                except Exception:
+                    pass
+            return
+
+        async def _retry_next():
+            await asyncio.sleep(delay)
+            if sid != self._play_session_id:
+                return
+            if not self.is_playing or self._last_cmd == "stop":
+                return
+            if self._degraded:
+                return
+            await self._play_next()
+
+        asyncio.create_task(_retry_next())
 
     async def set_volume(self, volume: int):
         """设置音量"""
