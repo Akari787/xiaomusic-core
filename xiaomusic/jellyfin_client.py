@@ -1,4 +1,5 @@
 import aiohttp
+from urllib.parse import urlencode
 
 
 class JellyfinClient:
@@ -59,16 +60,36 @@ class JellyfinClient:
                 return True
         return False
 
+    @staticmethod
+    def build_stream_url(base_url: str, item_id: str, api_key: str) -> str:
+        base = (base_url or "").rstrip("/")
+        path = f"{base}/Audio/{item_id}/stream.mp3"
+        params = [
+            ("static", "true"),
+            ("api_key", api_key),
+        ]
+        return f"{path}?{urlencode(params)}"
+
+    @staticmethod
+    def build_universal_url(base_url: str, item_id: str, user_id: str, api_key: str) -> str:
+        base = (base_url or "").rstrip("/")
+        path = f"{base}/Audio/{item_id}/universal"
+        params = [
+            ("UserId", user_id),
+            ("Container", "mp3"),
+            ("TranscodingContainer", "mp3"),
+            ("AudioCodec", "mp3"),
+            ("TranscodingProtocol", "http"),
+            ("api_key", api_key),
+        ]
+        return f"{path}?{urlencode(params)}"
+
     def _stream_url(self, item_id, user_id="", force_transcode=False):
         base = self._base()
         api_key = self.config.jellyfin_api_key
         if force_transcode and user_id:
-            return (
-                f"{base}/Audio/{item_id}/universal"
-                f"?UserId={user_id}&Container=mp3&TranscodingContainer=mp3"
-                f"&AudioCodec=mp3&TranscodingProtocol=http&api_key={api_key}"
-            )
-        return f"{base}/Audio/{item_id}/stream.mp3?static=true&api_key={api_key}"
+            return self.build_universal_url(base, item_id, user_id, api_key)
+        return self.build_stream_url(base, item_id, api_key)
 
     async def search_music(self, keyword, limit=20):
         user_id = await self._resolve_user_id()
