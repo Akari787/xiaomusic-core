@@ -123,7 +123,8 @@
   "allowed_exec_commands": [],
   "outbound_allowlist_domains": [],
   "allowlist_domains": [],
-  "__comment_allowlist_domains": "DEPRECATED: use outbound_allowlist_domains. Priority: outbound_allowlist_domains > allowlist_domains (fallback for backward compatibility).",
+  "__comment_allowlist_domains_1": "DEPRECATED: use outbound_allowlist_domains.",
+  "__comment_allowlist_domains_2": "Priority: outbound_allowlist_domains > allowlist_domains (fallback for backward compatibility).",
   "enable_self_update": false,
   "cors_allow_origins": [
     "http://localhost",
