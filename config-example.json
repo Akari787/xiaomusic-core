@@ -130,7 +130,9 @@
     "http://127.0.0.1"
   ],
   "keyword_override_mode": "override",
-  "__comment_security": "Defaults are hardened. Dangerous capabilities (exec/http_get/self-update) are disabled by default. To enable exec# you must set enable_exec_plugin=true AND configure allowed_exec_commands. Outbound network access is denied unless outbound_allowlist_domains is configured. Sensitive values are redacted in logs by default (log_redact=true). OAuth2 token persistence defaults to on (persist_token=true).",
+  "__comment_security_1": "Defaults are hardened. Dangerous capabilities (exec/http_get/self-update) are disabled by default.",
+  "__comment_security_2": "To enable exec# you must set enable_exec_plugin=true AND configure allowed_exec_commands. Outbound network access is denied unless outbound_allowlist_domains is configured.",
+  "__comment_security_3": "Sensitive values are redacted in logs by default (log_redact=true). OAuth2 token persistence defaults to on (persist_token=true).",
   "get_ask_by_mina": false,
   "play_type_one_tts_msg": "已经设置为单曲循环",
   "play_type_all_tts_msg": "已经设置为全部循环",
