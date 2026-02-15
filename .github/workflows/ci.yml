@@ -10,6 +10,11 @@ on:
 
 env:
   LOCAL_IMAGE: xiaomusic
+  # NOTE: Some GitHub setups reject using the `secrets` context inside `if:`.
+  # Mirror secrets into env, and only use env.* in conditions.
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+  PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
 
 permissions:
   contents: write
@@ -82,7 +87,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
-        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -90,13 +95,13 @@ jobs:
 
       - name: Set Docker repo
         id: docker_repo
-        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
         run: echo "repo=${DOCKERHUB_REPOSITORY}" >> "$GITHUB_OUTPUT"
         env:
           DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY || format('{0}/xiaomusic-oauth2', secrets.DOCKERHUB_USERNAME) }}
 
       - name: Publish to Docker Hub (default branch tag)
-        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
         uses: docker/build-push-action@v6
         with:
           platforms: linux/amd64,linux/arm64,linux/arm/v7
@@ -109,7 +114,7 @@ jobs:
             type=gha,scope=armv7
 
       - name: Publish to Docker Hub latest and stable
-        if: startsWith(github.ref, 'refs/tags/v') && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
+        if: startsWith(github.ref, 'refs/tags/v') && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
         uses: docker/build-push-action@v6
         with:
           platforms: linux/amd64,linux/arm64,linux/arm/v7
@@ -198,7 +203,7 @@ jobs:
       - uses: pdm-project/setup-pdm@v3
 
       - name: Publish package distributions to PyPI
-        if: ${{ secrets.PYPI_API_TOKEN != '' }}
+        if: env.PYPI_API_TOKEN != ''
         env:
           PDM_PUBLISH_USERNAME: __token__
           PDM_PUBLISH_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
