@@ -1,72 +1,63 @@
-# Manual Smoke Test (Test Server 192.168.7.178)
+# Manual Smoke Test (192.168.7.178)
 
-This is a non-destructive functional validation checklist.
+目标：在测试服务器 `192.168.7.178` 上用 hardened compose 做一次非破坏性验证。
 
-## 0) Prereqs
+## 1) 启动（docker-compose.hardened.yml）
 
-- You have SSH access to `root@192.168.7.178`.
-- Docker + docker compose are installed on the server.
-- You have a prepared music folder with at least one playable file.
-
-## 1) Deploy (docker-compose.hardened.yml)
-
-On your dev machine:
-
-```bash
-# Copy repo to server (recommended: tarball or git clone)
-scp -i ~/.ssh/id_ed25519_opencode -o IdentitiesOnly=yes -r . root@192.168.7.178:/root/xiaomusic_oauth2
-```
-
-On the server:
+在服务器上：
 
 ```bash
 cd /root/xiaomusic_oauth2
 mkdir -p conf music
 
-# Start
 docker compose -f docker-compose.hardened.yml up -d --build
 
-# Verify
 curl -fsS http://127.0.0.1:58090/getversion
+curl -fsS http://192.168.7.178:58090/getversion
 ```
 
-Expected: version JSON (e.g. `{"version":"1.0.1"}`)
+期望：两次都返回版本 JSON，且外部可通过 `http://192.168.7.178:58090` 访问。
 
-## 2) Startup Self-Check
+## 2) CORS 默认仅 localhost
 
 ```bash
-curl -fsS http://127.0.0.1:58090/diagnostics | jq
+curl -s -D - -o /dev/null \
+  -H "Origin: http://evil.com" \
+  -H "Access-Control-Request-Method: GET" \
+  -X OPTIONS http://127.0.0.1:58090/getversion | grep -i access-control-allow-origin || true
+
+curl -s -D - -o /dev/null \
+  -H "Origin: http://localhost" \
+  -H "Access-Control-Request-Method: GET" \
+  -X OPTIONS http://127.0.0.1:58090/getversion | grep -i access-control-allow-origin || true
 ```
 
-Check:
-- `startup.ok` is `true`
-- `paths[]` show readable/writable where needed
-- `tools[]` show `ffmpeg`/`ffprobe` found
+期望：
+- evil.com 不应出现 `Access-Control-Allow-Origin`
+- localhost 应允许（返回 `Access-Control-Allow-Origin: http://localhost`
 
-If not ok, follow `startup.notes` suggestions (volume mounts, ffmpeg path, etc.).
+## 3) Exec 默认禁用
 
-## 3) Play a Local Song
+先获取一个 DID（可从设置接口返回的 device_list 中选择）：
 
-Prepare a known file under the mounted `music/` dir.
+```bash
+curl -fsS "http://127.0.0.1:58090/getsetting?need_device_list=true" | head
+```
 
-Then use Web UI or API/ctrl-panel to trigger a local play command.
+然后通过 API 触发（把 `<DID>` 替换成实际 did）：
 
-Quick check (API may differ by your UI):
-- Use the UI to pick a track and start playback
-- Confirm device plays audio
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -X POST http://127.0.0.1:58090/cmd \
+  -H "Content-Type: application/json" \
+  -d '{"did":"<DID>","cmd":"exec#http_get(\\\"https://example.com\\\")"}'
+```
 
-## 4) Exec (Default Disabled)
+期望：HTTP 403（默认禁用危险能力）。
 
-Attempt an exec command via control panel (or API):
-- Example payload: `exec#http_get("https://example.com")`
+## 4) 开启 exec + allowlist 后验证 http_get
 
-Expected:
-- HTTP 403
-- No side effects
-
-## 5) Enable Exec + Allowlist (http_get)
-
-Edit your `conf/setting.json` (or your configured config file) and set:
+编辑 `conf/setting.json`：
 
 ```json
 {
@@ -76,57 +67,44 @@ Edit your `conf/setting.json` (or your configured config file) and set:
 }
 ```
 
-Restart container:
+重启：
 
 ```bash
 docker compose -f docker-compose.hardened.yml restart
 ```
 
-Now validate:
-- `http_get("https://example.com")` should succeed
-- `http_get("http://127.0.0.1")` and `http_get("http://192.168.1.1")` must be blocked
+验证：
+- `http_get("https://example.com")` 成功
+- `http_get("http://127.0.0.1")` / `http_get("http://192.168.7.1")` 必须拒绝
 
-## 6) File Watch Refresh Coalescing
+## 5) 自更新默认拒绝 + 安全解压验证
 
-Enable file watch in config:
+默认 `enable_self_update=false`：调用更新接口应拒绝。
+
+开启后再验证：
 
 ```json
 {
-  "enable_file_watch": true,
-  "file_watch_debounce": 10
+  "enable_self_update": true,
+  "outbound_allowlist_domains": ["gproxy.hanxi.cc", "github.com"]
 }
 ```
 
-Then copy multiple files into the music folder quickly:
+期望：
+- enable_self_update=false 时，updateversion 拒绝
+- enable_self_update=true 且 allowlist 配置正确时，可以正常更新
+- 恶意 tar（包含 `../`、绝对路径、symlink）不会写到目标目录外
+
+验证方法示例：
 
 ```bash
-cp /path/to/some.mp3 /root/xiaomusic_oauth2/music/
-cp /path/to/some2.mp3 /root/xiaomusic_oauth2/music/
+find /app -maxdepth 2 -name pwn.txt || true
 ```
 
-Expected:
-- Only a single refresh runs per debounce window (check container logs)
+## 6) 如何定位 outbound 失败原因（不含敏感信息）
 
 ```bash
-docker logs --tail 200 xiaomusic-oauth2 | rg "library refresh"
+docker logs --tail 300 xiaomusic-oauth2 | grep -i -E "SECURITY:|outbound|blocked" || true
 ```
 
-## 7) Playback Failure Backoff + Degraded Mode
-
-Simulate a non-playable target (e.g. an invalid URL or missing file) and trigger playback.
-
-Expected:
-- Retry with exponential backoff
-- After repeated failures, auto-next stops and a single user-facing TTS is emitted
-
-## 8) Jellyfin Auto Proxy Fallback
-
-If you use Jellyfin URLs that the speaker cannot reach directly:
-
-- Configure Jellyfin (base url + api key) and enable Jellyfin
-- Start playing a Jellyfin track
-
-Expected:
-- If direct URL is reachable by the speaker, it plays directly
-- Otherwise XiaoMusic retries once via `/proxy/...` automatically
-- Settings UI does not expose a manual proxy mode toggle
+期望：能看到被拦截原因（domain not allowlisted / ip literal not allowed / resolved to private 等），且日志会脱敏。

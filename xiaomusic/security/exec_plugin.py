@@ -1,11 +1,10 @@
 import ast
-import ipaddress
-import socket
 from typing import Any
 
 from xiaomusic import __version__
 from xiaomusic.security.errors import OutboundBlockedError
-from xiaomusic.security.outbound import OutboundBlockedError as _OutboundBlocked, OutboundPolicy, fetch_text
+from xiaomusic.security.outbound import OutboundBlockedError as _OutboundBlocked
+from xiaomusic.security.outbound import OutboundPolicy, fetch_text
 from pydantic import BaseModel, Field, ValidationError
 
 from xiaomusic.security.errors import (
@@ -74,56 +73,6 @@ def parse_exec_code(code: str) -> ExecCall:
         kwargs[kw.arg] = _ast_literal(kw.value)
 
     return ExecCall(command=command, args=list(args), kwargs=kwargs)
-
-
-def _domain_allowed(host: str, allowlist: list[str]) -> bool:
-    host = host.strip().lower().rstrip(".")
-    if not host or not allowlist:
-        return False
-
-    for d in allowlist:
-        d = d.strip().lower().rstrip(".")
-        if not d:
-            continue
-        if host == d:
-            return True
-        if host.endswith("." + d):
-            return True
-    return False
-
-
-def _is_ip_literal(host: str) -> bool:
-    try:
-        ipaddress.ip_address(host)
-        return True
-    except ValueError:
-        return False
-
-
-def _is_private_ip(ip: str) -> bool:
-    obj = ipaddress.ip_address(ip)
-    return bool(
-        obj.is_private
-        or obj.is_loopback
-        or obj.is_link_local
-        or obj.is_multicast
-        or obj.is_reserved
-    )
-
-
-def _resolve_and_block_private(host: str, port: int) -> None:
-    infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-    for family, _, _, _, sockaddr in infos:
-        if family == socket.AF_INET:
-            ip = sockaddr[0]
-        elif family == socket.AF_INET6:
-            ip = sockaddr[0]
-        else:
-            continue
-        if _is_private_ip(ip):
-            raise ExecNotAllowedError("Private/loopback/link-local IPs are not allowed")
-
-
 async def http_get(
     *,
     url: str,

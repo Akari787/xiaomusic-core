@@ -239,7 +239,7 @@ class Config:
             x.strip()
             for x in os.getenv(
                 "XIAOMUSIC_CORS_ALLOW_ORIGINS",
-                "http://localhost,http://127.0.0.1,http://localhost:8090,http://127.0.0.1:8090,http://localhost:58090,http://127.0.0.1:58090",
+                "http://localhost,http://127.0.0.1",
             ).split(",")
             if x.strip()
         ]

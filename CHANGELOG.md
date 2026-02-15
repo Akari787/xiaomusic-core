@@ -24,6 +24,8 @@
 
 ### Fix
 
+- 修复出站请求 DNS rebinding 回归点：`exec#http_get` 统一走 `security/outbound.py` 并增加二次解析校验
+
 - 修复 Jellyfin `.m4a` 无声播放问题，统一走可播放的 MP3 转码链路
 - 优化下一首定时触发逻辑，降低播放结束后的竞态与重复触发
 

@@ -147,6 +147,7 @@ async def fetch_bytes(
     max_bytes: int = 1024 * 1024,
     max_redirects: int = 3,
     user_agent: str | None = None,
+    rebind_check: bool = True,
 ) -> bytes:
     """Fetch URL with SSRF protections.
 
@@ -166,6 +167,12 @@ async def fetch_bytes(
         assert p.hostname is not None
         port = p.port or (443 if p.scheme == "https" else 80)
         ips = await policy.resolve_and_validate(p.hostname, port)
+
+        # Extra DNS rebinding guard: perform a second resolution/validation right
+        # before making the request. If the hostname suddenly resolves to a
+        # private/special address, block instead of connecting.
+        if rebind_check:
+            await policy.resolve_and_validate(p.hostname, port)
 
         resolver = _FixedResolver({_normalize_host(p.hostname): ips})
         connector = aiohttp.TCPConnector(
@@ -214,6 +221,7 @@ async def fetch_text(
     max_bytes: int = 1024 * 1024,
     max_redirects: int = 3,
     user_agent: str | None = None,
+    rebind_check: bool = True,
 ) -> str:
     data = await fetch_bytes(
         url,
@@ -222,5 +230,6 @@ async def fetch_text(
         max_bytes=max_bytes,
         max_redirects=max_redirects,
         user_agent=user_agent,
+        rebind_check=rebind_check,
     )
     return data.decode("utf-8", errors="replace")

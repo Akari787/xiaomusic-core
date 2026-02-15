@@ -67,10 +67,27 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 - 如需排障，优先导出脱敏日志片段再提交 issue。
 - 永远不要把 GitHub Token / Jellyfin API Key / `auth.json` 内容贴到公开渠道。
 
+### 配置迁移与字段优先级
+
+- 出站访问（SSRF 防护）：默认拒绝所有出站请求。
+- 域名白名单优先级：`outbound_allowlist_domains` > `allowlist_domains`（后者保留兼容但视为 deprecated）。
+- CORS 默认仅允许 `http://localhost`、`http://127.0.0.1`。
+- Self-update 默认关闭：`enable_self_update=false`。
+
 ### 迁移说明（安全默认）
 
 - 之前配置里如包含 `exec#...`（如放在 `user_key_word_dict`），升级后会默认被拦截；需要手动设置 `enable_exec_plugin=true` 并配置 `allowed_exec_commands` 白名单。
-- 如需 `http_get`：同时加入 `allowed_exec_commands`，并配置 `outbound_allowlist_domains`（旧字段 `allowlist_domains` 仍兼容）。
+- 如需 `http_get`：同时加入 `allowed_exec_commands`，并配置 `outbound_allowlist_domains`。
+
+示例：允许 `example.com`
+
+```json
+{
+  "enable_exec_plugin": true,
+  "allowed_exec_commands": ["http_get"],
+  "outbound_allowlist_domains": ["example.com"]
+}
+```
 - 如需通过反向代理访问 WebUI：配置 `cors_allow_origins`，否则浏览器可能被 CORS 拦截。
 - Jellyfin API Key 不再在设置页明文显示；`/getsetting` 也会返回脱敏值（`******`）。需要修改时请重新输入。
 - 口令合并模式新增：`keyword_override_mode` 默认 `override`（同名口令冲突时以用户自定义为准）；可改为 `append` 保留默认口令。
