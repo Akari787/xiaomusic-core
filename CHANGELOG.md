@@ -1,3 +1,9 @@
+## v1.0.2 (2026-02-15)
+
+### Fix
+
+- 修复 Jellyfin 自动降级策略在 `web_music_proxy=false` 场景下可能不生效的问题：Jellyfin URL 识别不再依赖 base_url 的字符串前缀格式（支持 http/https 差异、base path、端口校验）
+
 ## v1.0.1 (2026-02-14)
 
 ### Feat
