@@ -2,12 +2,10 @@ name: Deploy docs to GitHub Pages
 
 on:
   push:
-    branches: ["**"]
+    branches: ["oauth2-only"]
     paths:
       - "docs/**"
       - "README.md"
-      - "CHANGELOG.md"
-      - ".github/workflows/static.yml"
   workflow_dispatch:
 
 permissions:

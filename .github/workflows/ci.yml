@@ -2,12 +2,6 @@ name: CI Workflow
 
 on:
   push:
-    branches:
-      - "oauth2-only" # 仅默认分支触发，避免与 tag 发布重复跑
-    # Docs-only changes don't need full build matrix.
-    paths-ignore:
-      - "README.md"
-      - "docs/**"
     tags:
       - "v*"
   workflow_dispatch:
@@ -156,12 +150,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           RELEASE_NAME=${{ github.ref_name }}
-          RELEASE_BODY="This release is automatically updated from the ${RELEASE_NAME} branch."
+          RELEASE_BODY=$(RELEASE_NAME="$RELEASE_NAME" python3 -c "import os,sys,re; tag=os.environ.get('RELEASE_NAME','').strip(); txt=open('CHANGELOG.md',encoding='utf-8').read(); m=re.search(r'^##\\s+'+re.escape(tag)+r'\\s*\\([^\\n]*\\)\\n(.*?)(?=^##\\s+|\\Z)', txt, flags=re.M|re.S); body=(m.group(1).strip() if m else '(No changelog entry found in CHANGELOG.md)'); sys.stdout.write(tag+'\\n\\n'+(body or '(Empty changelog section)'))")
 
           EXISTING_RELEASE=$(gh release view "${RELEASE_NAME}" --json id --jq .id || echo "")
 
           if [[ -n "${EXISTING_RELEASE}" ]]; then
-            echo "release exist"
+            gh release edit "${RELEASE_NAME}" \
+              --title "${RELEASE_NAME}" \
+              --notes "${RELEASE_BODY}"
           else
             gh release create "${RELEASE_NAME}" \
               --prerelease=false \
