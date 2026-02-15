@@ -161,6 +161,10 @@ export default function GitHubIssuesPlugin(options: GitHubIssuesPluginOptions): 
 
     async buildStart() {
       try {
+        if (!token) {
+          console.warn('[vitepress-plugin-github-issues] VITE_GITHUB_ISSUES_TOKEN is not set; skip fetching issues.')
+          return
+        }
         const issues = await fetchAllIssues(repo, token);
 
         console.log(`Fetched ${issues.length} issues from GitHub`); // Log the number of issues fetched
