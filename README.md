@@ -48,7 +48,7 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 
 - `stable`：稳定版（推荐）
 - `latest`：最新构建
-- `v1.0.1`：指定版本
+- `v1.0.2`：指定版本
 
 快速启动（示例）：
 
@@ -59,7 +59,6 @@ docker run -d --name xiaomusic-oauth2 \
   -p 58090:8090 \
   -v /root/xiaomusic_conf:/app/conf \
   -v /root/xiaomusic_music:/app/music \
-  -e TZ=Asia/Tokyo \
   akari787/xiaomusic-oauth2:stable
 ```
 
@@ -69,6 +68,8 @@ docker run -d --name xiaomusic-oauth2 \
 - 配置目录：`/app/conf`
 - 服务端口：容器内 `8090`（示例映射到宿主 `58090`）
 - OAuth2 Token：默认 `conf/auth.json`
+
+可选：如需设置时区，可添加例如 `-e TZ=Asia/Tokyo`。
 
 更安全的部署方式：参考 `docker-compose.hardened.yml`（`read_only`、`cap_drop`、`no-new-privileges` 等）。
 
@@ -122,7 +123,7 @@ docker run -d --name xiaomusic-oauth2 \
 
 ## 版本
 
-当前维护版本: `1.0.1`
+当前维护版本: `1.0.2`
 
 更新记录: [CHANGELOG.md](CHANGELOG.md)
 
