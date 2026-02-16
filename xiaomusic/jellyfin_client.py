@@ -64,8 +64,12 @@ class JellyfinClient:
     def build_stream_url(base_url: str, item_id: str, api_key: str) -> str:
         base = (base_url or "").rstrip("/")
         path = f"{base}/Audio/{item_id}/stream.mp3"
+        # NOTE:
+        # Some XiaoAi firmware variants rewrite '&' in query strings and may
+        # send "static=true+api_key=..." to Jellyfin, which becomes invalid.
+        # Keep direct-stream URL to a single query param to avoid this class of
+        # transport mutation.
         params = [
-            ("static", "true"),
             ("api_key", api_key),
         ]
         return f"{path}?{urlencode(params)}"
@@ -87,8 +91,8 @@ class JellyfinClient:
     def _stream_url(self, item_id, user_id="", force_transcode=False):
         base = self._base()
         api_key = self.config.jellyfin_api_key
-        if force_transcode and user_id:
-            return self.build_universal_url(base, item_id, user_id, api_key)
+        # Use single-param direct URL for XiaoAi compatibility (see note in
+        # build_stream_url). Jellyfin can still transcode stream.mp3 when needed.
         return self.build_stream_url(base, item_id, api_key)
 
     async def search_music(self, keyword, limit=20):
