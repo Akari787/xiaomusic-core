@@ -395,8 +395,10 @@ function webPlay() {
 }
 
 function play() {
-  var did = $("#did").val();
-  if (did == "web_device") {
+  var currentDid = $("#did").val() || window.did || did || "web_device";
+  did = currentDid;
+  window.did = currentDid;
+  if (currentDid == "web_device") {
     webPlay();
   } else {
     playOnDevice();
@@ -405,28 +407,20 @@ function play() {
 
 function playOnDevice() {
   console.log("playOnDevice");
-  var music_list = $("#music_list").val();
-  var music_name = $("#music_name").val();
-  if (no_warning) {
-    do_play_music_list(music_list, music_name);
+  var music_list = $("#music_list").val() || localStorage.getItem("cur_playlist");
+  var music_name = $("#music_name").val() || localStorage.getItem("cur_music");
+  if (!music_name) {
+    sendcmd("下一首");
     return;
   }
-  $.get(`/musicinfo?name=${music_name}`, function (data, status) {
-    console.log(data);
-    if (data.ret == "OK") {
-      console.log(
-        "%cmd.js:42 validHost(data.url) ",
-        "color: #007acc;",
-        validHost(data.url),
-      );
-      validHost(data.url) && do_play_music_list(music_list, music_name);
-    }
-  });
+  do_play_music_list(music_list, music_name);
 }
 function stopPlay() {
-  var did = $("#did").val();
+  var currentDid = $("#did").val() || window.did || did || "web_device";
+  did = currentDid;
+  window.did = currentDid;
 
-  if (did == "web_device") {
+  if (currentDid == "web_device") {
     // 本机播放：停止播放
     const audioElement = document.getElementById("audio");
     audioElement.pause();
@@ -437,19 +431,16 @@ function stopPlay() {
 
     console.log("本机停止播放");
   } else {
-    // 设备播放：调用后端接口
     $.ajax({
       type: "POST",
       url: "/device/stop",
       contentType: "application/json; charset=utf-8",
-      data: JSON.stringify({
-        did: did,
-      }),
+      data: JSON.stringify({ did: currentDid }),
       success: () => {
-        console.log("stop play succ");
+        console.log("stop play succ", currentDid);
       },
       error: () => {
-        console.log("stop play failed");
+        console.log("stop play failed", currentDid);
       },
     });
   }
@@ -1079,12 +1070,19 @@ function refresh_music_list() {
 }
 
 function do_play_music_list(listname, musicname) {
+  const currentDid = $("#did").val() || window.did || did;
+  if (!currentDid) {
+    console.log("do_play_music_list failed: missing did");
+    return;
+  }
+  did = currentDid;
+  window.did = currentDid;
   $.ajax({
     type: "POST",
     url: "/playmusiclist",
     contentType: "application/json; charset=utf-8",
     data: JSON.stringify({
-      did: did,
+      did: currentDid,
       listname: listname,
       musicname: musicname,
     }),
@@ -1100,16 +1098,7 @@ function do_play_music_list(listname, musicname) {
 $("#play_music_list").on("click", () => {
   var music_list = $("#music_list").val();
   var music_name = $("#music_name").val();
-  if (no_warning) {
-    do_play_music_list(music_list, music_name);
-    return;
-  }
-  $.get(`/musicinfo?name=${music_name}`, function (data, status) {
-    console.log(data);
-    if (data.ret == "OK") {
-      validHost(data.url) && do_play_music_list(music_list, music_name);
-    }
-  });
+  do_play_music_list(music_list, music_name);
 });
 
 function playUrl() {
@@ -1163,12 +1152,19 @@ function sendCustomCmd() {
 }
 
 function do_play_music(musicname, searchkey) {
+  const currentDid = $("#did").val() || window.did || did;
+  if (!currentDid) {
+    console.log("do_play_music failed: missing did", musicname, searchkey);
+    return;
+  }
+  did = currentDid;
+  window.did = currentDid;
   $.ajax({
     type: "POST",
     url: "/playmusic",
     contentType: "application/json; charset=utf-8",
     data: JSON.stringify({
-      did: did,
+      did: currentDid,
       musicname: musicname,
       searchkey: searchkey,
     }),
@@ -1290,11 +1286,18 @@ function refreshlist() {
 }
 
 function sendcmd(cmd) {
+  const currentDid = $("#did").val() || window.did || did;
+  if (!currentDid) {
+    console.log("sendcmd failed: missing did", cmd);
+    return;
+  }
+  did = currentDid;
+  window.did = currentDid;
   $.ajax({
     type: "POST",
     url: "/cmd",
     contentType: "application/json; charset=utf-8",
-    data: JSON.stringify({ did: did, cmd: cmd }),
+    data: JSON.stringify({ did: currentDid, cmd: cmd }),
     success: () => {
       if (cmd == "刷新列表") {
         check_status_refresh_music_list(3); // 最多重试3次

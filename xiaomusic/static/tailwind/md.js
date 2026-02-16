@@ -219,21 +219,7 @@ function playOnDevice() {
   console.log("playOnDevice");
   var music_list = $("#music_list").val();
   var music_name = $("#music_name").val();
-  if (no_warning) {
-    do_play_music_list(music_list, music_name);
-    return;
-  }
-  $.get(`/musicinfo?name=${music_name}`, function (data, status) {
-    console.log(data);
-    if (data.ret == "OK") {
-      console.log(
-        "%cmd.js:42 validHost(data.url) ",
-        "color: #007acc;",
-        validHost(data.url)
-      );
-      validHost(data.url) && do_play_music_list(music_list, music_name);
-    }
-  });
+  do_play_music_list(music_list, music_name);
 }
 function stopPlay() {
   sendcmd("关机");
@@ -702,16 +688,7 @@ function do_play_music_list(listname, musicname) {
 $("#play_music_list").on("click", () => {
   var music_list = $("#music_list").val();
   var music_name = $("#music_name").val();
-  if (no_warning) {
-    do_play_music_list(music_list, music_name);
-    return;
-  }
-  $.get(`/musicinfo?name=${music_name}`, function (data, status) {
-    console.log(data);
-    if (data.ret == "OK") {
-      validHost(data.url) && do_play_music_list(music_list, music_name);
-    }
-  });
+  do_play_music_list(music_list, music_name);
 });
 
 $("#playurl").on("click", () => {

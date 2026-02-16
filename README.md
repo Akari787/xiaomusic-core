@@ -123,7 +123,7 @@ docker run -d --name xiaomusic-oauth2 \
 
 ## 版本
 
-当前维护版本: `1.0.2`
+当前维护版本: `1.0.3`
 
 更新记录: [CHANGELOG.md](CHANGELOG.md)
 
