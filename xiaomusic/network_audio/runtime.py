@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import time
-from base64 import b64encode
 from dataclasses import asdict
 from threading import Lock
 from urllib.parse import urlparse
@@ -17,7 +16,7 @@ from xiaomusic.network_audio.play_service import M1PlayService
 from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy
 from xiaomusic.network_audio.resolver import Resolver
 from xiaomusic.network_audio.session_manager import StreamSessionManager
-from xiaomusic.network_audio.url_classifier import UrlClassifier
+from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
 
 
 class NetworkAudioRuntime:
@@ -26,7 +25,9 @@ class NetworkAudioRuntime:
         self.stream_port = int(os.getenv("XIAOMUSIC_M1_STREAM_PORT", "18090"))
         self._started_at = time.monotonic()
         self._lock = Lock()
-        self._classifier = UrlClassifier()
+        self._strategy = getattr(xiaomusic, "link_playback_strategy", None)
+        if self._strategy is None:
+            self._strategy = LinkPlaybackStrategy(xiaomusic.music_library, xiaomusic.log)
 
         self.session_manager = StreamSessionManager()
         self.stream_server = LocalHttpStreamServer(
@@ -67,7 +68,7 @@ class NetworkAudioRuntime:
 
     async def play_and_cast(self, did: str, url: str) -> dict:
         self.ensure_started()
-        info = self._classifier.classify(url)
+        info = self._strategy.classify(url)
         out = self.play_service.play_url(info.normalized_url)
         if not out.get("ok"):
             return out
@@ -83,12 +84,10 @@ class NetworkAudioRuntime:
         return out
 
     async def play_link(self, did: str, url: str, prefer_proxy: bool = False) -> dict:
-        info = self._classifier.classify(url)
+        info = self._strategy.classify(url)
 
         if prefer_proxy:
-            origin = url
-            urlb64 = b64encode(origin.encode("utf-8")).decode("utf-8")
-            proxy_url = f"{self._public_base()}/proxy?urlb64={urlb64}"
+            proxy_url = self._strategy.build_proxy_url(url)
             cast_ret = await self.xiaomusic.play_url(did=did, arg1=proxy_url)
             return {
                 "ok": True,
@@ -98,7 +97,7 @@ class NetworkAudioRuntime:
                 "stream_url": proxy_url,
             }
 
-        if info.site in {"youtube", "bilibili"}:
+        if self._strategy.should_use_network_audio(url):
             out = await self.play_and_cast(did=did, url=info.normalized_url)
             out["mode"] = "network_audio"
             return out

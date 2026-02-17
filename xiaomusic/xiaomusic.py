@@ -27,6 +27,7 @@ from xiaomusic.file_watcher import FileWatcherManager
 from xiaomusic.music_library import MusicLibrary
 from xiaomusic.online_music import OnlineMusicService
 from xiaomusic.plugin import PluginManager
+from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
 from xiaomusic.security.token_store import TokenStore
 from xiaomusic.utils.network_utils import downloadfile
 from xiaomusic.utils.system_utils import deepcopy_data_no_sensitive_info
@@ -120,6 +121,10 @@ class XiaoMusic:
             config=self.config,
             log=self.log,
             event_bus=self.event_bus,
+        )
+        self.link_playback_strategy = LinkPlaybackStrategy(
+            music_library=self.music_library,
+            log=self.log,
         )
 
         # 启动时重新生成一次播放列表

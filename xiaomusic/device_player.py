@@ -370,16 +370,27 @@ class XiaoMusicDevice:
         jellyfin_mode = (
             getattr(self.config, "jellyfin_proxy_mode", "auto") or "auto"
         ).lower()
-        jellyfin_auto_candidate = (
-            jellyfin_mode == "auto"
-            and origin_url
-            and origin_url == url
-            and self.xiaomusic.music_library.is_jellyfin_url(url)
-        )
+        strategy = getattr(self.xiaomusic, "link_playback_strategy", None)
+        if strategy is not None:
+            jellyfin_auto_candidate = strategy.should_jellyfin_auto_fallback(
+                jellyfin_mode=jellyfin_mode,
+                origin_url=origin_url,
+                current_url=url,
+            )
+        else:
+            jellyfin_auto_candidate = (
+                jellyfin_mode == "auto"
+                and origin_url
+                and origin_url == url
+                and self.xiaomusic.music_library.is_jellyfin_url(url)
+            )
 
         async def _try_proxy_fallback(reason: str) -> str:
             try:
-                proxy_url = self.xiaomusic.music_library.get_proxy_url(origin_url, name=name)
+                if strategy is not None:
+                    proxy_url = strategy.build_proxy_url(origin_url, name=name)
+                else:
+                    proxy_url = self.xiaomusic.music_library.get_proxy_url(origin_url, name=name)
                 self.log.info("Jellyfin direct failed (%s), retry via proxy: %s", reason, proxy_url)
                 await self.group_force_stop_xiaoai()
                 results2 = await self.group_player_play(proxy_url, name)
