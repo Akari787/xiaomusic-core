@@ -108,6 +108,17 @@ class AuthManager:
             return True
         return False
 
+    def mark_session_invalid(self, reason=""):
+        """标记当前会话失效，触发下次 init_all_data 强制登录。"""
+        if reason:
+            self.log.warning(f"mark_session_invalid: {reason}")
+        self.mina_service = None
+        self.miio_service = None
+        self.login_signature = None
+        self.cookie_jar = None
+        # 立即允许下一次 init_all_data 触发登录
+        self._last_login_ts = 0
+
     def _get_login_signature(self):
         oauth2_mtime = None
         if os.path.isfile(self.oauth2_token_path):
@@ -146,13 +157,28 @@ class AuthManager:
                     # keep fallback login path
                     pass
 
-            # OAuth2 扫码场景优先使用 serviceToken，避免触发账号二次风控验证
+            # OAuth2 扫码场景优先使用 serviceToken，避免触发账号二次风控验证。
+            # 但 serviceToken 可能已失效：先走免登录路径，失败后回退到显式 login。
             has_service_token = bool(oauth_service_token and oauth_ssecurity)
-            if not has_service_token:
-                await mi_account.login("micoapi")
 
             self.mina_service = MiNAService(mi_account)
             self.miio_service = MiIOService(mi_account)
+
+            if has_service_token:
+                try:
+                    await self.mina_service.device_list()
+                except Exception as verify_err:
+                    self.log.warning(
+                        f"OAuth2 serviceToken 可能失效，回退账号登录流程: {verify_err}"
+                    )
+                    await mi_account.login("micoapi")
+                    self.mina_service = MiNAService(mi_account)
+                    self.miio_service = MiIOService(mi_account)
+            else:
+                await mi_account.login("micoapi")
+                self.mina_service = MiNAService(mi_account)
+                self.miio_service = MiIOService(mi_account)
+
             self.login_acount = account_name
             self.login_signature = self._get_login_signature()
             self.log.info(f"登录完成. {self.login_acount}")
@@ -196,6 +222,8 @@ class AuthManager:
             self.log.info(f"选中的设备: {devices}")
             return devices
         except Exception as e:
+            if "Login failed" in str(e):
+                self.mark_session_invalid(str(e))
             self.log.warning(f"可能登录失败. {e}")
             return {}
 

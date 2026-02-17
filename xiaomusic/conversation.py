@@ -183,6 +183,9 @@ class ConversationPoller:
                     self.log.warning(f"Request failed with status {r.status}")
                     # fix #362
                     if i == 2 and r.status == 401:
+                        self.auth_manager.mark_session_invalid(
+                            "conversation latest_ask got 401"
+                        )
                         await self.auth_manager.init_all_data()
                     continue
 
