@@ -1,0 +1,36 @@
+# M1-6.2 真机手动验收记录
+
+## 验收目标
+
+- 内网场景下，从 B 站/YouTube 页面 URL 出发，最终向小爱设备投放本地流 URL 并出声。
+- 停止后链路可回收；重复 play/stop 不崩溃。
+
+## 手动验收步骤（真机）
+
+1. 启动 M1 服务实例（含 `/play_url`、`/healthz`、`/sessions`）。
+2. 使用以下任一 URL 请求 `POST /play_url`：
+   - `https://www.bilibili.com/video/BV14EcazWEna`
+   - `https://www.youtube.com/watch?v=iPnaF8Ngk3Q`
+   - `https://www.youtube.com/watch?v=vNG3-GRjrAo`
+3. 记录返回的 `session.sid` 与 `session.stream_url`。
+4. 调用 XiaomiPlaybackAdapter：`play(speaker_id, stream_url)`。
+5. 观察小爱是否在 30 秒内出声。
+6. 查询 `/sessions`，确认 `state` 与 `reconnect_count` 可观测。
+7. 下发停止（当前实现通过 session 停止接口），确认音频停止且会话状态收敛为 `stopped`。
+
+## 本轮结果
+
+- 组件级验收：通过（UT/CT 全绿）。
+- 真机验收：待执行（需要在具备小爱账号与设备可达网络的环境中完成）。
+
+## 记录模板
+
+- 时间：
+- 环境：
+- URL：
+- speaker_id：
+- `play_url` 返回：
+- XiaomiAdapter 返回：
+- 出声耗时：
+- 停止结果：
+- 结论：通过 / 不通过

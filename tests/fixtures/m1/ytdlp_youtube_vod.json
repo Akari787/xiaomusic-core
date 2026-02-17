@@ -1,0 +1,8 @@
+{
+  "id": "iPnaF8Ngk3Q",
+  "title": "YT VOD Sample",
+  "is_live": false,
+  "url": "https://cdn.example.local/yt/vod/audio.m4a",
+  "ext": "m4a",
+  "webpage_url": "https://www.youtube.com/watch?v=iPnaF8Ngk3Q"
+}

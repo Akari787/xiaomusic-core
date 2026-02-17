@@ -1,0 +1,8 @@
+{
+  "id": "vNG3-GRjrAo",
+  "title": "YT LIVE Sample",
+  "is_live": true,
+  "url": "https://cdn.example.local/yt/live/stream.m3u8",
+  "ext": "m3u8",
+  "webpage_url": "https://www.youtube.com/watch?v=vNG3-GRjrAo"
+}

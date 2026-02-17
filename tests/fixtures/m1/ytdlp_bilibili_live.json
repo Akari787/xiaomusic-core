@@ -1,0 +1,8 @@
+{
+  "id": "12345",
+  "title": "Bili LIVE Sample",
+  "is_live": true,
+  "url": "https://cdn.example.local/bili/live/stream.flv",
+  "ext": "flv",
+  "webpage_url": "https://live.bilibili.com/12345"
+}

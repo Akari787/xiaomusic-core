@@ -98,3 +98,11 @@ major_version_zero = true
 version_files = [
     "xiaomusic/__init__.py",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: M1 unit tests",
+    "component: M1 component tests",
+    "e2e: optional end-to-end tests",
+]
