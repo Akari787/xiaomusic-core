@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from threading import Lock
 from uuid import uuid4
 
-from xiaomusic.m1.contracts import Session
+from xiaomusic.network_audio.contracts import Session
 
 
 def _now_iso() -> str:

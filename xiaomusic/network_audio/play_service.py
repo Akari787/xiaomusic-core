@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from xiaomusic.m1.audio_streamer import AudioStreamer
-from xiaomusic.m1.session_manager import StreamSessionManager
+from xiaomusic.network_audio.audio_streamer import AudioStreamer
+from xiaomusic.network_audio.session_manager import StreamSessionManager
 
 
 class M1PlayService:

@@ -50,7 +50,7 @@ import pytest
     ],
 )
 def test_url_classifier_cases(raw_url, site, kind_hint, normalized):
-    from xiaomusic.m1.url_classifier import UrlClassifier  # noqa: PLC0415
+    from xiaomusic.network_audio.url_classifier import UrlClassifier  # noqa: PLC0415
 
     info = UrlClassifier().classify(raw_url)
 

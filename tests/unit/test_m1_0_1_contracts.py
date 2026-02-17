@@ -7,7 +7,7 @@ import pytest
 
 @pytest.mark.unit
 def test_contract_examples_match_model_definitions():
-    from xiaomusic.m1.contracts import (  # noqa: PLC0415
+    from xiaomusic.network_audio.contracts import (  # noqa: PLC0415
         ERROR_CODES,
         Event,
         ResolveResult,

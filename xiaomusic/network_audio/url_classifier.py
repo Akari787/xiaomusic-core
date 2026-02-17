@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from xiaomusic.m1.contracts import UrlInfo
+from xiaomusic.network_audio.contracts import UrlInfo
 
 
 class UrlClassifier:

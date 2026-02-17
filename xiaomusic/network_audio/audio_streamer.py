@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import threading
 import time
+import subprocess
 from urllib.request import urlopen
 
-from xiaomusic.m1.local_http_stream_server import LocalHttpStreamServer
-from xiaomusic.m1.reconnect_policy import ReconnectPolicy
-from xiaomusic.m1.session_manager import StreamSessionManager
+from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer
+from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy
+from xiaomusic.network_audio.session_manager import StreamSessionManager
 
 
 class AudioStreamer:
@@ -17,10 +18,14 @@ class AudioStreamer:
         session_manager: StreamSessionManager,
         stream_server: LocalHttpStreamServer,
         reconnect_policy: ReconnectPolicy,
+        source_read_timeout_seconds: int = 15,
+        relay_mode: str = "http",
     ) -> None:
         self.session_manager = session_manager
         self.stream_server = stream_server
         self.reconnect_policy = reconnect_policy
+        self.source_read_timeout_seconds = source_read_timeout_seconds
+        self.relay_mode = relay_mode
         self._threads: dict[str, threading.Thread] = {}
         self._stop_flags: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
@@ -78,17 +83,10 @@ class AudioStreamer:
         try:
             while not stop_flag.is_set():
                 disconnected = False
-                try:
-                    with urlopen(source_url, timeout=3) as resp:  # noqa: S310
-                        while not stop_flag.is_set():
-                            data = resp.read(4096)
-                            if not data:
-                                disconnected = True
-                                break
-                            if not self.stream_server.push_bytes(sid, data):
-                                time.sleep(0.01)
-                except Exception:
-                    disconnected = True
+                if self.relay_mode == "ffmpeg":
+                    disconnected = self._pump_with_ffmpeg(sid, source_url, stop_flag)
+                else:
+                    disconnected = self._pump_with_http(sid, source_url, stop_flag)
 
                 if stop_flag.is_set():
                     break
@@ -104,3 +102,63 @@ class AudioStreamer:
         finally:
             self.stream_server.close_stream_channel(sid)
             self.session_manager.stop_session(sid)
+
+    def _pump_with_http(self, sid: str, source_url: str, stop_flag: threading.Event) -> bool:
+        try:
+            with urlopen(source_url, timeout=self.source_read_timeout_seconds) as resp:  # noqa: S310
+                while not stop_flag.is_set():
+                    data = resp.read(4096)
+                    if not data:
+                        return True
+                    if not self.stream_server.push_bytes(sid, data):
+                        time.sleep(0.01)
+            return False
+        except Exception:
+            return True
+
+    def _pump_with_ffmpeg(self, sid: str, source_url: str, stop_flag: threading.Event) -> bool:
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-reconnect",
+            "1",
+            "-reconnect_streamed",
+            "1",
+            "-reconnect_delay_max",
+            "2",
+            "-i",
+            source_url,
+            "-vn",
+            "-f",
+            "mp3",
+            "pipe:1",
+        ]
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            while not stop_flag.is_set():
+                if proc.stdout is None:
+                    return True
+                data = proc.stdout.read(4096)
+                if not data:
+                    return True
+                if not self.stream_server.push_bytes(sid, data):
+                    time.sleep(0.01)
+            return False
+        except Exception:
+            return True
+        finally:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.communicate(timeout=1)
+            except Exception:
+                pass

@@ -14,7 +14,7 @@ import pytest
     ],
 )
 def test_ct1_0_parse_ytdlp_output_fixture(fixture_name, expected_live, expected_ext):
-    from xiaomusic.m1.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
+    from xiaomusic.network_audio.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
 
     p = Path("tests/fixtures/m1") / fixture_name
     payload = json.loads(p.read_text(encoding="utf-8"))
@@ -31,7 +31,7 @@ def test_ct1_0_parse_ytdlp_output_fixture(fixture_name, expected_live, expected_
 
 @pytest.mark.component
 def test_ct1_0_parse_ytdlp_output_fallback_to_requested_formats_audio_url():
-    from xiaomusic.m1.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
+    from xiaomusic.network_audio.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
 
     payload = {
         "id": "iPnaF8Ngk3Q",

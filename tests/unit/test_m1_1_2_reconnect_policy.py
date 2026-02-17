@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.unit
 def test_reconnect_policy_exponential_with_cap_and_terminate():
-    from xiaomusic.m1.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
+    from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
 
     policy = ReconnectPolicy(base_delay_seconds=1, max_delay_seconds=8, max_retries=5)
 
@@ -17,7 +17,7 @@ def test_reconnect_policy_exponential_with_cap_and_terminate():
 
 @pytest.mark.unit
 def test_reconnect_policy_rejects_invalid_attempt():
-    from xiaomusic.m1.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
+    from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
 
     policy = ReconnectPolicy(base_delay_seconds=1, max_delay_seconds=8, max_retries=2)
     with pytest.raises(ValueError):

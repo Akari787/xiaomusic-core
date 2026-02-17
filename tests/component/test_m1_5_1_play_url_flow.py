@@ -8,7 +8,7 @@ class _MockResolver:
         self.source_url = source_url
 
     def resolve(self, url, timeout_seconds=8):  # noqa: ARG002
-        from xiaomusic.m1.contracts import ResolveResult  # noqa: PLC0415
+        from xiaomusic.network_audio.contracts import ResolveResult  # noqa: PLC0415
 
         return ResolveResult(
             ok=True,
@@ -24,12 +24,12 @@ class _MockResolver:
 
 @pytest.mark.component
 def test_ct4_0_play_url_with_mock_resolver():
-    from xiaomusic.m1.audio_streamer import AudioStreamer  # noqa: PLC0415
-    from xiaomusic.m1.fake_source_server import FakeSourceServer  # noqa: PLC0415
-    from xiaomusic.m1.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
-    from xiaomusic.m1.play_service import M1PlayService  # noqa: PLC0415
-    from xiaomusic.m1.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
-    from xiaomusic.m1.session_manager import StreamSessionManager  # noqa: PLC0415
+    from xiaomusic.network_audio.audio_streamer import AudioStreamer  # noqa: PLC0415
+    from xiaomusic.network_audio.fake_source_server import FakeSourceServer  # noqa: PLC0415
+    from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
+    from xiaomusic.network_audio.play_service import M1PlayService  # noqa: PLC0415
+    from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
+    from xiaomusic.network_audio.session_manager import StreamSessionManager  # noqa: PLC0415
 
     sessions = StreamSessionManager()
     local = LocalHttpStreamServer(session_manager=sessions)

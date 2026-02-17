@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 
-from xiaomusic.m1.contracts import ResolveResult
-from xiaomusic.m1.ytdlp_parser import parse_ytdlp_output
-from xiaomusic.m1.ytdlp_runner import YtdlpRunner
+from xiaomusic.network_audio.contracts import ResolveResult
+from xiaomusic.network_audio.ytdlp_parser import parse_ytdlp_output
+from xiaomusic.network_audio.ytdlp_runner import YtdlpRunner
 
 
 class Resolver:

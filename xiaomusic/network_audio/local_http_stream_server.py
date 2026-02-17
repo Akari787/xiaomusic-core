@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import Empty, Queue
 from urllib.parse import urlparse
 
-from xiaomusic.m1.session_manager import StreamSessionManager
+from xiaomusic.network_audio.session_manager import StreamSessionManager
 
 
 class LocalHttpStreamServer:
@@ -17,10 +17,12 @@ class LocalHttpStreamServer:
         session_manager: StreamSessionManager,
         host: str = "127.0.0.1",
         port: int = 0,
+        max_clients_per_sid: int = 1,
     ) -> None:
         self.session_manager = session_manager
         self.host = host
         self.port = port
+        self.max_clients_per_sid = max_clients_per_sid
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._active_by_sid: dict[str, int] = {}
@@ -52,7 +54,7 @@ class LocalHttpStreamServer:
 
                 with outer._lock:
                     active = outer._active_by_sid.get(sid, 0)
-                    if active >= 1:
+                    if active >= outer.max_clients_per_sid:
                         self.send_response(409)
                         self.send_header("Content-Type", "application/json")
                         self.end_headers()

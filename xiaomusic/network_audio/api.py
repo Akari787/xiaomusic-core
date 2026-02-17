@@ -7,7 +7,7 @@ from dataclasses import asdict
 
 from fastapi import FastAPI
 
-from xiaomusic.m1.session_manager import StreamSessionManager
+from xiaomusic.network_audio.session_manager import StreamSessionManager
 
 
 def build_m1_app(play_service, session_manager: StreamSessionManager) -> FastAPI:
