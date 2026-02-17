@@ -1,6 +1,6 @@
-# M1 Test Layers
+# M1 / Network Audio Test Layers
 
-M1 uses three layers:
+网络音频链路（原 M1 任务）使用三层测试：
 
 - `tests/unit` for deterministic logic (`UT-*`)
 - `tests/component` for local component interactions (`CT-*`)

@@ -2,6 +2,8 @@
 
 This document defines the only data structures allowed between M1 modules.
 
+Note: runtime package path has been standardized to `xiaomusic/network_audio`.
+
 ## Models
 
 - `UrlInfo`: classified and normalized input URL.
