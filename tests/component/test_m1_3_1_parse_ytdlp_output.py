@@ -27,3 +27,36 @@ def test_ct1_0_parse_ytdlp_output_fixture(fixture_name, expected_live, expected_
     assert result.is_live is expected_live
     assert result.container_hint == expected_ext
     assert result.error_code is None
+
+
+@pytest.mark.component
+def test_ct1_0_parse_ytdlp_output_fallback_to_requested_formats_audio_url():
+    from xiaomusic.m1.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
+
+    payload = {
+        "id": "iPnaF8Ngk3Q",
+        "title": "YT VOD Missing top-level url",
+        "is_live": False,
+        "ext": "webm",
+        "requested_formats": [
+            {
+                "format_id": "137",
+                "vcodec": "avc1",
+                "acodec": "none",
+                "url": "https://cdn.example.local/video-only.m4v",
+                "ext": "mp4",
+            },
+            {
+                "format_id": "251",
+                "vcodec": "none",
+                "acodec": "opus",
+                "url": "https://cdn.example.local/audio-only.webm",
+                "ext": "webm",
+            },
+        ],
+    }
+    result = parse_ytdlp_output(payload)
+
+    assert result.ok is True
+    assert result.source_url == "https://cdn.example.local/audio-only.webm"
+    assert result.container_hint == "webm"

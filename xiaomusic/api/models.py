@@ -36,6 +36,15 @@ class UrlInfo(BaseModel):
     url: str
 
 
+class DidUrl(BaseModel):
+    did: str
+    url: str
+
+
+class SidObj(BaseModel):
+    sid: str
+
+
 class DidPlayMusic(BaseModel):
     did: str
     musicname: str = ""

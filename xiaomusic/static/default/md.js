@@ -1102,14 +1102,28 @@ $("#play_music_list").on("click", () => {
 });
 
 function playUrl() {
+  const currentDid = $("#did").val() || window.did || did;
+  if (!currentDid) {
+    alert("未选择设备");
+    return;
+  }
+  did = currentDid;
+  window.did = currentDid;
   var url = $("#music-url").val();
   const encoded_url = encodeURIComponent(url);
-  $.get(`/playurl?url=${encoded_url}&did=${did}`, function (data, status) {
+  $.get(`/playurl?url=${encoded_url}&did=${currentDid}`, function (data, status) {
     console.log(data);
   });
 }
 
 function playProxyUrl() {
+  const currentDid = $("#did").val() || window.did || did;
+  if (!currentDid) {
+    alert("未选择设备");
+    return;
+  }
+  did = currentDid;
+  window.did = currentDid;
   const origin_url = $("#music-url").val();
   const protocol = window.location.protocol;
   const host = window.location.host;
@@ -1117,8 +1131,41 @@ function playProxyUrl() {
   const urlb64 = btoa(origin_url);
   const url = `${baseUrl}/proxy?urlb64=${urlb64}`;
   const encoded_url = encodeURIComponent(url);
-  $.get(`/playurl?url=${encoded_url}&did=${did}`, function (data, status) {
+  $.get(`/playurl?url=${encoded_url}&did=${currentDid}`, function (data, status) {
     console.log(data);
+  });
+}
+
+function playM1Url() {
+  const currentDid = $("#did").val() || window.did || did;
+  if (!currentDid) {
+    alert("未选择设备");
+    return;
+  }
+  const sourceUrl = $("#m1-source-url").val();
+  if (!sourceUrl) {
+    alert("请输入 B 站或 YouTube 链接");
+    return;
+  }
+  did = currentDid;
+  window.did = currentDid;
+  $.ajax({
+    type: "POST",
+    url: "/m1/play_url",
+    contentType: "application/json; charset=utf-8",
+    data: JSON.stringify({ did: currentDid, url: sourceUrl }),
+    success: (data) => {
+      console.log("playM1Url succ", data);
+      if (data.ok) {
+        alert(`M1 已下发: ${data.session.stream_url}`);
+      } else {
+        alert(`M1 下发失败: ${data.error_code || "unknown"}`);
+      }
+    },
+    error: () => {
+      console.log("playM1Url failed", sourceUrl);
+      alert("M1 下发请求失败");
+    },
   });
 }
 
