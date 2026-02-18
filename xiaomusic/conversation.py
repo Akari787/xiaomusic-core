@@ -115,9 +115,6 @@ class ConversationPoller:
                 self.log.debug(
                     f"Listening new message, timestamp: {self.last_timestamp}"
                 )
-                # 动态获取最新的 cookie_jar
-                if self.auth_manager.cookie_jar is not None:
-                    session._cookie_jar = self.auth_manager.cookie_jar
 
                 # 拉取所有音箱的对话记录
                 tasks = []
@@ -165,29 +162,15 @@ class ConversationPoller:
         Returns:
             None - 通过 _check_last_query 更新内部状态
         """
-        cookies = {"deviceId": device_id}
         retries = 3
         for i in range(retries):
             try:
-                timeout = ClientTimeout(total=15)
-                hardware = self.device_manager.get_hardward(device_id)
-                url = LATEST_ASK_API.format(
-                    hardware=hardware,
-                    timestamp=str(int(time.time() * 1000)),
+                data = await self.auth_manager.auth_call(
+                    lambda: self.get_latest_ask_raw(session, device_id),
+                    ctx="poll_latest_ask",
+                    retry=1,
                 )
-                # self.log.debug(f"url:{url} device_id:{device_id} hardware:{hardware}")
-                r = await session.get(url, timeout=timeout, cookies=cookies)
-
-                # 检查响应状态码
-                if r.status != 200:
-                    self.log.warning(f"Request failed with status {r.status}")
-                    # fix #362
-                    if i == 2 and r.status == 401:
-                        self.auth_manager.mark_session_invalid(
-                            "conversation latest_ask got 401"
-                        )
-                        await self.auth_manager.init_all_data()
-                    continue
+                return self._get_last_query(device_id, data)
 
             except asyncio.CancelledError:
                 self.log.warning("Task was cancelled.")
@@ -196,18 +179,24 @@ class ConversationPoller:
             except Exception as e:
                 self.log.warning(f"Execption {e}")
                 continue
-
-            try:
-                data = await r.json()
-            except Exception as e:
-                self.log.warning(f"Execption {e}")
-                if i == 2:
-                    # tricky way to fix #282 #272 # if it is the third time we re init all data
-                    self.log.info("Maybe outof date trying to re init it")
-                    await self.auth_manager.init_all_data()
-            else:
-                return self._get_last_query(device_id, data)
         self.log.warning("get_latest_ask_from_xiaoai. All retries failed.")
+
+    async def get_latest_ask_raw(self, session, device_id):
+        timeout = ClientTimeout(total=15)
+        hardware = self.device_manager.get_hardward(device_id)
+        url = LATEST_ASK_API.format(
+            hardware=hardware,
+            timestamp=str(int(time.time() * 1000)),
+        )
+        cookies = self.auth_manager.get_cookie_dict(device_id=device_id)
+        cookies["deviceId"] = device_id
+        r = await session.get(url, timeout=timeout, cookies=cookies)
+        if r.status != 200:
+            body = await r.text()
+            if self.auth_manager.is_auth_error(resp=r, body=body):
+                raise RuntimeError(f"unauthorized status={r.status} body={body[:120]}")
+            raise RuntimeError(f"status={r.status} body={body[:120]}")
+        return await r.json()
 
     async def get_latest_ask_by_mina(self, device_id):
         """通过Mina服务获取最新对话
@@ -228,7 +217,12 @@ class ConversationPoller:
                     f"mina_service is None, skip get_latest_ask_by_mina for device {device_id}"
                 )
                 return
-            messages = await self.auth_manager.mina_service.get_latest_ask(device_id)
+            messages = await self.auth_manager.mina_call(
+                "get_latest_ask",
+                device_id,
+                retry=1,
+                ctx="poll_latest_ask_mina",
+            )
             self.log.debug(
                 f"get_latest_ask_by_mina device_id:{device_id} did:{did} messages:{messages}"
             )

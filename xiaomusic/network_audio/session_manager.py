@@ -1,4 +1,4 @@
-"""In-memory stream session lifecycle manager for M1."""
+"""In-memory stream session lifecycle manager for network audio."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Local fake media source for M1 component tests."""
+"""Local fake media source for network audio component tests."""
 
 from __future__ import annotations
 

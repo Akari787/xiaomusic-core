@@ -1,4 +1,4 @@
-"""Unified contracts for M1 streaming pipeline."""
+"""Unified contracts for network audio streaming pipeline."""
 
 from __future__ import annotations
 

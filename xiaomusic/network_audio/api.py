@@ -1,4 +1,4 @@
-"""Minimal M1 API endpoints for health and session observation."""
+"""Minimal network-audio API endpoints for health and session observation."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from fastapi import FastAPI
 from xiaomusic.network_audio.session_manager import StreamSessionManager
 
 
-def build_m1_app(play_service, session_manager: StreamSessionManager) -> FastAPI:
-    app = FastAPI(title="M1 Minimal API")
+def build_network_audio_app(play_service, session_manager: StreamSessionManager) -> FastAPI:
+    app = FastAPI(title="Network Audio Minimal API")
     started_at = time.monotonic()
 
     @app.get("/healthz")

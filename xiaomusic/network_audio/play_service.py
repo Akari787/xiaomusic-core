@@ -1,4 +1,4 @@
-"""M1 play_url orchestration: classify -> resolve -> start stream."""
+"""Network audio play orchestration: classify -> resolve -> start stream."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from xiaomusic.network_audio.audio_streamer import AudioStreamer
 from xiaomusic.network_audio.session_manager import StreamSessionManager
 
 
-class M1PlayService:
+class NetworkAudioPlayService:
     def __init__(self, session_manager: StreamSessionManager, resolver, audio_streamer: AudioStreamer) -> None:
         self.session_manager = session_manager
         self.resolver = resolver

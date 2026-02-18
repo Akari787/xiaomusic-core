@@ -1,1 +1,1 @@
-"""M1 minimal streaming contracts and building blocks."""
+"""Network audio contracts and building blocks."""

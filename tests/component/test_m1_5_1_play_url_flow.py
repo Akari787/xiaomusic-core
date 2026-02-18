@@ -27,7 +27,7 @@ def test_ct4_0_play_url_with_mock_resolver():
     from xiaomusic.network_audio.audio_streamer import AudioStreamer  # noqa: PLC0415
     from xiaomusic.network_audio.fake_source_server import FakeSourceServer  # noqa: PLC0415
     from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
-    from xiaomusic.network_audio.play_service import M1PlayService  # noqa: PLC0415
+    from xiaomusic.network_audio.play_service import NetworkAudioPlayService  # noqa: PLC0415
     from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
     from xiaomusic.network_audio.session_manager import StreamSessionManager  # noqa: PLC0415
 
@@ -43,7 +43,7 @@ def test_ct4_0_play_url_with_mock_resolver():
         reconnect_policy=ReconnectPolicy(base_delay_seconds=1, max_delay_seconds=1, max_retries=1),
     )
     resolver = _MockResolver(fake.url("/fake/live"))
-    service = M1PlayService(
+    service = NetworkAudioPlayService(
         session_manager=sessions,
         resolver=resolver,
         audio_streamer=streamer,

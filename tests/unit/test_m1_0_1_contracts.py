@@ -15,8 +15,8 @@ def test_contract_examples_match_model_definitions():
         UrlInfo,
     )
 
-    examples_path = Path("docs/m1/contracts.examples.json")
-    assert examples_path.exists(), "missing docs/m1/contracts.examples.json"
+    examples_path = Path("docs/network_audio/contracts.examples.json")
+    assert examples_path.exists(), "missing docs/network_audio/contracts.examples.json"
 
     payload = json.loads(examples_path.read_text(encoding="utf-8"))
 

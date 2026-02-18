@@ -317,10 +317,16 @@ class XiaoMusic:
         )  # to keep the reference to task, do not remove this
         await self.sync_jellyfin_music_lists_if_needed()
         await self.auth_manager.init_all_data()
+        keepalive_task = asyncio.create_task(self.auth_manager.keepalive_loop())
+        self.append_running_task(keepalive_task)
         # 启动对话循环，传递回调函数
-        await self.conversation_poller.run_conversation_loop(
-            self.do_check_cmd, self.reset_timer_when_answer
-        )
+        try:
+            await self.conversation_poller.run_conversation_loop(
+                self.do_check_cmd, self.reset_timer_when_answer
+            )
+        finally:
+            keepalive_task.cancel()
+            await asyncio.gather(keepalive_task, return_exceptions=True)
 
     # 匹配命令
     async def do_check_cmd(self, did="", query="", ctrl_panel=True, **kwargs):
@@ -725,14 +731,17 @@ class XiaoMusic:
     async def getalldevices(self, **kwargs):
         device_list = []
         try:
-            device_list = await self.auth_manager.mina_service.device_list()
+            device_list = await self.auth_manager.mina_call(
+                "device_list", retry=1, ctx="getalldevices"
+            )
         except Exception as e:
             self.log.warning(f"Execption {e}")
             # 重新初始化
-            await self.reinit()
             try:
-                if self.auth_manager.mina_service is not None:
-                    device_list = await self.auth_manager.mina_service.device_list()
+                await self.auth_manager.ensure_logged_in(force=True, reason="getalldevices")
+                device_list = await self.auth_manager.mina_call(
+                    "device_list", retry=0, ctx="getalldevices-retry"
+                )
             except Exception as e2:
                 self.log.warning(f"Execption after reinit {e2}")
         return device_list
@@ -743,11 +752,14 @@ class XiaoMusic:
         data = arg1
         device_id = self.config.get_one_device_id()
         self.log.info(f"debug_play_by_music_url: {data} {device_id}")
-        return await self.auth_manager.mina_service.ubus_request(
+        return await self.auth_manager.mina_call(
+            "ubus_request",
             device_id,
             "player_play_music",
             "mediaplayer",
             data,
+            retry=1,
+            ctx="debug_play_by_music_url",
         )
 
     async def exec(self, did="", arg1=None, **kwargs):

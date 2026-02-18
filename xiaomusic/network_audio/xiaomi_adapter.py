@@ -1,19 +1,30 @@
-"""Xiaomi playback adapter contract for M1."""
+"""Xiaomi playback adapter contract for network audio."""
 
 from __future__ import annotations
 
 
 class XiaomiPlaybackAdapter:
-    def __init__(self, mina_service) -> None:
+    def __init__(self, mina_service=None, auth_manager=None) -> None:
         self.mina_service = mina_service
+        self.auth_manager = auth_manager
 
     async def play(self, speaker_id: str, stream_url: str) -> dict:
         try:
-            ret = await self.mina_service.play_by_music_url(
-                device_id=speaker_id,
-                url=stream_url,
-                audio_id="m1_stream",
-            )
+            if self.auth_manager is not None:
+                ret = await self.auth_manager.mina_call(
+                    "play_by_music_url",
+                    speaker_id,
+                    stream_url,
+                    audio_id="network_audio_stream",
+                    retry=1,
+                    ctx="network_audio_adapter",
+                )
+            else:
+                ret = await self.mina_service.play_by_music_url(
+                    device_id=speaker_id,
+                    url=stream_url,
+                    audio_id="network_audio_stream",
+                )
         except Exception as exc:  # noqa: BLE001
             return {
                 "accepted": False,

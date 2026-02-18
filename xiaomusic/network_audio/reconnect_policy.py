@@ -1,4 +1,4 @@
-"""Deterministic reconnect policy for M1."""
+"""Deterministic reconnect policy for network audio."""
 
 from __future__ import annotations
 

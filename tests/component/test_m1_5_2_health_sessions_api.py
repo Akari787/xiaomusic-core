@@ -5,11 +5,11 @@ import pytest
 def test_ct4_1_healthz_and_sessions():
     from fastapi.testclient import TestClient  # noqa: PLC0415
 
-    from xiaomusic.network_audio.api import build_m1_app  # noqa: PLC0415
+    from xiaomusic.network_audio.api import build_network_audio_app  # noqa: PLC0415
     from xiaomusic.network_audio.audio_streamer import AudioStreamer  # noqa: PLC0415
     from xiaomusic.network_audio.fake_source_server import FakeSourceServer  # noqa: PLC0415
     from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
-    from xiaomusic.network_audio.play_service import M1PlayService  # noqa: PLC0415
+    from xiaomusic.network_audio.play_service import NetworkAudioPlayService  # noqa: PLC0415
     from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
     from xiaomusic.network_audio.session_manager import StreamSessionManager  # noqa: PLC0415
 
@@ -42,12 +42,12 @@ def test_ct4_1_healthz_and_sessions():
         stream_server=local,
         reconnect_policy=ReconnectPolicy(base_delay_seconds=1, max_delay_seconds=1, max_retries=1),
     )
-    service = M1PlayService(
+    service = NetworkAudioPlayService(
         session_manager=sessions,
         resolver=_MockResolver(fake.url("/fake/live")),
         audio_streamer=streamer,
     )
-    app = build_m1_app(play_service=service, session_manager=sessions)
+    app = build_network_audio_app(play_service=service, session_manager=sessions)
     client = TestClient(app)
 
     try:

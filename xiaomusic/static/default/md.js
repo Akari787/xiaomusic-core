@@ -1112,7 +1112,7 @@ function playUrl() {
   const sourceUrl = $("#music-url").val();
   $.ajax({
     type: "POST",
-    url: "/m1/play_link",
+    url: "/network_audio/play_link",
     contentType: "application/json; charset=utf-8",
     data: JSON.stringify({ did: currentDid, url: sourceUrl }),
     success: (data) => {
@@ -1141,7 +1141,7 @@ function playProxyUrl() {
   const sourceUrl = $("#music-url").val();
   $.ajax({
     type: "POST",
-    url: "/m1/play_link?proxy=true",
+    url: "/network_audio/play_link?proxy=true",
     contentType: "application/json; charset=utf-8",
     data: JSON.stringify({ did: currentDid, url: sourceUrl }),
     success: (data) => {

@@ -1,6 +1,6 @@
 # xiaomusic-oauth2
 
-`xiaomusic-oauth2` 是基于 `xiaomusic` 的独立维护分支，目标是提供更稳定的 OAuth2 登录体验与 Jellyfin 联动能力。
+`xiaomusic-oauth2` 是基于 `xiaomusic` 二次开发的独立维护分支，目标是提供更稳定的 OAuth2 登录体验与 Jellyfin 联动能力。
 
 原项目: <https://github.com/hanxi/xiaomusic>
 

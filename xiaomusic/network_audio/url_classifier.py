@@ -1,4 +1,4 @@
-"""URL classification and normalization for M1."""
+"""URL classification and normalization for network audio."""
 
 from __future__ import annotations
 

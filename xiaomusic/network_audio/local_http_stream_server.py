@@ -1,4 +1,4 @@
-"""Local HTTP stream endpoint for M1 sessions."""
+"""Local HTTP stream endpoint for network audio sessions."""
 
 from __future__ import annotations
 

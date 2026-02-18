@@ -12,7 +12,7 @@ from urllib.request import urlopen
 from xiaomusic.network_audio.audio_streamer import AudioStreamer
 from xiaomusic.network_audio.contracts import ERROR_CODES
 from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer
-from xiaomusic.network_audio.play_service import M1PlayService
+from xiaomusic.network_audio.play_service import NetworkAudioPlayService
 from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy
 from xiaomusic.network_audio.resolver import Resolver
 from xiaomusic.network_audio.session_manager import StreamSessionManager
@@ -44,7 +44,7 @@ class NetworkAudioRuntime:
             relay_mode="ffmpeg",
         )
         self.resolver = Resolver()
-        self.play_service = M1PlayService(
+        self.play_service = NetworkAudioPlayService(
             session_manager=self.session_manager,
             resolver=self.resolver,
             audio_streamer=self.audio_streamer,
@@ -64,7 +64,7 @@ class NetworkAudioRuntime:
         return f"http://127.0.0.1:{self.stream_port}/stream/{sid}"
 
     def _external_stream_url(self, sid: str) -> str:
-        return f"{self._public_base()}/m1/stream/{sid}"
+        return f"{self._public_base()}/network_audio/stream/{sid}"
 
     async def play_and_cast(self, did: str, url: str) -> dict:
         self.ensure_started()
