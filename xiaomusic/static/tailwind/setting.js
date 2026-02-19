@@ -211,7 +211,16 @@ $(function () {
     $btn.prop('disabled', true);
     fetchOAuth2Status()
       .done(function (st) {
-        if (st && (st.token_exists || st.login_in_progress)) {
+        const hasQrShown = !!String($("#qrcode-image").attr("src") || "").trim();
+        if (st && st.login_in_progress) {
+          if (!hasQrShown) {
+            fetchQRCode();
+            return;
+          }
+          refreshDevicesAfterOAuth();
+          return;
+        }
+        if (st && (st.token_valid || st.cloud_available)) {
           refreshDevicesAfterOAuth();
           return;
         }

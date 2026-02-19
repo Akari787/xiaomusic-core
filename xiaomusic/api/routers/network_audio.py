@@ -6,9 +6,11 @@ from fastapi.responses import StreamingResponse
 from xiaomusic.api.dependencies import verification, xiaomusic
 from xiaomusic.api.models import DidUrl, SidObj
 from xiaomusic.network_audio.runtime import NetworkAudioRuntime
+from xiaomusic.playback.facade import PlaybackFacade
 
 router = APIRouter(dependencies=[Depends(verification)])
 _runtime: NetworkAudioRuntime | None = None
+_facade: PlaybackFacade | None = None
 
 
 def _get_runtime() -> NetworkAudioRuntime:
@@ -18,8 +20,16 @@ def _get_runtime() -> NetworkAudioRuntime:
     return _runtime
 
 
+def _get_facade() -> PlaybackFacade:
+    global _facade
+    if _facade is None:
+        _facade = PlaybackFacade(xiaomusic, runtime_provider=_get_runtime)
+    return _facade
+
+
 @router.post("/network_audio/play_url")
 async def network_audio_play_url(data: DidUrl):
+    """Deprecated wrapper for unified play_url facade."""
     did = data.did
     if not xiaomusic.did_exist(did):
         return {
@@ -27,11 +37,17 @@ async def network_audio_play_url(data: DidUrl):
             "error_code": "E_STREAM_NOT_FOUND",
             "error_message": "Did not exist",
         }
-    return await _get_runtime().play_and_cast(did=did, url=data.url)
+    out = await _get_facade().play_url(
+        url=data.url,
+        speaker_id=did,
+        options={"mode": "network_audio_cast"},
+    )
+    return out["raw"]
 
 
 @router.post("/network_audio/play_link")
 async def network_audio_play_link(data: DidUrl, proxy: bool = False):
+    """Deprecated wrapper for unified play_url facade."""
     did = data.did
     if not xiaomusic.did_exist(did):
         return {
@@ -39,7 +55,12 @@ async def network_audio_play_link(data: DidUrl, proxy: bool = False):
             "error_code": "E_STREAM_NOT_FOUND",
             "error_message": "Did not exist",
         }
-    return await _get_runtime().play_link(did=did, url=data.url, prefer_proxy=proxy)
+    out = await _get_facade().play_url(
+        url=data.url,
+        speaker_id=did,
+        options={"mode": "network_audio_link", "prefer_proxy": proxy},
+    )
+    return out["raw"]
 
 
 @router.get("/network_audio/healthz")
@@ -54,7 +75,8 @@ async def network_audio_sessions():
 
 @router.post("/network_audio/stop")
 async def network_audio_stop(data: SidObj):
-    return _get_runtime().stop_session(sid=data.sid)
+    out = await _get_facade().stop({"sid": data.sid})
+    return out["raw"]
 
 
 @router.get("/network_audio/stream/{sid}")

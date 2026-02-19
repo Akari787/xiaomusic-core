@@ -163,3 +163,58 @@ def test_is_auth_error_matrix(exc, status, body, expected):
     if status is not None:
         resp = type("_Resp", (), {"status": status})()
     assert is_auth_error(exc=exc, resp=resp, body=body) is expected
+
+
+@pytest.mark.asyncio
+async def test_keepalive_degrades_after_three_failures(auth_manager, monkeypatch):
+    delays = []
+
+    async def _sleep(delay):
+        delays.append(delay)
+        if len(delays) >= 3:
+            raise asyncio.CancelledError()
+
+    async def _ensure(force=False, reason=""):  # noqa: ARG001
+        return False
+
+    async def _mina_call(*args, **kwargs):  # noqa: ARG001
+        raise RuntimeError("401 unauthorized")
+
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    auth_manager.ensure_logged_in = _ensure
+    auth_manager.mina_call = _mina_call
+
+    with pytest.raises(asyncio.CancelledError):
+        await auth_manager.keepalive_loop(interval_sec=5)
+
+    assert auth_manager._keepalive_degraded is True
+    assert auth_manager._keepalive_fail_streak == 3
+    assert delays == [30, 60, 300]
+
+
+@pytest.mark.asyncio
+async def test_keepalive_recovers_from_degraded(auth_manager, monkeypatch):
+    delays = []
+
+    async def _sleep(delay):
+        delays.append(delay)
+        raise asyncio.CancelledError()
+
+    async def _ensure(force=False, reason=""):  # noqa: ARG001
+        return False
+
+    async def _mina_call(*args, **kwargs):  # noqa: ARG001
+        return []
+
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    auth_manager.ensure_logged_in = _ensure
+    auth_manager.mina_call = _mina_call
+    auth_manager._keepalive_degraded = True
+    auth_manager._keepalive_fail_streak = 3
+
+    with pytest.raises(asyncio.CancelledError):
+        await auth_manager.keepalive_loop(interval_sec=7)
+
+    assert auth_manager._keepalive_degraded is False
+    assert auth_manager._keepalive_fail_streak == 0
+    assert delays == [7]

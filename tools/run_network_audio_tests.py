@@ -1,4 +1,4 @@
-"""Run M1 tests by layer: UT, CT, E2E."""
+"""Run network audio tests by layer: UT, CT, E2E."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ TEST_GROUPS = {
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="M1 test runner")
+    parser = argparse.ArgumentParser(description="Network audio test runner")
     parser.add_argument("target", nargs="?", default="all", choices=tuple(TEST_GROUPS))
     parser.add_argument("--list", action="store_true", help="list supported targets")
     args = parser.parse_args()

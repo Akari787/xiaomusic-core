@@ -22,7 +22,10 @@ from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
 class NetworkAudioRuntime:
     def __init__(self, xiaomusic) -> None:
         self.xiaomusic = xiaomusic
-        self.stream_port = int(os.getenv("XIAOMUSIC_M1_STREAM_PORT", "18090"))
+        stream_port = os.getenv("XIAOMUSIC_NETWORK_AUDIO_STREAM_PORT")
+        if not stream_port:
+            stream_port = os.getenv("XIAOMUSIC_M1_STREAM_PORT", "18090")
+        self.stream_port = int(stream_port)
         self._started_at = time.monotonic()
         self._lock = Lock()
         self._strategy = getattr(xiaomusic, "link_playback_strategy", None)

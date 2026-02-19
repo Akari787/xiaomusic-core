@@ -5,14 +5,14 @@
 - 修复默认主题设备播放按钮在部分场景下无响应的问题：补齐 `did` 兜底并统一设备播放调用路径
 - 修复默认主题停止按钮重复语音播报：设备停止改回专用接口 `/device/stop`，避免走口令链路重复播报
 - 修复默认主题与 Tailwind 主题在跨主机媒体地址场景下的播放拦截：移除对 `validHost(...)` 的播放前置阻断，确保可直接下发播放请求
-- 修复网络音频 `/m1/stream/{sid}` 在读超时时返回 500 导致设备中断的问题：改为超时继续等待流数据
+- 修复网络音频 `/network_audio/stream/{sid}` 在读超时时返回 500 导致设备中断的问题：改为超时继续等待流数据
 - 修复 YouTube 部分场景 `yt-dlp` 顶层缺少 `url` 导致解析失败的问题：增加 `requested_formats/formats` 的音频 URL 回退解析
 
 ### Feat
 
 - 默认主题“播放测试”整合为单一“播放链接”入口：同一输入可处理普通链接、B 站、YouTube
-- 新增统一入口接口 `POST /m1/play_link`，支持 `direct/proxy/network_audio` 三种模式路由
-- 网络音频流对外统一为 `/m1/stream/{sid}`，无需额外外部端口
+- 新增统一入口接口 `POST /network_audio/play_link`，支持 `direct/proxy/network_audio` 三种模式路由
+- 网络音频流对外统一为 `/network_audio/stream/{sid}`，无需额外外部端口
 
 ### Refactor
 

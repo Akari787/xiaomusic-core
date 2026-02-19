@@ -16,7 +16,7 @@ import pytest
 def test_ct1_0_parse_ytdlp_output_fixture(fixture_name, expected_live, expected_ext):
     from xiaomusic.network_audio.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
 
-    p = Path("tests/fixtures/m1") / fixture_name
+    p = Path("tests/fixtures/network_audio") / fixture_name
     payload = json.loads(p.read_text(encoding="utf-8"))
 
     result = parse_ytdlp_output(payload)

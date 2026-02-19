@@ -19,10 +19,19 @@ from xiaomusic.api.models import (
     DidCmd,
     DidVolume,
 )
+from xiaomusic.playback.facade import PlaybackFacade
 
 from xiaomusic.security.exec_plugin import parse_exec_code
 
 router = APIRouter(dependencies=[Depends(verification)])
+_facade: PlaybackFacade | None = None
+
+
+def _get_facade() -> PlaybackFacade:
+    global _facade
+    if _facade is None:
+        _facade = PlaybackFacade(xiaomusic)
+    return _facade
 
 @router.get("/device_list")
 async def device_list():
@@ -54,7 +63,8 @@ async def getplayerstatus(did: str = ""):
     if not xiaomusic.did_exist(did):
         return {"status": 0, "volume": 0}
 
-    return await xiaomusic.get_player_status(did=did)
+    out = await _get_facade().status({"speaker_id": did})
+    return out["raw"]
 
 
 @router.post("/setvolume")
@@ -118,12 +128,17 @@ async def cmd_status():
 
 @router.get("/playurl")
 async def playurl(did: str, url: str):
-    """播放 URL"""
+    """播放 URL（deprecated wrapper，内部已收敛到统一播放入口）"""
     if not xiaomusic.did_exist(did):
         return {"ret": "Did not exist"}
     decoded_url = urllib.parse.unquote(url)
     log.info(f"playurl did: {did} url: {decoded_url}")
-    return await xiaomusic.play_url(did=did, arg1=decoded_url)
+    out = await _get_facade().play_url(
+        url=decoded_url,
+        speaker_id=did,
+        options={"mode": "direct"},
+    )
+    return out["raw"].get("cast_ret", out["raw"])
 
 
 @router.get("/playtts")
@@ -139,14 +154,14 @@ async def playtts(did: str, text: str):
 
 @router.post("/device/stop")
 async def stop(data: Did):
-    """关机"""
+    """关机（deprecated wrapper，内部已收敛到统一停止入口）"""
     did = data.did
     log.info(f"stop did:{did}")
     if not xiaomusic.did_exist(did):
         return {"ret": "Did not exist"}
 
     try:
-        await xiaomusic.stop(did, "notts")
+        await _get_facade().stop({"speaker_id": did})
     except Exception as e:
         log.warning(f"Execption {e}")
     return {"ret": "OK"}

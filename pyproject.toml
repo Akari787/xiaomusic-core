@@ -102,7 +102,7 @@ version_files = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "unit: M1 unit tests",
-    "component: M1 component tests",
+    "unit: network audio unit tests",
+    "component: network audio component tests",
     "e2e: optional end-to-end tests",
 ]

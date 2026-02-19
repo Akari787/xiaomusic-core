@@ -41,7 +41,7 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 - 优化播放结束后切下一首的计时触发逻辑，降低竞态问题。
 - 新增统一链接播放策略层（`xiaomusic/playback/link_strategy.py`），Jellyfin 自动降级与网络音频入口复用同一套 URL 判定/规范化能力。
 - 默认主题“播放测试”已整合为单一“播放链接”入口：同一输入框可直接处理普通音频链接、B 站与 YouTube 链接。
-- 网络视频/直播播放统一通过站内路径 `/m1/stream/{sid}` 回放，不再需要额外暴露独立转流端口。
+- 网络视频/直播播放统一通过站内路径 `/network_audio/stream/{sid}` 回放，不再需要额外暴露独立转流端口。
 
 ## 🐳 Docker 使用说明
 
