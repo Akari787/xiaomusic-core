@@ -6,6 +6,7 @@ on:
     paths:
       - "docs/**"
       - "README.md"
+      - ".github/workflows/static.yml"
   workflow_dispatch:
 
 permissions:
