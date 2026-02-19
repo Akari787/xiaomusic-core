@@ -76,6 +76,51 @@ docker run -d --name xiaomusic-oauth2 \
 
 更安全的部署方式：参考 `docker-compose.hardened.yml`（`read_only`、`cap_drop`、`no-new-privileges` 等）。
 
+### docker compose 示例
+
+1) 使用仓库内置 hardened compose（推荐）：
+
+```bash
+mkdir -p conf music
+docker compose -f docker-compose.hardened.yml up -d --build
+```
+
+2) 使用 Docker Hub 镜像（不本地 build）：
+
+```yaml
+services:
+  xiaomusic:
+    image: akari787/xiaomusic-oauth2:v1.0.3
+    container_name: xiaomusic-oauth2
+    restart: unless-stopped
+    ports:
+      - "58090:8090"
+    environment:
+      TZ: Asia/Shanghai
+      XIAOMUSIC_PUBLIC_PORT: 58090
+    volumes:
+      - ./conf:/app/conf
+      - ./music:/app/music
+```
+
+```bash
+docker compose up -d
+```
+
+3) 常用运维命令：
+
+```bash
+# 查看版本
+curl -fsS http://127.0.0.1:58090/getversion
+
+# 查看日志
+docker logs --tail 200 xiaomusic-oauth2
+
+# 更新到新版本镜像（示例 v1.0.3）
+docker compose pull
+docker compose up -d --force-recreate
+```
+
 ## ⚠️ 安全建议
 
 ### 内网安全部署（默认安全）
