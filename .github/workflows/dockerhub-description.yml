@@ -21,6 +21,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve Docker Hub repository
+        id: docker_repo
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="${DOCKERHUB_REPOSITORY:-}"
+          if [[ -z "$REPO" ]]; then
+            REPO="${DOCKERHUB_USERNAME}/${GITHUB_REPOSITORY##*/}"
+          fi
+          # Docker Hub repository names are effectively lowercase.
+          REPO_LOWER=$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')
+          echo "repo=${REPO_LOWER}" >> "$GITHUB_OUTPUT"
+        env:
+          DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
+
       - name: Docker Hub Description
         if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
         uses: peter-evans/dockerhub-description@v4
@@ -28,4 +44,4 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           # Override via repo variable DOCKERHUB_REPOSITORY if needed.
-          repository: ${{ vars.DOCKERHUB_REPOSITORY || format('{0}/xiaomusic-oauth2', secrets.DOCKERHUB_USERNAME) }}
+          repository: ${{ steps.docker_repo.outputs.repo }}
