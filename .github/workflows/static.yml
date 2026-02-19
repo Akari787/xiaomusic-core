@@ -44,12 +44,28 @@ jobs:
         run: npm ci
 
       - name: Build VitePress
+        id: vitepress_build
         working-directory: ./docs
         env:
           VITE_GITHUB_ISSUES_TOKEN: ${{ secrets.VITE_GITHUB_ISSUES_TOKEN }}
           # Override via repo variable if you use a custom domain.
           VITE_SITE_BASE: ${{ vars.VITE_SITE_BASE || (github.event.repository.name == format('{0}.github.io', github.repository_owner) && '/' || format('/{0}/', github.event.repository.name)) }}
-        run: npm run docs:build
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm run docs:build 2>&1 | tee vitepress-build.log
+
+      - name: Upload VitePress build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitepress-build-log
+          path: docs/vitepress-build.log
+          retention-days: 3
+
+      - name: Fail if VitePress build failed
+        if: steps.vitepress_build.outcome != 'success'
+        run: exit 1
 
       - name: Setup Python
         uses: actions/setup-python@v5
