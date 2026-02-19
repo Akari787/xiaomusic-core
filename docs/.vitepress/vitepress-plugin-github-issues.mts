@@ -17,6 +17,11 @@ interface GitHubIssuesPluginOptions {
   githubProxy: string;
 }
 
+function yamlDoubleQuoted(value: unknown): string {
+  // YAML accepts JSON-style double-quoted strings; JSON.stringify also escapes newlines/quotes.
+  return JSON.stringify(value ?? '');
+}
+
 async function fetchAllIssues(repo: string, token: string): Promise<any[]> {
   const maxRetries = 3; // 最大重试次数
   let attempt = 0;
@@ -203,12 +208,12 @@ export default function GitHubIssuesPlugin(options: GitHubIssuesPluginOptions): 
 
             let content =
               `---
-title: ${issue.title}
+title: ${yamlDoubleQuoted(issue.title)}
 ---
 
 # ${title}
 
-${issue.body}
+${issue.body ?? ''}
 
 ## 评论
 
