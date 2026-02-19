@@ -2,10 +2,43 @@ import { loadEnv, defineConfig } from 'vitepress'
 import AutoSidebar from 'vite-plugin-vitepress-auto-sidebar';
 import GitHubIssuesPlugin from './vitepress-plugin-github-issues.mts';
 
+function normalizeBase(rawBase: string): string {
+  let base = (rawBase || '').trim()
+  if (!base) return '/'
+
+  // Allow providing a full URL via env/vars; VitePress base must be a pathname.
+  if (/^https?:\/\//i.test(base)) {
+    try {
+      base = new URL(base).pathname || '/'
+    } catch {
+      // keep raw value; we'll normalize slashes below
+    }
+  }
+
+  if (!base.startsWith('/')) base = `/${base}`
+  if (base !== '/' && !base.endsWith('/')) base = `${base}/`
+  if (base == '//') base = '/'
+  return base
+}
+
+function normalizeHostname(rawHostname: string): string {
+  const v = (rawHostname || '').trim()
+  if (!v) return ''
+  try {
+    // VitePress sitemap expects an absolute URL.
+    return new URL(v).origin
+  } catch {
+    return ''
+  }
+}
+
 export default async ({ mode }) => {
   const env = loadEnv(mode || '', process.cwd())
-  const siteBase = process.env.VITE_SITE_BASE || env.VITE_SITE_BASE || '/'
-  const siteHostname = process.env.VITE_SITE_HOSTNAME || env.VITE_SITE_HOSTNAME || 'https://xdocs.hanxi.cc'
+  const siteBaseRaw = process.env.VITE_SITE_BASE || env.VITE_SITE_BASE || '/'
+  const siteBase = normalizeBase(siteBaseRaw)
+
+  const siteHostnameRaw = process.env.VITE_SITE_HOSTNAME || env.VITE_SITE_HOSTNAME || 'https://xdocs.hanxi.cc'
+  const siteHostname = normalizeHostname(siteHostnameRaw) || 'https://xdocs.hanxi.cc'
   const issuesToken = process.env.VITE_GITHUB_ISSUES_TOKEN || env.VITE_GITHUB_ISSUES_TOKEN || ''
   return defineConfig({
     // GitHub Pages: for project pages you typically need "/<repo-name>/".
@@ -29,9 +62,7 @@ export default async ({ mode }) => {
         copyright: `版权所有 © 2023-${new Date().getFullYear()} 涵曦`
       },
     },
-    sitemap: {
-      hostname: siteHostname
-    },
+    sitemap: siteHostname ? { hostname: siteHostname } : undefined,
     head: [
       ['script', { defer: true, src: 'https://umami.hanxi.cc/script.js', 'data-website-id': '29cca3f5-e420-432b-adc7-8a1325d31c68' }]
     ],
