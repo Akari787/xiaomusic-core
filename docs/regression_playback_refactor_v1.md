@@ -84,7 +84,7 @@ Field rule:
 
 | date/time           | commit | case | result | fail_stage | notes |
 | ------------------- | ------ | ---- | ------ | ---------- | ----- |
-| YYYY-MM-DD HH:mm:ss | <SHA>  | A    | pass   |            | t=12s; retries=0; keylog=...; ext_var=no |
-| YYYY-MM-DD HH:mm:ss | <SHA>  | B    | fail   | resolve    | t=30s; retries=2; keylog=timeout; ext_var=live_unstable |
-| YYYY-MM-DD HH:mm:ss | <SHA>  | C    | pass   |            | t=18s; retries=1; keylog=reconnect; ext_var=yes |
-| YYYY-MM-DD HH:mm:ss | <SHA>  | D    | pass   |            | t=6s; retries=0; keylog=ok; ext_var=no |
+| YYYY-MM-DD HH:mm:ss | `<SHA>`  | A    | pass   |            | t=12s; retries=0; keylog=...; ext_var=no |
+| YYYY-MM-DD HH:mm:ss | `<SHA>`  | B    | fail   | resolve    | t=30s; retries=2; keylog=timeout; ext_var=live_unstable |
+| YYYY-MM-DD HH:mm:ss | `<SHA>`  | C    | pass   |            | t=18s; retries=1; keylog=reconnect; ext_var=yes |
+| YYYY-MM-DD HH:mm:ss | `<SHA>`  | D    | pass   |            | t=6s; retries=0; keylog=ok; ext_var=no |
