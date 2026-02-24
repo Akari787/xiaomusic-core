@@ -4,6 +4,7 @@
 """
 
 import json
+import os
 from dataclasses import asdict
 
 
@@ -57,8 +58,13 @@ class ConfigManager:
             data: 要保存的配置数据（字典格式）
         """
         filename = self.config.getsettingfile()
-        with open(filename, "w", encoding="utf-8") as f:
+        tmp = f"{filename}.tmp"
+        os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, filename)
         self.log.info(f"Configuration saved to {filename}")
 
     def save_cur_config(self, devices):

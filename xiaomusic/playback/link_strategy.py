@@ -44,7 +44,11 @@ class LinkPlaybackStrategy:
             return False
         if host in {"localhost", "127.0.0.1"}:
             return True
-        if host.startswith("192.168.") or host.startswith("10.") or host.startswith("172."):
+        if (
+            host.startswith("192.168.")
+            or host.startswith("10.")
+            or host.startswith("172.")
+        ):
             return True
 
         cfg = getattr(self.music_library, "config", None)
@@ -57,18 +61,35 @@ class LinkPlaybackStrategy:
 
     def normalize(self, raw_url: str, *, name: str = "") -> NormalizedLink:
         direct = self.normalize_input_url(raw_url)
-        source_type = "jellyfin" if self.music_library.is_jellyfin_url(direct) else self.classify(direct).site
+        if self.music_library.is_jellyfin_url(direct):
+            source_type = "jellyfin"
+        else:
+            source_type = self.classify(direct).site
         proxy_url = None
         if self._host_allowed_for_proxy(direct):
             proxy_url = self.build_proxy_url(direct, name=name)
-        return NormalizedLink(source_type=source_type, direct_url=direct, proxy_url=proxy_url)
+        return NormalizedLink(
+            source_type=source_type,
+            direct_url=direct,
+            proxy_url=proxy_url,
+        )
 
-    def should_fallback(self, *, startup_ok: bool, fail_count: int, reason: str = "") -> bool:
+    def should_fallback(
+        self,
+        *,
+        startup_ok: bool,
+        fail_count: int,
+        reason: str = "",
+    ) -> bool:
         if not startup_ok:
             return True
         if fail_count >= 2:
             return True
-        if reason and reason in {"not_playing", "player_play_failed", "connection_reset"}:
+        if reason and reason in {
+            "not_playing",
+            "player_play_failed",
+            "connection_reset",
+        }:
             return True
         return False
 

@@ -5,6 +5,7 @@ import threading
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+from time import sleep, time
 from typing import Any
 
 
@@ -36,7 +37,7 @@ class TokenStore:
         self._token: dict[str, Any] = {}
         self._loaded = False
         self._dirty = False
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
 
     def _log(self, level: str, message: str, *args):
         if self.log is None:
@@ -85,6 +86,25 @@ class TokenStore:
                 return {}
             self._log("info", "TokenStore load: ok")
             return data
+        except json.JSONDecodeError as e:
+            bak = self.path.with_name(self.path.name + ".bak")
+            if bak.exists():
+                try:
+                    with bak.open(encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict):
+                        self._log("warning", "TokenStore load: recovered from backup")
+                        return data
+                except Exception:
+                    pass
+            bad_name = self.path.with_name(f"{self.path.name}.bad-{int(time())}")
+            try:
+                os.replace(self.path, bad_name)
+                self._log("warning", "TokenStore load: moved bad token file to %s", bad_name)
+            except Exception:
+                pass
+            self._log("warning", "TokenStore load failed, require qr login: %s", e)
+            return {}
         except Exception as e:
             self._log("warning", "TokenStore load failed, require qr login: %s", e)
             return {}
@@ -116,6 +136,41 @@ class TokenStore:
             self._dirty = True
             self._log("info", "TokenStore update reason=%s", reason or "")
 
+    def _atomic_write_unlocked(self, data: dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(f"{self.path}.tmp")
+        bak = Path(f"{self.path}.bak")
+        if self.path.exists():
+            try:
+                with self.path.open(encoding="utf-8") as src, bak.open(
+                    "w", encoding="utf-8"
+                ) as dst:
+                    dst.write(src.read())
+                    dst.flush()
+                    os.fsync(dst.fileno())
+            except Exception as e:
+                self._log("warning", "TokenStore backup write failed: %s", e)
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        last_exc = None
+        for _ in range(20):
+            try:
+                os.replace(tmp, self.path)
+                last_exc = None
+                break
+            except PermissionError as e:
+                last_exc = e
+                sleep(0.01)
+        if last_exc is not None:
+            raise last_exc
+        if os.name == "posix":
+            try:
+                os.chmod(self.path, 0o600)
+            except Exception as e:
+                self._log("warning", "TokenStore chmod 600 failed: %s", e)
+
     def flush(self) -> None:
         with self._lock:
             persist_token = bool(getattr(self.config, "persist_token", True))
@@ -128,19 +183,7 @@ class TokenStore:
                 self._loaded = True
             if not self._dirty and self.path.exists():
                 return
-
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-            with tmp.open("w", encoding="utf-8") as f:
-                json.dump(self._token, f, indent=2, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, self.path)
-            if os.name == "posix":
-                try:
-                    os.chmod(self.path, 0o600)
-                except Exception as e:
-                    self._log("warning", "TokenStore chmod 600 failed: %s", e)
+            self._atomic_write_unlocked(self._token)
             self._dirty = False
             self._log("info", "TokenStore flush complete")
 
@@ -151,8 +194,18 @@ class TokenStore:
             self._dirty = False
 
     def save(self, data: dict[str, Any]) -> None:
-        self.update(data, reason="save")
-        self.flush()
+        with self._lock:
+            if not isinstance(data, dict):
+                raise TypeError("data must be dict")
+            persist_token = bool(getattr(self.config, "persist_token", True))
+            self._token = deepcopy(data)
+            self._loaded = True
+            self._dirty = False
+            if not persist_token:
+                self._log("info", "TokenStore save skipped (persist_token=false)")
+                return
+            self._atomic_write_unlocked(self._token)
+            self._log("info", "TokenStore save complete")
 
     def clear(self) -> None:
         with self._lock:
@@ -164,7 +217,9 @@ class TokenStore:
         removed = False
         removed_paths: list[str] = []
         with self._lock:
-            self.clear()
+            self._token = {}
+            self._loaded = True
+            self._dirty = False
             candidates = [
                 self.path,
                 Path(os.path.abspath(str(self.path))),
