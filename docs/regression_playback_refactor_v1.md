@@ -104,3 +104,11 @@ Environment:
 | 2026-02-24 21:25:20 | `v1.0.3-test-server` | B    | pass   |            | i1:t=4.15s stop_status=2; i2:t=3.57s stop_status=2; i3:t=4.23s stop_status=2 |
 | 2026-02-24 21:26:29 | `v1.0.3-test-server` | C    | pass   |            | i1:t=6.38s stop_status=2; i2:t=6.17s stop_status=2; i3:t=4.67s stop_status=2 |
 | 2026-02-24 21:28:39 | `v1.0.3-test-server` | D    | pass   |            | t=0.96s; samples=10s:1|30s:1|60s:1|90s:1|120s:1; stop_status=2 |
+
+## 6. Jellyfin Playback Troubleshooting Note
+
+- Symptom: web UI play returns failure or no sound for Jellyfin tracks while direct network stream still works.
+- Root cause seen on test server: `hostname` drifted to a non-routable address (`http://192.168.2.5`), making generated proxy URLs unreachable by speaker.
+- Quick check: call `/musicinfo?name=<track>` and verify URL host uses current LAN endpoint (for test server should be `http://192.168.7.178:58090`).
+- Fix: update setting `hostname` and `public_port`, then retry web UI playback.
+- Verified after fix: multiple Jellyfin tracks played via `/playmusic`, player status reached `status=1` each run.
