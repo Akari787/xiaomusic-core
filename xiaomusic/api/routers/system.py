@@ -173,10 +173,7 @@ async def getsetting(need_device_list: bool = False):
     try:
         ts = getattr(xiaomusic, "token_store", None)
         if ts is not None:
-            j = ts.load().data
-        elif config_data.oauth2_token_path and os.path.isfile(config_data.oauth2_token_path):
-            with open(config_data.oauth2_token_path, encoding="utf-8") as f:
-                j = json.load(f)
+            j = ts.get()
         else:
             j = {}
         token_available = _token_valid(j)
@@ -199,10 +196,8 @@ async def oauth2_status():
     try:
         ts = getattr(xiaomusic, "token_store", None)
         if ts is not None:
-            j = ts.load().data
-        elif token_exists:
-            with open(token_path, encoding="utf-8") as f:
-                j = json.load(f)
+            j = ts.get()
+            token_exists = bool(getattr(ts, "path", None) and ts.path.exists())
         else:
             j = {}
         st = j.get("serviceToken") or j.get("yetAnotherServiceToken")
@@ -236,30 +231,14 @@ async def oauth2_logout():
     removed = False
     removed_paths = []
 
-    # Best-effort remove token file (handle relative path ambiguity)
-    candidates = []
-    if token_path:
-        candidates.append(token_path)
-        candidates.append(os.path.abspath(token_path))
-        candidates.append(os.path.join(os.getcwd(), token_path))
-        candidates.append(os.path.join("/app", token_path.lstrip("/")))
-    for p in [c for c in candidates if c]:
-        if os.path.isfile(p):
-            try:
-                os.remove(p)
-                removed = True
-                removed_paths.append(p)
-            except OSError as e:
-                log.exception("remove oauth2 token file failed: %s", e)
-                raise HTTPException(status_code=500, detail=f"remove token failed: {e}")
-
-    # Clear in-memory token cache (e.g., persist_token=false)
+    # Clear token through TokenStore only.
     try:
         ts = getattr(xiaomusic, "token_store", None)
         if ts is not None:
-            ts.clear()
+            removed, removed_paths = ts.clear_and_remove()
     except Exception:
-        pass
+        log.exception("remove oauth2 token file failed")
+        raise HTTPException(status_code=500, detail="remove token failed")
 
     # Clear in-memory auth/session state so it stops being treated as logged-in.
     try:

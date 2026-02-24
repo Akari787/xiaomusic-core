@@ -4,6 +4,7 @@ import argparse
 import base64
 import json
 import os
+import warnings
 from dataclasses import asdict, dataclass, field
 from typing import get_args, get_origin, get_type_hints
 
@@ -14,6 +15,7 @@ from xiaomusic.const import (
     PLAY_TYPE_SEQ,
     PLAY_TYPE_SIN,
 )
+from xiaomusic.config_model import try_validate_config_model
 from xiaomusic.utils.system_utils import validate_proxy
 
 
@@ -345,19 +347,47 @@ class Config:
         self._active_cmd_arr = self.active_cmd.split(",") if self.active_cmd else []
         self._exclude_dirs_set = set(self.exclude_dirs.split(","))
 
-        # Normalize security fields
-        self.allowed_exec_commands = [x.strip() for x in self.allowed_exec_commands if x.strip()]
-        self.allowlist_domains = [x.strip().lower() for x in self.allowlist_domains if x.strip()]
-        self.outbound_allowlist_domains = [
-            x.strip().lower()
-            for x in (getattr(self, "outbound_allowlist_domains", []) or [])
-            if x.strip()
-        ]
-        if not self.outbound_allowlist_domains:
-            # Backward compatibility: reuse legacy allowlist_domains.
-            self.outbound_allowlist_domains = list(self.allowlist_domains)
-
-        self.cors_allow_origins = [x.strip() for x in (self.cors_allow_origins or []) if x.strip()]
+        # Normalize and validate security/network fields with typed model.
+        with warnings.catch_warnings(record=True) as ws:
+            warnings.simplefilter("always")
+            typed = try_validate_config_model(
+                {
+                    "enable_exec_plugin": self.enable_exec_plugin,
+                    "allowed_exec_commands": self.allowed_exec_commands,
+                    "outbound_allowlist_domains": getattr(self, "outbound_allowlist_domains", []) or [],
+                    "allowlist_domains": self.allowlist_domains,
+                    "enable_self_update": getattr(self, "enable_self_update", False),
+                    "cors_allow_origins": self.cors_allow_origins,
+                    "log_redact": self.log_redact,
+                    "jellyfin_base_url": self.jellyfin_base_url,
+                    "jellyfin_api_key": self.jellyfin_api_key,
+                    "port": self.port,
+                }
+            )
+        for w in ws:
+            print(f"Config warning: {w.message}")
+        if typed is not None:
+            self._typed = typed
+            self.enable_exec_plugin = typed.enable_exec_plugin
+            self.allowed_exec_commands = list(typed.allowed_exec_commands)
+            self.allowlist_domains = list(typed.allowlist_domains)
+            self.outbound_allowlist_domains = list(typed.outbound_allowlist_domains)
+            self.enable_self_update = typed.enable_self_update
+            self.cors_allow_origins = list(typed.cors_allow_origins)
+            self.log_redact = typed.log_redact
+            self.jellyfin_base_url = typed.jellyfin_base_url
+            self.jellyfin_api_key = typed.jellyfin_api_key.get_secret_value()
+        else:
+            self.allowed_exec_commands = [x.strip() for x in self.allowed_exec_commands if x.strip()]
+            self.allowlist_domains = [x.strip().lower() for x in self.allowlist_domains if x.strip()]
+            self.outbound_allowlist_domains = [
+                x.strip().lower()
+                for x in (getattr(self, "outbound_allowlist_domains", []) or [])
+                if x.strip()
+            ]
+            if not self.outbound_allowlist_domains:
+                self.outbound_allowlist_domains = list(self.allowlist_domains)
+            self.cors_allow_origins = [x.strip() for x in (self.cors_allow_origins or []) if x.strip()]
 
         mode = (self.keyword_override_mode or "override").strip().lower()
         if mode not in ("override", "append"):

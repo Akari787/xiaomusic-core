@@ -348,6 +348,15 @@ class XiaoMusicDevice:
         self._play_fail_first_ts = 0.0
         self._play_fail_last_reason = ""
 
+    def _bump_play_session(self, reason: str = "") -> int:
+        self._play_session_id += 1
+        self.log.info(
+            "play_session_bump(session_id=%s, reason=%s)",
+            self._play_session_id,
+            reason or "",
+        )
+        return self._play_session_id
+
     async def _playmusic(self, name):
         """播放音乐的核心实现"""
         # New session: invalidate any pending delayed tasks from older sessions.

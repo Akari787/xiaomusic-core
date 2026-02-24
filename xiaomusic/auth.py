@@ -11,6 +11,7 @@ import json
 import os
 import time
 import asyncio
+from copy import deepcopy
 
 from aiohttp import ClientSession
 from miservice import MiAccount, MiIOService, MiNAService
@@ -269,8 +270,11 @@ class AuthManager:
 
     def _get_login_signature(self):
         oauth2_mtime = None
-        if os.path.isfile(self.oauth2_token_path):
-            oauth2_mtime = int(os.path.getmtime(self.oauth2_token_path))
+        token_path = self.oauth2_token_path
+        if self.token_store is not None:
+            token_path = str(getattr(self.token_store, "path", token_path))
+        if token_path and os.path.isfile(token_path):
+            oauth2_mtime = int(os.path.getmtime(token_path))
         return (oauth2_mtime, self.config.mi_did)
 
     async def login_miboy(self):
@@ -329,6 +333,7 @@ class AuthManager:
 
             self.login_acount = account_name
             self.login_signature = self._get_login_signature()
+            self._persist_oauth2_token(auth_data=auth_data, mi_account=mi_account, reason="login")
             self.log.info(f"登录完成. {self.login_acount}")
         except Exception as e:
             self.mina_service = None
@@ -393,9 +398,31 @@ class AuthManager:
         else:
             return
 
+    def _persist_oauth2_token(self, auth_data: dict, mi_account, reason: str = "") -> None:
+        if self.token_store is None:
+            return
+        merged = deepcopy(auth_data or {})
+        try:
+            acct = getattr(mi_account, "token", {}) or {}
+            for key in ("passToken", "userId", "deviceId", "cUserId"):
+                if acct.get(key):
+                    merged[key] = acct.get(key)
+            mico = acct.get("micoapi")
+            if isinstance(mico, (tuple, list)) and len(mico) >= 2:
+                if mico[0]:
+                    merged["ssecurity"] = mico[0]
+                if mico[1]:
+                    merged["serviceToken"] = mico[1]
+                    merged.setdefault("yetAnotherServiceToken", mico[1])
+        except Exception as e:
+            self.log.warning("persist token merge failed: %s", e)
+
+        self.token_store.update(merged, reason=reason or "login")
+        self.token_store.flush()
+
     def _get_oauth2_auth_data(self):
         if self.token_store is not None:
-            user_data = self.token_store.load().data
+            user_data = self.token_store.get()
         else:
             if not os.path.isfile(self.oauth2_token_path):
                 return {}

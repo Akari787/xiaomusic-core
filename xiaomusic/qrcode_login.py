@@ -114,8 +114,12 @@ class MiJiaAPI:
 
         self.token_store = token_store
 
-        if self.auth_data_path.exists():
-            with open(self.auth_data_path, "r") as f:
+        if self.token_store is not None:
+            self.auth_data = self.token_store.get()
+            if self.auth_data:
+                self._init_session()
+        elif self.auth_data_path.exists():
+            with open(self.auth_data_path, "r", encoding="utf-8") as f:
                 self.auth_data = json.load(f)
             self._init_session()
         else:
