@@ -88,3 +88,19 @@ Field rule:
 | YYYY-MM-DD HH:mm:ss | `<SHA>`  | B    | fail   | resolve    | t=30s; retries=2; keylog=timeout; ext_var=live_unstable |
 | YYYY-MM-DD HH:mm:ss | `<SHA>`  | C    | pass   |            | t=18s; retries=1; keylog=reconnect; ext_var=yes |
 | YYYY-MM-DD HH:mm:ss | `<SHA>`  | D    | pass   |            | t=6s; retries=0; keylog=ok; ext_var=no |
+
+## 5. Test Server Baseline Record
+
+Environment:
+
+- target: `192.168.7.178:58090`
+- service: `xiaomusic-oauth2` image `akari787/xiaomusic-oauth2:v1.0.3`
+- speaker_id: `981257654`
+- note: on this speaker firmware, `getplayerstatus.status=2` is treated as stopped (non-playing)
+
+| date/time           | commit             | case | result | fail_stage | notes |
+| ------------------- | ------------------ | ---- | ------ | ---------- | ----- |
+| 2026-02-24 21:24:21 | `v1.0.3-test-server` | A    | pass   |            | i1:t=4.02s stop_status=2; i2:t=3.82s stop_status=2; i3:t=8.66s stop_status=2 |
+| 2026-02-24 21:25:20 | `v1.0.3-test-server` | B    | pass   |            | i1:t=4.15s stop_status=2; i2:t=3.57s stop_status=2; i3:t=4.23s stop_status=2 |
+| 2026-02-24 21:26:29 | `v1.0.3-test-server` | C    | pass   |            | i1:t=6.38s stop_status=2; i2:t=6.17s stop_status=2; i3:t=4.67s stop_status=2 |
+| 2026-02-24 21:28:39 | `v1.0.3-test-server` | D    | pass   |            | t=0.96s; samples=10s:1|30s:1|60s:1|90s:1|120s:1; stop_status=2 |
