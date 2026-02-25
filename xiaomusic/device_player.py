@@ -360,8 +360,7 @@ class XiaoMusicDevice:
     async def _playmusic(self, name):
         """播放音乐的核心实现"""
         # New session: invalidate any pending delayed tasks from older sessions.
-        self._play_session_id += 1
-        sid = self._play_session_id
+        sid = self._bump_play_session(reason="start_new_play")
 
         # 取消组内所有的下一首歌曲的定时器
         await self.cancel_group_next_timer()
@@ -408,6 +407,11 @@ class XiaoMusicDevice:
                 # Best-effort verify playback started.
                 await asyncio.sleep(1)
                 if sid != self._play_session_id:
+                    self.log.info(
+                        "timer_discard_due_to_sid_mismatch(old_sid=%s, cur_sid=%s)",
+                        sid,
+                        self._play_session_id,
+                    )
                     return proxy_url
                 try:
                     if not await self.get_if_xiaoai_is_playing():
@@ -942,6 +946,12 @@ class XiaoMusicDevice:
             try:
                 await asyncio.sleep(sec)
                 if sid != self._play_session_id:
+                    self.log.info(
+                        "timer_discard_due_to_sid_mismatch(old_sid=%s, cur_sid=%s)",
+                        sid,
+                        self._play_session_id,
+                    )
+                    self._next_timer = None
                     return
                 self.log.info(f"定时器时间到了 did: {self.did}")
                 # 定时器触发后先清理引用，避免任务自我取消导致逻辑混乱
@@ -953,13 +963,22 @@ class XiaoMusicDevice:
                     await self._play_next()
 
             except asyncio.CancelledError:
-                self.log.info(f"定时器取消 did: {self.did}")
+                self.log.info(
+                    "timer_cancel(session_id=%s, did=%s)",
+                    sid,
+                    self.did,
+                )
                 raise
             except Exception as e:
                 self.log.error(f"Execption {e}")
 
         self._next_timer = asyncio.create_task(_do_next())
-        self.log.info(f"{sec} 秒后将会播放下一首歌曲 did: {self.did}")
+        self.log.info(
+            "timer_start(session_id=%s, delay_sec=%.3f, did=%s)",
+            sid,
+            sec,
+            self.did,
+        )
 
     async def _handle_play_failure(self, *, name: str, sid: int, reason: str):
         now = time.time()
@@ -990,6 +1009,11 @@ class XiaoMusicDevice:
         async def _retry_next():
             await asyncio.sleep(delay)
             if sid != self._play_session_id:
+                self.log.info(
+                    "timer_discard_due_to_sid_mismatch(old_sid=%s, cur_sid=%s)",
+                    sid,
+                    self._play_session_id,
+                )
                 return
             if not self.is_playing or self._last_cmd == "stop":
                 return
@@ -1074,6 +1098,7 @@ class XiaoMusicDevice:
         """停止播放"""
         self._last_cmd = "stop"
         self.is_playing = False
+        self._bump_play_session(reason="stop")
         if arg1 != "notts":
             await self.do_tts(self.config.stop_tts_msg)
             await asyncio.sleep(3)  # 等它说完
@@ -1081,6 +1106,15 @@ class XiaoMusicDevice:
         await self.cancel_group_next_timer()
         await self.group_force_stop_xiaoai()
         self.log.info("stop now")
+
+    async def pause(self):
+        """暂停播放并使旧计时器失效。"""
+        self._last_cmd = "pause"
+        self.is_playing = False
+        self._bump_play_session(reason="pause")
+        await self.cancel_group_next_timer()
+        await self.group_force_stop_xiaoai()
+        self.log.info("pause now")
 
     async def group_force_stop_xiaoai(self):
         """强制停止组内所有设备"""
@@ -1112,7 +1146,11 @@ class XiaoMusicDevice:
 
     async def cancel_next_timer(self):
         """取消下一首定时器"""
-        self.log.info(f"cancel_next_timer did: {self.did}")
+        self.log.info(
+            "timer_cancel(session_id=%s, did=%s)",
+            self._play_session_id,
+            self.did,
+        )
         if self._next_timer:
             self._next_timer.cancel()
             try:
