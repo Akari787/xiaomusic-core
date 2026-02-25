@@ -9,6 +9,7 @@ from xiaomusic.api.routers import (
     playlist,
     plugin,
     system,
+    v1,
 )
 
 
@@ -24,6 +25,7 @@ def register_routers(app):
     app.include_router(music.router, tags=["音乐管理"])
     app.include_router(playlist.router, tags=["播放列表"])
     app.include_router(plugin.router, tags=["插件管理"])
+    app.include_router(v1.router, tags=["API v1"])
     app.include_router(network_audio.router, tags=["网络音频"])
     app.include_router(file.router, tags=["文件操作"])
     app.include_router(websocket.router, tags=["WebSocket"])

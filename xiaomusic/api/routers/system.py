@@ -6,6 +6,7 @@ import io
 import base64
 import shutil
 import tempfile
+import time
 from dataclasses import (
     asdict,
 )
@@ -76,6 +77,19 @@ def _get_mijia_api():
 
 mi_jia_api = None
 qrcode_login_task = None
+qrcode_login_started_at = 0.0
+qrcode_login_error = ""
+
+
+async def _runtime_auth_ready() -> bool:
+    """Best-effort runtime auth readiness without forcing network relogin."""
+    try:
+        am = getattr(xiaomusic, "auth_manager", None)
+        if am is None:
+            return False
+        return not await am.need_login()
+    except Exception:
+        return False
 
 @router.get("/")
 async def read_index():
@@ -90,9 +104,12 @@ async def get_qrcode():
     """生成小米账号扫码登录用二维码，返回 base64 图片 URL。"""
     global qrcode_login_task
     global mi_jia_api
+    global qrcode_login_started_at
+    global qrcode_login_error
     try:
-        if mi_jia_api is None:
-            mi_jia_api = _get_mijia_api()
+        # Always rebuild API object to avoid stale in-memory cookies/session.
+        mi_jia_api = _get_mijia_api()
+        qrcode_login_error = ""
         qrcode_data = mi_jia_api.get_qrcode()
         # 已登录时 get_qrcode 返回 False，无需扫码
         if qrcode_data is False:
@@ -120,7 +137,8 @@ async def get_qrcode():
         # 返回二维码的同时，在后台启动 get_logint_status，不阻塞本次响应
         if qrcode_login_task and not qrcode_login_task.done():
             qrcode_login_task.cancel()
-        qrcode_login_task = asyncio.create_task(get_logint_status(qrcode_data["lp"]))
+        qrcode_login_task = asyncio.create_task(get_logint_status(mi_jia_api, qrcode_data["lp"]))
+        qrcode_login_started_at = time.time()
         return {
             "success": True,
             "qrcode_url": qrcode_url,
@@ -128,22 +146,27 @@ async def get_qrcode():
             "expire_seconds": config.qrcode_timeout,
         }
     except Exception as e:
+        qrcode_login_error = str(e)
         log.exception("get_qrcode failed: %s", e)
         return {"success": False, "message": str(e)}
 
 
-async def get_logint_status(lp: str):
+async def get_logint_status(api: MiJiaAPI, lp: str):
     """轮询获取扫码登录状态"""
+    global qrcode_login_error
     try:
-        await asyncio.to_thread(mi_jia_api.get_logint_status, lp)
+        await asyncio.to_thread(api.get_logint_status, lp)
+        qrcode_login_error = ""
         # 扫码登录成功后立即重建认证状态，避免前端刷新后仍使用旧会话
         await xiaomusic.reinit()
     except asyncio.CancelledError:
         log.info("qrcode login polling cancelled")
         raise
     except ValueError as e:
+        qrcode_login_error = str(e)
         log.exception("get_logint_status failed: %s", e)
     except Exception as e:
+        qrcode_login_error = str(e)
         log.exception("refresh auth after qrcode login failed: %s", e)
 
 @router.get("/getversion")
@@ -179,7 +202,9 @@ async def getsetting(need_device_list: bool = False):
         token_available = _token_valid(j)
     except Exception:
         token_available = False
+    runtime_ready = await _runtime_auth_ready()
     data["oauth2_token_available"] = token_available
+    data["oauth2_runtime_ready"] = runtime_ready
     if need_device_list:
         device_list = await xiaomusic.getalldevices()
         log.info(f"getsetting device_list: {device_list}")
@@ -190,6 +215,8 @@ async def getsetting(need_device_list: bool = False):
 @router.get("/api/oauth2/status")
 async def oauth2_status():
     global qrcode_login_task
+    global qrcode_login_started_at
+    global qrcode_login_error
     token_path = config.oauth2_token_path
     token_exists = bool(token_path and os.path.isfile(token_path))
     token_valid = False
@@ -204,6 +231,17 @@ async def oauth2_status():
         token_valid = bool(j.get("userId") and j.get("passToken") and j.get("ssecurity") and st)
     except Exception:
         token_valid = False
+    runtime_ready = await _runtime_auth_ready()
+    login_in_progress = bool(qrcode_login_task and not qrcode_login_task.done())
+    if login_in_progress:
+        expire_after = int(getattr(config, "qrcode_timeout", 120)) + 15
+        if qrcode_login_started_at > 0 and (time.time() - qrcode_login_started_at) > expire_after:
+            try:
+                qrcode_login_task.cancel()
+            except Exception:
+                pass
+            login_in_progress = False
+
     return {
         "success": True,
         "token_file": token_path,
@@ -211,7 +249,9 @@ async def oauth2_status():
         "token_valid": token_valid,
         # Used by frontend to decide if refresh loop should continue
         "cloud_available": token_valid,
-        "login_in_progress": bool(qrcode_login_task and not qrcode_login_task.done()),
+        "runtime_auth_ready": runtime_ready,
+        "login_in_progress": login_in_progress,
+        "last_error": qrcode_login_error,
     }
 
 
@@ -222,11 +262,15 @@ async def oauth2_logout():
     仅删除 token 文件，不修改其它配置；删除后会触发 reinit 让服务重新读取认证状态。
     """
     global qrcode_login_task
+    global qrcode_login_started_at
+    global qrcode_login_error
     token_path = config.oauth2_token_path
 
     # 如果正在轮询扫码登录，先取消
     if qrcode_login_task and not qrcode_login_task.done():
         qrcode_login_task.cancel()
+    qrcode_login_started_at = 0.0
+    qrcode_login_error = ""
 
     removed = False
     removed_paths = []

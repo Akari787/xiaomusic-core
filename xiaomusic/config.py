@@ -95,6 +95,7 @@ class Config:
     conf_path: str = os.getenv("XIAOMUSIC_CONF_PATH", "conf")
     cache_dir: str = os.getenv("XIAOMUSIC_CACHE_DIR", "music/cache")
     hostname: str = os.getenv("XIAOMUSIC_HOSTNAME", "http://192.168.2.5")
+    public_base_url: str = os.getenv("XIAOMUSIC_PUBLIC_BASE_URL", "")
     port: int = int(os.getenv("XIAOMUSIC_PORT", "8090"))  # 监听端口
     public_port: int = int(os.getenv("XIAOMUSIC_PUBLIC_PORT", 58090))  # 歌曲访问端口
     proxy: str | None = os.getenv("XIAOMUSIC_PROXY", None)
@@ -510,9 +511,10 @@ class Config:
         token_file = self.oauth2_token_file or "auth.json"
         if os.path.isabs(token_file):
             return token_file
-        if not os.path.exists(self.conf_path):
-            os.makedirs(self.conf_path)
-        return os.path.join(self.conf_path, token_file)
+        conf_path = self.conf_path or "conf"
+        if not os.path.exists(conf_path):
+            os.makedirs(conf_path)
+        return os.path.join(conf_path, token_file)
 
     @property
     def tag_cache_path(self):

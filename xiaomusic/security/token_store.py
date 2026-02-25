@@ -27,11 +27,24 @@ class TokenStore:
     def __init__(self, path_or_config, log=None):
         self.log = log
         self.config = None
-        if hasattr(path_or_config, "oauth2_token_path"):
-            self.config = path_or_config
-            token_path = path_or_config.oauth2_token_path
-        else:
+        if isinstance(path_or_config, (str, Path)):
             token_path = str(path_or_config)
+        else:
+            self.config = path_or_config
+            try:
+                token_path = path_or_config.oauth2_token_path
+            except Exception:
+                conf_path = getattr(path_or_config, "conf_path", "conf") or "conf"
+                token_file = getattr(path_or_config, "oauth2_token_file", "auth.json") or "auth.json"
+                if os.path.isabs(token_file):
+                    token_path = token_file
+                else:
+                    token_path = os.path.join(conf_path, token_file)
+                self._log(
+                    "warning",
+                    "TokenStore init fallback token path used: %s",
+                    token_path,
+                )
 
         self.path = Path(token_path)
         self._token: dict[str, Any] = {}

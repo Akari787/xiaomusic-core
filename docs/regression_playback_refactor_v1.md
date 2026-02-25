@@ -104,6 +104,10 @@ Environment:
 | 2026-02-24 21:25:20 | `v1.0.3-test-server` | B    | pass   |            | i1:t=4.15s stop_status=2; i2:t=3.57s stop_status=2; i3:t=4.23s stop_status=2 |
 | 2026-02-24 21:26:29 | `v1.0.3-test-server` | C    | pass   |            | i1:t=6.38s stop_status=2; i2:t=6.17s stop_status=2; i3:t=4.67s stop_status=2 |
 | 2026-02-24 21:28:39 | `v1.0.3-test-server` | D    | pass   |            | t=0.96s; samples=10s:1|30s:1|60s:1|90s:1|120s:1; stop_status=2 |
+| 2026-02-25 22:57:09 | `oauth2-only-wip` | A    | pass   |            | `/api/v1/play_url` state=streaming; status=1; stop=OK; t=19.23s |
+| 2026-02-25 22:57:27 | `oauth2-only-wip` | B    | pass   |            | `/api/v1/play_url` state=streaming; status=1; stop=OK; t=17.40s |
+| 2026-02-25 22:57:44 | `oauth2-only-wip` | C    | pass   |            | `/api/v1/play_url` state=streaming; status=1; stop=OK; t=17.46s |
+| 2026-02-25 22:57:58 | `oauth2-only-wip` | D    | pass   |            | `/api/v1/play_url` state=streaming; status=0(固件差异); stop=OK; t=13.34s |
 
 ## 6. Jellyfin Playback Troubleshooting Note
 
@@ -112,3 +116,10 @@ Environment:
 - Quick check: call `/musicinfo?name=<track>` and verify URL host uses current LAN endpoint (for test server should be `http://192.168.7.178:58090`).
 - Fix: update setting `hostname` and `public_port`, then retry web UI playback.
 - Verified after fix: multiple Jellyfin tracks played via `/playmusic`, player status reached `status=1` each run.
+
+## 7. 2026-02-25 Additional Fix Note
+
+- Symptom: `/api/v1/play_url` occasionally returned `state=streaming`, but runtime emitted `OSError: [Errno 98] Address in use` when reading `/network_audio/stream/{sid}`.
+- Root cause: `v1` router and `network_audio` router each owned an independent `NetworkAudioRuntime`, both trying to bind the same local stream port.
+- Fix: make `xiaomusic/api/routers/v1.py` reuse `network_audio._get_runtime` so both routers share one runtime instance.
+- Verification on `192.168.7.178`: repeated play/stop no longer hit `Errno 98`; A/B/C/D smoke via `/api/v1/*` all pass.

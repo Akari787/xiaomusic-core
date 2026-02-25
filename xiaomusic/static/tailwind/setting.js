@@ -6,6 +6,34 @@ $(function () {
     return $.get('/api/oauth2/status');
   }
 
+  function fetchDetectedBaseUrl() {
+    return $.get('/api/v1/detect_base_url');
+  }
+
+  function applyDetectedBaseUrl(baseUrl, message) {
+    const $status = $('#base-url-detect-status');
+    if (!baseUrl) {
+      if ($status.length) {
+        $status.text(message || '自动检测失败，请手动填写');
+      }
+      return;
+    }
+    try {
+      const parsed = new URL(baseUrl);
+      const hostOnly = `${parsed.protocol}//${parsed.hostname}`;
+      const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+      $('#hostname').val(hostOnly);
+      $('#public_port').val(port);
+      if ($status.length) {
+        $status.text((message || '检测到推荐地址') + `：${baseUrl}`);
+      }
+    } catch (_e) {
+      if ($status.length) {
+        $status.text('自动检测失败，请手动填写');
+      }
+    }
+  }
+
   function setOAuth2LoggedIn(loggedIn) {
     oauth2LoggedIn = !!loggedIn;
 
@@ -145,7 +173,13 @@ $(function () {
     const retryFetch = function () {
       $.get('/api/oauth2/status')
         .done(function (oauthStatus) {
-          if ((oauthStatus.login_in_progress || !oauthStatus.cloud_available) && retryCount < maxRetry) {
+          if (oauthStatus && oauthStatus.last_error && !oauthStatus.login_in_progress) {
+            if (qrcodeStatus) {
+              qrcodeStatus.textContent = `登录失败：${oauthStatus.last_error}，请重新获取二维码`;
+            }
+            return;
+          }
+          if (!oauthStatus.cloud_available && retryCount < maxRetry) {
             retryCount += 1;
             if (qrcodeStatus) {
               qrcodeStatus.textContent = `登录处理中，请在米家 App 完成确认...（${retryCount}/${maxRetry}）`;
@@ -204,6 +238,14 @@ $(function () {
     setJellyfinFieldsVisible($("#jellyfin_enabled").val() === "true");
 
     setOAuth2LoggedIn(authReady);
+
+    fetchDetectedBaseUrl()
+      .done(function (ret) {
+        applyDetectedBaseUrl(ret.base_url, ret.message);
+      })
+      .fail(function () {
+        applyDetectedBaseUrl(null, '自动检测失败，请手动填写');
+      });
   });
 
   $("#oauth2-action").on("click", function () {
@@ -220,10 +262,7 @@ $(function () {
           refreshDevicesAfterOAuth();
           return;
         }
-        if (st && (st.token_valid || st.cloud_available)) {
-          refreshDevicesAfterOAuth();
-          return;
-        }
+        // Always request QR when user clicks, so UI has explicit feedback.
         fetchQRCode();
       })
       .fail(function () {
@@ -376,17 +415,50 @@ $(function () {
 
 
   $("#auto-hostname").on("click", () => {
-    const protocol = window.location.protocol;
-    const hostname = window.location.hostname;
-    const baseUrl = `${protocol}//${hostname}`;
-    console.log(baseUrl);
-    $("#hostname").val(baseUrl);
+    fetchDetectedBaseUrl()
+      .done(function (ret) {
+        applyDetectedBaseUrl(ret.base_url, ret.message);
+      })
+      .fail(function () {
+        alert('自动检测失败，请手动填写');
+      });
   });
 
   $("#auto-port").on("click", () => {
     const port = window.location.port;
     console.log(port);
     $("#public_port").val(port);
+  });
+
+  $("#test-reachability").on("click", () => {
+    const did = getSelectedDids('#mi_did').split(',')[0] || '';
+    if (!did) {
+      alert('请先勾选设备');
+      return;
+    }
+    const hostname = String($('#hostname').val() || '').trim();
+    const port = String($('#public_port').val() || '').trim();
+    const baseUrl = hostname && port ? `${hostname}:${port}` : '';
+
+    $.ajax({
+      type: 'POST',
+      url: '/api/v1/test_reachability',
+      contentType: 'application/json; charset=utf-8',
+      data: JSON.stringify({
+        speaker_id: did,
+        base_url: baseUrl || null,
+      }),
+      success: (ret) => {
+        if (ret.reachable) {
+          alert('地址可达');
+        } else {
+          alert(`地址不可达: ${ret.error_code || 'unknown'}`);
+        }
+      },
+      error: () => {
+        alert('可达性测试失败');
+      }
+    });
   });
 
   // Toggle masked secrets (API key, tokens)

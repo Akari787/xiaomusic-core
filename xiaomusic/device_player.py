@@ -987,9 +987,9 @@ class XiaoMusicDevice:
         self._play_fail_last_reason = reason
         self._play_failed_cnt += 1
 
-        self.log.info(
-            "播放 %s 失败. reason=%s cnt=%d", name, reason, self._play_failed_cnt
-        )
+        logger = getattr(self, "log", None)
+        if logger is not None:
+            logger.info("播放 %s 失败. reason=%s cnt=%d", name, reason, self._play_failed_cnt)
 
         # Exponential backoff, capped.
         delay = min(1.0 * (2 ** max(self._play_failed_cnt - 1, 0)), 8.0)
@@ -1009,11 +1009,12 @@ class XiaoMusicDevice:
         async def _retry_next():
             await asyncio.sleep(delay)
             if sid != self._play_session_id:
-                self.log.info(
-                    "timer_discard_due_to_sid_mismatch(old_sid=%s, cur_sid=%s)",
-                    sid,
-                    self._play_session_id,
-                )
+                if logger is not None:
+                    logger.info(
+                        "timer_discard_due_to_sid_mismatch(old_sid=%s, cur_sid=%s)",
+                        sid,
+                        self._play_session_id,
+                    )
                 return
             if not self.is_playing or self._last_cmd == "stop":
                 return

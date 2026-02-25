@@ -9,7 +9,7 @@
     <link rel="preload" href="/static/default/materialicons.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="/static/default/materialiconsoutlined.woff2" as="font" type="font/woff2" crossorigin>
     <script src="/static/default/jquery-3.7.1.min.js?version=1769383300"></script>
-    <script src="/static/default/setting.js?version=1769700003"></script>
+    <script src="/static/default/setting.js?version=1769800003"></script>
     <link rel="stylesheet" type="text/css" href="/static/default/setting.css?version=1769383300" />
 
 </head>
@@ -86,6 +86,7 @@
                             </button>
                         </label>
                         <input id="hostname" type="text" aria-required="true" />
+                        <p id="base-url-detect-status" class="form-hint">正在检测推荐地址...</p>
                     </div>
 
                     <div class="form-item">
@@ -96,6 +97,10 @@
                             </button>
                         </label>
                         <input id="public_port" type="number" value="58090" aria-required="true" />
+                        <button class="option-inline mini-button" id="test-reachability" type="button" aria-label="测试地址可达性">
+                            <span class="material-icons" aria-hidden="true">network_check</span>
+                            <span>测试可达性</span>
+                        </button>
                     </div>
 
                     <div class="form-item">

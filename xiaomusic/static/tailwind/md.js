@@ -667,21 +667,28 @@ function refresh_music_list() {
 }
 
 function do_play_music_list(listname, musicname) {
-  $.ajax({
-    type: "POST",
-    url: "/playmusiclist",
-    contentType: "application/json; charset=utf-8",
-    data: JSON.stringify({
-      did: did,
-      listname: listname,
-      musicname: musicname,
-    }),
-    success: () => {
-      console.log("do_play_music_list succ", listname, musicname);
-    },
-    error: () => {
-      console.log("do_play_music_list failed", listname, musicname);
-    },
+  $.get(`/musicinfo?name=${encodeURIComponent(musicname)}`, function (info) {
+    const url = info && info.url;
+    if (!url) {
+      console.log("do_play_music_list failed: no url", listname, musicname);
+      return;
+    }
+    $.ajax({
+      type: "POST",
+      url: "/api/v1/play_url",
+      contentType: "application/json; charset=utf-8",
+      data: JSON.stringify({
+        url: url,
+        speaker_id: did,
+        options: { prefer_codec: "auto" },
+      }),
+      success: () => {
+        console.log("do_play_music_list succ", listname, musicname);
+      },
+      error: () => {
+        console.log("do_play_music_list failed", listname, musicname);
+      },
+    });
   });
 }
 
@@ -692,30 +699,46 @@ $("#play_music_list").on("click", () => {
 });
 
 $("#playurl").on("click", () => {
-  var url = $("#music-url").val();
-  const encoded_url = encodeURIComponent(url);
-  $.get(`/playurl?url=${encoded_url}&did=${did}`, function (data, status) {
-    console.log(data);
+  const url = $("#music-url").val();
+  $.ajax({
+    type: "POST",
+    url: "/api/v1/play_url",
+    contentType: "application/json; charset=utf-8",
+    data: JSON.stringify({
+      url: url,
+      speaker_id: did,
+      options: { prefer_codec: "auto" },
+    }),
+    success: function (data) {
+      console.log(data);
+    },
   });
 });
 
 
 function do_play_music(musicname, searchkey) {
-  $.ajax({
-    type: "POST",
-    url: "/playmusic",
-    contentType: "application/json; charset=utf-8",
-    data: JSON.stringify({
-      did: did,
-      musicname: musicname,
-      searchkey: searchkey,
-    }),
-    success: () => {
-      console.log("do_play_music succ", musicname, searchkey);
-    },
-    error: () => {
-      console.log("do_play_music failed", musicname, searchkey);
-    },
+  $.get(`/musicinfo?name=${encodeURIComponent(musicname)}`, function (info) {
+    const url = info && info.url;
+    if (!url) {
+      console.log("do_play_music failed: no url", musicname, searchkey);
+      return;
+    }
+    $.ajax({
+      type: "POST",
+      url: "/api/v1/play_url",
+      contentType: "application/json; charset=utf-8",
+      data: JSON.stringify({
+        url: url,
+        speaker_id: did,
+        options: { prefer_codec: "auto" },
+      }),
+      success: () => {
+        console.log("do_play_music succ", musicname, searchkey);
+      },
+      error: () => {
+        console.log("do_play_music failed", musicname, searchkey);
+      },
+    });
   });
 }
 

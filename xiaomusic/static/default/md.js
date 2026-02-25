@@ -433,9 +433,9 @@ function stopPlay() {
   } else {
     $.ajax({
       type: "POST",
-      url: "/device/stop",
+      url: "/api/v1/stop",
       contentType: "application/json; charset=utf-8",
-      data: JSON.stringify({ did: currentDid }),
+      data: JSON.stringify({ speaker_id: currentDid }),
       success: () => {
         console.log("stop play succ", currentDid);
       },
@@ -1069,6 +1069,21 @@ function refresh_music_list() {
   });
 }
 
+function apiPlayUrlForDevice(targetDid, sourceUrl, onSuccess, onError) {
+  $.ajax({
+    type: "POST",
+    url: "/api/v1/play_url",
+    contentType: "application/json; charset=utf-8",
+    data: JSON.stringify({
+      url: sourceUrl,
+      speaker_id: targetDid,
+      options: { prefer_codec: "auto" },
+    }),
+    success: onSuccess,
+    error: onError,
+  });
+}
+
 function do_play_music_list(listname, musicname) {
   const currentDid = $("#did").val() || window.did || did;
   if (!currentDid) {
@@ -1077,21 +1092,22 @@ function do_play_music_list(listname, musicname) {
   }
   did = currentDid;
   window.did = currentDid;
-  $.ajax({
-    type: "POST",
-    url: "/playmusiclist",
-    contentType: "application/json; charset=utf-8",
-    data: JSON.stringify({
-      did: currentDid,
-      listname: listname,
-      musicname: musicname,
-    }),
-    success: () => {
-      console.log("do_play_music_list succ", listname, musicname);
-    },
-    error: () => {
-      console.log("do_play_music_list failed", listname, musicname);
-    },
+  $.get(`/musicinfo?name=${encodeURIComponent(musicname)}`, function (info) {
+    const url = info && info.url;
+    if (!url) {
+      console.log("do_play_music_list failed: no url", listname, musicname);
+      return;
+    }
+    apiPlayUrlForDevice(
+      currentDid,
+      url,
+      () => {
+        console.log("do_play_music_list succ", listname, musicname);
+      },
+      () => {
+        console.log("do_play_music_list failed", listname, musicname);
+      },
+    );
   });
 }
 
@@ -1110,24 +1126,22 @@ function playUrl() {
   did = currentDid;
   window.did = currentDid;
   const sourceUrl = $("#music-url").val();
-  $.ajax({
-    type: "POST",
-    url: "/network_audio/play_link",
-    contentType: "application/json; charset=utf-8",
-    data: JSON.stringify({ did: currentDid, url: sourceUrl }),
-    success: (data) => {
+  apiPlayUrlForDevice(
+    currentDid,
+    sourceUrl,
+    (data) => {
       console.log("playUrl succ", data);
-      if (data.ok) {
-        alert(`已下发播放: ${data.mode}`);
+      if (data.error_code) {
+        alert(`播放失败: ${data.error_code}`);
       } else {
-        alert(`播放失败: ${data.error_code || "unknown"}`);
+        alert("已下发播放");
       }
     },
-    error: () => {
+    () => {
       console.log("playUrl failed", sourceUrl);
       alert("播放请求失败");
     },
-  });
+  );
 }
 
 function playProxyUrl() {
@@ -1139,24 +1153,22 @@ function playProxyUrl() {
   did = currentDid;
   window.did = currentDid;
   const sourceUrl = $("#music-url").val();
-  $.ajax({
-    type: "POST",
-    url: "/network_audio/play_link?proxy=true",
-    contentType: "application/json; charset=utf-8",
-    data: JSON.stringify({ did: currentDid, url: sourceUrl }),
-    success: (data) => {
+  apiPlayUrlForDevice(
+    currentDid,
+    sourceUrl,
+    (data) => {
       console.log("playProxyUrl succ", data);
-      if (data.ok) {
-        alert("已通过代理下发播放");
+      if (data.error_code) {
+        alert(`播放失败: ${data.error_code}`);
       } else {
-        alert(`代理播放失败: ${data.error_code || "unknown"}`);
+        alert("已下发播放");
       }
     },
-    error: () => {
+    () => {
       console.log("playProxyUrl failed", sourceUrl);
-      alert("代理播放请求失败");
+      alert("播放请求失败");
     },
-  });
+  );
 }
 
 function playTts() {
@@ -1196,21 +1208,22 @@ function do_play_music(musicname, searchkey) {
   }
   did = currentDid;
   window.did = currentDid;
-  $.ajax({
-    type: "POST",
-    url: "/playmusic",
-    contentType: "application/json; charset=utf-8",
-    data: JSON.stringify({
-      did: currentDid,
-      musicname: musicname,
-      searchkey: searchkey,
-    }),
-    success: () => {
-      console.log("do_play_music succ", musicname, searchkey);
-    },
-    error: () => {
-      console.log("do_play_music failed", musicname, searchkey);
-    },
+  $.get(`/musicinfo?name=${encodeURIComponent(musicname)}`, function (info) {
+    const url = info && info.url;
+    if (!url) {
+      console.log("do_play_music failed: no url", musicname, searchkey);
+      return;
+    }
+    apiPlayUrlForDevice(
+      currentDid,
+      url,
+      () => {
+        console.log("do_play_music succ", musicname, searchkey);
+      },
+      () => {
+        console.log("do_play_music failed", musicname, searchkey);
+      },
+    );
   });
 }
 

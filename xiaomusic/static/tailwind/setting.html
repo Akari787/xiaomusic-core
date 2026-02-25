@@ -7,7 +7,7 @@
   <title>XiaoMusic 设置面板</title>
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
   <script src="/static/tailwind/jquery-3.7.1.min.js?version=1736211336"></script>
-  <script src="/static/tailwind/setting.js?version=1769700003"></script>
+  <script src="/static/tailwind/setting.js?version=1769800003"></script>
   <script src="/static/tailwind/libs/tailwind.js"></script>
 
 
@@ -180,6 +180,7 @@
                     </button>
                   </label>
                   <input id="hostname" type="text" class="mt-1 block w-full rounded-md border border-gray-300 bg-white px-4 py-2.5 text-gray-900 placeholder:text-gray-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 hover:border-gray-400" />
+                  <p id="base-url-detect-status" class="mt-1 text-xs text-gray-500">正在检测推荐地址...</p>
                 </div>
                 <div class="mb-4">
                   <label for="public_port" class="block text-sm font-medium text-gray-700">
@@ -192,6 +193,10 @@
                     </button>
                   </label>
                   <input id="public_port" type="number" value="0" class="mt-1 block w-full rounded-md border border-gray-300 bg-white px-4 py-2.5 text-gray-900 placeholder:text-gray-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 hover:border-gray-400" />
+                  <button id="test-reachability" type="button" class="mt-2 inline-flex items-center text-sm text-blue-600 hover:text-blue-800">
+                    <span class="material-icons text-sm">network_check</span>
+                    测试可达性
+                  </button>
                 </div>
 
                 <div class="mb-4">

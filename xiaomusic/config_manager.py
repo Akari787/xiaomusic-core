@@ -5,6 +5,8 @@
 
 import json
 import os
+import threading
+from time import sleep
 from dataclasses import asdict
 
 
@@ -27,6 +29,7 @@ class ConfigManager:
         """
         self.config = config
         self.log = log
+        self._save_lock = threading.Lock()
 
     def try_init_setting(self):
         """尝试从设置文件加载配置
@@ -34,6 +37,7 @@ class ConfigManager:
         从配置文件中读取设置并更新当前配置。
         如果文件不存在或格式错误，会记录日志但不会抛出异常。
         """
+        filename = "<unknown>"
         try:
             filename = self.config.getsettingfile()
             with open(filename, encoding="utf-8") as f:
@@ -60,11 +64,27 @@ class ConfigManager:
         filename = self.config.getsettingfile()
         tmp = f"{filename}.tmp"
         os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, filename)
+        with self._save_lock:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            last_exc = None
+            for _ in range(20):
+                try:
+                    os.replace(tmp, filename)
+                    last_exc = None
+                    break
+                except PermissionError as e:
+                    last_exc = e
+                    sleep(0.01)
+            if last_exc is not None:
+                raise last_exc
+            if os.name == "posix":
+                try:
+                    os.chmod(filename, 0o600)
+                except Exception:
+                    pass
         self.log.info(f"Configuration saved to {filename}")
 
     def save_cur_config(self, devices):

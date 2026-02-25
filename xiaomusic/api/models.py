@@ -81,3 +81,24 @@ class PlayListUpdateObj(BaseModel):
 class PlayListMusicObj(BaseModel):
     name: str = ""  # 歌单名
     music_list: list[str]  # 歌曲名列表
+
+
+class PlayUrlOptions(BaseModel):
+    volume: int | None = None
+    prefer_codec: str | None = None
+
+
+class ApiV1PlayUrlRequest(BaseModel):
+    url: str
+    speaker_id: str
+    options: PlayUrlOptions | None = None
+
+
+class ApiV1StopRequest(BaseModel):
+    speaker_id: str | None = None
+    sid: str | None = None
+
+
+class ApiV1ReachabilityRequest(BaseModel):
+    speaker_id: str
+    base_url: str | None = None

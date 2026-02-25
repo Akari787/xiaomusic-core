@@ -51,7 +51,7 @@ async def getvolume(did: str = ""):
 
 @router.get("/getplayerstatus")
 async def getplayerstatus(did: str = ""):
-    """获取完整播放状态
+    """获取完整播放状态（deprecated wrapper，内部已收敛到统一状态入口）
 
     返回小米音箱的完整播放状态，包括：
     - status: 播放状态 (0=停止, 1=播放)

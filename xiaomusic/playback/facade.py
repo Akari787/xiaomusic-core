@@ -120,7 +120,19 @@ class PlaybackFacade:
             }
 
         if speaker_id:
-            await self.xiaomusic.stop(did=speaker_id, arg1="notts")
+            try:
+                await self.xiaomusic.stop(did=speaker_id, arg1="notts")
+            except Exception:
+                return {
+                    "sid": sid,
+                    "speaker_id": speaker_id,
+                    "state": "error",
+                    "title": None,
+                    "stream_url": "",
+                    "error_code": "E_STREAM_NOT_FOUND",
+                    "ok": False,
+                    "raw": {"ret": "Did not exist"},
+                }
             raw = {"ret": "OK"}
             return {
                 "sid": "",
@@ -173,7 +185,19 @@ class PlaybackFacade:
             }
 
         if speaker_id:
-            raw = await self.xiaomusic.get_player_status(did=speaker_id)
+            try:
+                raw = await self.xiaomusic.get_player_status(did=speaker_id)
+            except Exception:
+                return {
+                    "sid": "",
+                    "speaker_id": speaker_id,
+                    "state": "error",
+                    "title": None,
+                    "stream_url": "",
+                    "error_code": "E_STREAM_NOT_FOUND",
+                    "ok": False,
+                    "raw": {"ret": "Did not exist"},
+                }
             return {
                 "sid": "",
                 "speaker_id": speaker_id,

@@ -17,15 +17,15 @@ def redact_text(text: str) -> str:
     if not text:
         return text
 
+    # Bearer <token>
+    text = re.sub(r"(?i)(bearer\s+)([^\s,;]+)", rf"\1{REDACTED}", text)
+
     # key=value or key: value
     for key in _SENSITIVE_KEYS:
         pattern = re.compile(
             rf"(?i)({re.escape(key)}\s*[:=]\s*)([^\s,;\"']+|\"[^\"]*\"|'[^']*')"
         )
         text = pattern.sub(rf"\1{REDACTED}", text)
-
-    # Bearer <token>
-    text = re.sub(r"(?i)(bearer\s+)([^\s,;]+)", rf"\1{REDACTED}", text)
     return text
 
 
