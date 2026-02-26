@@ -21,7 +21,7 @@
 ## 本轮结果
 
 - 组件级验收：通过（UT/CT 全绿）。
-- 真机验收（2026-02-17，测试服务器 `192.168.7.178`）：
+- 真机验收（2026-02-17，测试服务器 `<TEST_SERVER_HOST>`）：
   - 第 1 次失败：使用 `FakeSourceServer` 的占位字节流，设备端提示播放失败（原因：非可解码音频帧）。
   - 第 2 次修正：改用真实可解码 MP3 源（`/music/tmp/*.mp3`）经 network audio 本地流转发后投放。
   - 服务端日志确认：`playurl -> play_by_music_url(code=0) -> group_player_play` 链路成功。

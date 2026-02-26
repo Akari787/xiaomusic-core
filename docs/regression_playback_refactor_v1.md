@@ -93,7 +93,7 @@ Field rule:
 
 Environment:
 
-- target: `192.168.7.178:58090`
+- target: `<TEST_SERVER_HOST>:58090`
 - service: `xiaomusic-oauth2` image `akari787/xiaomusic-oauth2:v1.0.3`
 - speaker_id: `981257654`
 - note: on this speaker firmware, `getplayerstatus.status=2` is treated as stopped (non-playing)
@@ -113,7 +113,7 @@ Environment:
 
 - Symptom: web UI play returns failure or no sound for Jellyfin tracks while direct network stream still works.
 - Root cause seen on test server: `hostname` drifted to a non-routable address (`http://192.168.2.5`), making generated proxy URLs unreachable by speaker.
-- Quick check: call `/musicinfo?name=<track>` and verify URL host uses current LAN endpoint (for test server should be `http://192.168.7.178:58090`).
+- Quick check: call `/musicinfo?name=<track>` and verify URL host uses current LAN endpoint (for test server should be `http://<TEST_SERVER_HOST>:58090`).
 - Fix: update setting `hostname` and `public_port`, then retry web UI playback.
 - Verified after fix: multiple Jellyfin tracks played via `/playmusic`, player status reached `status=1` each run.
 
@@ -122,4 +122,4 @@ Environment:
 - Symptom: `/api/v1/play_url` occasionally returned `state=streaming`, but runtime emitted `OSError: [Errno 98] Address in use` when reading `/network_audio/stream/{sid}`.
 - Root cause: `v1` router and `network_audio` router each owned an independent `NetworkAudioRuntime`, both trying to bind the same local stream port.
 - Fix: make `xiaomusic/api/routers/v1.py` reuse `network_audio._get_runtime` so both routers share one runtime instance.
-- Verification on `192.168.7.178`: repeated play/stop no longer hit `Errno 98`; A/B/C/D smoke via `/api/v1/*` all pass.
+- Verification on `<TEST_SERVER_HOST>`: repeated play/stop no longer hit `Errno 98`; A/B/C/D smoke via `/api/v1/*` all pass.

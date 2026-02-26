@@ -18,9 +18,9 @@ def test_detect_base_url_prefers_public_base_url():
 
 
 def test_detect_base_url_uses_request_host_when_not_loopback():
-    req = _request(host="192.168.7.178:58090", scheme="http")
+    req = _request(host="192.168.1.178:58090", scheme="http")
     cfg = _config(public_base_url="")
-    assert detect_base_url(req, cfg) == "http://192.168.7.178:58090"
+    assert detect_base_url(req, cfg) == "http://192.168.1.178:58090"
 
 
 def test_detect_base_url_returns_none_for_localhost_in_container(monkeypatch):

@@ -21,7 +21,7 @@
 ### Test & Docs
 
 - 新增并完善关键回归测试：`test_base_url_detection.py`、`test_config_atomic_write.py`、`test_token_store_atomic.py`、`test_play_session_timer.py` 等。
-- 更新测试服务器回归基线与排障文档，补充 `192.168.7.178` 的 A/B/C/D 记录与 Jellyfin 播放故障说明。
+- 更新测试服务器回归基线与排障文档，补充 A/B/C/D 记录与 Jellyfin 播放故障说明。
 
 ## v1.0.3 (2026-02-16)
 

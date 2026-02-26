@@ -1,6 +1,6 @@
-# Manual Smoke Test (192.168.7.178)
+# Manual Smoke Test (<TEST_SERVER_HOST>)
 
-目标：在测试服务器 `192.168.7.178` 上用 hardened compose 做一次非破坏性验证。
+目标：在测试服务器 `<TEST_SERVER_HOST>` 上用 hardened compose 做一次非破坏性验证。
 
 ## 1) 启动（docker-compose.hardened.yml）
 
@@ -13,10 +13,10 @@ mkdir -p conf music
 docker compose -f docker-compose.hardened.yml up -d --build
 
 curl -fsS http://127.0.0.1:58090/getversion
-curl -fsS http://192.168.7.178:58090/getversion
+curl -fsS http://<TEST_SERVER_HOST>:58090/getversion
 ```
 
-期望：两次都返回版本 JSON，且外部可通过 `http://192.168.7.178:58090` 访问。
+期望：两次都返回版本 JSON，且外部可通过 `http://<TEST_SERVER_HOST>:58090` 访问。
 
 ## 2) CORS 默认仅 localhost
 
