@@ -1,3 +1,28 @@
+## v1.0.4 (2026-02-26)
+
+### Feat
+
+- 新增面向外部调用的稳定播放接口：`/api/v1/play_url`、`/api/v1/stop`、`/api/v1/status`、`/api/v1/test_reachability`、`/api/v1/detect_base_url`。
+- 设置页新增 Base URL 自动检测与可达性测试，默认主题和 Tailwind 主题的播放入口统一走 v1 API。
+
+### Fix
+
+- 修复 OAuth2 扫码登录闭环稳定性：扫码轮询增加超时兜底，状态接口透出 `last_error`，前端可直接显示失败原因。
+- 修复 Base URL 自动检测边界：`localhost/loopback/0.0.0.0` 及容器环境下不再返回 Docker bridge 地址，无法可靠判断时返回 `null`。
+- 修复网络音频 runtime 在不同路由重复实例化导致的端口冲突（`Errno 98: Address in use`）。
+- 修复配置与 token 持久化可靠性：`setting.json`/`auth.json` 改为原子写（`tmp + fsync + os.replace`），降低并发和异常中断导致的半截 JSON 风险。
+- 修复播放定时器竞态：定时器与 `play_session_id` 绑定，避免 stop/pause 后旧定时器误触发下一首。
+
+### Refactor
+
+- 旧播放接口改为 deprecated wrapper 并内部收敛到 `PlaybackFacade`（如 `/playurl`、`/device/stop`、`/network_audio/play_*`）。
+- 网络音频命名与路径继续去 `m1` 化，统一到 `network_audio`/`playback` 语义。
+
+### Test & Docs
+
+- 新增并完善关键回归测试：`test_base_url_detection.py`、`test_config_atomic_write.py`、`test_token_store_atomic.py`、`test_play_session_timer.py` 等。
+- 更新测试服务器回归基线与排障文档，补充 `192.168.7.178` 的 A/B/C/D 记录与 Jellyfin 播放故障说明。
+
 ## v1.0.3 (2026-02-16)
 
 ### Fix

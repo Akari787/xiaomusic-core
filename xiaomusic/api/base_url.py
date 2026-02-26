@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ipaddress
+import os
 import socket
 from typing import Optional
 from urllib.parse import urlparse
@@ -21,13 +23,67 @@ def _normalize_base_url(raw: str) -> Optional[str]:
     return f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
 
 
-def _first_non_loopback_ipv4() -> Optional[str]:
+def _is_container_env() -> bool:
+    if os.path.exists("/.dockerenv"):
+        return True
+    for p in ("/proc/1/cgroup", "/proc/self/cgroup"):
+        try:
+            with open(p, encoding="utf-8") as f:
+                txt = f.read().lower()
+            if "docker" in txt or "kubepods" in txt:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _is_local_host(host: str) -> bool:
+    h = (host or "").strip().lower()
+    if h in {"localhost", "0.0.0.0"}:
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_unspecified
+
+
+def _is_recommended_private_ipv4(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if addr.version != 4:
+        return False
+
+    if not (
+        addr in ipaddress.ip_network("10.0.0.0/8")
+        or addr in ipaddress.ip_network("172.16.0.0/12")
+        or addr in ipaddress.ip_network("192.168.0.0/16")
+    ):
+        return False
+
+    blocked = (
+        "172.17.0.0/16",
+        "172.18.0.0/16",
+        "172.19.0.0/16",
+        "169.254.0.0/16",
+        "100.64.0.0/10",
+        "198.18.0.0/15",
+    )
+    for net in blocked:
+        if addr in ipaddress.ip_network(net):
+            return False
+    return True
+
+
+def _first_recommended_private_ipv4() -> Optional[str]:
     candidates: list[str] = []
     try:
         hostname = socket.gethostname()
         for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None, socket.AF_INET):
             ip = sockaddr[0]
-            if ip and not ip.startswith("127."):
+            if ip and _is_recommended_private_ipv4(ip):
                 candidates.append(ip)
     except Exception:
         pass
@@ -38,13 +94,13 @@ def _first_non_loopback_ipv4() -> Optional[str]:
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
-        if ip and not ip.startswith("127."):
+        if ip and _is_recommended_private_ipv4(ip):
             candidates.insert(0, ip)
     except Exception:
         pass
 
     for ip in candidates:
-        if ip and not ip.startswith("127."):
+        if ip and _is_recommended_private_ipv4(ip):
             return ip
     return None
 
@@ -63,11 +119,18 @@ def detect_base_url(request, config) -> Optional[str]:
         if cand:
             p = urlparse(cand)
             host = (p.hostname or "").lower()
-            if host not in {"0.0.0.0", "localhost"}:
+            if not _is_local_host(host):
                 return cand
 
-            # 3) replace localhost/0.0.0.0 with first non-loopback IPv4
-            ip = _first_non_loopback_ipv4()
+            # 3) localhost/loopback is ambiguous for speaker reachability.
+            # In container env, never guess from localhost.
+            if host in {"localhost", "127.0.0.1", "::1"}:
+                if _is_container_env():
+                    return None
+                return None
+
+            # 0.0.0.0 -> best effort private IPv4 only
+            ip = _first_recommended_private_ipv4()
             if ip:
                 if p.port is not None:
                     return f"{scheme}://{ip}:{p.port}"

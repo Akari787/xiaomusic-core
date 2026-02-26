@@ -18,20 +18,31 @@ def test_detect_base_url_prefers_public_base_url():
 
 
 def test_detect_base_url_uses_request_host_when_not_loopback():
-    req = _request(host="example.local:58090", scheme="https")
+    req = _request(host="192.168.7.178:58090", scheme="http")
     cfg = _config(public_base_url="")
-    assert detect_base_url(req, cfg) == "https://example.local:58090"
+    assert detect_base_url(req, cfg) == "http://192.168.7.178:58090"
 
 
-def test_detect_base_url_rewrites_loopback_host(monkeypatch):
+def test_detect_base_url_returns_none_for_localhost_in_container(monkeypatch):
     req = _request(host="localhost:8090", scheme="http")
     cfg = _config(public_base_url="")
-    monkeypatch.setattr("xiaomusic.api.base_url._first_non_loopback_ipv4", lambda: "192.168.7.178")
-    assert detect_base_url(req, cfg) == "http://192.168.7.178:8090"
+    monkeypatch.setattr("xiaomusic.api.base_url._is_container_env", lambda: True)
+    assert detect_base_url(req, cfg) is None
 
 
-def test_detect_base_url_returns_none_when_no_signal(monkeypatch):
+def test_detect_base_url_returns_none_for_invalid_host_colon():
+    req = _request(host=":58090", scheme="http")
+    cfg = _config(public_base_url="")
+    assert detect_base_url(req, cfg) is None
+
+
+def test_detect_base_url_returns_none_for_loopback_ipv4():
+    req = _request(host="127.0.0.1:58090", scheme="http")
+    cfg = _config(public_base_url="")
+    assert detect_base_url(req, cfg) is None
+
+
+def test_detect_base_url_returns_none_when_no_signal():
     req = _request(host="", scheme="http")
     cfg = _config(public_base_url="")
-    monkeypatch.setattr("xiaomusic.api.base_url._first_non_loopback_ipv4", lambda: None)
     assert detect_base_url(req, cfg) is None
