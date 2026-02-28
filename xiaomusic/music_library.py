@@ -932,6 +932,23 @@ class MusicLibrary:
             asyncio.ensure_future(self._gen_all_music_tag(only_items))
             self.log.info("启动后台构建 tag cache")
 
+    @staticmethod
+    def _file_tag_signature(file_path: str) -> dict:
+        try:
+            return {
+                "__source_mtime": int(os.path.getmtime(file_path)),
+                "__source_size": int(os.path.getsize(file_path)),
+            }
+        except OSError:
+            return {"__source_mtime": 0, "__source_size": 0}
+
+    def _need_refresh_tag(self, tag: dict, file_path: str) -> bool:
+        sig = self._file_tag_signature(file_path)
+        return (
+            int(tag.get("__source_mtime", 0)) != sig["__source_mtime"]
+            or int(tag.get("__source_size", 0)) != sig["__source_size"]
+        )
+
     async def _gen_all_music_tag(self, only_items=None):
         """生成所有音乐标签（异步）
 
@@ -948,12 +965,23 @@ class MusicLibrary:
         ignore_tag_absolute_dirs = self.config.get_ignore_tag_dirs()
         self.log.info(f"ignore_tag_absolute_dirs: {ignore_tag_absolute_dirs}")
 
+        scanned = 0
+        refreshed = 0
+        skipped = 0
+        build_start = time.perf_counter()
+
         for name, file_or_url in only_items.items():
             # 跳过网络音乐
             if self.is_web_music(name):
                 continue
+            scanned += 1
             start = time.perf_counter()
-            if name not in all_music_tags:
+            need_refresh = True
+            if name in all_music_tags and not self._need_refresh_tag(
+                all_music_tags[name], file_or_url
+            ):
+                need_refresh = False
+            if need_refresh:
                 try:
                     if os.path.exists(file_or_url) and not_in_dirs(
                         file_or_url, ignore_tag_absolute_dirs
@@ -961,10 +989,14 @@ class MusicLibrary:
                         all_music_tags[name] = extract_audio_metadata(
                             file_or_url, self.config.picture_cache_path
                         )
+                        all_music_tags[name].update(self._file_tag_signature(file_or_url))
+                        refreshed += 1
                     else:
                         self.log.info(f"{name} {file_or_url} 无法更新 tag")
                 except BaseException as e:
                     self.log.exception(f"{e} {file_or_url} error {type(file_or_url)}!")
+            else:
+                skipped += 1
 
             # 获取并缓存歌曲时长（仅本地音乐）
             if name in all_music_tags and "duration" not in all_music_tags[name]:
@@ -986,7 +1018,14 @@ class MusicLibrary:
         # 刷新 tag cache
         self.try_save_tag_cache()
         self._tag_generation_task = False
-        self.log.info("tag 更新完成")
+        elapsed_ms = int((time.perf_counter() - build_start) * 1000)
+        self.log.info(
+            "tag 更新完成 benchmark scanned=%s refreshed=%s skipped=%s cost_ms=%s",
+            scanned,
+            refreshed,
+            skipped,
+            elapsed_ms,
+        )
 
     # ==================== 辅助方法 ====================
 
