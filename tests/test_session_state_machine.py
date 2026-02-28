@@ -19,6 +19,7 @@ def test_update_state_updates_transition_and_error_fields():
 def test_stop_session_sets_stopped_at():
     mgr = StreamSessionManager()
     s = mgr.create_session("https://a")
+    mgr.update_state(s.sid, "resolving", now_ts=110)
     mgr.update_state(s.sid, "streaming", now_ts=120)
     mgr.update_state(s.sid, "stopped", now_ts=130)
 

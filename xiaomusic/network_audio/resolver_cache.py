@@ -80,3 +80,11 @@ class ResolverCache:
                 "evictions": self._evictions,
                 "last_prune_at": self._last_prune_at,
             }
+
+    def invalidate(self, normalized_url: str) -> bool:
+        with self._lock:
+            existed = self._data.pop(normalized_url, None) is not None
+            if existed:
+                self._evictions += 1
+                self._last_prune_at = int(time.time())
+            return existed

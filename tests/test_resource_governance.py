@@ -38,6 +38,7 @@ def test_idle_timeout_sweep_stops_old_active_session(monkeypatch):
     runtime.idle_timeout_seconds = 120
 
     s = runtime.session_manager.create_session("https://x")
+    runtime.session_manager.update_state(s.sid, "resolving", now_ts=90)
     runtime.session_manager.update_state(s.sid, "streaming", now_ts=100, last_client_at=100)
 
     monkeypatch.setattr(runtime.audio_streamer, "stop_stream", lambda sid: runtime.session_manager.stop_session(sid))

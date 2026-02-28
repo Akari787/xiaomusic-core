@@ -31,6 +31,7 @@ class NetworkAudioRuntime:
         self._last_cleanup_at: float | None = None
         self.max_active_sessions = int(os.getenv("XIAOMUSIC_NETWORK_AUDIO_MAX_ACTIVE_SESSIONS", "3"))
         self.idle_timeout_seconds = int(os.getenv("XIAOMUSIC_NETWORK_AUDIO_IDLE_TIMEOUT_SECONDS", "120"))
+        self.resolve_timeout_seconds = int(os.getenv("XIAOMUSIC_NETWORK_AUDIO_RESOLVE_TIMEOUT_SECONDS", "15"))
         self._lock = Lock()
         self._strategy = getattr(xiaomusic, "link_playback_strategy", None)
         if self._strategy is None:
@@ -49,6 +50,7 @@ class NetworkAudioRuntime:
             reconnect_policy=ReconnectPolicy(base_delay_seconds=1, max_delay_seconds=3, max_retries=30),
             source_read_timeout_seconds=15,
             relay_mode="ffmpeg",
+            on_stream_failed=self._on_stream_failed,
         )
         self.resolver = Resolver()
         self.resolver_cache = ResolverCache(
@@ -100,6 +102,7 @@ class NetworkAudioRuntime:
         info = strategy.classify(url)
         out = self.play_service.play_url(info.normalized_url, no_cache=no_cache)
         if not out.get("ok"):
+            self._invalidate_cache_on_stream_failure(info.normalized_url, out.get("error_code") or "")
             return out
 
         sid = out["session"]["sid"]
@@ -209,14 +212,30 @@ class NetworkAudioRuntime:
 
     def sweep_idle_sessions(self, now_ts: int | None = None) -> dict[str, int]:
         timeout = int(self.idle_timeout_seconds or 0)
+        resolve_timeout = int(self.resolve_timeout_seconds or 0)
         if timeout <= 0:
-            return {"stopped": 0}
+            timeout = 0
 
         now = int(now_ts if now_ts is not None else time.time())
         active_states = {"creating", "resolving", "streaming", "reconnecting"}
         stopped = 0
+        resolve_timeouts = 0
         for sess in self.session_manager.list_sessions():
             if (sess.state or "").lower() not in active_states:
+                continue
+            if (sess.state or "").lower() == "resolving" and resolve_timeout > 0:
+                last = int(sess.last_transition_at or 0)
+                if last > 0 and now - last > resolve_timeout:
+                    changed = self.session_manager.update_state(
+                        sess.sid,
+                        "failed",
+                        error_code="E_RESOLVE_TIMEOUT",
+                        now_ts=now,
+                    )
+                    if changed is not None:
+                        resolve_timeouts += 1
+                    continue
+            if timeout <= 0:
                 continue
             last_client_at = int(sess.last_client_at or 0)
             if last_client_at <= 0:
@@ -225,4 +244,29 @@ class NetworkAudioRuntime:
                 continue
             self.audio_streamer.stop_stream(sess.sid)
             stopped += 1
-        return {"stopped": stopped}
+        return {"stopped": stopped, "resolve_timeouts": resolve_timeouts}
+
+    @staticmethod
+    def _is_stream_level_error(error_code: str | None) -> bool:
+        ec = str(error_code or "")
+        if not ec:
+            return False
+        if ec in {"E_TOO_MANY_SESSIONS", "E_INTERNAL"}:
+            return False
+        if ec.startswith("E_STREAM") or ec.startswith("E_FFMPEG"):
+            return True
+        return False
+
+    def _invalidate_cache_on_stream_failure(self, normalized_url: str, error_code: str | None) -> None:
+        if not self._is_stream_level_error(error_code):
+            return
+        self.resolver_cache.invalidate(normalized_url)
+
+    def _on_stream_failed(self, sid: str, error_code: str) -> None:
+        sess = self.session_manager.get_session(sid)
+        if sess is None:
+            return
+        key = str(sess.input_url or "")
+        if not key:
+            return
+        self._invalidate_cache_on_stream_failure(key, error_code)

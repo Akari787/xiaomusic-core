@@ -6,6 +6,7 @@ import threading
 import time
 import subprocess
 from urllib.request import urlopen
+from typing import Callable
 
 from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer
 from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy
@@ -20,12 +21,14 @@ class AudioStreamer:
         reconnect_policy: ReconnectPolicy,
         source_read_timeout_seconds: int = 15,
         relay_mode: str = "http",
+        on_stream_failed: Callable[[str, str], None] | None = None,
     ) -> None:
         self.session_manager = session_manager
         self.stream_server = stream_server
         self.reconnect_policy = reconnect_policy
         self.source_read_timeout_seconds = source_read_timeout_seconds
         self.relay_mode = relay_mode
+        self.on_stream_failed = on_stream_failed
         self._threads: dict[str, threading.Thread] = {}
         self._stop_flags: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
@@ -111,6 +114,11 @@ class AudioStreamer:
             self.stream_server.close_stream_channel(sid)
             if failed and not stop_flag.is_set():
                 self.session_manager.update_state(sid, "failed", error_code="E_STREAM_START_FAILED")
+                if self.on_stream_failed is not None:
+                    try:
+                        self.on_stream_failed(sid, "E_STREAM_START_FAILED")
+                    except Exception:
+                        pass
             else:
                 self.session_manager.stop_session(sid)
 

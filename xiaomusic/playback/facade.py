@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from typing import Any, Callable
 
 
@@ -163,11 +163,12 @@ class PlaybackFacade:
         }
 
     async def status(self, target: dict[str, Any]) -> dict[str, Any]:
+        self._runtime().sweep_idle_sessions()
         sid = str(target.get("sid") or "")
         speaker_id = str(target.get("speaker_id") or "")
 
         if sid:
-            session = self._runtime().session_manager.get_session(sid)
+            session: Any = self._runtime().session_manager.get_session(sid)
             if session is None:
                 return {
                     "sid": sid,
@@ -181,16 +182,14 @@ class PlaybackFacade:
                 }
             raw_session: Any = session
             if is_dataclass(session):
-                try:
-                    raw_session = asdict(session)
-                except Exception:
-                    raw_session = session
+                raw_session = {f.name: getattr(session, f.name, None) for f in fields(session)}
+            meta = raw_session.get("meta", {}) if isinstance(raw_session, dict) else {}
             return {
                 "sid": sid,
                 "speaker_id": speaker_id,
-                "state": str(session.state),
-                "title": str(session.meta.get("title") or "") or None,
-                "stream_url": str(session.stream_url or ""),
+                "state": str(raw_session.get("state") if isinstance(raw_session, dict) else "unknown"),
+                "title": str(meta.get("title") or "") or None,
+                "stream_url": str(raw_session.get("stream_url") if isinstance(raw_session, dict) else ""),
                 "error_code": None,
                 "ok": True,
                 "raw": {"session": raw_session},

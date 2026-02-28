@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from threading import Lock
 from uuid import uuid4
@@ -11,6 +12,19 @@ from xiaomusic.network_audio.contracts import SESSION_STATES, Session
 
 def _now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+allowed_transitions: dict[str, list[str]] = {
+    "creating": ["resolving", "failed"],
+    "resolving": ["streaming", "failed"],
+    "streaming": ["reconnecting", "stopped", "failed"],
+    "reconnecting": ["streaming", "failed", "stopped"],
+    "stopped": [],
+    "failed": [],
+}
+
+
+_log = logging.getLogger(__name__)
 
 
 class StreamSessionManager:
@@ -45,7 +59,7 @@ class StreamSessionManager:
             return session
 
     def stop_session(self, sid: str) -> Session | None:
-        return self.update_state(sid, "stopped")
+        return self.update_state(sid, "stopped", force=True)
 
     @staticmethod
     def _now_ts() -> int:
@@ -58,6 +72,7 @@ class StreamSessionManager:
         *,
         error_code: str | None = None,
         now_ts: int | None = None,
+        force: bool = False,
         **metrics,
     ) -> Session | None:
         if new_state == "running":
@@ -71,6 +86,17 @@ class StreamSessionManager:
                 return None
 
             ts = int(now_ts if now_ts is not None else self._now_ts())
+            current_state = (session.state or "").lower()
+            if current_state == new_state:
+                pass
+            elif (not force) and new_state not in allowed_transitions.get(current_state, []):
+                _log.warning(
+                    "reject_illegal_transition sid=%s from=%s to=%s",
+                    sid,
+                    current_state,
+                    new_state,
+                )
+                return None
             session.state = new_state
             session.updated_at = _now_iso()
             session.last_transition_at = ts
@@ -91,6 +117,13 @@ class StreamSessionManager:
             return session
 
     def set_state(self, sid: str, state: str) -> Session | None:
+        if state == "running":
+            cur = self.get_session(sid)
+            if cur is not None and (cur.state or "").lower() == "creating":
+                self.update_state(sid, "resolving")
+                return self.update_state(sid, "streaming")
+        if state == "stopped":
+            return self.update_state(sid, "stopped", force=True)
         return self.update_state(sid, state)
 
     def set_stream_url(self, sid: str, stream_url: str) -> Session | None:
