@@ -1,15 +1,47 @@
 from __future__ import annotations
 
+from pydantic import BaseModel
+
 from xiaomusic.api.models import ApiPlaybackResponse
 from xiaomusic.network_audio.contracts import ERROR_CODES
 
 
 def error_message(error_code: str | None, fallback: str | None = None) -> str | None:
-    if error_code and error_code in ERROR_CODES:
-        return ERROR_CODES[error_code]
-    if error_code and not fallback:
-        return error_code
-    return fallback
+    if fallback is not None:
+        return fallback
+    if not error_code:
+        return None
+    return ERROR_CODES.get(error_code, "Unknown error")
+
+
+def _payload_to_dict(payload: dict | BaseModel | None) -> dict:
+    if payload is None:
+        return {}
+    if isinstance(payload, BaseModel):
+        return payload.model_dump()
+    return dict(payload)
+
+
+def make_ok(payload: dict | BaseModel | None = None, message: str | None = None) -> dict:
+    body = _payload_to_dict(payload)
+    body["ok"] = True
+    body["success"] = True
+    body["error_code"] = None
+    body["message"] = message
+    return body
+
+
+def make_error(
+    error_code: str,
+    message: str | None = None,
+    payload: dict | BaseModel | None = None,
+) -> dict:
+    body = _payload_to_dict(payload)
+    body["ok"] = False
+    body["success"] = False
+    body["error_code"] = error_code
+    body["message"] = error_message(error_code, message)
+    return body
 
 
 def playback_response(
@@ -27,11 +59,12 @@ def playback_response(
     message: str | None = None,
     deprecated: bool | None = None,
 ) -> dict:
+    err = None if ok else (error_code or "E_INTERNAL")
     payload = ApiPlaybackResponse(
         ok=ok,
         success=ok,
-        error_code=error_code,
-        message=error_message(error_code, message),
+        error_code=err,
+        message=error_message(err, message),
         sid=sid,
         speaker_id=speaker_id,
         state=state,

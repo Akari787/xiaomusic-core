@@ -45,8 +45,23 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 
 ### API 收敛说明
 
-- 对外稳定接口统一推荐使用 `/api/v1/*`。
-- `/network_audio/play_url`、`/network_audio/play_link`、`/network_audio/stop` 为兼容 wrapper（deprecated），会继续兼容但不建议新接入。
+- 控制面接口已统一为 `/api/v1/*`。
+- **Breaking Change**：已移除 `/network_audio/play_url`、`/network_audio/play_link`、`/network_audio/stop`。
+- 媒体流回放路径保留为 `/network_audio/stream/{sid}`。
+
+### API v1 调用示例
+
+```bash
+curl -X POST http://<HOST>:<PORT>/api/v1/play_url \
+  -H "Content-Type: application/json" \
+  -d '{"speaker_id":"<SPEAKER_ID>","url":"https://example.com/test.mp3"}'
+
+curl -X POST http://<HOST>:<PORT>/api/v1/stop \
+  -H "Content-Type: application/json" \
+  -d '{"speaker_id":"<SPEAKER_ID>"}'
+
+curl "http://<HOST>:<PORT>/api/v1/status?speaker_id=<SPEAKER_ID>"
+```
 
 ## 🐳 Docker 使用说明
 

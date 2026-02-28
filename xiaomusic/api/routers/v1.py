@@ -16,8 +16,7 @@ from xiaomusic.api.models import (
     ApiV1ReachabilityRequest,
     ApiV1StopRequest,
 )
-from xiaomusic.api.response_utils import playback_response
-from xiaomusic.network_audio.contracts import ERROR_CODES
+from xiaomusic.api.response_utils import make_error, make_ok, playback_response
 from xiaomusic.playback.facade import PlaybackFacade
 
 router = APIRouter(dependencies=[Depends(verification)])
@@ -80,20 +79,12 @@ def _playback_from_facade(out: dict, *, fallback_state: str = "unknown", depreca
 async def api_v1_detect_base_url(request: Request):
     base = detect_base_url(request, xiaomusic.getconfig())
     if base:
-        return {
-            "ok": True,
-            "success": True,
-            "error_code": None,
-            "message": "检测到推荐地址",
-            "base_url": base,
-        }
-    return {
-        "ok": False,
-        "success": True,
-        "error_code": "E_INTERNAL",
-        "base_url": None,
-        "message": "自动检测失败，请手动填写",
-    }
+        return make_ok(payload={"base_url": base}, message="检测到推荐地址")
+    return make_error(
+        "E_INTERNAL",
+        message="自动检测失败，请手动填写",
+        payload={"base_url": None},
+    )
 
 
 @router.post("/api/v1/play_url")
@@ -189,37 +180,32 @@ async def api_v1_sessions_cleanup(data: ApiSessionsCleanupRequest):
         max_sessions=int(data.max_sessions or 100),
         ttl_seconds=data.ttl_seconds,
     )
-    return {
-        "ok": True,
-        "success": True,
-        "error_code": None,
-        "message": "cleanup done",
-        "removed": ret.get("removed", 0),
-        "remaining": ret.get("remaining", 0),
-    }
+    return make_ok(
+        payload={
+            "removed": ret.get("removed", 0),
+            "remaining": ret.get("remaining", 0),
+        },
+        message="cleanup done",
+    )
 
 
 @router.post("/api/v1/test_reachability")
 async def api_v1_test_reachability(request: Request, data: ApiV1ReachabilityRequest):
     base_url = data.base_url or detect_base_url(request, xiaomusic.getconfig())
     if not base_url:
-        return {
-            "ok": False,
-            "success": False,
-            "reachable": False,
-            "error_code": "E_INTERNAL",
-            "message": "自动检测失败，请手动填写",
-        }
+        return make_error(
+            "E_INTERNAL",
+            message="自动检测失败，请手动填写",
+            payload={"reachable": False},
+        )
 
     parsed = urlparse(base_url)
     if not parsed.scheme or not parsed.hostname:
-        return {
-            "ok": False,
-            "success": False,
-            "reachable": False,
-            "error_code": "E_INTERNAL",
-            "message": "base_url 无效",
-        }
+        return make_error(
+            "E_INTERNAL",
+            message="base_url 无效",
+            payload={"reachable": False},
+        )
 
     test_url = f"{base_url.rstrip('/')}/static/silence.mp3"
     try:
@@ -229,22 +215,22 @@ async def api_v1_test_reachability(request: Request, data: ApiV1ReachabilityRequ
             options={"mode": "direct"},
         )
     except Exception:
-        return {
-            "ok": False,
-            "success": False,
-            "reachable": False,
-            "error_code": "E_STREAM_NOT_FOUND",
-            "message": ERROR_CODES["E_STREAM_NOT_FOUND"],
-        }
+        return make_error(
+            "E_STREAM_NOT_FOUND",
+            payload={"reachable": False, "test_url": test_url, "sid": ""},
+        )
     await asyncio.sleep(2)
     st = await _get_facade().status({"speaker_id": data.speaker_id})
     reachable = bool(out.get("ok")) and str(st.get("state")) in {"1", "playing", "streaming"}
-    return {
-        "ok": reachable,
-        "success": True,
+    payload = {
         "reachable": reachable,
         "test_url": test_url,
         "sid": out.get("sid") or "",
-        "error_code": None if reachable else (out.get("error_code") or "E_XIAOMI_PLAY_FAILED"),
-        "message": "地址可达" if reachable else "地址不可达，请检查网络与端口",
     }
+    if reachable:
+        return make_ok(payload=payload, message="地址可达")
+    return make_error(
+        out.get("error_code") or "E_XIAOMI_PLAY_FAILED",
+        message="地址不可达，请检查网络与端口",
+        payload=payload,
+    )

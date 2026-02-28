@@ -7,12 +7,12 @@
 
 ## 手动验收步骤（真机）
 
-1. 启动网络音频服务实例（含 `/network_audio/play_link`、`/network_audio/healthz`、`/network_audio/sessions`）。
-2. 使用以下任一 URL 请求 `POST /network_audio/play_link`：
+1. 启动服务（控制面使用 `/api/v1/*`，观测接口保留 `/network_audio/healthz`、`/network_audio/sessions`）。
+2. 使用以下任一 URL 请求 `POST /api/v1/play_url`：
    - `https://www.bilibili.com/video/BV14EcazWEna`
    - `https://www.youtube.com/watch?v=iPnaF8Ngk3Q`
    - `https://www.youtube.com/watch?v=vNG3-GRjrAo`
-3. 记录返回的 `session.sid` 与 `session.stream_url`（应为 `/network_audio/stream/{sid}`）。
+3. 记录返回的 `sid` 与 `stream_url`（应为 `/network_audio/stream/{sid}`）。
 4. 由服务自动调用小爱投放（无需手工二次调用 adapter）。
 5. 观察小爱是否在 30 秒内出声。
 6. 查询 `/sessions`，确认 `state` 与 `reconnect_count` 可观测。
@@ -33,7 +33,7 @@
 - 环境：
 - URL：
 - speaker_id：
-- `network_audio/play_link` 返回：
+- `/api/v1/play_url` 返回：
 - XiaomiAdapter 返回：
 - 出声耗时：
 - 停止结果：
