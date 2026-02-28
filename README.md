@@ -176,24 +176,22 @@ npm run build
 ```
 
 2. 使用 compose 挂载 `webui/dist`（示例已包含）。
-3. 启动后访问：`/webui/`。
+3. 启动后访问根路径 `/`（会自动进入 `/webui/`）。
 
 说明：
 
 - 后端会在检测到 `webui/dist` 存在时自动挂载 `/webui`（支持 SPA history fallback）。
 - 可通过 `XIAOMUSIC_WEBUI_DIST_PATH` 自定义构建产物路径。
 
-### 模式 B：完全分离部署（文档方案）
-
-- 使用 Nginx/Node 托管 `webui/dist`
-- 后端 API 独立部署
-- 通过 `VITE_API_BASE_URL` 指向后端地址（或前置反向代理统一 `/api`）
-
 ### 主题策略
 
 - 当前仅支持 Default 主题。
-- 历史多主题入口已标记弃用并从主入口移除。
-- 后续如需开放用户主题，将基于 `webui/src/theme` 的 token 标准扩展。
+
+### API 响应契约（当前阶段）
+
+- 本阶段仅做内部统一封装（Response 工具层 + 异常处理收敛）。
+- 对外响应契约保持不变（继续兼容现有 `ok/success/error_code/message` 及历史结构）。
+- 暂不引入 `code/message/data` 全量切换；如需变更，将在后续独立版本（如 v2）评估。
 
 ## ⚠️ 安全建议
 
