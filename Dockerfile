@@ -122,6 +122,8 @@ EXPOSE 8090
 # 设置环境变量
 ENV TZ=Asia/Shanghai
 ENV PATH=/app/.venv/bin:/usr/local/bin:$PATH
+# Runtime secrets are injected via environment/.env (API_SECRET, HTTP_AUTH_HASH).
+ENV PYTHONUNBUFFERED=1
 
 # 直接启动xiaomusic应用
 CMD ["/app/.venv/bin/python3", "/app/xiaomusic.py"]

@@ -19,6 +19,8 @@
 - 修复 API runtime provider 耦合点，降低路由间隐式依赖导致的不确定行为。
 - 修复 HTTP Basic 明文校验风险：改为基于 `HTTP_AUTH_HASH` 的 bcrypt 校验，并提供哈希生成脚本。
 - 修复 analytics API Secret 硬编码：改为通过环境变量 `API_SECRET` 注入。
+- 修复外部二维码登录链路降级能力：新增超时、指数退避重试与结构化错误返回（含 error_id）。
+- 重构超大文件布局：`online_music.py`、`js_plugin_manager.py` 拆分到 `services/providers/managers` 并保留兼容入口。
 
 ## v1.0.4 (2026-02-26)
 

@@ -108,6 +108,19 @@ mkdir -p conf music
 docker compose -f docker-compose.hardened.yml up -d --build
 ```
 
+4) 使用 profile 化 compose（production/test）：
+
+```bash
+# 先准备 .env（必须包含 API_SECRET 与 HTTP_AUTH_HASH）
+python scripts/generate_password_hash.py
+
+# 生产
+docker compose --profile production up -d
+
+# 测试
+docker compose --profile test up -d
+```
+
 2) 使用 Docker Hub 镜像（不本地 build）：
 
 ```yaml

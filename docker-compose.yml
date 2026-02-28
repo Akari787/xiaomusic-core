@@ -1,0 +1,36 @@
+services:
+  xiaomusic-production:
+    profiles: ["production"]
+    image: akari787/xiaomusic-oauth2:latest
+    container_name: xiaomusic-oauth2
+    restart: unless-stopped
+    ports:
+      - "58090:8090"
+    env_file:
+      - .env
+    environment:
+      TZ: Asia/Shanghai
+      XIAOMUSIC_PUBLIC_PORT: 58090
+      API_SECRET: ${API_SECRET:?API_SECRET is required}
+      HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:?HTTP_AUTH_HASH is required}
+    volumes:
+      - ./conf:/app/conf
+      - ./music:/app/music
+
+  xiaomusic-test:
+    profiles: ["test"]
+    image: akari787/xiaomusic-oauth2:latest
+    container_name: xiaomusic-oauth2-test
+    restart: unless-stopped
+    ports:
+      - "58091:8090"
+    env_file:
+      - .env
+    environment:
+      TZ: Asia/Shanghai
+      XIAOMUSIC_PUBLIC_PORT: 58091
+      API_SECRET: ${API_SECRET:?API_SECRET is required}
+      HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:?HTTP_AUTH_HASH is required}
+    volumes:
+      - ./conf:/app/conf
+      - ./music:/app/music
