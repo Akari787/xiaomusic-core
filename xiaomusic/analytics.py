@@ -8,6 +8,7 @@ import aiohttp
 from ga4mp import GtagMP
 
 from xiaomusic import __version__
+from xiaomusic.core.settings import get_settings
 from xiaomusic.security.redaction import redact_text
 
 MAX_PARAM_LENGTH = 100
@@ -25,8 +26,10 @@ class Analytics:
         if self.gtag is not None:
             return
 
+        settings = get_settings()
+
         gtag = GtagMP(
-            api_secret="sVRsf3T9StuWc-ZiWZxDVA",
+            api_secret=settings.API_SECRET,
             measurement_id="G-Z09NC1K7ZW",
             client_id="",
         )

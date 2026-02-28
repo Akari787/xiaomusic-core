@@ -103,6 +103,7 @@ def main():
         app as HttpApp,
     )
     from xiaomusic.config import Config
+    from xiaomusic.core.settings import get_settings
     from xiaomusic.xiaomusic import XiaoMusic
 
     _enforce_single_worker()
@@ -287,6 +288,8 @@ def main():
     import uvicorn
 
     async def async_main(config: Config) -> None:
+        # Validate required runtime secrets at startup.
+        get_settings()
         bind_host = "0.0.0.0"
         _warn_if_httpauth_unsafe(config, bind_host, logging.getLogger("xiaomusic"))
 

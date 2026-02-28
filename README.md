@@ -151,6 +151,7 @@ docker compose up -d --force-recreate
 - 默认禁用危险能力：`exec#...`（需显式开启并配置白名单）。
 - 默认关闭遥测：`enable_analytics=false`。
 - 建议启用 HTTP Basic：设置 `disable_httpauth=false` 并配置强口令。
+- 从 `v1.0.5` 起建议改为哈希认证：设置 `HTTP_AUTH_HASH`（bcrypt），不再使用明文密码比对。
 - `conf/auth.json` 仅限容器/宿主可读写（Linux 推荐权限 `600`）。
 - Jellyfin 建议使用可被音箱访问的 HTTPS 域名；若是内网地址可启用自动代理降级。
 - Docker 推荐最小权限运行：非 root、`read_only`、`cap_drop: [ALL]`、`no-new-privileges`。
@@ -165,6 +166,7 @@ docker compose up -d --force-recreate
 - 出站访问（SSRF 防护）：默认拒绝所有出站请求。
 - 域名白名单优先级：`outbound_allowlist_domains` > `allowlist_domains`（后者保留兼容但视为 deprecated）。
 - CORS 默认仅允许 `http://localhost`、`http://127.0.0.1`。
+- 启动必须注入以下环境变量（支持 `.env`）：`API_SECRET`、`HTTP_AUTH_HASH`。
 - Self-update 默认关闭：`enable_self_update=false`。
 
 ### 迁移说明（安全默认）

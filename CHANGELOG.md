@@ -17,6 +17,8 @@
 
 - 修复播放结束不自动切歌的关键竞态：认证 keepalive 重登后复用同 DID 设备实例，不再误取消正在播放会话的下一首定时器。
 - 修复 API runtime provider 耦合点，降低路由间隐式依赖导致的不确定行为。
+- 修复 HTTP Basic 明文校验风险：改为基于 `HTTP_AUTH_HASH` 的 bcrypt 校验，并提供哈希生成脚本。
+- 修复 analytics API Secret 硬编码：改为通过环境变量 `API_SECRET` 注入。
 
 ## v1.0.4 (2026-02-26)
 

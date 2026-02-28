@@ -18,6 +18,9 @@ from fastapi.security import (
     HTTPBasicCredentials,
 )
 from fastapi.staticfiles import StaticFiles
+import bcrypt
+
+from xiaomusic.core.settings import get_settings
 
 if TYPE_CHECKING:
     import logging
@@ -109,11 +112,14 @@ def verification(
     is_correct_username = secrets.compare_digest(
         current_username_bytes, correct_username_bytes
     )
-    current_password_bytes = credentials.password.encode("utf8")
-    correct_password_bytes = config.httpauth_password.encode("utf8")
-    is_correct_password = secrets.compare_digest(
-        current_password_bytes, correct_password_bytes
-    )
+    settings = get_settings()
+    try:
+        is_correct_password = bcrypt.checkpw(
+            credentials.password.encode("utf8"),
+            settings.HTTP_AUTH_HASH.encode("utf8"),
+        )
+    except ValueError:
+        is_correct_password = False
     if not (is_correct_username and is_correct_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
