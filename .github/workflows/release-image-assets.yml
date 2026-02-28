@@ -61,7 +61,6 @@ jobs:
             .
 
           docker save "$IMAGE_LOCAL" | gzip -1 > "$OUT_TGZ"
-          sha256sum "$OUT_TGZ" > "${OUT_TGZ}.sha256"
 
       - name: Upload assets to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -69,4 +68,3 @@ jobs:
           tag_name: ${{ inputs.tag }}
           files: |
             dist/*.tar.gz
-            dist/*.sha256

@@ -62,7 +62,6 @@ jobs:
         run: |
           OUT="xiaomusic-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz"
           docker save ${{ env.LOCAL_IMAGE }}:${{ github.ref_name }}-${{ matrix.platform }} | gzip -1 > "${OUT}"
-          sha256sum "${OUT}" > "${OUT}.sha256"
 
       - name: Upload Docker images as artifacts
         uses: actions/upload-artifact@v4
@@ -70,7 +69,6 @@ jobs:
           name: docker-images-${{ matrix.platform }}
           path: |
             xiaomusic-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz
-            xiaomusic-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz.sha256
           retention-days: 1
 
   # 推送多架构 Docker 镜像到 Docker Hub
@@ -175,7 +173,7 @@ jobs:
         run: |
           RELEASE_NAME=${{ github.ref_name }}
 
-          FILES=$(find . -type f \( -name "xiaomusic-*.tar.gz" -o -name "xiaomusic-*.tar.gz.sha256" \))
+          FILES=$(find . -type f -name "xiaomusic-*.tar.gz")
           for FILE in ${FILES}; do
             echo "type upload ${FILE}"
             gh release upload "${RELEASE_NAME}" "${FILE}" --clobber
