@@ -63,6 +63,97 @@ curl -X POST http://<HOST>:<PORT>/api/v1/stop \
 curl "http://<HOST>:<PORT>/api/v1/status?speaker_id=<SPEAKER_ID>"
 ```
 
+### API 详细说明
+
+以下为当前推荐的控制面 API（统一使用 `/api/v1/*`）：
+
+1) `POST /api/v1/play_url`
+
+- 用途：播放任意可解析音频链接（直链、B 站、YouTube 等）。
+- 请求体：
+
+```json
+{
+  "speaker_id": "<SPEAKER_ID>",
+  "url": "https://example.com/test.mp3",
+  "options": {
+    "no_cache": false
+  }
+}
+```
+
+- 关键响应字段：
+  - `ok/success`：是否成功（始终保持 `success == ok`）
+  - `sid`：会话 ID，用于后续 status/stop
+  - `state`：当前状态（如 `streaming`）
+  - `stream_url`：内部回放地址（通常为 `/network_audio/stream/{sid}`）
+  - `error_code/message`：失败时错误信息
+  - `cache_hit/resolve_ms`：解析缓存命中与解析耗时观测字段
+
+2) `POST /api/v1/stop`
+
+- 用途：停止播放。
+- 请求体（推荐传 `sid`，也可仅传 `speaker_id`）：
+
+```json
+{
+  "sid": "s_xxx",
+  "speaker_id": "<SPEAKER_ID>"
+}
+```
+
+- 关键响应字段：`ok/success`、`sid`、`state`（期望 `stopped`）、`error_code/message`。
+
+3) `GET /api/v1/status`
+
+- 用途：查询会话或设备当前状态。
+- 查询参数：
+  - `sid`：按会话查询
+  - `speaker_id`：按设备查询（无 `sid` 时常用）
+
+- 关键响应字段：
+  - 基础：`ok/success/error_code/message/sid/speaker_id/state`
+  - 可观测：`stage`、`last_transition_at`、`last_error_code`、`reconnect_count`、`cache_hit`、`resolve_ms`
+
+4) `POST /api/v1/test_reachability`
+
+- 用途：检测 Base URL 可达性（用于部署排障）。
+- 请求体：
+
+```json
+{
+  "speaker_id": "<SPEAKER_ID>",
+  "base_url": "http://<HOST>:<PORT>"
+}
+```
+
+- 关键响应字段：`ok/success`、`reachable`、`test_url`、`sid`、`error_code/message`。
+
+5) `GET /api/v1/detect_base_url`
+
+- 用途：自动检测推荐的 base_url。
+- 关键响应字段：`ok/success`、`base_url`、`error_code/message`。
+
+6) `POST /api/v1/sessions/cleanup`
+
+- 用途：手动触发会话清理。
+- 请求体（可选）：
+
+```json
+{
+  "max_sessions": 100,
+  "ttl_seconds": 3600
+}
+```
+
+- 关键响应字段：`ok/success`、`removed`、`remaining`、`error_code/message`。
+
+非控制面接口（仍保留）：
+
+- `GET /network_audio/stream/{sid}`：音频流回放通道
+- `GET /network_audio/healthz`：运行健康与缓存/会话观测
+- `GET /network_audio/sessions`：会话列表观测
+
 ## 🐳 Docker 使用说明
 
 本仓库已发布 Docker Hub 镜像：`akari787/xiaomusic-oauth2`（多架构：`linux/amd64`、`linux/arm64`、`linux/arm/v7`）。
@@ -108,7 +199,7 @@ mkdir -p conf music
 docker compose -f docker-compose.hardened.yml up -d --build
 ```
 
-4) 使用 profile 化 compose（production/test）：
+2) 使用 profile 化 compose（production/test）：
 
 ```bash
 # 先准备 .env（必须包含 API_SECRET 与 HTTP_AUTH_HASH）
@@ -121,7 +212,7 @@ docker compose --profile production up -d
 docker compose --profile test up -d
 ```
 
-2) 使用 Docker Hub 镜像（不本地 build）：
+3) 使用 Docker Hub 镜像（不本地 build）：
 
 ```yaml
 services:
@@ -143,7 +234,7 @@ services:
 docker compose up -d
 ```
 
-3) 常用运维命令：
+4) 常用运维命令：
 
 ```bash
 # 查看版本

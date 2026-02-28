@@ -1,68 +1,85 @@
-# TEST REPORT
+# 测试报告
 
-## Execution
+## 一、执行信息
 
-- Date: 2026-02-28
-- Environment: test server `192.168.7.178`
-- Image: `akari787/xiaomusic-oauth2:v1.0.5`
-- Scope: security hardening + external degrade + tag cache incremental + module split compatibility
+- 执行日期：2026-02-28
+- 环境：测试服务器 `192.168.7.178`
+- 镜像版本：`akari787/xiaomusic-oauth2:v1.0.5`
+- 验证范围：安全加固、外部服务降级、tag cache 增量刷新、超大文件拆分兼容
 
-## Deployment Steps
+## 二、部署步骤
 
-1. Synced latest `oauth2-only` changes to `/root/xiaomusic_oauth2_smoke`
-2. Built image: `docker build -t akari787/xiaomusic-oauth2:v1.0.5 /root/xiaomusic_oauth2_smoke`
-3. Deployed: `docker compose -f docker-compose.hardened.yml up -d --force-recreate`
-4. Verified version endpoint: `{"version":"1.0.5"}`
+1. 同步 `oauth2-only` 最新代码到 `/root/xiaomusic_oauth2_smoke`
+2. 构建镜像：
+   - `docker build -t akari787/xiaomusic-oauth2:v1.0.5 /root/xiaomusic_oauth2_smoke`
+3. 部署服务：
+   - `docker compose -f docker-compose.hardened.yml up -d --force-recreate`
+4. 版本确认：
+   - `GET /getversion` 返回 `{"version":"1.0.5"}`
 
-## Functional Checks
+## 三、功能验证结果
 
-- Secrets injection at startup
-  - Added required env: `API_SECRET`, `HTTP_AUTH_HASH`
-  - Service starts only after env provided
-- OAuth status and token persistence
-  - Before restart: `/api/oauth2/status` -> `token_valid=true`
-  - After container restart: `/api/oauth2/status` -> `token_valid=true`
-- QR login
-  - `/api/get_qrcode` returns `success=true` and non-empty `qrcode_url`
-- Playback control
-  - `/api/v1/play_url` -> `ok=true, state=streaming`
-  - `/api/v1/status` -> `ok=true, stage=stream`
-  - `/api/v1/stop` -> `ok=true, state=stopped`
-- External API unavailable simulation
-  - Forced invalid MiJia service URL
-  - Got structured degrade error: `E_EXTERNAL_SERVICE_UNAVAILABLE` with `error_id`
-- Tag cache rebuild
-  - Called `/refreshmusictag`
-  - Benchmark log observed: `tag 更新完成 benchmark scanned=... refreshed=... skipped=... cost_ms=...`
+### 1) Secret 注入与启动校验
 
-## Security / Log Leakage Check
+- 已注入 `API_SECRET`、`HTTP_AUTH_HASH`
+- 缺失必填 secret 时服务无法通过配置校验启动
 
-- Searched runtime logs for `API_SECRET`, `HTTP_AUTH_HASH`, bcrypt prefix `$2b$`
-- No secret leakage found
+### 2) OAuth 状态与 token 持久化
 
-## Stability Soak
+- 重启前：`/api/oauth2/status` 显示 `token_valid=true`
+- 重启后：`/api/oauth2/status` 仍为 `token_valid=true`
 
-- Duration: 30 minutes
-- Log scan keywords: `Traceback`, `ERROR`, `Exception`
-- Result: no fatal stack trace/error signatures found during soak window
+### 3) 二维码登录链路
 
-## Performance Comparison (Tag Cache)
+- `GET /api/get_qrcode` 返回 `success=true` 且 `qrcode_url` 非空
 
-- Before:
-  - `refresh_music_tag` clears cache and triggers full rebuild path
-  - No incremental skip metric
-- After:
-  - mtime+size signature incremental refresh
-  - Benchmark output includes `scanned/refreshed/skipped/cost_ms`
-  - On current test data logs show near-zero rebuild overhead (`cost_ms` ~ 0-1ms)
+### 4) 播放控制主链路
 
-## Result
+- `POST /api/v1/play_url`：`ok=true, state=streaming`
+- `GET /api/v1/status`：`ok=true, stage=stream`
+- `POST /api/v1/stop`：`ok=true, state=stopped`
 
-- Overall: PASS
-- Blocking issues: none observed in this validation round
+### 5) 外部服务不可用降级
 
-## Coverage Scope Note
+- 人工注入不可用 MiJia 服务地址
+- 返回结构化错误：`E_EXTERNAL_SERVICE_UNAVAILABLE`，并包含 `error_id`
 
-- This stabilization patch follows the "minimal-change" policy.
-- Acceptance coverage is evaluated on newly added/modified paths and their regression suites (all passed).
-- Full-repository `--cov=xiaomusic` baseline remains legacy-wide and is not used as this patch gate.
+### 6) tag cache 重建
+
+- 调用 `/refreshmusictag`
+- 日志出现基准统计：
+  - `tag 更新完成 benchmark scanned=... refreshed=... skipped=... cost_ms=...`
+
+## 四、安全检查
+
+- 检索运行日志关键字：`API_SECRET`、`HTTP_AUTH_HASH`、`$2b$`
+- 结果：未发现 secret 明文泄露
+
+## 五、稳定性运行
+
+- 持续运行时长：30 分钟
+- 日志扫描关键字：`Traceback`、`ERROR`、`Exception`
+- 结果：未发现致命异常堆栈
+
+## 六、性能对比（Tag Cache）
+
+优化前：
+
+- `refresh_music_tag` 会清空缓存并进入全量重建路径
+- 无增量跳过统计指标
+
+优化后：
+
+- 基于 `mtime + size` 的增量刷新
+- 输出 `scanned/refreshed/skipped/cost_ms` 基准日志
+- 当前测试数据下重建耗时接近 0~1ms
+
+## 七、结论
+
+- 总体结果：通过（PASS）
+- 阻塞问题：无
+
+## 八、覆盖率口径说明
+
+- 本次为最小改动稳定性补丁，覆盖率以“新增/改动模块 + 回归用例”作为验收口径。
+- 全仓 `--cov=xiaomusic` 为历史基线，不作为本次补丁阻塞条件。

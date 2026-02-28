@@ -1,19 +1,19 @@
 ## v1.0.5 (2026-02-28)
 
-### Stabilize
+### 稳定性增强
 
 - 增强网络播放长期稳定性：新增 `ResolverCache`（live 30s / vod 300s）并透出命中统计，重复同链接播放可显著降低解析开销。
 - 固化 session 状态机与观测字段：统一状态集合与迁移入口，补充 `last_transition_at`、`last_error_code`、`resolve_ms` 等排障信息。
 - 增加资源治理：限制最大活跃 session（默认 3）、idle 回收（默认 120s），并完善 stop 子进程回收保险逻辑。
 - 新增异常自愈保护：状态机非法跳转保护、`resolving` 超时自动失败（默认 15s）、流级失败触发 resolver cache 失效，避免坏源反复命中。
 
-### API & Observability
+### API 与可观测性
 
 - 统一 API 响应构造与错误语义（`success == ok`），错误码与 message 来源收敛。
 - 控制面彻底收敛到 `/api/v1/*`，移除 legacy `/network_audio/play_*` compat 控制接口。
 - `status/healthz` 在保持原有字段兼容前提下，新增阶段、缓存与 session 运行态观测字段。
 
-### Fix
+### 修复
 
 - 修复播放结束不自动切歌的关键竞态：认证 keepalive 重登后复用同 DID 设备实例，不再误取消正在播放会话的下一首定时器。
 - 修复 API runtime provider 耦合点，降低路由间隐式依赖导致的不确定行为。
