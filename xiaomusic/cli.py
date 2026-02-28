@@ -48,6 +48,52 @@ if os.getenv("XIAOMUSIC_ENABLE_SENTRY", "false").lower() == "true":
 ignore_logger("miservice")
 
 
+def _detect_configured_worker_count() -> int:
+    for key in ("XIAOMUSIC_WORKERS", "UVICORN_WORKERS", "WEB_CONCURRENCY", "GUNICORN_WORKERS"):
+        raw = (os.getenv(key, "") or "").strip()
+        if not raw:
+            continue
+        try:
+            val = int(raw)
+        except ValueError:
+            continue
+        if val > 0:
+            return val
+    return 1
+
+
+def _enforce_single_worker() -> None:
+    workers = _detect_configured_worker_count()
+    if workers > 1:
+        raise RuntimeError(
+            "multi-worker is not supported: TokenStore/auth.json is single-process safe only; set workers=1"
+        )
+
+
+def _cors_localhost_only(origins: list[str]) -> bool:
+    if not origins:
+        return False
+    allowed = {"http://localhost", "http://127.0.0.1", "https://localhost", "https://127.0.0.1"}
+    for origin in origins:
+        if (origin or "").strip().lower() not in allowed:
+            return False
+    return True
+
+
+def _warn_if_httpauth_unsafe(config, bind_host: str, logger: logging.Logger) -> None:
+    if not getattr(config, "disable_httpauth", False):
+        return
+    host = (bind_host or "").strip().lower()
+    localhost_bind = host in {"127.0.0.1", "localhost"}
+    cors_local = _cors_localhost_only(list(getattr(config, "cors_allow_origins", []) or []))
+    if (not localhost_bind) or (not cors_local):
+        logger.warning(
+            "HTTP auth disabled; if exposed beyond LAN this is unsafe (disable_httpauth=true, bind_host=%s, cors_localhost_only=%s)",
+            bind_host,
+            cors_local,
+        )
+
+
 def main():
     from xiaomusic import __version__
     from xiaomusic.api import (
@@ -58,6 +104,8 @@ def main():
     )
     from xiaomusic.config import Config
     from xiaomusic.xiaomusic import XiaoMusic
+
+    _enforce_single_worker()
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -239,6 +287,9 @@ def main():
     import uvicorn
 
     async def async_main(config: Config) -> None:
+        bind_host = "0.0.0.0"
+        _warn_if_httpauth_unsafe(config, bind_host, logging.getLogger("xiaomusic"))
+
         xiaomusic = XiaoMusic(config)
         HttpInit(xiaomusic)
         port = int(config.port)
@@ -252,7 +303,7 @@ def main():
         # 创建 uvicorn 配置，禁用其信号处理
         uvicorn_config = uvicorn.Config(
             HttpApp,
-            host="0.0.0.0",
+            host=bind_host,
             port=port,
             log_config=LOGGING_CONFIG,
         )

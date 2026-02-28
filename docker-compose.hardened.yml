@@ -21,6 +21,9 @@ services:
       XIAOMUSIC_CORS_ALLOW_ORIGINS: "http://localhost,http://127.0.0.1"
       # Outbound network access allowlist (empty -> deny). Required for web playlists / http_get / self-update.
       XIAOMUSIC_OUTBOUND_ALLOWLIST_DOMAINS: ""
+      # Must stay single worker: TokenStore/auth.json is single-process safe only.
+      UVICORN_WORKERS: "1"
+      WEB_CONCURRENCY: "1"
     volumes:
       - ./conf:/app/conf
       - ./music:/app/music

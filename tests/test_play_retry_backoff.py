@@ -29,9 +29,12 @@ async def test_play_failure_backoff_and_degrade(monkeypatch):
     d = Dummy()
 
     sleeps: list[float] = []
+    real_sleep = asyncio.sleep
 
     async def fake_sleep(sec):
         sleeps.append(float(sec))
+        if float(sec) == 0.0:
+            await real_sleep(0)
         return None
 
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
@@ -47,7 +50,8 @@ async def test_play_failure_backoff_and_degrade(monkeypatch):
     assert d._degraded is True
     assert d.tts_calls == 1
     # Backoff sequence should start at 1s and grow.
-    assert sleeps[0] == 1.0
-    assert sleeps[1] == 2.0
-    assert sleeps[2] == 4.0
-    assert sleeps[3] == 8.0
+    backoff = [s for s in sleeps if s > 0]
+    assert backoff[0] == 1.0
+    assert backoff[1] == 2.0
+    assert backoff[2] == 4.0
+    assert backoff[3] == 8.0

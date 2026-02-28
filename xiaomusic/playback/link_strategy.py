@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+import socket
 from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urlparse
@@ -38,18 +40,88 @@ class LinkPlaybackStrategy:
     def build_proxy_url(self, raw_url: str, name: str = "") -> str:
         return self.music_library.get_proxy_url(raw_url, name=name)
 
+    @staticmethod
+    def _is_private_rfc1918_ipv4(ip: ipaddress.IPv4Address) -> bool:
+        return (
+            ip in ipaddress.ip_network("10.0.0.0/8")
+            or ip in ipaddress.ip_network("172.16.0.0/12")
+            or ip in ipaddress.ip_network("192.168.0.0/16")
+        )
+
+    @staticmethod
+    def _is_explicitly_blocked_ipv4(ip: ipaddress.IPv4Address) -> bool:
+        blocked_nets = (
+            "172.17.0.0/16",
+            "172.18.0.0/16",
+            "172.19.0.0/16",
+            "127.0.0.0/8",
+            "0.0.0.0/8",
+            "169.254.0.0/16",
+            "100.64.0.0/10",
+            "198.18.0.0/15",
+        )
+        return any(ip in ipaddress.ip_network(net) for net in blocked_nets)
+
+    @classmethod
+    def _is_allowed_ip_literal(cls, ip: ipaddress._BaseAddress) -> bool:
+        # IPv6 literals are blocked for proxy target by default.
+        if isinstance(ip, ipaddress.IPv6Address):
+            return False
+        if cls._is_explicitly_blocked_ipv4(ip):
+            return False
+        if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            return False
+        return cls._is_private_rfc1918_ipv4(ip)
+
+    @classmethod
+    def _resolved_ips_safe_for_domain(cls, host: str) -> bool:
+        try:
+            infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        except Exception:
+            return False
+
+        resolved = []
+        for family, _type, _proto, _canon, sockaddr in infos:
+            if family == socket.AF_INET:
+                resolved.append(sockaddr[0])
+            elif family == socket.AF_INET6:
+                resolved.append(sockaddr[0])
+        if not resolved:
+            return False
+
+        for ip_s in resolved:
+            try:
+                ip_obj = ipaddress.ip_address(ip_s)
+            except ValueError:
+                return False
+            # Domain targets must resolve to public routable IPs only.
+            if (
+                ip_obj.is_private
+                or ip_obj.is_loopback
+                or ip_obj.is_link_local
+                or ip_obj.is_multicast
+                or ip_obj.is_reserved
+                or ip_obj.is_unspecified
+            ):
+                return False
+            if isinstance(ip_obj, ipaddress.IPv4Address) and cls._is_explicitly_blocked_ipv4(ip_obj):
+                return False
+        return True
+
     def _host_allowed_for_proxy(self, raw_url: str) -> bool:
-        host = (urlparse(raw_url).hostname or "").lower()
+        host = (urlparse(raw_url).hostname or "").strip().lower()
         if not host:
             return False
-        if host in {"localhost", "127.0.0.1"}:
-            return True
-        if (
-            host.startswith("192.168.")
-            or host.startswith("10.")
-            or host.startswith("172.")
-        ):
-            return True
+
+        if host == "localhost":
+            return False
+
+        # IP literal path: allow only strict RFC1918 subset.
+        try:
+            ip_obj = ipaddress.ip_address(host)
+            return self._is_allowed_ip_literal(ip_obj)
+        except ValueError:
+            pass
 
         cfg = getattr(self.music_library, "config", None)
         allowlist = []
@@ -57,7 +129,11 @@ class LinkPlaybackStrategy:
             allowlist = list(getattr(cfg, "outbound_allowlist_domains", []) or [])
         if not allowlist:
             return False
-        return any(host == d or host.endswith("." + d) for d in allowlist)
+        normalized_allowlist = [str(d).strip().lower().rstrip(".") for d in allowlist if str(d).strip()]
+        allow_ok = any(host == d or host.endswith("." + d) for d in normalized_allowlist)
+        if not allow_ok:
+            return False
+        return self._resolved_ips_safe_for_domain(host)
 
     def normalize(self, raw_url: str, *, name: str = "") -> NormalizedLink:
         direct = self.normalize_input_url(raw_url)

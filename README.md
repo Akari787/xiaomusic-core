@@ -76,6 +76,9 @@ docker run -d --name xiaomusic-oauth2 \
 
 更安全的部署方式：参考 `docker-compose.hardened.yml`（`read_only`、`cap_drop`、`no-new-privileges` 等）。
 
+运行进程模型约束：必须单 worker（`workers=1`）。
+原因：`TokenStore/conf/auth.json` 仅提供单进程并发安全，多 worker 会导致 token 写入覆盖/回滚并引发掉线。
+
 ### docker compose 示例
 
 1) 使用仓库内置 hardened compose（推荐）：

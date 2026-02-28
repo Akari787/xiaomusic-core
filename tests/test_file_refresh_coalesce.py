@@ -18,6 +18,14 @@ async def test_file_refresh_coalesces(monkeypatch):
             self.update_calls = 0
             self._library_refresh_task = None
             self._library_refresh_pending = False
+            self.log = type(
+                "_L",
+                (),
+                {
+                    "info": staticmethod(lambda *args, **kwargs: None),
+                    "exception": staticmethod(lambda *args, **kwargs: None),
+                },
+            )()
 
         def update_all_playlist(self):
             self.update_calls += 1
