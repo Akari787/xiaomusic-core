@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from xiaomusic.api import response as api_response
 from xiaomusic.api.models import ApiPlaybackResponse
 from xiaomusic.network_audio.contracts import ERROR_CODES
 
@@ -23,12 +24,7 @@ def _payload_to_dict(payload: dict | BaseModel | None) -> dict:
 
 
 def make_ok(payload: dict | BaseModel | None = None, message: str | None = None) -> dict:
-    body = _payload_to_dict(payload)
-    body["ok"] = True
-    body["success"] = True
-    body["error_code"] = None
-    body["message"] = message
-    return body
+    return api_response.ok(_payload_to_dict(payload), message=message)
 
 
 def make_error(
@@ -37,11 +33,11 @@ def make_error(
     payload: dict | BaseModel | None = None,
 ) -> dict:
     body = _payload_to_dict(payload)
-    body["ok"] = False
-    body["success"] = False
-    body["error_code"] = error_code
-    body["message"] = error_message(error_code, message)
-    return body
+    return api_response.fail(
+        error_code,
+        error_message(error_code, message) or "Unknown error",
+        **body,
+    )
 
 
 def playback_response(
