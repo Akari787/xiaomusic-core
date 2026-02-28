@@ -20,10 +20,16 @@ class Analytics:
         self.current_date = None
         self.log = log
         self.config = config
-        self.init()
+        self._init_attempted = False
 
     def init(self):
         if self.gtag is not None:
+            return
+        if self._init_attempted:
+            return
+        self._init_attempted = True
+
+        if not getattr(self.config, "enable_analytics", False):
             return
 
         settings = get_settings()
@@ -39,11 +45,23 @@ class Analytics:
         self.log.info("analytics init ok")
 
     async def send_startup_event(self):
+        if not self.config.enable_analytics:
+            return
+        self.init()
+        if self.gtag is None:
+            return
+        assert self.gtag is not None
         event = self.gtag.create_new_event(name="startup")
         event.set_event_param(name="version", value=__version__)
         await self._send(event)
 
     async def send_daily_event(self):
+        if not self.config.enable_analytics:
+            return
+        self.init()
+        if self.gtag is None:
+            return
+        assert self.gtag is not None
         current_date = datetime.now().strftime("%Y-%m-%d")
         if self.current_date == current_date:
             return
@@ -55,6 +73,12 @@ class Analytics:
         self.current_date = current_date
 
     async def send_play_event(self, name, sec, hardware):
+        if not self.config.enable_analytics:
+            return
+        self.init()
+        if self.gtag is None:
+            return
+        assert self.gtag is not None
         event = self.gtag.create_new_event(name="play")
         event.set_event_param(name="version", value=__version__)
         truncated_name = name[:MAX_PARAM_LENGTH]
@@ -72,7 +96,10 @@ class Analytics:
 
     def _google_send(self, events):
         try:
-            self.gtag.send(events)
+            gtag = self.gtag
+            if gtag is None:
+                return
+            gtag.send(events)
         except Exception as e:
             self.log.warning(f"google analytics run_with_cancel failed {e}")
 
