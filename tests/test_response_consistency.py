@@ -65,7 +65,7 @@ async def test_v1_sessions_cleanup_success_consistency(monkeypatch):
         def cleanup_sessions(self, max_sessions=100, ttl_seconds=None):  # noqa: ARG002
             return {"removed": 1, "remaining": 2}
 
-    monkeypatch.setattr(v1, "_shared_runtime", lambda: _Runtime())
+    monkeypatch.setattr(v1, "get_runtime", lambda: _Runtime())
     out = await v1.api_v1_sessions_cleanup(v1.ApiSessionsCleanupRequest())
     assert out["ok"] is True
     assert out["success"] is True

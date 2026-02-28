@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from xiaomusic.api.base_url import detect_base_url
 from xiaomusic.api.dependencies import verification, xiaomusic
 from xiaomusic.api.models import ApiSessionsCleanupRequest
-from xiaomusic.api.routers.network_audio import _get_runtime as _shared_runtime
+from xiaomusic.api.runtime_provider import get_runtime
 from xiaomusic.api.models import (
     ApiV1PlayMusicListRequest,
     ApiV1PlayMusicRequest,
@@ -26,7 +26,7 @@ _facade: PlaybackFacade | None = None
 def _get_facade() -> PlaybackFacade:
     global _facade
     if _facade is None:
-        _facade = PlaybackFacade(xiaomusic, runtime_provider=_shared_runtime)
+        _facade = PlaybackFacade(xiaomusic, runtime_provider=get_runtime)
     return _facade
 
 
@@ -175,7 +175,7 @@ async def api_v1_status(
 
 @router.post("/api/v1/sessions/cleanup")
 async def api_v1_sessions_cleanup(data: ApiSessionsCleanupRequest):
-    runtime = _shared_runtime()
+    runtime = get_runtime()
     ret = runtime.cleanup_sessions(
         max_sessions=int(data.max_sessions or 100),
         ttl_seconds=data.ttl_seconds,

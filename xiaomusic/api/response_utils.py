@@ -59,12 +59,18 @@ def playback_response(
     message: str | None = None,
     deprecated: bool | None = None,
 ) -> dict:
-    err = None if ok else (error_code or "E_INTERNAL")
+    if ok:
+        resolved_error_code = None
+        resolved_message = message
+    else:
+        resolved_error_code = error_code or "E_INTERNAL"
+        resolved_message = error_message(resolved_error_code, message)
+
     payload = ApiPlaybackResponse(
         ok=ok,
         success=ok,
-        error_code=err,
-        message=error_message(err, message),
+        error_code=resolved_error_code,
+        message=resolved_message,
         sid=sid,
         speaker_id=speaker_id,
         state=state,
