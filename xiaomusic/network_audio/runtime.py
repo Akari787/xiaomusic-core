@@ -83,6 +83,8 @@ class NetworkAudioRuntime:
     async def play_and_cast(self, did: str, url: str, *, no_cache: bool = False) -> dict:
         self.sweep_idle_sessions()
         if self.session_manager.count_active() >= self.max_active_sessions:
+            self._stop_oldest_active_session()
+        if self.session_manager.count_active() >= self.max_active_sessions:
             return {
                 "ok": False,
                 "error_code": "E_TOO_MANY_SESSIONS",
@@ -270,3 +272,23 @@ class NetworkAudioRuntime:
         if not key:
             return
         self._invalidate_cache_on_stream_failure(key, error_code)
+
+    def _stop_oldest_active_session(self) -> bool:
+        active_states = {"creating", "resolving", "streaming", "reconnecting"}
+        candidates = [
+            s
+            for s in self.session_manager.list_sessions()
+            if (s.state or "").lower() in active_states
+        ]
+        if not candidates:
+            return False
+
+        oldest = min(
+            candidates,
+            key=lambda s: (
+                int(s.started_at or s.last_transition_at or 0),
+                str(s.created_at or ""),
+            ),
+        )
+        self.audio_streamer.stop_stream(oldest.sid)
+        return True

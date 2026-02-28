@@ -19,18 +19,45 @@ def _fake_xiaomusic():
 
 
 @pytest.mark.asyncio
-async def test_max_active_sessions_returns_too_many(monkeypatch):
+async def test_max_active_sessions_auto_stops_oldest_then_allows_new_play(monkeypatch):
     runtime = NetworkAudioRuntime(_fake_xiaomusic())
     runtime.max_active_sessions = 3
     monkeypatch.setattr(runtime, "ensure_started", lambda: None)
 
+    created = []
     for i in range(3):
         s = runtime.session_manager.create_session(f"https://x/{i}")
-        runtime.session_manager.update_state(s.sid, "streaming")
+        runtime.session_manager.update_state(s.sid, "resolving", now_ts=10 + i)
+        runtime.session_manager.update_state(
+            s.sid, "streaming", now_ts=20 + i, last_client_at=20 + i
+        )
+        created.append(s.sid)
+
+    monkeypatch.setattr(
+        runtime.audio_streamer,
+        "stop_stream",
+        lambda sid: runtime.session_manager.stop_session(sid),
+    )
+
+    def _fake_play_url(url, *, no_cache=False):  # noqa: ARG001
+        s = runtime.session_manager.create_session(url)
+        runtime.session_manager.update_state(s.sid, "resolving", now_ts=100)
+        runtime.session_manager.update_state(s.sid, "streaming", now_ts=101)
+        return {
+            "ok": True,
+            "error_code": None,
+            "error_message": None,
+            "session": {"sid": s.sid, "stream_url": "", "state": "streaming"},
+        }
+
+    monkeypatch.setattr(runtime.play_service, "play_url", _fake_play_url)
 
     out = await runtime.play_and_cast("did-1", "https://www.youtube.com/watch?v=abc")
-    assert out["ok"] is False
-    assert out["error_code"] == "E_TOO_MANY_SESSIONS"
+    assert out["ok"] is True
+
+    oldest = runtime.session_manager.get_session(created[0])
+    assert oldest is not None
+    assert oldest.state == "stopped"
 
 
 def test_idle_timeout_sweep_stops_old_active_session(monkeypatch):
@@ -48,3 +75,20 @@ def test_idle_timeout_sweep_stops_old_active_session(monkeypatch):
     assert ret["stopped"] == 1
     assert cur is not None
     assert cur.state == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_max_active_sessions_still_returns_error_when_cannot_free_slot(monkeypatch):
+    runtime = NetworkAudioRuntime(_fake_xiaomusic())
+    runtime.max_active_sessions = 3
+    monkeypatch.setattr(runtime, "ensure_started", lambda: None)
+    monkeypatch.setattr(runtime, "_stop_oldest_active_session", lambda: False)
+
+    for i in range(3):
+        s = runtime.session_manager.create_session(f"https://x/{i}")
+        runtime.session_manager.update_state(s.sid, "resolving", now_ts=10 + i)
+        runtime.session_manager.update_state(s.sid, "streaming", now_ts=20 + i)
+
+    out = await runtime.play_and_cast("did-1", "https://www.youtube.com/watch?v=abc")
+    assert out["ok"] is False
+    assert out["error_code"] == "E_TOO_MANY_SESSIONS"
