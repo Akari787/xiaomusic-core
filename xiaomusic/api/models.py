@@ -86,6 +86,7 @@ class PlayListMusicObj(BaseModel):
 class PlayUrlOptions(BaseModel):
     volume: int | None = None
     prefer_codec: str | None = None
+    no_cache: bool = False
 
 
 class ApiV1PlayUrlRequest(BaseModel):
@@ -133,6 +134,11 @@ class ApiPlaybackResponse(ApiResponseBase):
     is_live: bool | None = None
     uptime: int | None = None
     reconnect_count: int | None = None
+    stage: str | None = None
+    last_transition_at: int | None = None
+    last_error_code: str | None = None
+    cache_hit: bool | None = None
+    resolve_ms: int | None = None
     deprecated: bool | None = None
 
 

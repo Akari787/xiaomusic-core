@@ -55,6 +55,11 @@ def playback_response(
     is_live: bool | None = None,
     uptime: int | None = None,
     reconnect_count: int | None = None,
+    stage: str | None = None,
+    last_transition_at: int | None = None,
+    last_error_code: str | None = None,
+    cache_hit: bool | None = None,
+    resolve_ms: int | None = None,
     error_code: str | None = None,
     message: str | None = None,
     deprecated: bool | None = None,
@@ -79,6 +84,11 @@ def playback_response(
         is_live=is_live,
         uptime=uptime,
         reconnect_count=reconnect_count,
+        stage=stage,
+        last_transition_at=last_transition_at,
+        last_error_code=last_error_code,
+        cache_hit=cache_hit,
+        resolve_ms=resolve_ms,
         deprecated=deprecated,
     )
     return payload.model_dump()

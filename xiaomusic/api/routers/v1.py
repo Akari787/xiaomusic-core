@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from urllib.parse import urlparse
+from dataclasses import asdict, is_dataclass
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -51,26 +53,71 @@ def _is_live(out: dict) -> bool | None:
     return None
 
 
+def _coerce_session(raw: dict) -> dict:
+    sess: Any = raw.get("session")
+    if isinstance(sess, dict):
+        return sess
+    if sess is not None and is_dataclass(sess) and not isinstance(sess, type):
+        return asdict(sess)  # type: ignore[arg-type]
+    return {}
+
+
+def _infer_stage(state: str, error_code: str | None) -> str:
+    s = str(state or "").lower()
+    if s in {"1", "playing"}:
+        return "xiaomi"
+    if s == "resolving":
+        return "resolve"
+    if s in {"streaming", "reconnecting"}:
+        return "stream"
+    ec = str(error_code or "")
+    if ec.startswith("E_RESOLVE"):
+        return "resolve"
+    if ec.startswith("E_STREAM_START"):
+        return "ffmpeg"
+    if ec.startswith("E_XIAOMI"):
+        return "xiaomi"
+    if ec.startswith("E_STREAM"):
+        return "stream"
+    return "unknown"
+
+
 def _playback_from_facade(out: dict, *, fallback_state: str = "unknown", deprecated: bool | None = None) -> dict:
     raw = out.get("raw") or {}
+    sess = _coerce_session(raw)
     uptime = None
     reconnect_count = None
-    if isinstance(raw.get("session"), dict):
-        sess = raw.get("session") or {}
+    if sess:
         if sess.get("uptime") is not None:
             uptime = int(sess.get("uptime") or 0)
         reconnect_count = sess.get("reconnect_count")
+
+    state = str(out.get("state") or fallback_state)
+    error_code = out.get("error_code") or sess.get("last_error_code")
+    last_transition_at = sess.get("last_transition_at")
+    last_error_code = sess.get("last_error_code")
+    cache_hit = out.get("cache_hit")
+    resolve_ms = out.get("resolve_ms")
+    if resolve_ms is None:
+        resolve_ms = sess.get("resolve_ms")
+    stage = out.get("fail_stage") or _infer_stage(state, error_code)
+
     return playback_response(
         ok=bool(out.get("ok")),
         sid=out.get("sid") or "",
         speaker_id=out.get("speaker_id") or "",
-        state=str(out.get("state") or fallback_state),
+        state=state,
         title=out.get("title"),
         stream_url=out.get("stream_url") or "",
         is_live=_is_live(raw),
         uptime=uptime,
         reconnect_count=reconnect_count,
-        error_code=out.get("error_code"),
+        stage=stage,
+        last_transition_at=last_transition_at,
+        last_error_code=last_error_code,
+        cache_hit=cache_hit,
+        resolve_ms=resolve_ms,
+        error_code=error_code,
         deprecated=deprecated,
     )
 
@@ -99,11 +146,12 @@ async def api_v1_play_url(data: ApiV1PlayUrlRequest):
             pass
 
     mode = "network_audio_link" if str(data.url).startswith(("http://", "https://")) else "direct"
+    no_cache = bool(options.get("no_cache", False))
     try:
         out = await _get_facade().play_url(
             url=data.url,
             speaker_id=speaker_id,
-            options={"mode": mode, "prefer_proxy": False},
+            options={"mode": mode, "prefer_proxy": False, "no_cache": no_cache},
         )
     except Exception:
         return playback_response(

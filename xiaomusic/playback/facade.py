@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict, is_dataclass
 from typing import Any, Callable
 
 
@@ -68,15 +69,17 @@ class PlaybackFacade:
         options = options or {}
         mode = options.get("mode", "direct")
         prefer_proxy = bool(options.get("prefer_proxy", False))
+        no_cache = bool(options.get("no_cache", False))
 
         if mode == "network_audio_cast":
-            raw = await self._runtime().play_and_cast(did=speaker_id, url=url)
+            raw = await self._runtime().play_and_cast(did=speaker_id, url=url, no_cache=no_cache)
             ok = bool(raw.get("ok", False))
         elif mode == "network_audio_link":
             raw = await self._runtime().play_link(
                 did=speaker_id,
                 url=url,
                 prefer_proxy=prefer_proxy,
+                no_cache=no_cache,
             )
             ok = bool(raw.get("ok", False))
         else:
@@ -96,6 +99,9 @@ class PlaybackFacade:
             "title": raw.get("title"),
             "stream_url": self._extract_stream_url(raw, fallback=url),
             "error_code": raw.get("error_code"),
+            "cache_hit": raw.get("cache_hit"),
+            "resolve_ms": raw.get("resolve_ms"),
+            "fail_stage": raw.get("fail_stage"),
             "ok": ok,
             "raw": raw,
         }
@@ -173,6 +179,12 @@ class PlaybackFacade:
                     "ok": False,
                     "raw": {"ret": "Not found"},
                 }
+            raw_session: Any = session
+            if is_dataclass(session):
+                try:
+                    raw_session = asdict(session)
+                except Exception:
+                    raw_session = session
             return {
                 "sid": sid,
                 "speaker_id": speaker_id,
@@ -181,7 +193,7 @@ class PlaybackFacade:
                 "stream_url": str(session.stream_url or ""),
                 "error_code": None,
                 "ok": True,
-                "raw": {"session": session},
+                "raw": {"session": raw_session},
             }
 
         if speaker_id:

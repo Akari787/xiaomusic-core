@@ -14,7 +14,18 @@ ERROR_CODES: dict[str, str] = {
     "E_STREAM_NOT_FOUND": "Stream session not found",
     "E_STREAM_SINGLE_CLIENT_ONLY": "Only one client is allowed per session stream",
     "E_XIAOMI_PLAY_FAILED": "Xiaomi playback adapter failed to accept stream",
+    "E_TOO_MANY_SESSIONS": "Too many active sessions",
     "E_INTERNAL": "Unexpected internal error",
+}
+
+
+SESSION_STATES = {
+    "creating",
+    "resolving",
+    "streaming",
+    "reconnecting",
+    "stopped",
+    "failed",
 }
 
 
@@ -70,19 +81,33 @@ class Session:
     reconnect_count: int
     created_at: str
     updated_at: str
+    last_transition_at: int | None = None
+    started_at: int | None = None
+    stopped_at: int | None = None
+    last_error_code: str | None = None
+    resolve_ms: int | None = None
+    stream_start_ms: int | None = None
+    last_client_at: int | None = None
     meta: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
     def sample() -> "Session":
         return Session(
             sid="s_0001",
-            state="running",
+            state="streaming",
             input_url="https://www.youtube.com/watch?v=abc123",
             stream_url="http://127.0.0.1:18090/stream/s_0001",
             source_url="https://media.example.local/audio.m4a",
             reconnect_count=0,
             created_at="2026-02-16T12:00:00Z",
             updated_at="2026-02-16T12:00:01Z",
+            last_transition_at=1771233601,
+            started_at=1771233601,
+            stopped_at=None,
+            last_error_code=None,
+            resolve_ms=123,
+            stream_start_ms=45,
+            last_client_at=1771233602,
             meta={"speaker_id": "981257654"},
         )
 

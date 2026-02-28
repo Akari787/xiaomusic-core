@@ -80,8 +80,11 @@ class AudioStreamer:
 
     def _run_pump(self, sid: str, source_url: str, stop_flag: threading.Event) -> None:
         reconnect_attempt = 0
+        failed = False
         try:
             while not stop_flag.is_set():
+                if reconnect_attempt > 0:
+                    self.session_manager.update_state(sid, "streaming")
                 disconnected = False
                 if self.relay_mode == "ffmpeg":
                     disconnected = self._pump_with_ffmpeg(sid, source_url, stop_flag)
@@ -96,12 +99,40 @@ class AudioStreamer:
                 reconnect_attempt += 1
                 delay = self.reconnect_policy.delay_for_attempt(reconnect_attempt)
                 if delay is None:
+                    failed = True
                     break
                 self.session_manager.increment_reconnect(sid)
+                self.session_manager.update_state(sid, "reconnecting")
                 time.sleep(delay)
+        except Exception:
+            failed = True
+            raise
         finally:
             self.stream_server.close_stream_channel(sid)
-            self.session_manager.stop_session(sid)
+            if failed and not stop_flag.is_set():
+                self.session_manager.update_state(sid, "failed", error_code="E_STREAM_START_FAILED")
+            else:
+                self.session_manager.stop_session(sid)
+
+    @staticmethod
+    def _terminate_process(proc: subprocess.Popen) -> None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=1)
+            return
+        except Exception:
+            pass
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.communicate(timeout=1)
+        except Exception:
+            pass
 
     def _pump_with_http(self, sid: str, source_url: str, stop_flag: threading.Event) -> bool:
         try:
@@ -154,11 +185,4 @@ class AudioStreamer:
         except Exception:
             return True
         finally:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            try:
-                proc.communicate(timeout=1)
-            except Exception:
-                pass
+            self._terminate_process(proc)

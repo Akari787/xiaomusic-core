@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from threading import Lock
 from uuid import uuid4
 
-from xiaomusic.network_audio.contracts import Session
+from xiaomusic.network_audio.contracts import SESSION_STATES, Session
 
 
 def _now_iso() -> str:
@@ -22,6 +22,7 @@ class StreamSessionManager:
         with self._lock:
             sid = f"s_{uuid4().hex[:12]}"
             now = _now_iso()
+            now_ts = int(datetime.now(UTC).timestamp())
             session = Session(
                 sid=sid,
                 state="creating",
@@ -31,29 +32,66 @@ class StreamSessionManager:
                 reconnect_count=0,
                 created_at=now,
                 updated_at=now,
+                last_transition_at=now_ts,
+                started_at=None,
+                stopped_at=None,
+                last_error_code=None,
+                resolve_ms=None,
+                stream_start_ms=None,
+                last_client_at=now_ts,
                 meta={},
             )
             self._sessions[sid] = session
             return session
 
     def stop_session(self, sid: str) -> Session | None:
+        return self.update_state(sid, "stopped")
+
+    @staticmethod
+    def _now_ts() -> int:
+        return int(datetime.now(UTC).timestamp())
+
+    def update_state(
+        self,
+        sid: str,
+        new_state: str,
+        *,
+        error_code: str | None = None,
+        now_ts: int | None = None,
+        **metrics,
+    ) -> Session | None:
+        if new_state == "running":
+            new_state = "streaming"
+        if new_state not in SESSION_STATES:
+            raise ValueError(f"unsupported session state: {new_state}")
+
         with self._lock:
             session = self._sessions.get(sid)
             if session is None:
                 return None
-            if session.state != "stopped":
-                session.state = "stopped"
-                session.updated_at = _now_iso()
+
+            ts = int(now_ts if now_ts is not None else self._now_ts())
+            session.state = new_state
+            session.updated_at = _now_iso()
+            session.last_transition_at = ts
+
+            if new_state == "streaming" and session.started_at is None:
+                session.started_at = ts
+            if new_state == "stopped":
+                session.stopped_at = ts
+            if new_state == "failed":
+                session.last_error_code = error_code or "E_INTERNAL"
+            elif error_code is not None:
+                session.last_error_code = error_code
+
+            for key in ("resolve_ms", "stream_start_ms", "last_client_at"):
+                if key in metrics and metrics[key] is not None:
+                    setattr(session, key, int(metrics[key]))
+
             return session
 
     def set_state(self, sid: str, state: str) -> Session | None:
-        with self._lock:
-            session = self._sessions.get(sid)
-            if session is None:
-                return None
-            session.state = state
-            session.updated_at = _now_iso()
-            return session
+        return self.update_state(sid, state)
 
     def set_stream_url(self, sid: str, stream_url: str) -> Session | None:
         with self._lock:
@@ -82,6 +120,20 @@ class StreamSessionManager:
             session.updated_at = _now_iso()
             return session
 
+    def touch_client(self, sid: str, now_ts: int | None = None) -> Session | None:
+        with self._lock:
+            session = self._sessions.get(sid)
+            if session is None:
+                return None
+            session.last_client_at = int(now_ts if now_ts is not None else self._now_ts())
+            session.updated_at = _now_iso()
+            return session
+
+    def count_active(self) -> int:
+        active = {"creating", "resolving", "streaming", "reconnecting"}
+        with self._lock:
+            return sum(1 for s in self._sessions.values() if (s.state or "").lower() in active)
+
     def get_session(self, sid: str) -> Session | None:
         with self._lock:
             return self._sessions.get(sid)
@@ -108,7 +160,7 @@ class StreamSessionManager:
 
         def _is_active(state: str) -> bool:
             s = (state or "").lower()
-            return s in {"running", "streaming"}
+            return s in {"creating", "resolving", "streaming", "reconnecting"}
 
         with self._lock:
             if ttl_seconds is not None and int(ttl_seconds) > 0:

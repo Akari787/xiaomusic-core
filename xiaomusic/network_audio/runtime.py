@@ -15,6 +15,7 @@ from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServ
 from xiaomusic.network_audio.play_service import NetworkAudioPlayService
 from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy
 from xiaomusic.network_audio.resolver import Resolver
+from xiaomusic.network_audio.resolver_cache import ResolverCache
 from xiaomusic.network_audio.session_manager import StreamSessionManager
 from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
 
@@ -28,6 +29,8 @@ class NetworkAudioRuntime:
         self.stream_port = int(stream_port)
         self._started_at = time.monotonic()
         self._last_cleanup_at: float | None = None
+        self.max_active_sessions = int(os.getenv("XIAOMUSIC_NETWORK_AUDIO_MAX_ACTIVE_SESSIONS", "3"))
+        self.idle_timeout_seconds = int(os.getenv("XIAOMUSIC_NETWORK_AUDIO_IDLE_TIMEOUT_SECONDS", "120"))
         self._lock = Lock()
         self._strategy = getattr(xiaomusic, "link_playback_strategy", None)
         if self._strategy is None:
@@ -48,10 +51,15 @@ class NetworkAudioRuntime:
             relay_mode="ffmpeg",
         )
         self.resolver = Resolver()
+        self.resolver_cache = ResolverCache(
+            live_ttl_seconds=int(os.getenv("XIAOMUSIC_RESOLVER_CACHE_LIVE_TTL_SECONDS", "30")),
+            vod_ttl_seconds=int(os.getenv("XIAOMUSIC_RESOLVER_CACHE_VOD_TTL_SECONDS", "300")),
+        )
         self.play_service = NetworkAudioPlayService(
             session_manager=self.session_manager,
             resolver=self.resolver,
             audio_streamer=self.audio_streamer,
+            resolver_cache=self.resolver_cache,
         )
 
     def ensure_started(self) -> None:
@@ -70,10 +78,27 @@ class NetworkAudioRuntime:
     def _external_stream_url(self, sid: str) -> str:
         return f"{self._public_base()}/network_audio/stream/{sid}"
 
-    async def play_and_cast(self, did: str, url: str) -> dict:
+    async def play_and_cast(self, did: str, url: str, *, no_cache: bool = False) -> dict:
+        self.sweep_idle_sessions()
+        if self.session_manager.count_active() >= self.max_active_sessions:
+            return {
+                "ok": False,
+                "error_code": "E_TOO_MANY_SESSIONS",
+                "error_message": ERROR_CODES["E_TOO_MANY_SESSIONS"],
+                "fail_stage": "stream",
+            }
         self.ensure_started()
-        info = self._strategy.classify(url)
-        out = self.play_service.play_url(info.normalized_url)
+        strategy = self._strategy
+        if strategy is None:
+            return {
+                "ok": False,
+                "error_code": "E_INTERNAL",
+                "error_message": ERROR_CODES["E_INTERNAL"],
+                "fail_stage": "stream",
+            }
+        assert strategy is not None
+        info = strategy.classify(url)
+        out = self.play_service.play_url(info.normalized_url, no_cache=no_cache)
         if not out.get("ok"):
             return out
 
@@ -87,11 +112,27 @@ class NetworkAudioRuntime:
         out["cast_ret"] = cast_ret
         return out
 
-    async def play_link(self, did: str, url: str, prefer_proxy: bool = False) -> dict:
-        info = self._strategy.classify(url)
+    async def play_link(
+        self,
+        did: str,
+        url: str,
+        prefer_proxy: bool = False,
+        *,
+        no_cache: bool = False,
+    ) -> dict:
+        strategy = self._strategy
+        if strategy is None:
+            return {
+                "ok": False,
+                "error_code": "E_INTERNAL",
+                "error_message": ERROR_CODES["E_INTERNAL"],
+                "fail_stage": "stream",
+            }
+        assert strategy is not None
+        info = strategy.classify(url)
 
         if prefer_proxy:
-            proxy_url = self._strategy.build_proxy_url(url)
+            proxy_url = strategy.build_proxy_url(url)
             cast_ret = await self.xiaomusic.play_url(did=did, arg1=proxy_url)
             return {
                 "ok": True,
@@ -101,8 +142,8 @@ class NetworkAudioRuntime:
                 "stream_url": proxy_url,
             }
 
-        if self._strategy.should_use_network_audio(url):
-            out = await self.play_and_cast(did=did, url=info.normalized_url)
+        if strategy.should_use_network_audio(url):
+            out = await self.play_and_cast(did=did, url=info.normalized_url, no_cache=no_cache)
             out["mode"] = "network_audio"
             return out
 
@@ -116,15 +157,19 @@ class NetworkAudioRuntime:
         }
 
     def healthz(self) -> dict:
+        self.sweep_idle_sessions()
         return {
             "status": "ok",
             "uptime_seconds": int(time.monotonic() - self._started_at),
             "stream_port": self.stream_port,
+            "active_sessions": self.session_manager.count_active(),
             "session_count": len(self.session_manager.list_sessions()),
+            "cache_stats": self.resolver_cache.stats(),
             "last_cleanup_at": self._last_cleanup_at,
         }
 
     def sessions(self) -> dict:
+        self.sweep_idle_sessions()
         sessions = [asdict(s) for s in self.session_manager.list_sessions()]
         return {
             "sessions": sessions,
@@ -141,6 +186,7 @@ class NetworkAudioRuntime:
         self.ensure_started()
         if self.session_manager.get_session(sid) is None:
             raise KeyError(ERROR_CODES["E_STREAM_NOT_FOUND"])
+        self.session_manager.touch_client(sid)
 
         stream_url = self._internal_stream_url(sid)
         with urlopen(stream_url, timeout=60) as resp:  # noqa: S310
@@ -153,9 +199,30 @@ class NetworkAudioRuntime:
                     continue
                 if not chunk:
                     break
+                self.session_manager.touch_client(sid)
                 yield chunk
 
     def stop_session(self, sid: str) -> dict:
         self.audio_streamer.stop_stream(sid)
         sess = self.session_manager.get_session(sid)
         return {"ret": "OK", "session": asdict(sess) if sess else None}
+
+    def sweep_idle_sessions(self, now_ts: int | None = None) -> dict[str, int]:
+        timeout = int(self.idle_timeout_seconds or 0)
+        if timeout <= 0:
+            return {"stopped": 0}
+
+        now = int(now_ts if now_ts is not None else time.time())
+        active_states = {"creating", "resolving", "streaming", "reconnecting"}
+        stopped = 0
+        for sess in self.session_manager.list_sessions():
+            if (sess.state or "").lower() not in active_states:
+                continue
+            last_client_at = int(sess.last_client_at or 0)
+            if last_client_at <= 0:
+                continue
+            if now - last_client_at < timeout:
+                continue
+            self.audio_streamer.stop_stream(sess.sid)
+            stopped += 1
+        return {"stopped": stopped}
