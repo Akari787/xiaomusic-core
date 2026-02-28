@@ -113,7 +113,7 @@ docker compose -f docker-compose.hardened.yml up -d --build
 ```yaml
 services:
   xiaomusic:
-    image: akari787/xiaomusic-oauth2:v1.0.4
+    image: akari787/xiaomusic-oauth2:v1.0.5
     container_name: xiaomusic-oauth2
     restart: unless-stopped
     ports:
@@ -139,7 +139,7 @@ curl -fsS http://127.0.0.1:58090/getversion
 # 查看日志
 docker logs --tail 200 xiaomusic-oauth2
 
-# 更新到新版本镜像（示例 v1.0.4）
+# 更新到新版本镜像（示例 v1.0.5）
 docker compose pull
 docker compose up -d --force-recreate
 ```
@@ -202,7 +202,7 @@ docker compose up -d --force-recreate
 
 ## 版本
 
-当前维护版本: `1.0.4`
+当前维护版本: `1.0.5`
 
 更新记录: [CHANGELOG.md](CHANGELOG.md)
 
