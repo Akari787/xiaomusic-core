@@ -75,7 +75,7 @@ docker compose -f docker-compose.hardened.yml restart
 
 验证：
 - `http_get("https://example.com")` 成功
-- `http_get("http://127.0.0.1")` / `http_get("http://192.168.7.1")` 必须拒绝
+- `http_get("http://127.0.0.1")` / `http_get("http://192.168.0.1")` 必须拒绝
 
 ## 5) 自更新默认拒绝 + 安全解压验证
 

@@ -85,7 +85,7 @@ async def test_http_get_blocks_private_resolution(monkeypatch):
 
     async def fake_getaddrinfo(host, port, *args, **kwargs):
         # Resolve to private IP -> must be blocked.
-        return [(2, 1, 6, "", ("192.168.7.10", port))]
+        return [(2, 1, 6, "", ("192.168.0.10", port))]
 
     monkeypatch.setattr(loop, "getaddrinfo", fake_getaddrinfo)
 
@@ -116,7 +116,7 @@ async def test_dns_rebinding_blocked(monkeypatch):
         calls["n"] += 1
         if calls["n"] == 1:
             return [(2, 1, 6, "", ("93.184.216.34", port))]
-        return [(2, 1, 6, "", ("192.168.7.10", port))]
+        return [(2, 1, 6, "", ("192.168.0.10", port))]
 
     monkeypatch.setattr(loop, "getaddrinfo", fake_getaddrinfo)
 

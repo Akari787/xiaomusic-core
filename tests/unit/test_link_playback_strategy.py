@@ -10,7 +10,7 @@ class _FakeMusicLibrary:
         return f"http://127.0.0.1:58090/proxy?url={url}"
 
     def is_jellyfin_url(self, url):
-        return "192.168.7.4:30013" in url
+        return "192.168.0.4:30013" in url
 
 
 @pytest.mark.unit
@@ -48,7 +48,7 @@ def test_link_strategy_detects_jellyfin_auto_fallback_candidate():
     from xiaomusic.playback.link_strategy import LinkPlaybackStrategy  # noqa: PLC0415
 
     s = LinkPlaybackStrategy(music_library=_FakeMusicLibrary(), log=None)
-    url = "http://192.168.7.4:30013/Audio/abc/stream.mp3?api_key=xx"
+    url = "http://192.168.0.4:30013/Audio/abc/stream.mp3?api_key=xx"
     assert s.should_jellyfin_auto_fallback("auto", url, url)
     assert not s.should_jellyfin_auto_fallback("on", url, url)
     assert not s.should_jellyfin_auto_fallback("auto", url, "http://other")

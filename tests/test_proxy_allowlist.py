@@ -28,7 +28,7 @@ def _s(allowlist=None):
 @pytest.mark.parametrize(
     ("host", "expected"),
     [
-        ("192.168.7.4", True),
+        ("192.168.0.4", True),
         ("10.0.0.5", True),
         ("172.16.0.10", True),
         ("172.31.255.254", True),

@@ -127,5 +127,5 @@ class Event:
             ts="2026-02-16T12:00:02Z",
             type="ClientConnected",
             level="info",
-            detail={"remote_addr": "192.168.7.50"},
+            detail={"remote_addr": "192.168.0.50"},
         )
