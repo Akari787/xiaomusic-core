@@ -1,6 +1,5 @@
 """依赖注入和认证相关功能"""
 
-import hashlib
 import secrets
 from typing import (
     TYPE_CHECKING,
@@ -132,39 +131,6 @@ def verification(
 def no_verification():
     """无认证模式"""
     return True
-
-
-def access_key_verification(file_path: str, key: str, code: str) -> bool:
-    """访问密钥验证"""
-    if config.disable_httpauth:
-        return True
-
-    log.debug(f"访问限制接收端[{file_path}, {key}, {code}]")
-    if key is not None:
-        current_key_bytes = key.encode("utf8")
-        correct_key_bytes = (
-            config.httpauth_username + config.httpauth_password
-        ).encode("utf8")
-        is_correct_key = secrets.compare_digest(correct_key_bytes, current_key_bytes)
-        if is_correct_key:
-            return True
-
-    if code is not None:
-        current_code_bytes = code.encode("utf8")
-        correct_code_bytes = (
-            hashlib.sha256(
-                (
-                    file_path + config.httpauth_username + config.httpauth_password
-                ).encode("utf-8")
-            )
-            .hexdigest()
-            .encode("utf-8")
-        )
-        is_correct_code = secrets.compare_digest(correct_code_bytes, current_code_bytes)
-        if is_correct_code:
-            return True
-
-    return False
 
 
 class AuthStaticFiles(StaticFiles):

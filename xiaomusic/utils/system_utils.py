@@ -3,7 +3,6 @@
 
 import asyncio
 import copy
-import hashlib
 import logging
 import os
 import platform
@@ -123,41 +122,17 @@ def deepcopy_data_no_sensitive_info(data, fields_to_anonymize: list = None):
 
 def try_add_access_control_param(config, url: str) -> str:
     """
-    为 URL 添加访问控制参数
+    兼容保留：旧版链接鉴权参数注入（已移除）
 
     Args:
         config: 配置对象
         url: 原始 URL
 
     Returns:
-        添加了访问控制参数的 URL
+        原始 URL（不再追加任何参数）
     """
-    if config.disable_httpauth:
-        return url
-
-    url_parts = urllib.parse.urlparse(url)
-    file_path = urllib.parse.unquote(url_parts.path)
-    correct_code = hashlib.sha256(
-        (file_path + config.httpauth_username + config.httpauth_password).encode(
-            "utf-8"
-        )
-    ).hexdigest()
-    log.debug(f"rewrite url: [{file_path}, {correct_code}]")
-
-    # make new url
-    parsed_get_args = dict(urllib.parse.parse_qsl(url_parts.query))
-    parsed_get_args.update({"code": correct_code})
-    encoded_get_args = urllib.parse.urlencode(parsed_get_args, doseq=True)
-    new_url = urllib.parse.ParseResult(
-        url_parts.scheme,
-        url_parts.netloc,
-        url_parts.path,
-        url_parts.params,
-        encoded_get_args,
-        url_parts.fragment,
-    ).geturl()
-
-    return new_url
+    # 旧版 key/code 链接鉴权已移除，保留该函数避免历史调用链崩溃。
+    return url
 
 
 def is_docker() -> bool:

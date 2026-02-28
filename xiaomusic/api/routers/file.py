@@ -18,19 +18,14 @@ from fastapi import (
 )
 from fastapi.responses import (
     FileResponse,
+    JSONResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
 )
 from starlette.background import BackgroundTask
 
-from xiaomusic.api.dependencies import (
-    access_key_verification,
-    config,
-    log,
-    verification,
-    xiaomusic,
-)
+from xiaomusic.api.dependencies import config, log, verification, xiaomusic
 from xiaomusic.api.models import (
     DownloadOneMusic,
     DownloadPlayList,
@@ -54,7 +49,6 @@ from xiaomusic.utils.network_utils import (
     download_playlist,
     downloadfile,
 )
-from xiaomusic.utils.system_utils import try_add_access_control_param
 
 router = APIRouter()
 
@@ -338,7 +332,6 @@ async def upload_music(playlist: str = Form(...), file: UploadFile = File(...)):
 
 def safe_redirect(url):
     """安全重定向"""
-    url = try_add_access_control_param(config, url)
     url = url.replace("\\", "")
     if not urlparse(url).netloc and not urlparse(url).scheme:
         log.debug(f"redirect to {url}")
@@ -346,11 +339,26 @@ def safe_redirect(url):
     return None
 
 
+def _legacy_link_auth_removed_response() -> JSONResponse:
+    log.warning(
+        "legacy_link_auth_removed: migrate to HTTP Basic + HTTP_AUTH_HASH or OAuth2"
+    )
+    return JSONResponse(
+        status_code=410,
+        content={
+            "ok": False,
+            "success": False,
+            "error_code": "E_LEGACY_LINK_AUTH_REMOVED",
+            "message": "旧版 key/code 鉴权已移除，请使用 HTTP Basic + HTTP_AUTH_HASH 或 OAuth2",
+        },
+    )
+
+
 @router.get("/music/{file_path:path}")
 async def music_file(request: Request, file_path: str, key: str = "", code: str = ""):
     """音乐文件访问"""
-    if not access_key_verification(f"/music/{file_path}", key, code):
-        raise HTTPException(status_code=404, detail="File not found")
+    if key or code:
+        return _legacy_link_auth_removed_response()
 
     absolute_path = os.path.abspath(config.music_path)
     absolute_file_path = os.path.normpath(os.path.join(absolute_path, file_path))
@@ -400,8 +408,8 @@ async def music_options():
 @router.get("/picture/{file_path:path}")
 async def get_picture(request: Request, file_path: str, key: str = "", code: str = ""):
     """图片文件访问"""
-    if not access_key_verification(f"/picture/{file_path}", key, code):
-        raise HTTPException(status_code=404, detail="File not found")
+    if key or code:
+        return _legacy_link_auth_removed_response()
 
     absolute_path = os.path.abspath(config.picture_cache_path)
     absolute_file_path = os.path.normpath(os.path.join(absolute_path, file_path))
