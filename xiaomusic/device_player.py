@@ -74,6 +74,7 @@ class XiaoMusicDevice:
         self._play_fail_first_ts = 0.0
         self._play_fail_last_reason = ""
         self._duration_probe_task = None
+        self._autonext_guard_task = None
         self._degraded = False
         self._degraded_notified = False
 
@@ -112,6 +113,42 @@ class XiaoMusicDevice:
         if not self.is_playing:
             return 0, duration
         offset = time.time() - self._start_time - self._paused_time
+
+        # Safety net: if timer was lost/cancelled and track is far beyond expected
+        # duration, try one guarded auto-next recovery.
+        if (
+            duration > 0.1
+            and offset >= duration + 15.0
+            and self._next_timer is None
+            and self.device.play_type != PLAY_TYPE_SIN
+            and self._last_cmd not in {"stop", "pause"}
+        ):
+            if self._autonext_guard_task is None or self._autonext_guard_task.done():
+                sid = self._play_session_id
+
+                async def _guard_autonext():
+                    try:
+                        # Avoid false-positive early switches when Xiaomi is still playing.
+                        still_playing = await self.get_if_xiaoai_is_playing()
+                        if still_playing:
+                            return
+                    except Exception:
+                        # If status check fails, avoid force-switching.
+                        return
+                    if sid != self._play_session_id:
+                        return
+                    if self._next_timer is not None:
+                        return
+                    self.log.info(
+                        "autonext_guard_trigger(session_id=%s, offset=%.3f, duration=%.3f)",
+                        sid,
+                        offset,
+                        duration,
+                    )
+                    await self._play_next()
+
+                self._autonext_guard_task = asyncio.create_task(_guard_autonext())
+
         return offset, duration
 
     @staticmethod
@@ -149,6 +186,12 @@ class XiaoMusicDevice:
                     d = self._extract_duration_seconds(info)
                     if d > 0.1:
                         self._duration = d
+                        # If original duration probe failed at play start, timer was not set.
+                        # Rebuild a next-track timer once duration becomes known.
+                        cur_offset, _ = self.get_offset_duration()
+                        remaining = d - max(cur_offset, 0.0) + float(self.config.delay_sec)
+                        if remaining > 0.1:
+                            await self.set_next_music_timeout(remaining)
                         self.log.info("duration_probe_success name=%s duration=%.3fs", name, d)
                         return
                 except Exception as e:

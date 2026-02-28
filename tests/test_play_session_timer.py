@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sys
+import time
 import types
 
 import pytest
@@ -31,6 +32,7 @@ def _build_device_for_timer_tests():
     d._tts_timer = None
     d._play_session_id = 1
     d._last_cmd = ""
+    d._autonext_guard_task = None
     d.is_playing = True
     d.device = types.SimpleNamespace(did="did-test", play_type=PLAY_TYPE_ALL)
 
@@ -78,3 +80,63 @@ async def test_pause_prevents_next():
 
     await asyncio.sleep(0.12)
     assert d._next_called == 0
+
+
+@pytest.mark.asyncio
+async def test_duration_probe_sets_next_timer_when_duration_recovered(monkeypatch):
+    d = _build_device_for_timer_tests()
+    d.config = types.SimpleNamespace(delay_sec=-1)
+    d._duration = 0.0
+    d._duration_probe_task = None
+
+    async def _get_player_status():
+        return {"duration": 10.0}
+
+    def _get_offset_duration():
+        return 2.0, d._duration
+
+    d.get_player_status = _get_player_status
+    d.get_offset_duration = _get_offset_duration
+
+    captured = {"sec": None}
+
+    async def _set_next_music_timeout(sec):
+        captured["sec"] = sec
+
+    d.set_next_music_timeout = _set_next_music_timeout
+
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(sec):
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    d._start_duration_probe("x", d._play_session_id)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert d._duration == 10.0
+    # remaining = duration - offset + delay_sec = 10 - 2 - 1 = 7
+    assert captured["sec"] == 7.0
+
+
+@pytest.mark.asyncio
+async def test_overdue_offset_triggers_autonext_guard_when_idle():
+    d = _build_device_for_timer_tests()
+    d._duration = 1.0
+    d._start_time = time.time() - 30.0
+    d._paused_time = 0.0
+    d._next_timer = None
+    d._last_cmd = "play"
+
+    async def _get_if_xiaoai_is_playing():
+        return False
+
+    d.get_if_xiaoai_is_playing = _get_if_xiaoai_is_playing
+
+    d.get_offset_duration()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert d._next_called == 1
