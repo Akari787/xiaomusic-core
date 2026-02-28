@@ -8,7 +8,9 @@ from xiaomusic.network_audio.runtime import NetworkAudioRuntime
 def _fake_xiaomusic():
     class _X:
         def __init__(self):
-            self.config = SimpleNamespace(hostname="http://127.0.0.1", public_port=58090)
+            self.config = SimpleNamespace(
+                hostname="http://127.0.0.1", public_port=58090, mi_did=""
+            )
             self.music_library = SimpleNamespace()
             self.log = SimpleNamespace(info=lambda *a, **k: None)
 
@@ -85,6 +87,24 @@ async def test_max_active_sessions_still_returns_error_when_cannot_free_slot(mon
     monkeypatch.setattr(runtime, "_stop_oldest_active_session", lambda: False)
 
     for i in range(3):
+        s = runtime.session_manager.create_session(f"https://x/{i}")
+        runtime.session_manager.update_state(s.sid, "resolving", now_ts=10 + i)
+        runtime.session_manager.update_state(s.sid, "streaming", now_ts=20 + i)
+
+    out = await runtime.play_and_cast("did-1", "https://www.youtube.com/watch?v=abc")
+    assert out["ok"] is False
+    assert out["error_code"] == "E_TOO_MANY_SESSIONS"
+
+
+@pytest.mark.asyncio
+async def test_active_limit_uses_selected_device_count(monkeypatch):
+    runtime = NetworkAudioRuntime(_fake_xiaomusic())
+    runtime.max_active_sessions = 10
+    runtime.xiaomusic.config.mi_did = "did-1,did-2"
+    monkeypatch.setattr(runtime, "ensure_started", lambda: None)
+    monkeypatch.setattr(runtime, "_stop_oldest_active_session", lambda: False)
+
+    for i in range(2):
         s = runtime.session_manager.create_session(f"https://x/{i}")
         runtime.session_manager.update_state(s.sid, "resolving", now_ts=10 + i)
         runtime.session_manager.update_state(s.sid, "streaming", now_ts=20 + i)

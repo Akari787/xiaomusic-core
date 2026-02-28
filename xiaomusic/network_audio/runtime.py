@@ -82,9 +82,13 @@ class NetworkAudioRuntime:
 
     async def play_and_cast(self, did: str, url: str, *, no_cache: bool = False) -> dict:
         self.sweep_idle_sessions()
-        if self.session_manager.count_active() >= self.max_active_sessions:
-            self._stop_oldest_active_session()
-        if self.session_manager.count_active() >= self.max_active_sessions:
+        active_limit = self._active_session_limit()
+        safety = 0
+        while self.session_manager.count_active() >= active_limit and safety < 8:
+            if not self._stop_oldest_active_session():
+                break
+            safety += 1
+        if self.session_manager.count_active() >= active_limit:
             return {
                 "ok": False,
                 "error_code": "E_TOO_MANY_SESSIONS",
@@ -272,6 +276,14 @@ class NetworkAudioRuntime:
         if not key:
             return
         self._invalidate_cache_on_stream_failure(key, error_code)
+
+    def _active_session_limit(self) -> int:
+        """Determine active session limit from selected devices first."""
+        mi_did = str(getattr(self.xiaomusic.config, "mi_did", "") or "")
+        selected = [x.strip() for x in mi_did.split(",") if x.strip()]
+        if selected:
+            return max(1, len(selected))
+        return max(1, int(self.max_active_sessions or 3))
 
     def _stop_oldest_active_session(self) -> bool:
         active_states = {"creating", "resolving", "streaming", "reconnecting"}
