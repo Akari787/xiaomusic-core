@@ -1,6 +1,8 @@
 import asyncio
 import json
 import locale
+import logging
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Union
@@ -91,16 +93,27 @@ def decrypt(ssecurity, nonce, payload):
 
 class MiJiaAPI:
     def __init__(self, auth_data_path: Optional[str] = None, token_store=None):
+        self.log = logging.getLogger(__name__)
         self.locale = locale.getlocale()[0] if locale.getlocale()[0] else "zh_CN"
         if "_" not in self.locale:  # #57, make sure locale is in correct format
             self.locale = "zh_CN"
-        self.api_base_url = "https://api.mijia.tech/app"
-        self.login_url = "https://account.xiaomi.com/longPolling/loginUrl"
+        self.api_base_url = os.getenv("XIAOMUSIC_MIJIA_API_BASE_URL", "https://api.mijia.tech/app")
+        self.login_url = os.getenv(
+            "XIAOMUSIC_MIJIA_LOGIN_URL",
+            "https://account.xiaomi.com/longPolling/loginUrl",
+        )
         # NOTE:
         # - xiaomusic uses miservice with sid="micoapi" to fetch XiaoAi device list (api2.mina.mi.com).
         # - If we login with sid="mijia" only, generated auth.json may not contain micoapi serviceToken,
         #   which causes device list refresh to fail and may trigger captcha risk-control.
-        self.service_login_url = f"https://account.xiaomi.com/pass/serviceLogin?_json=true&sid=micoapi&_locale={self.locale}"
+        service_base = os.getenv(
+            "XIAOMUSIC_MIJIA_SERVICE_LOGIN_URL",
+            "https://account.xiaomi.com/pass/serviceLogin",
+        )
+        self.service_login_url = f"{service_base}?_json=true&sid=micoapi&_locale={self.locale}"
+        self.request_timeout = float(os.getenv("XIAOMUSIC_MIJIA_TIMEOUT_SECONDS", "15"))
+        self.request_retries = int(os.getenv("XIAOMUSIC_MIJIA_RETRY_COUNT", "3"))
+        self.retry_backoff_seconds = float(os.getenv("XIAOMUSIC_MIJIA_RETRY_BACKOFF_SECONDS", "0.5"))
 
         if auth_data_path is None:
             self.auth_data_path = Path.home() / ".config" / "mijia-api" / "auth.json"
@@ -271,11 +284,11 @@ class MiJiaAPI:
                       f"cUserId={self.auth_data.get('cUserId', '')};"
                       f"uLocale={self.locale};",
         }
-        service_ret = requests.get(self.service_login_url, headers=headers)
+        service_ret = self._http_request("get", self.service_login_url, headers=headers)
         service_data = self._handle_ret(service_ret, verify_code=False)
         location = service_data["location"]
         if service_data["code"] == 0:
-            ret = self.session.get(location)
+            ret = self._http_request("get", location, session=self.session)
             if ret.status_code == 200 and ret.text == "ok":
                 cookies = self.session.cookies.get_dict()
                 self.auth_data.update(cookies)
@@ -329,7 +342,7 @@ class MiJiaAPI:
             "Content-Type": "application/x-www-form-urlencoded",
             "Connection": "keep-alive",
         }
-        login_ret = requests.get(url, headers=headers)
+        login_ret = self._http_request("get", url, headers=headers)
         return self._handle_ret(login_ret)
 
     def get_logint_status(self, status_url):
@@ -342,7 +355,7 @@ class MiJiaAPI:
             "Connection": "keep-alive",
         }
         try:
-            lp_ret = session.get(status_url, headers=headers, timeout=120)
+            lp_ret = self._http_request("get", status_url, session=session, headers=headers, timeout=120)
             lp_data = self._handle_ret(lp_ret)
         except requests.exceptions.Timeout:
             raise ValueError("超时，请重试")
@@ -363,14 +376,19 @@ class MiJiaAPI:
         try:
             nsec = "nonce=" + str(lp_data["nonce"]) + "&" + lp_data["ssecurity"]
             client_sign = base64.b64encode(hashlib.sha1(nsec.encode()).digest()).decode()
-            r = session.get(callback_url + "&clientSign=" + parse.quote(client_sign), headers=headers)
+            r = self._http_request(
+                "get",
+                callback_url + "&clientSign=" + parse.quote(client_sign),
+                session=session,
+                headers=headers,
+            )
             st_cookie = r.cookies.get("serviceToken")
             if st_cookie:
                 self.auth_data["serviceToken"] = st_cookie
         except Exception:
             pass
 
-        session.get(callback_url, headers=headers)
+        self._http_request("get", callback_url, session=session, headers=headers)
         cookies = session.cookies.get_dict()
         self.auth_data.update(cookies)
 
@@ -435,7 +453,7 @@ class MiJiaAPI:
             "Content-Type": "application/x-www-form-urlencoded",
             "Connection": "keep-alive",
         }
-        login_ret = requests.get(url, headers=headers)
+        login_ret = self._http_request("get", url, headers=headers)
         login_data = self._handle_ret(login_ret)
         self._print_qr(login_data["loginUrl"])
         print(f"也可以访问链接查看二维码图片: {login_data['qr']}")
@@ -443,7 +461,7 @@ class MiJiaAPI:
         # Step 3: 轮询等待扫码登录
         session = requests.Session()
         try:
-            lp_ret = session.get(login_data["lp"], headers=headers, timeout=120)
+            lp_ret = self._http_request("get", login_data["lp"], session=session, headers=headers, timeout=120)
             lp_data = self._handle_ret(lp_ret)
         except requests.exceptions.Timeout:
             raise ValueError("超时，请重试")
@@ -460,7 +478,7 @@ class MiJiaAPI:
         for key in auth_keys:
             self.auth_data[key] = lp_data[key]
         callback_url = lp_data["location"]
-        session.get(callback_url, headers=headers)
+        self._http_request("get", callback_url, session=session, headers=headers)
         cookies = session.cookies.get_dict()
         self.auth_data.update(cookies)
         self.auth_data.update(
@@ -486,7 +504,7 @@ class MiJiaAPI:
         params = generate_enc_params(
             uri, "POST", signed_nonce, nonce, params, self.auth_data["ssecurity"]
         )
-        ret = self.session.post(url, data=params)
+        ret = self._http_request("post", url, session=self.session, data=params)
         try:
             ret_data = json.loads(ret.text)
         except json.JSONDecodeError:
@@ -498,6 +516,55 @@ class MiJiaAPI:
                 f"API错误，状态码: {ret_data['code']}, 响应: {ret_data.get('message', ret_data.get('desc', '未知错误'))}"
             )
         return ret_data["result"]
+
+    def _http_request(self, method: str, url: str, session=None, **kwargs):
+        client = session or requests
+        timeout = kwargs.pop("timeout", self.request_timeout)
+        retries = max(1, int(self.request_retries))
+        last_error: Exception | None = None
+        for attempt in range(1, retries + 1):
+            try:
+                return getattr(client, method.lower())(url, timeout=timeout, **kwargs)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                last_error = exc
+                self.log.warning(
+                    "mijia_http_retry",
+                    extra={
+                        "event": "mijia_http_retry",
+                        "method": method.upper(),
+                        "url": url,
+                        "attempt": attempt,
+                        "retries": retries,
+                        "error": exc.__class__.__name__,
+                    },
+                )
+                if attempt < retries:
+                    time.sleep(self.retry_backoff_seconds * (2 ** (attempt - 1)))
+                    continue
+        error_id = f"mijia-{int(time.time()*1000)}"
+        self.log.error(
+            "mijia_http_failed",
+            extra={
+                "event": "mijia_http_failed",
+                "method": method.upper(),
+                "url": url,
+                "error_id": error_id,
+                "error": str(last_error) if last_error else "unknown",
+            },
+        )
+        raise ValueError(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "E_EXTERNAL_SERVICE_UNAVAILABLE",
+                        "message": "External service unavailable",
+                        "error_id": error_id,
+                    },
+                },
+                ensure_ascii=False,
+            )
+        )
 
     def check_new_msg(
             self, begin_at: int = int(time.time()) - 3600, refresh_token: bool = True

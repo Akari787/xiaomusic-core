@@ -111,6 +111,12 @@ async def get_qrcode():
         mi_jia_api = _get_mijia_api()
         qrcode_login_error = ""
         qrcode_data = mi_jia_api.get_qrcode()
+        if isinstance(qrcode_data, dict) and qrcode_data.get("ok") is False:
+            return {
+                "success": False,
+                "message": qrcode_data.get("error", {}).get("message", "外部服务不可用"),
+                "error": qrcode_data.get("error", {}),
+            }
         # 已登录时 get_qrcode 返回 False，无需扫码
         if qrcode_data is False:
             return {
