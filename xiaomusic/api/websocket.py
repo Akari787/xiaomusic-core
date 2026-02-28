@@ -13,6 +13,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 
+from xiaomusic.api import response as api_response
 from xiaomusic.api.dependencies import (
     verification,
     xiaomusic,
@@ -42,10 +43,13 @@ def generate_ws_token(
 
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-    return {
-        "token": token,
-        "expire_in": JWT_EXPIRE_SECONDS,
-    }
+    return api_response.ok(
+        {
+            "token": token,
+            "expire_in": JWT_EXPIRE_SECONDS,
+        },
+        contract="raw",
+    )
 
 
 @router.websocket("/ws/playingmusic")

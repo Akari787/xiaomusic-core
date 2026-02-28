@@ -26,11 +26,13 @@ from fastapi.openapi.utils import (
 )
 from fastapi.responses import (
     FileResponse,
+    RedirectResponse,
 )
 from starlette.background import (
     BackgroundTask,
 )
 
+from xiaomusic.api import response as api_response
 from xiaomusic import (
     __version__,
 )
@@ -55,12 +57,15 @@ router = APIRouter(dependencies=[Depends(verification)])
 async def diagnostics():
     """Runtime diagnostics (startup self-check, keyword conflicts, etc.)."""
     startup = getattr(xiaomusic, "startup_diagnostics", None)
-    return {
-        "startup": asdict(startup) if startup is not None else None,
-        "keyword_override_mode": getattr(config, "keyword_override_mode", "override"),
-        "keyword_conflicts": list(getattr(config, "keyword_conflicts", []) or []),
-        "last_download_result": getattr(xiaomusic, "last_download_result", None),
-    }
+    return api_response.ok(
+        {
+            "startup": asdict(startup) if startup is not None else None,
+            "keyword_override_mode": getattr(config, "keyword_override_mode", "override"),
+            "keyword_conflicts": list(getattr(config, "keyword_conflicts", []) or []),
+            "last_download_result": getattr(xiaomusic, "last_download_result", None),
+        },
+        contract="raw",
+    )
 
 
 def _get_mijia_api():
@@ -97,7 +102,14 @@ async def read_index():
     folder = os.path.dirname(
         os.path.dirname(os.path.dirname(__file__))
     )  # xiaomusic 目录
-    return FileResponse(f"{folder}/static/index.html")
+    repo_root = os.path.dirname(folder)
+    webui_dist = os.getenv(
+        "XIAOMUSIC_WEBUI_DIST_PATH",
+        os.path.join(repo_root, "webui", "dist"),
+    )
+    if os.path.isdir(webui_dist):
+        return RedirectResponse(url="/webui/", status_code=302)
+    return RedirectResponse(url="/static/default/index.html", status_code=302)
 
 @router.get("/api/get_qrcode")
 async def get_qrcode():
@@ -112,19 +124,22 @@ async def get_qrcode():
         qrcode_login_error = ""
         qrcode_data = mi_jia_api.get_qrcode()
         if isinstance(qrcode_data, dict) and qrcode_data.get("ok") is False:
-            return {
-                "success": False,
-                "message": qrcode_data.get("error", {}).get("message", "外部服务不可用"),
-                "error": qrcode_data.get("error", {}),
-            }
+            return api_response.fail(
+                "E_INTERNAL",
+                qrcode_data.get("error", {}).get("message", "外部服务不可用"),
+                contract="success_error",
+                error=qrcode_data.get("error", {}),
+            )
         # 已登录时 get_qrcode 返回 False，无需扫码
         if qrcode_data is False:
-            return {
-                "success": True,
-                "already_logged_in": True,
-                "qrcode_url": "",
-                "message": "已登录，无需扫码",
-            }
+            return api_response.ok(
+                {
+                    "already_logged_in": True,
+                    "qrcode_url": "",
+                    "message": "已登录，无需扫码",
+                },
+                contract="success_error",
+            )
 
         # 优先使用小米返回的官方二维码图片 URL，与扫码内容一致且最可靠
         if qrcode_data.get("qr"):
@@ -145,16 +160,20 @@ async def get_qrcode():
             qrcode_login_task.cancel()
         qrcode_login_task = asyncio.create_task(get_logint_status(mi_jia_api, qrcode_data["lp"]))
         qrcode_login_started_at = time.time()
-        return {
-            "success": True,
-            "qrcode_url": qrcode_url,
-            "status_url": qrcode_data.get("lp", ""),
-            "expire_seconds": config.qrcode_timeout,
-        }
+        return api_response.ok(
+            {
+                "qrcode_url": qrcode_url,
+                "status_url": qrcode_data.get("lp", ""),
+                "expire_seconds": config.qrcode_timeout,
+            },
+            contract="success_error",
+        )
     except Exception as e:
         qrcode_login_error = str(e)
         log.exception("get_qrcode failed: %s", e)
-        return {"success": False, "message": str(e)}
+        return api_response.fail(
+            "E_INTERNAL", str(e), contract="success_error", exc=e
+        )
 
 
 async def get_logint_status(api: MiJiaAPI, lp: str):
@@ -179,7 +198,7 @@ async def get_logint_status(api: MiJiaAPI, lp: str):
 def getversion():
     """获取版本"""
     log.debug("getversion %s", __version__)
-    return {"version": __version__}
+    return api_response.ok({"version": __version__}, contract="raw")
 
 
 @router.get("/getsetting")
@@ -215,7 +234,7 @@ async def getsetting(need_device_list: bool = False):
         device_list = await xiaomusic.getalldevices()
         log.info(f"getsetting device_list: {device_list}")
         data["device_list"] = device_list
-    return data
+    return api_response.ok(data, contract="raw")
 
 
 @router.get("/api/oauth2/status")
@@ -248,17 +267,18 @@ async def oauth2_status():
                 pass
             login_in_progress = False
 
-    return {
-        "success": True,
-        "token_file": token_path,
-        "token_exists": token_exists,
-        "token_valid": token_valid,
-        # Used by frontend to decide if refresh loop should continue
-        "cloud_available": token_valid,
-        "runtime_auth_ready": runtime_ready,
-        "login_in_progress": login_in_progress,
-        "last_error": qrcode_login_error,
-    }
+    return api_response.ok(
+        {
+            "token_file": token_path,
+            "token_exists": token_exists,
+            "token_valid": token_valid,
+            "cloud_available": token_valid,
+            "runtime_auth_ready": runtime_ready,
+            "login_in_progress": login_in_progress,
+            "last_error": qrcode_login_error,
+        },
+        contract="success_error",
+    )
 
 
 @router.post("/api/oauth2/logout")
@@ -322,12 +342,14 @@ async def oauth2_logout():
         log.exception("cleanup after oauth2 logout failed: %s", e)
         raise HTTPException(status_code=500, detail=f"logout cleanup failed: {e}")
 
-    return {
-        "success": True,
-        "removed": removed,
-        "token_file": token_path,
-        "removed_paths": removed_paths,
-    }
+    return api_response.ok(
+        {
+            "removed": removed,
+            "token_file": token_path,
+            "removed_paths": removed_paths,
+        },
+        contract="success_error",
+    )
 
 
 @router.post("/api/oauth2/refresh")
@@ -338,27 +360,30 @@ async def oauth2_refresh():
         raise HTTPException(status_code=503, detail="auth manager unavailable")
     try:
         ret = await am.manual_refresh(reason="manual_refresh")
-        return ret
+        return api_response.ok(ret, contract="raw")
     except Exception as e:
         log.exception("oauth2 refresh failed: %s", e)
-        return {
-            "refreshed": False,
-            "runtime_auth_ready": False,
-            "token_saved": False,
-            "last_error": str(e),
-            "timestamps": {
-                "saveTime": None,
-                "last_ok_ts": None,
-                "last_refresh_ts": None,
+        return api_response.ok(
+            {
+                "refreshed": False,
+                "runtime_auth_ready": False,
+                "token_saved": False,
+                "last_error": str(e),
+                "timestamps": {
+                    "saveTime": None,
+                    "last_ok_ts": None,
+                    "last_refresh_ts": None,
+                },
             },
-        }
+            contract="raw",
+        )
 
 
 @router.post("/api/jellyfin/sync")
 async def jellyfin_sync():
     ret = await xiaomusic.online_music_service.sync_jellyfin_music_lists()
     if ret.get("success"):
-        return ret
+        return api_response.ok(ret, contract="raw")
     raise HTTPException(status_code=400, detail=ret.get("error", "sync failed"))
 
 
@@ -389,7 +414,7 @@ async def savesetting(request: Request):
 
         reset_http_server(app)
 
-        return "save success"
+        return api_response.ok("save success", contract="raw")
     except json.JSONDecodeError as err:
         raise HTTPException(status_code=400, detail="Invalid JSON") from err
 
@@ -435,7 +460,10 @@ async def modifiysetting(request: Request):
         # 保存配置到文件
         xiaomusic.save_cur_config()
 
-        return {"success": True, "message": "Configuration updated successfully"}
+        return api_response.ok(
+            {"message": "Configuration updated successfully"},
+            contract="success_error",
+        )
     except json.JSONDecodeError as err:
         raise HTTPException(status_code=400, detail="Invalid JSON") from err
     except Exception as err:
@@ -472,7 +500,7 @@ def downloadlog():
                 status_code=500, detail="Error capturing log file"
             ) from e
     else:
-        return {"message": "File not found."}
+        return api_response.ok({"message": "File not found."}, contract="raw")
 
 
 @router.get("/latestversion")
@@ -480,9 +508,9 @@ async def latest_version():
     """获取最新版本"""
     version = await get_latest_version("xiaomusic")
     if version:
-        return {"ret": "OK", "version": version}
+        return api_response.ok({"version": version}, contract="ret")
     else:
-        return {"ret": "Fetch version failed"}
+        return api_response.ok(contract="ret", ret="Fetch version failed")
 
 
 @router.post("/updateversion")
@@ -493,13 +521,13 @@ async def updateversion(version: str = "", lite: bool = True):
     try:
         ret = await update_version(config, version, lite)
     except Exception as e:
-        return {"ret": str(e)}
+        return api_response.ok(contract="ret", ret=str(e))
 
     if ret != "OK":
-        return {"ret": ret}
+        return api_response.ok(contract="ret", ret=ret)
 
     asyncio.create_task(restart_xiaomusic())
-    return {"ret": "OK"}
+    return api_response.ok(contract="ret")
 
 
 @router.get("/docs", include_in_schema=False)

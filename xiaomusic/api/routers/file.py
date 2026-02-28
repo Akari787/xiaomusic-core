@@ -25,6 +25,7 @@ from fastapi.responses import (
 )
 from starlette.background import BackgroundTask
 
+from xiaomusic.api import response as api_response
 from xiaomusic.api.dependencies import config, log, verification, xiaomusic
 from xiaomusic.api.models import (
     DownloadOneMusic,
@@ -100,7 +101,7 @@ def _process_m3u8_content(m3u8_content: str, base_url: str, is_radio: bool) -> s
 async def cleantempdir(Verifcation=Depends(verification)):
     await clean_temp_dir(xiaomusic.config)
     log.info("clean_temp_dir ok")
-    return {"ret": "OK"}
+    return api_response.ok(contract="ret")
 
 
 @router.post("/downloadjson")
@@ -115,10 +116,7 @@ async def downloadjson(data: UrlInfo, Verifcation=Depends(verification)):
     except Exception as e:
         log.exception(f"Execption {e}")
         ret = "Download JSON file failed."
-    return {
-        "ret": ret,
-        "content": content,
-    }
+    return api_response.ok({"content": content}, contract="ret", ret=ret)
 
 
 @router.post("/downloadplaylist")
@@ -141,7 +139,7 @@ async def downloadplaylist(data: DownloadPlayList, Verifcation=Depends(verificat
             # 可能只是部分失败，都需要整理下载目录
             remove_common_prefix(dir_path)
             chmoddir(dir_path)
-            return {"ret": "OK"}
+            return api_response.ok(contract="ret")
         else:
             download_proc = await download_playlist(config, data.url, data.dirname)
 
@@ -157,11 +155,11 @@ async def downloadplaylist(data: DownloadPlayList, Verifcation=Depends(verificat
             chmoddir(dir_path)
 
         asyncio.create_task(check_download_proc())
-        return {"ret": "OK"}
+        return api_response.ok(contract="ret")
     except Exception as e:
         log.exception(f"Execption {e}")
 
-    return {"ret": "Failed download"}
+    return api_response.ok(contract="ret", ret="Failed download")
 
 
 @router.post("/downloadonemusic")
@@ -250,11 +248,11 @@ async def downloadonemusic(data: DownloadOneMusic, Verifcation=Depends(verificat
                 )
 
         asyncio.create_task(check_download_proc())
-        return {"ret": "OK"}
+        return api_response.ok(contract="ret")
     except Exception as e:
         log.exception(f"Execption {e}")
 
-    return {"ret": "Failed download"}
+    return api_response.ok(contract="ret", ret="Failed download")
 
 
 @router.post("/uploadytdlpcookie")
@@ -262,11 +260,13 @@ async def upload_yt_dlp_cookie(file: UploadFile = File(...)):
     """上传 yt-dlp cookies"""
     with open(config.yt_dlp_cookies_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    return {
-        "ret": "OK",
-        "filename": file.filename,
-        "file_location": config.yt_dlp_cookies_path,
-    }
+    return api_response.ok(
+        {
+            "filename": file.filename,
+            "file_location": config.yt_dlp_cookies_path,
+        },
+        contract="ret",
+    )
 
 
 @router.post("/uploadmusic")
@@ -322,7 +322,7 @@ async def upload_music(playlist: str = Form(...), file: UploadFile = File(...)):
         except Exception:
             pass
 
-        return {"ret": "OK", "filename": filename}
+        return api_response.ok({"filename": filename}, contract="ret")
     except HTTPException:
         raise
     except Exception as e:
@@ -343,14 +343,10 @@ def _legacy_link_auth_removed_response() -> JSONResponse:
     log.warning(
         "legacy_link_auth_removed: migrate to HTTP Basic + HTTP_AUTH_HASH or OAuth2"
     )
-    return JSONResponse(
-        status_code=410,
-        content={
-            "ok": False,
-            "success": False,
-            "error_code": "E_LEGACY_LINK_AUTH_REMOVED",
-            "message": "旧版 key/code 鉴权已移除，请使用 HTTP Basic + HTTP_AUTH_HASH 或 OAuth2",
-        },
+    return api_response.fail(
+        "E_LEGACY_LINK_AUTH_REMOVED",
+        "旧版 key/code 鉴权已移除，请使用 HTTP Basic + HTTP_AUTH_HASH 或 OAuth2",
+        http_status=410,
     )
 
 

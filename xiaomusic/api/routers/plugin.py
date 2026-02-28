@@ -13,6 +13,7 @@ from fastapi import (
     UploadFile,
 )
 
+from xiaomusic.api import response as api_response
 from xiaomusic.api.dependencies import (
     verification,
     xiaomusic,
@@ -31,16 +32,20 @@ def get_js_plugins(
             not hasattr(xiaomusic, "js_plugin_manager")
             or not xiaomusic.js_plugin_manager
         ):
-            return {"success": False, "error": "JS Plugin Manager not available"}
+            return api_response.fail(
+                "E_INTERNAL",
+                "JS Plugin Manager not available",
+                contract="success_error",
+            )
 
         if enabled_only:
             plugins = xiaomusic.js_plugin_manager.get_enabled_plugins()
         else:
             plugins = xiaomusic.js_plugin_manager.refresh_plugin_list()
-        return {"success": True, "data": plugins}
+        return api_response.ok({"data": plugins}, contract="success_error")
 
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return api_response.fail("E_INTERNAL", str(e), contract="success_error", exc=e)
 
 
 @router.put("/api/js-plugins/{plugin_name}/enable")
@@ -51,13 +56,17 @@ def enable_js_plugin(plugin_name: str):
             not hasattr(xiaomusic, "js_plugin_manager")
             or not xiaomusic.js_plugin_manager
         ):
-            return {"success": False, "error": "JS Plugin Manager not available"}
+            return api_response.fail(
+                "E_INTERNAL",
+                "JS Plugin Manager not available",
+                contract="success_error",
+            )
 
         success = xiaomusic.js_plugin_manager.enable_plugin(plugin_name)
-        return {"success": success}
+        return api_response.ok({"success": success}, contract="raw")
 
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return api_response.fail("E_INTERNAL", str(e), contract="success_error", exc=e)
 
 
 @router.put("/api/js-plugins/{plugin_name}/disable")
@@ -68,13 +77,17 @@ def disable_js_plugin(plugin_name: str):
             not hasattr(xiaomusic, "js_plugin_manager")
             or not xiaomusic.js_plugin_manager
         ):
-            return {"success": False, "error": "JS Plugin Manager not available"}
+            return api_response.fail(
+                "E_INTERNAL",
+                "JS Plugin Manager not available",
+                contract="success_error",
+            )
 
         success = xiaomusic.js_plugin_manager.disable_plugin(plugin_name)
-        return {"success": success}
+        return api_response.ok({"success": success}, contract="raw")
 
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return api_response.fail("E_INTERNAL", str(e), contract="success_error", exc=e)
 
 
 @router.delete("/api/js-plugins/{plugin_name}/uninstall")
@@ -85,13 +98,17 @@ def uninstall_js_plugin(plugin_name: str):
             not hasattr(xiaomusic, "js_plugin_manager")
             or not xiaomusic.js_plugin_manager
         ):
-            return {"success": False, "error": "JS Plugin Manager not available"}
+            return api_response.fail(
+                "E_INTERNAL",
+                "JS Plugin Manager not available",
+                contract="success_error",
+            )
 
         success = xiaomusic.js_plugin_manager.uninstall_plugin(plugin_name)
-        return {"success": success}
+        return api_response.ok({"success": success}, contract="raw")
 
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return api_response.fail("E_INTERNAL", str(e), contract="success_error", exc=e)
 
 
 @router.post("/api/js-plugins/upload")
@@ -141,10 +158,10 @@ async def upload_js_plugin(file: UploadFile = File(...)):
         # 重新加载插件
         xiaomusic.js_plugin_manager.reload_plugins()
 
-        return {"success": True, "message": "插件上传成功"}
+        return api_response.ok({"message": "插件上传成功"}, contract="success_error")
 
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return api_response.fail("E_INTERNAL", str(e), contract="success_error", exc=e)
 
 
 # ----------------------------开放接口相关函数---------------------------------------
@@ -155,18 +172,20 @@ def get_openapi_info():
     """获取开放接口配置信息"""
     try:
         openapi_info = xiaomusic.js_plugin_manager.get_openapi_info()
-        return {"success": True, "data": openapi_info}
+        return api_response.ok({"data": openapi_info}, contract="success_error")
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return api_response.fail("E_INTERNAL", str(e), contract="success_error", exc=e)
 
 
 @router.post("/api/openapi/toggle")
 def toggle_openapi():
     """开放接口状态切换"""
     try:
-        return xiaomusic.js_plugin_manager.toggle_openapi()
+        return api_response.ok(
+            xiaomusic.js_plugin_manager.toggle_openapi(), contract="raw"
+        )
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return api_response.fail("E_INTERNAL", str(e), contract="success_error", exc=e)
 
 
 @router.post("/api/openapi/updateUrl")
@@ -176,10 +195,17 @@ async def update_openapi_url(request: Request):
         request_json = await request.json()
         search_url = request_json.get("search_url")
         if not request_json or "search_url" not in request_json:
-            return {"success": False, "error": "Missing 'search_url' in request body"}
-        return xiaomusic.js_plugin_manager.update_openapi_url(search_url)
+            return api_response.fail(
+                "E_BAD_REQUEST",
+                "Missing 'search_url' in request body",
+                contract="success_error",
+            )
+        return api_response.ok(
+            xiaomusic.js_plugin_manager.update_openapi_url(search_url),
+            contract="raw",
+        )
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return api_response.fail("E_INTERNAL", str(e), contract="success_error", exc=e)
 
 
 # ----------------------------插件源接口---------------------------------------
@@ -190,18 +216,20 @@ def get_plugin_source_info():
     """获取插件源配置信息"""
     try:
         plugin_source = xiaomusic.js_plugin_manager.get_plugin_source()
-        return {"success": True, "data": plugin_source}
+        return api_response.ok({"data": plugin_source}, contract="success_error")
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return api_response.fail("E_INTERNAL", str(e), contract="success_error", exc=e)
 
 
 @router.post("/api/plugin-source/refresh")
 def refresh_plugin_source():
     """更新订阅源"""
     try:
-        return xiaomusic.js_plugin_manager.refresh_plugin_source()
+        return api_response.ok(
+            xiaomusic.js_plugin_manager.refresh_plugin_source(), contract="raw"
+        )
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return api_response.fail("E_INTERNAL", str(e), contract="success_error", exc=e)
 
 
 @router.post("/api/plugin-source/updateUrl")
@@ -211,7 +239,14 @@ async def update_plugin_source(request: Request):
         request_json = await request.json()
         source_url = request_json.get("source_url")
         if not request_json or "source_url" not in request_json:
-            return {"success": False, "error": "Missing 'search_url' in request body"}
-        return xiaomusic.js_plugin_manager.update_plugin_source_url(source_url)
+            return api_response.fail(
+                "E_BAD_REQUEST",
+                "Missing 'search_url' in request body",
+                contract="success_error",
+            )
+        return api_response.ok(
+            xiaomusic.js_plugin_manager.update_plugin_source_url(source_url),
+            contract="raw",
+        )
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return api_response.fail("E_INTERNAL", str(e), contract="success_error", exc=e)

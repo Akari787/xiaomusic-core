@@ -9,6 +9,7 @@ from fastapi import (
     HTTPException,
 )
 
+from xiaomusic.api import response as api_response
 from xiaomusic.api.dependencies import (
     log,
     verification,
@@ -37,16 +38,16 @@ def _get_facade() -> PlaybackFacade:
 async def device_list():
     """获取设备列表"""
     devices = await xiaomusic.getalldevices()
-    return {"devices": devices}
+    return api_response.ok({"devices": devices}, contract="raw")
 
 @router.get("/getvolume")
 async def getvolume(did: str = ""):
     """获取音量"""
     if not xiaomusic.did_exist(did):
-        return {"volume": 0}
+        return api_response.ok({"volume": 0}, contract="raw")
 
     volume = await xiaomusic.get_volume(did=did)
-    return {"volume": volume}
+    return api_response.ok({"volume": volume}, contract="raw")
 
 
 @router.get("/getplayerstatus")
@@ -61,7 +62,7 @@ async def getplayerstatus(did: str = ""):
         - duration: 总时长（毫秒）
     """
     if not xiaomusic.did_exist(did):
-        return {"status": 0, "volume": 0}
+        return api_response.ok({"status": 0, "volume": 0}, contract="raw")
 
     out = await _get_facade().status({"speaker_id": did})
     return out["raw"]
@@ -73,11 +74,11 @@ async def setvolume(data: DidVolume):
     did = data.did
     volume = data.volume
     if not xiaomusic.did_exist(did):
-        return {"ret": "Did not exist"}
+        return api_response.ok(contract="ret", ret="Did not exist")
 
     log.info(f"set_volume {did} {volume}")
     await xiaomusic.set_volume(did=did, arg1=volume)
-    return {"ret": "OK", "volume": volume}
+    return api_response.ok({"volume": volume}, contract="ret")
 
 
 @router.post("/cmd")
@@ -87,7 +88,7 @@ async def do_cmd(data: DidCmd):
     cmd = data.cmd
     log.info(f"docmd. did:{did} cmd:{cmd}")
     if not xiaomusic.did_exist(did):
-        return {"ret": "Did not exist"}
+        return api_response.ok(contract="ret", ret="Did not exist")
 
     if len(cmd) > 0:
         try:
@@ -113,8 +114,8 @@ async def do_cmd(data: DidCmd):
             raise
         except Exception as e:
             log.warning(f"Exception {e}")
-        return {"ret": "OK"}
-    return {"ret": "Unknow cmd"}
+        return api_response.ok(contract="ret")
+    return api_response.ok(contract="ret", ret="Unknow cmd")
 
 
 @router.get("/cmdstatus")
@@ -122,15 +123,15 @@ async def cmd_status():
     """命令状态"""
     finish = await xiaomusic.is_task_finish()
     if finish:
-        return {"ret": "OK", "status": "finish"}
-    return {"ret": "OK", "status": "running"}
+        return api_response.ok({"status": "finish"}, contract="ret")
+    return api_response.ok({"status": "running"}, contract="ret")
 
 
 @router.get("/playurl")
 async def playurl(did: str, url: str):
     """播放 URL（deprecated wrapper，内部已收敛到统一播放入口）"""
     if not xiaomusic.did_exist(did):
-        return {"ret": "Did not exist"}
+        return api_response.ok(contract="ret", ret="Did not exist")
     decoded_url = urllib.parse.unquote(url)
     log.info(f"playurl did: {did} url: {decoded_url}")
     out = await _get_facade().play_url(
@@ -145,11 +146,11 @@ async def playurl(did: str, url: str):
 async def playtts(did: str, text: str):
     """播放 TTS"""
     if not xiaomusic.did_exist(did):
-        return {"ret": "Did not exist"}
+        return api_response.ok(contract="ret", ret="Did not exist")
 
     log.info(f"tts {did} {text}")
     await xiaomusic.do_tts(did=did, value=text)
-    return {"ret": "OK"}
+    return api_response.ok(contract="ret")
 
 
 @router.post("/device/stop")
@@ -158,10 +159,10 @@ async def stop(data: Did):
     did = data.did
     log.info(f"stop did:{did}")
     if not xiaomusic.did_exist(did):
-        return {"ret": "Did not exist"}
+        return api_response.ok(contract="ret", ret="Did not exist")
 
     try:
         await _get_facade().stop({"speaker_id": did})
     except Exception as e:
         log.warning(f"Execption {e}")
-    return {"ret": "OK"}
+    return api_response.ok(contract="ret")
