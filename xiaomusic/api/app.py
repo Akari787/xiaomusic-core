@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
 from xiaomusic import __version__
@@ -130,6 +131,20 @@ def HttpInit(_xiaomusic: "XiaoMusic"):
     # 挂载静态文件
     folder = os.path.dirname(os.path.dirname(__file__))  # xiaomusic 目录
     app.mount("/static", AuthStaticFiles(directory=f"{folder}/static"), name="static")
+
+    # Optional: host separated webui build output under /webui.
+    repo_root = os.path.dirname(folder)
+    webui_dist = os.getenv(
+        "XIAOMUSIC_WEBUI_DIST_PATH",
+        os.path.join(repo_root, "webui", "dist"),
+    )
+    if os.path.isdir(webui_dist):
+        if not any(getattr(r, "path", "") == "/webui" for r in app.routes):
+            app.mount(
+                "/webui",
+                StaticFiles(directory=webui_dist, html=True),
+                name="webui",
+            )
 
     # 注册所有路由
     from xiaomusic.api.routers import register_routers

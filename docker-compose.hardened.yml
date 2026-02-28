@@ -27,6 +27,7 @@ services:
     volumes:
       - ./conf:/app/conf
       - ./music:/app/music
+      - ./webui/dist:/app/webui/dist:ro
     # Harden runtime
     read_only: true
     tmpfs:

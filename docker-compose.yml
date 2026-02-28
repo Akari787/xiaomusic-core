@@ -11,11 +11,12 @@ services:
     environment:
       TZ: Asia/Shanghai
       XIAOMUSIC_PUBLIC_PORT: 58090
-      API_SECRET: ${API_SECRET:?API_SECRET is required}
+      API_SECRET: ${API_SECRET:-}
       HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:?HTTP_AUTH_HASH is required}
     volumes:
       - ./conf:/app/conf
       - ./music:/app/music
+      - ./webui/dist:/app/webui/dist:ro
 
   xiaomusic-test:
     profiles: ["test"]
@@ -29,8 +30,9 @@ services:
     environment:
       TZ: Asia/Shanghai
       XIAOMUSIC_PUBLIC_PORT: 58091
-      API_SECRET: ${API_SECRET:?API_SECRET is required}
+      API_SECRET: ${API_SECRET:-}
       HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:?HTTP_AUTH_HASH is required}
     volumes:
       - ./conf:/app/conf
       - ./music:/app/music
+      - ./webui/dist:/app/webui/dist:ro
