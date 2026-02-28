@@ -144,7 +144,7 @@ def fail(error_code: str, message: str, http_status: int | None = None, **extra)
     if contract == "ret":
         body = {"ret": ret_value}
     elif contract == "success_error":
-        body = {"success": False, "error": message}
+        body = {"success": False, "error": message, "message": message}
     elif contract == "detail":
         body = {"detail": detail_payload if detail_payload is not None else message}
     elif contract == "raw":
