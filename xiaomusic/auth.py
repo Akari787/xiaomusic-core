@@ -12,6 +12,7 @@ import os
 import time
 import asyncio
 from copy import deepcopy
+from typing import Any
 
 from aiohttp import ClientSession
 from miservice import MiAccount, MiIOService, MiNAService
@@ -30,8 +31,39 @@ AUTH_ERROR_KEYWORDS = (
     "unauthorized",
     "invalid token",
     "service token expired",
+    "servicetoken invalid",
     "servicetoken expired",
     "token expired",
+    "401",
+    "403",
+)
+
+NETWORK_ERROR_KEYWORDS = (
+    "timeout",
+    "timed out",
+    "connection reset",
+    "connection aborted",
+    "connection refused",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "dns",
+    "network is unreachable",
+    "remote disconnected",
+    "502",
+    "503",
+    "504",
+)
+
+AUTH_REFRESH_RELOGIN_KEYWORDS = (
+    "refresh token failed",
+    "refresh token missing",
+    "missing refresh",
+    "invalid_grant",
+    "re-login",
+    "relogin",
+    "please login",
+    "请重新登录",
+    "刷新token失败",
 )
 
 
@@ -60,6 +92,54 @@ def is_auth_error(exc=None, resp=None, body=None) -> bool:
 
     lowered = " ".join(text_parts).lower()
     return any(word in lowered for word in AUTH_ERROR_KEYWORDS)
+
+
+def is_auth_error_strict(exc=None, resp=None, body=None) -> bool:
+    status = None
+    if resp is not None:
+        status = getattr(resp, "status", None)
+    if status is None and exc is not None:
+        status = getattr(exc, "status", None)
+    if status is None and exc is not None:
+        status = getattr(exc, "code", None)
+    if status in (401, 403):
+        return True
+
+    text_parts = []
+    if body is not None:
+        if isinstance(body, dict):
+            for key in ("code", "message", "msg", "error", "detail", "description"):
+                val = body.get(key)
+                if val is not None:
+                    text_parts.append(str(val))
+        else:
+            text_parts.append(str(body))
+    if exc is not None:
+        text_parts.append(str(exc))
+    lowered = " ".join(text_parts).lower()
+    if any(word in lowered for word in NETWORK_ERROR_KEYWORDS):
+        return False
+    return any(word in lowered for word in AUTH_ERROR_KEYWORDS)
+
+
+def is_network_error(exc=None, resp=None, body=None) -> bool:
+    status = None
+    if resp is not None:
+        status = getattr(resp, "status", None)
+    if status is None and exc is not None:
+        status = getattr(exc, "status", None)
+    if status is None and exc is not None:
+        status = getattr(exc, "code", None)
+    if status is not None and int(status) >= 500:
+        return True
+
+    text_parts = []
+    if body is not None:
+        text_parts.append(str(body))
+    if exc is not None:
+        text_parts.append(str(exc))
+    lowered = " ".join(text_parts).lower()
+    return any(word in lowered for word in NETWORK_ERROR_KEYWORDS)
 
 
 class AuthManager:
@@ -97,12 +177,53 @@ class AuthManager:
         self._next_relogin_allowed_ts = 0.0
         self._keepalive_fail_streak = 0
         self._keepalive_degraded = False
+        self._last_refresh_ts = 0.0
+        self._last_refresh_error = ""
+
+        self._high_freq_methods = {
+            "device_list",
+            "get_latest_ask",
+        }
+        self._hf_last_call_ts: dict[str, float] = {}
+        self._hf_auth_fail_streak: dict[str, int] = {}
+        self._hf_cooldown_until_ts: dict[str, float] = {}
 
         # 当前设备DID（用于设备ID更新）
         self._cur_did = None
         self.device_id = get_random(16).upper()
         self.mi_session = ClientSession()
         self.device_manager = device_manager
+
+    def _auth_log(self, reason: str, action: str, result: str, err: str = "") -> None:
+        err_text = (err or "").replace("\n", " ")[:200]
+        self.log.info(
+            "auth_flow reason=%s action=%s result=%s error=%s",
+            reason,
+            action,
+            result,
+            err_text,
+        )
+
+    @property
+    def _hf_min_interval_sec(self) -> int:
+        return max(1, int(getattr(self.config, "mina_high_freq_min_interval_seconds", 8)))
+
+    @property
+    def _hf_auth_fail_threshold(self) -> int:
+        return max(1, int(getattr(self.config, "mina_auth_fail_threshold", 3)))
+
+    @property
+    def _hf_auth_cooldown_sec(self) -> int:
+        return max(60, int(getattr(self.config, "mina_auth_cooldown_seconds", 600)))
+
+    @property
+    def _refresh_interval_hours(self) -> float:
+        return max(0.01, float(getattr(self.config, "oauth2_refresh_interval_hours", 12.0)))
+
+    @property
+    def _refresh_min_interval_sec(self) -> int:
+        mins = max(1, int(getattr(self.config, "oauth2_refresh_min_interval_minutes", 30)))
+        return mins * 60
 
     def is_auth_error(self, exc=None, resp=None, body=None) -> bool:
         return is_auth_error(exc=exc, resp=resp, body=body)
@@ -159,7 +280,175 @@ class AuthManager:
             return True
         return False
 
-    async def ensure_logged_in(self, force=False, reason=""):
+    def _refresh_failed_requires_relogin(self, err: Exception | str) -> bool:
+        text = str(err).lower()
+        return any(word in text for word in AUTH_REFRESH_RELOGIN_KEYWORDS)
+
+    def _is_high_freq_request(self, method_name: str, ctx: str) -> bool:
+        if method_name == "get_latest_ask":
+            return True
+        if method_name != "device_list":
+            return False
+        c = (ctx or "").lower()
+        # Only poll-like paths should be throttled/circuit-broken.
+        return ("keepalive" in c) or ("poll" in c)
+
+    def _should_skip_high_freq(self, method_name: str) -> tuple[bool, str]:
+        now = time.time()
+        cooldown_until = self._hf_cooldown_until_ts.get(method_name, 0.0)
+        if now < cooldown_until:
+            return True, "circuit_open"
+        last_ts = self._hf_last_call_ts.get(method_name, 0.0)
+        if now - last_ts < self._hf_min_interval_sec:
+            return True, "rate_limited"
+        self._hf_last_call_ts[method_name] = now
+        return False, ""
+
+    def _record_high_freq_auth_failure(self, method_name: str) -> None:
+        streak = self._hf_auth_fail_streak.get(method_name, 0) + 1
+        self._hf_auth_fail_streak[method_name] = streak
+        if streak >= self._hf_auth_fail_threshold:
+            cooldown_until = time.time() + self._hf_auth_cooldown_sec
+            self._hf_cooldown_until_ts[method_name] = cooldown_until
+            self._auth_log(
+                reason="auth_error",
+                action="circuit_open",
+                result="fail",
+                err=f"method={method_name} streak={streak} cooldown={self._hf_auth_cooldown_sec}s",
+            )
+
+    def _record_high_freq_success(self, method_name: str) -> None:
+        self._hf_auth_fail_streak[method_name] = 0
+        self._hf_cooldown_until_ts[method_name] = 0.0
+
+    def _degraded_high_freq_result(self, method_name: str):
+        if method_name == "device_list":
+            return []
+        if method_name == "get_latest_ask":
+            return []
+        return []
+
+    def _token_save_ts(self) -> float:
+        try:
+            data = self._get_oauth2_auth_data()
+            save_ms = int(data.get("saveTime") or 0)
+            if save_ms > 0:
+                return save_ms / 1000.0
+        except Exception:
+            return 0.0
+        return 0.0
+
+    async def _verify_runtime_auth_ready(self) -> bool:
+        try:
+            if self.mina_service is None:
+                return False
+            await self.mina_service.device_list()
+            self._last_ok_ts = time.time()
+            return True
+        except Exception:
+            return False
+
+    async def rebuild_services(self, reason: str, allow_login_fallback: bool = False) -> bool:
+        self.mark_session_invalid(reason or "rebuild")
+        await self.login_miboy(
+            allow_login_fallback=allow_login_fallback,
+            reason=reason,
+        )
+        ready = await self._verify_runtime_auth_ready()
+        self._auth_log(
+            reason=reason,
+            action="rebuild",
+            result="success" if ready else "fail",
+            err="",
+        )
+        return ready
+
+    async def refresh_oauth2_token_if_needed(self, reason: str, force: bool = False) -> dict[str, Any]:
+        now = time.time()
+        if not force and self._last_refresh_ts and (now - self._last_refresh_ts) < self._refresh_min_interval_sec:
+            return {
+                "refreshed": False,
+                "token_saved": False,
+                "last_error": "refresh skipped by min interval",
+                "fallback_allowed": False,
+            }
+
+        from xiaomusic.qrcode_login import MiJiaAPI
+
+        token_path = self.oauth2_token_path
+        auth_dir = os.path.dirname(token_path) if token_path else None
+        try:
+            api = MiJiaAPI(auth_data_path=auth_dir, token_store=self.token_store)
+            if not hasattr(api, "_refresh_token"):
+                raise RuntimeError("refresh api unavailable")
+            await asyncio.to_thread(api._refresh_token)
+            self._last_refresh_ts = time.time()
+            self._last_refresh_error = ""
+            self._auth_log(reason=reason, action="refresh", result="success")
+            return {
+                "refreshed": True,
+                "token_saved": True,
+                "last_error": None,
+                "fallback_allowed": False,
+            }
+        except Exception as e:
+            self._last_refresh_error = str(e)
+            fallback_allowed = self._refresh_failed_requires_relogin(e)
+            self._auth_log(
+                reason=reason,
+                action="refresh",
+                result="fail",
+                err=f"{type(e).__name__}:{e}",
+            )
+            return {
+                "refreshed": False,
+                "token_saved": False,
+                "last_error": str(e),
+                "fallback_allowed": fallback_allowed,
+            }
+
+    async def manual_refresh(self, reason: str = "manual_refresh") -> dict[str, Any]:
+        async with self._relogin_lock:
+            ref = await self.refresh_oauth2_token_if_needed(reason=reason, force=True)
+            runtime_ready = False
+            if ref.get("refreshed"):
+                runtime_ready = await self.rebuild_services(
+                    reason=reason,
+                    allow_login_fallback=False,
+                )
+            return {
+                "refreshed": bool(ref.get("refreshed")),
+                "runtime_auth_ready": bool(runtime_ready),
+                "token_saved": bool(ref.get("token_saved")),
+                "last_error": ref.get("last_error"),
+                "timestamps": {
+                    "saveTime": int(self._token_save_ts() * 1000) if self._token_save_ts() else None,
+                    "last_ok_ts": int(self._last_ok_ts * 1000) if self._last_ok_ts else None,
+                    "last_refresh_ts": int(self._last_refresh_ts * 1000) if self._last_refresh_ts else None,
+                },
+            }
+
+    async def _maybe_scheduled_refresh(self) -> None:
+        now = time.time()
+        if self._last_refresh_ts and (now - self._last_refresh_ts) < self._refresh_min_interval_sec:
+            return
+        save_ts = self._token_save_ts()
+        if not save_ts:
+            return
+        if now - save_ts < self._refresh_interval_hours * 3600:
+            return
+        async with self._relogin_lock:
+            ref = await self.refresh_oauth2_token_if_needed(
+                reason="scheduled_refresh",
+                force=False,
+            )
+            if ref.get("refreshed"):
+                await self.rebuild_services(
+                    reason="scheduled_refresh",
+                    allow_login_fallback=False,
+                )
+
+    async def ensure_logged_in(self, force=False, reason="", prefer_refresh=False):
         async with self._relogin_lock:
             now = time.time()
             self._relogin_inflight_ts = now
@@ -180,11 +469,33 @@ class AuthManager:
             if reason:
                 self.log.warning(f"ensure_logged_in start reason={reason} force={force}")
 
-            self.mark_session_invalid(reason or "ensure_logged_in")
             try:
-                await self.init_all_data()
-                if await self.need_login():
-                    raise RuntimeError("relogin completed but service still unavailable")
+                if prefer_refresh:
+                    refreshed = await self.refresh_oauth2_token_if_needed(
+                        reason=reason or "auth_error",
+                        force=True,
+                    )
+                    if refreshed.get("refreshed"):
+                        ready = await self.rebuild_services(
+                            reason=reason or "auth_error",
+                            allow_login_fallback=False,
+                        )
+                        if not ready:
+                            raise RuntimeError("rebuild after refresh failed")
+                    elif refreshed.get("fallback_allowed"):
+                        ready = await self.rebuild_services(
+                            reason=reason or "login_fallback",
+                            allow_login_fallback=True,
+                        )
+                        if not ready:
+                            raise RuntimeError("fallback login rebuild failed")
+                    else:
+                        raise RuntimeError(refreshed.get("last_error") or "refresh failed")
+                else:
+                    self.mark_session_invalid(reason or "ensure_logged_in")
+                    await self.init_all_data()
+                    if await self.need_login():
+                        raise RuntimeError("relogin completed but service still unavailable")
                 self._last_ok_ts = time.time()
                 self._relogin_fail_streak = 0
                 self._next_relogin_allowed_ts = 0.0
@@ -205,23 +516,60 @@ class AuthManager:
         try:
             return await fn()
         except Exception as e:
-            if not self.is_auth_error(exc=e):
+            if is_network_error(exc=e):
+                self._auth_log(
+                    reason=ctx or "unknown",
+                    action="network_backoff",
+                    result="fail",
+                    err=f"{type(e).__name__}:{e}",
+                )
                 raise
 
-            self.log.warning(f"auth_call detect auth error ctx={ctx} err={e}")
-            await self.ensure_logged_in(force=True, reason=ctx or str(e))
+            if not is_auth_error_strict(exc=e):
+                raise
+
+            self._auth_log(
+                reason=ctx or "auth_error",
+                action="auth_error_detected",
+                result="fail",
+                err=f"{type(e).__name__}:{e}",
+            )
+            await self.ensure_logged_in(
+                force=True,
+                reason=ctx or str(e),
+                prefer_refresh=True,
+            )
             if retry <= 0:
                 raise
             return await fn()
 
     async def mina_call(self, method_name: str, *args, retry=1, ctx="", **kwargs):
+        if self._is_high_freq_request(method_name, ctx):
+            skip, skip_reason = self._should_skip_high_freq(method_name)
+            if skip:
+                self._auth_log(
+                    reason=f"mina:{method_name}:{ctx}",
+                    action=skip_reason,
+                    result="degraded",
+                )
+                return self._degraded_high_freq_result(method_name)
+
         async def _call():
             if self.mina_service is None:
                 raise RuntimeError("mina service unavailable")
             method = getattr(self.mina_service, method_name)
             return await method(*args, **kwargs)
 
-        return await self.auth_call(_call, retry=retry, ctx=f"mina:{method_name}:{ctx}")
+        try:
+            ret = await self.auth_call(_call, retry=retry, ctx=f"mina:{method_name}:{ctx}")
+            if self._is_high_freq_request(method_name, ctx):
+                self._record_high_freq_success(method_name)
+            return ret
+        except Exception as e:
+            if self._is_high_freq_request(method_name, ctx) and is_auth_error_strict(exc=e):
+                self._record_high_freq_auth_failure(method_name)
+                return self._degraded_high_freq_result(method_name)
+            raise
 
     async def miio_call(self, fn, *, retry=1, ctx=""):
         return await self.auth_call(fn, retry=retry, ctx=f"miio:{ctx}")
@@ -229,6 +577,7 @@ class AuthManager:
     async def keepalive_loop(self, interval_sec=300):
         while True:
             try:
+                await self._maybe_scheduled_refresh()
                 await self.ensure_logged_in(force=False, reason="keepalive")
                 await self.mina_call("device_list", retry=1, ctx="keepalive")
                 self._last_ok_ts = time.time()
@@ -277,7 +626,7 @@ class AuthManager:
             oauth2_mtime = int(os.path.getmtime(token_path))
         return (oauth2_mtime, self.config.mi_did)
 
-    async def login_miboy(self):
+    async def login_miboy(self, allow_login_fallback: bool = True, reason: str = ""):
         """登录小米账号
 
         使用 OAuth2 token 登录小米账号，并初始化相关服务。
@@ -304,7 +653,9 @@ class AuthManager:
             oauth_ssecurity = auth_data.get("ssecurity")
             if oauth_service_token and oauth_ssecurity:
                 try:
-                    mi_account.token["micoapi"] = (oauth_ssecurity, oauth_service_token)
+                    token_data = getattr(mi_account, "token", None)
+                    if isinstance(token_data, dict):
+                        token_data["micoapi"] = (oauth_ssecurity, oauth_service_token)
                 except Exception:
                     # keep fallback login path
                     pass
@@ -320,13 +671,30 @@ class AuthManager:
                 try:
                     await self.mina_service.device_list()
                 except Exception as verify_err:
-                    self.log.warning(
-                        f"OAuth2 serviceToken 可能失效，回退账号登录流程: {verify_err}"
+                    self._auth_log(
+                        reason=reason or "login_verify",
+                        action="verify_service_token",
+                        result="fail",
+                        err=f"{type(verify_err).__name__}:{verify_err}",
+                    )
+                    if not allow_login_fallback:
+                        raise RuntimeError("service token verify failed and login fallback disabled")
+                    self._auth_log(
+                        reason=reason or "auth_error",
+                        action="login_fallback",
+                        result="start",
                     )
                     await mi_account.login("micoapi")
                     self.mina_service = MiNAService(mi_account)
                     self.miio_service = MiIOService(mi_account)
             else:
+                if not allow_login_fallback:
+                    raise RuntimeError("missing service token and login fallback disabled")
+                self._auth_log(
+                    reason=reason or "auth_error",
+                    action="login_fallback",
+                    result="start",
+                )
                 await mi_account.login("micoapi")
                 self.mina_service = MiNAService(mi_account)
                 self.miio_service = MiIOService(mi_account)
@@ -334,11 +702,26 @@ class AuthManager:
             self.login_acount = account_name
             self.login_signature = self._get_login_signature()
             self._persist_oauth2_token(auth_data=auth_data, mi_account=mi_account, reason="login")
+            # Clear relogin backoff immediately after a successful login/reinit.
+            self._relogin_fail_streak = 0
+            self._next_relogin_allowed_ts = 0.0
+            self._last_ok_ts = time.time()
             self.log.info(f"登录完成. {self.login_acount}")
+            self._auth_log(
+                reason=reason or "login",
+                action="login",
+                result="success",
+            )
         except Exception as e:
             self.mina_service = None
             self.miio_service = None
             self.log.warning(f"可能登录失败. {e}")
+            self._auth_log(
+                reason=reason or "login",
+                action="login",
+                result="fail",
+                err=f"{type(e).__name__}:{e}",
+            )
 
     async def try_update_device_id(self):
         """更新设备ID

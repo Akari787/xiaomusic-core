@@ -163,6 +163,14 @@ docker compose up -d --force-recreate
 - 口令合并模式新增：`keyword_override_mode` 默认 `override`（同名口令冲突时以用户自定义为准）；可改为 `append` 保留默认口令。
 - Token 优先级变更为“环境变量 > `conf/auth.json`”：支持 `OAUTH2_ACCESS_TOKEN` / `OAUTH2_REFRESH_TOKEN`；若这些变量存在，删除 token 文件不会让其失效。
 - 如不希望落盘 token：设置 `persist_token=false`，扫码/刷新只会保存到内存（重启后需重新登录）。
+- 掉线自愈策略：认证错误优先走 OAuth2 refresh，再重建会话；仅在 refresh 明确失败时才回退账号登录。
+- 新增手动刷新接口：`POST /api/oauth2/refresh`。
+- 新增可调参数：
+  - `OAUTH2_REFRESH_INTERVAL_HOURS`（默认 `12`）
+  - `OAUTH2_REFRESH_MIN_INTERVAL_MINUTES`（默认 `30`）
+  - `XIAOMUSIC_MINA_HIGH_FREQ_MIN_INTERVAL_SECONDS`（默认 `8`）
+  - `XIAOMUSIC_MINA_AUTH_FAIL_THRESHOLD`（默认 `3`）
+  - `XIAOMUSIC_MINA_AUTH_COOLDOWN_SECONDS`（默认 `600`）
 
 ## 🤝 贡献与反馈
 

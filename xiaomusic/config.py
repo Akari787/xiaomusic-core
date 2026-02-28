@@ -299,6 +299,21 @@ class Config:
         os.getenv("XIAOMUSIC_ENABLE_AUTO_CLEAN_TEMP", "true").lower() == "true"
     )
     qrcode_timeout: int = int(os.getenv("QRCODE_TIMEOUT", "120"))
+    oauth2_refresh_interval_hours: float = float(
+        os.getenv("OAUTH2_REFRESH_INTERVAL_HOURS", "12")
+    )
+    oauth2_refresh_min_interval_minutes: int = int(
+        os.getenv("OAUTH2_REFRESH_MIN_INTERVAL_MINUTES", "30")
+    )
+    mina_high_freq_min_interval_seconds: int = int(
+        os.getenv("XIAOMUSIC_MINA_HIGH_FREQ_MIN_INTERVAL_SECONDS", "8")
+    )
+    mina_auth_fail_threshold: int = int(
+        os.getenv("XIAOMUSIC_MINA_AUTH_FAIL_THRESHOLD", "3")
+    )
+    mina_auth_cooldown_seconds: int = int(
+        os.getenv("XIAOMUSIC_MINA_AUTH_COOLDOWN_SECONDS", "600")
+    )
     jellyfin_enabled: bool = (
         os.getenv("XIAOMUSIC_JELLYFIN_ENABLED", "false").lower() == "true"
     )

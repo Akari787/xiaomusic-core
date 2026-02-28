@@ -1084,6 +1084,17 @@ function apiPlayUrlForDevice(targetDid, sourceUrl, onSuccess, onError) {
   });
 }
 
+function pullPlayingOnce(targetDid) {
+  if (!targetDid || targetDid === "web_device") return;
+  $.get(`/playingmusic?did=${targetDid}`)
+    .done(function (data) {
+      applyPlayingSnapshot(data);
+    })
+    .fail(function () {
+      // ignore one-shot pull failure
+    });
+}
+
 function do_play_music_list(listname, musicname) {
   const currentDid = $("#did").val() || window.did || did;
   if (!currentDid) {
@@ -1092,22 +1103,23 @@ function do_play_music_list(listname, musicname) {
   }
   did = currentDid;
   window.did = currentDid;
-  $.get(`/musicinfo?name=${encodeURIComponent(musicname)}`, function (info) {
-    const url = info && info.url;
-    if (!url) {
-      console.log("do_play_music_list failed: no url", listname, musicname);
-      return;
-    }
-    apiPlayUrlForDevice(
-      currentDid,
-      url,
-      () => {
-        console.log("do_play_music_list succ", listname, musicname);
-      },
-      () => {
-        console.log("do_play_music_list failed", listname, musicname);
-      },
-    );
+  $.ajax({
+    type: "POST",
+    url: "/api/v1/play_music_list",
+    contentType: "application/json; charset=utf-8",
+    data: JSON.stringify({
+      speaker_id: currentDid,
+      list_name: listname,
+      music_name: musicname || "",
+    }),
+    success: () => {
+      console.log("do_play_music_list succ", listname, musicname);
+      pullPlayingOnce(currentDid);
+      setTimeout(() => pullPlayingOnce(currentDid), 1200);
+    },
+    error: () => {
+      console.log("do_play_music_list failed", listname, musicname);
+    },
   });
 }
 
@@ -1208,22 +1220,23 @@ function do_play_music(musicname, searchkey) {
   }
   did = currentDid;
   window.did = currentDid;
-  $.get(`/musicinfo?name=${encodeURIComponent(musicname)}`, function (info) {
-    const url = info && info.url;
-    if (!url) {
-      console.log("do_play_music failed: no url", musicname, searchkey);
-      return;
-    }
-    apiPlayUrlForDevice(
-      currentDid,
-      url,
-      () => {
-        console.log("do_play_music succ", musicname, searchkey);
-      },
-      () => {
-        console.log("do_play_music failed", musicname, searchkey);
-      },
-    );
+  $.ajax({
+    type: "POST",
+    url: "/api/v1/play_music",
+    contentType: "application/json; charset=utf-8",
+    data: JSON.stringify({
+      speaker_id: currentDid,
+      music_name: musicname,
+      search_key: searchkey || "",
+    }),
+    success: () => {
+      console.log("do_play_music succ", musicname, searchkey);
+      pullPlayingOnce(currentDid);
+      setTimeout(() => pullPlayingOnce(currentDid), 1200);
+    },
+    error: () => {
+      console.log("do_play_music failed", musicname, searchkey);
+    },
   });
 }
 
@@ -1557,6 +1570,51 @@ let ws = null;
 let wsReconnectTimer = null;
 let currentDid = null;
 let isConnecting = false;
+let lastWsMessageTs = 0;
+let wsFallbackPollTimer = null;
+
+function applyPlayingSnapshot(data) {
+  if (!data || data.ret !== "OK") return;
+  isPlaying = !!data.is_playing;
+  const cur_music = data.cur_music || "";
+  $("#playering-music").text(
+    isPlaying ? `【播放中】 ${cur_music}` : `【空闲中】 ${cur_music}`,
+  );
+  offset = data.offset || 0;
+  duration = data.duration || 0;
+  if (favoritelist.includes(cur_music)) {
+    $(".favorite").addClass("favorite-active");
+  } else {
+    $(".favorite").removeClass("favorite-active");
+  }
+  localStorage.setItem("cur_music", cur_music);
+  updateProgressUI();
+}
+
+function startWsFallbackPoll() {
+  if (wsFallbackPollTimer) return;
+  const tick = () => {
+    const didNow = $("#did").val() || window.did || did;
+    let nextDelay = document.hidden ? 10000 : (isPlaying ? 1500 : 3000);
+    if (!didNow || didNow === "web_device") {
+      wsFallbackPollTimer = setTimeout(tick, nextDelay);
+      return;
+    }
+    const wsHealthy = ws && ws.readyState === WebSocket.OPEN && Date.now() - lastWsMessageTs < 5000;
+    if (wsHealthy) {
+      wsFallbackPollTimer = setTimeout(tick, 5000);
+      return;
+    }
+    $.get(`/playingmusic?did=${didNow}`)
+      .done(function (data) {
+        applyPlayingSnapshot(data);
+      })
+      .always(function () {
+        wsFallbackPollTimer = setTimeout(tick, nextDelay);
+      });
+  };
+  wsFallbackPollTimer = setTimeout(tick, 1000);
+}
 
 // 清理 WebSocket 连接
 function cleanupWebSocket() {
@@ -1645,25 +1703,8 @@ function startWebSocket(did, token) {
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.ret !== "OK") return;
-
-      isPlaying = data.is_playing;
-      let cur_music = data.cur_music || "";
-
-      $("#playering-music").text(
-        isPlaying ? `【播放中】 ${cur_music}` : `【空闲中】 ${cur_music}`,
-      );
-
-      offset = data.offset || 0;
-      duration = data.duration || 0;
-
-      if (favoritelist.includes(cur_music)) {
-        $(".favorite").addClass("favorite-active");
-      } else {
-        $(".favorite").removeClass("favorite-active");
-      }
-
-      localStorage.setItem("cur_music", cur_music);
-      updateProgressUI();
+      lastWsMessageTs = Date.now();
+      applyPlayingSnapshot(data);
     };
 
     ws.onclose = (event) => {
@@ -1708,6 +1749,8 @@ setInterval(() => {
     updateProgressUI();
   }
 }, 1000);
+
+startWsFallbackPoll();
 
 function togglePullAsk() {
   console.log("切换对话记录状态");

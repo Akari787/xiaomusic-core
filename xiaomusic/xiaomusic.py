@@ -738,7 +738,11 @@ class XiaoMusic:
             self.log.warning(f"Execption {e}")
             # 重新初始化
             try:
-                await self.auth_manager.ensure_logged_in(force=True, reason="getalldevices")
+                await self.auth_manager.ensure_logged_in(
+                    force=True,
+                    reason="getalldevices",
+                    prefer_refresh=True,
+                )
                 device_list = await self.auth_manager.mina_call(
                     "device_list", retry=0, ctx="getalldevices-retry"
                 )

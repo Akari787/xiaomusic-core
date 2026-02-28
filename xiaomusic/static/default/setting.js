@@ -265,7 +265,14 @@ $(function () {
     $(selector).empty();
 
     // 将 mi_did 字符串通过逗号分割转换为数组，以便于判断默认选中项
-    var selected_dids = mi_did.split(",");
+    var selected_dids = String(mi_did || "")
+      .split(",")
+      .map(function (x) {
+        return String(x).trim();
+      })
+      .filter(function (x) {
+        return x.length > 0;
+      });
 
     // 如果 device_list 为空，则提示用户先完成 OAuth2 登录
     if (device_list.length == 0) {
@@ -276,7 +283,7 @@ $(function () {
       return;
     }
     $.each(device_list, function (index, device) {
-      var did = device.miotDID;
+      var did = String(device.miotDID || "");
       var hardware = device.hardware;
       var name = device.name;
       // 创建复选框元素

@@ -324,6 +324,30 @@ async def oauth2_logout():
     }
 
 
+@router.post("/api/oauth2/refresh")
+async def oauth2_refresh():
+    """手动触发 OAuth2 refresh 与运行时会话重建。"""
+    am = getattr(xiaomusic, "auth_manager", None)
+    if am is None:
+        raise HTTPException(status_code=503, detail="auth manager unavailable")
+    try:
+        ret = await am.manual_refresh(reason="manual_refresh")
+        return ret
+    except Exception as e:
+        log.exception("oauth2 refresh failed: %s", e)
+        return {
+            "refreshed": False,
+            "runtime_auth_ready": False,
+            "token_saved": False,
+            "last_error": str(e),
+            "timestamps": {
+                "saveTime": None,
+                "last_ok_ts": None,
+                "last_refresh_ts": None,
+            },
+        }
+
+
 @router.post("/api/jellyfin/sync")
 async def jellyfin_sync():
     ret = await xiaomusic.online_music_service.sync_jellyfin_music_lists()
@@ -348,7 +372,8 @@ async def savesetting(request: Request):
             data["httpauth_password"] = config_obj.httpauth_password
 
         # Jellyfin API key should not be displayed; keep existing unless user overrides.
-        if data.get("jellyfin_api_key") == "******":
+        # Some browsers clear password fields on refresh, so empty string should also keep old value.
+        if data.get("jellyfin_api_key") in {"******", ""}:
             data["jellyfin_api_key"] = config_obj.jellyfin_api_key
         await xiaomusic.saveconfig(data)
 
@@ -381,7 +406,8 @@ async def modifiysetting(request: Request):
             data["httpauth_password"] = config_obj.httpauth_password
 
         # Jellyfin API key should not be displayed; keep existing unless user overrides.
-        if "jellyfin_api_key" in data and data["jellyfin_api_key"] == "******":
+        # Some browsers clear password fields on refresh, so empty string should also keep old value.
+        if "jellyfin_api_key" in data and data["jellyfin_api_key"] in {"******", ""}:
             data["jellyfin_api_key"] = config_obj.jellyfin_api_key
 
         # 检查是否有HTTP服务器相关配置被修改

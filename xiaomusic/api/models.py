@@ -102,3 +102,15 @@ class ApiV1StopRequest(BaseModel):
 class ApiV1ReachabilityRequest(BaseModel):
     speaker_id: str
     base_url: str | None = None
+
+
+class ApiV1PlayMusicRequest(BaseModel):
+    speaker_id: str
+    music_name: str
+    search_key: str = ""
+
+
+class ApiV1PlayMusicListRequest(BaseModel):
+    speaker_id: str
+    list_name: str
+    music_name: str = ""

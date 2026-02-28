@@ -32,6 +32,42 @@ let progressInterval;
 
 // 全局变量，用于存储播放状态更新定时器
 let playingStatusInterval = null;
+let playingPollInterval = null;
+
+function ensurePlayingPoll() {
+  if (playingPollInterval) {
+    return;
+  }
+  const tick = () => {
+    if (!did || did === "web_device") {
+      playingPollInterval = setTimeout(tick, 5000);
+      return;
+    }
+    const delay = document.hidden ? 10000 : (isPlaying ? 1500 : 3000);
+    $.get(`/playingmusic?did=${did}`)
+      .done(function (data) {
+        if (data && data.ret == "OK" && data.cur_music) {
+          updatePlayingInfo(data.cur_music, data.is_playing);
+          offset = data.offset || 0;
+          duration = data.duration || 0;
+          if (duration > 0) {
+            $("#progress").val((offset / duration) * 100);
+            $("#current-time").text(formatTime(offset));
+            $("#duration").text(formatTime(duration));
+            if (data.is_playing) {
+              startProgressUpdate();
+            } else {
+              stopProgressUpdate();
+            }
+          }
+        }
+      })
+      .always(function () {
+        playingPollInterval = setTimeout(tick, delay);
+      });
+  };
+  playingPollInterval = setTimeout(tick, 1000);
+}
 
 function startProgressUpdate() {
   // 清除之前的计时器
@@ -667,28 +703,23 @@ function refresh_music_list() {
 }
 
 function do_play_music_list(listname, musicname) {
-  $.get(`/musicinfo?name=${encodeURIComponent(musicname)}`, function (info) {
-    const url = info && info.url;
-    if (!url) {
-      console.log("do_play_music_list failed: no url", listname, musicname);
-      return;
-    }
-    $.ajax({
-      type: "POST",
-      url: "/api/v1/play_url",
-      contentType: "application/json; charset=utf-8",
-      data: JSON.stringify({
-        url: url,
-        speaker_id: did,
-        options: { prefer_codec: "auto" },
-      }),
-      success: () => {
-        console.log("do_play_music_list succ", listname, musicname);
-      },
-      error: () => {
-        console.log("do_play_music_list failed", listname, musicname);
-      },
-    });
+  $.ajax({
+    type: "POST",
+    url: "/api/v1/play_music_list",
+    contentType: "application/json; charset=utf-8",
+    data: JSON.stringify({
+      speaker_id: did,
+      list_name: listname,
+      music_name: musicname || "",
+    }),
+    success: () => {
+      console.log("do_play_music_list succ", listname, musicname);
+      get_playing_music();
+      setTimeout(get_playing_music, 1200);
+    },
+    error: () => {
+      console.log("do_play_music_list failed", listname, musicname);
+    },
   });
 }
 
@@ -717,28 +748,23 @@ $("#playurl").on("click", () => {
 
 
 function do_play_music(musicname, searchkey) {
-  $.get(`/musicinfo?name=${encodeURIComponent(musicname)}`, function (info) {
-    const url = info && info.url;
-    if (!url) {
-      console.log("do_play_music failed: no url", musicname, searchkey);
-      return;
-    }
-    $.ajax({
-      type: "POST",
-      url: "/api/v1/play_url",
-      contentType: "application/json; charset=utf-8",
-      data: JSON.stringify({
-        url: url,
-        speaker_id: did,
-        options: { prefer_codec: "auto" },
-      }),
-      success: () => {
-        console.log("do_play_music succ", musicname, searchkey);
-      },
-      error: () => {
-        console.log("do_play_music failed", musicname, searchkey);
-      },
-    });
+  $.ajax({
+    type: "POST",
+    url: "/api/v1/play_music",
+    contentType: "application/json; charset=utf-8",
+    data: JSON.stringify({
+      speaker_id: did,
+      music_name: musicname,
+      search_key: searchkey || "",
+    }),
+    success: () => {
+      console.log("do_play_music succ", musicname, searchkey);
+      get_playing_music();
+      setTimeout(get_playing_music, 1200);
+    },
+    error: () => {
+      console.log("do_play_music failed", musicname, searchkey);
+    },
   });
 }
 
@@ -839,6 +865,7 @@ function handleSearch() {
 // 在文档加载完成后初始化搜索功能
 document.addEventListener('DOMContentLoaded', function() {
   handleSearch();
+  ensurePlayingPoll();
 });
 
 function get_playing_music() {

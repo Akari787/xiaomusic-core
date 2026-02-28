@@ -9,6 +9,8 @@ from xiaomusic.api.base_url import detect_base_url
 from xiaomusic.api.dependencies import verification, xiaomusic
 from xiaomusic.api.routers.network_audio import _get_runtime as _shared_runtime
 from xiaomusic.api.models import (
+    ApiV1PlayMusicListRequest,
+    ApiV1PlayMusicRequest,
     ApiV1PlayUrlRequest,
     ApiV1ReachabilityRequest,
     ApiV1StopRequest,
@@ -95,6 +97,48 @@ async def api_v1_play_url(data: ApiV1PlayUrlRequest):
         "is_live": _is_live(raw),
         "error_code": out.get("error_code"),
     }
+
+
+@router.post("/api/v1/play_music")
+async def api_v1_play_music(data: ApiV1PlayMusicRequest):
+    try:
+        await xiaomusic.do_play(
+            did=data.speaker_id,
+            name=data.music_name,
+            search_key=data.search_key or "",
+        )
+        return {
+            "success": True,
+            "state": "playing",
+            "error_code": None,
+        }
+    except Exception:
+        return {
+            "success": False,
+            "state": "failed",
+            "error_code": "E_XIAOMI_PLAY_FAILED",
+        }
+
+
+@router.post("/api/v1/play_music_list")
+async def api_v1_play_music_list(data: ApiV1PlayMusicListRequest):
+    try:
+        await xiaomusic.do_play_music_list(
+            did=data.speaker_id,
+            list_name=data.list_name,
+            music_name=data.music_name or "",
+        )
+        return {
+            "success": True,
+            "state": "playing",
+            "error_code": None,
+        }
+    except Exception:
+        return {
+            "success": False,
+            "state": "failed",
+            "error_code": "E_XIAOMI_PLAY_FAILED",
+        }
 
 
 @router.post("/api/v1/stop")

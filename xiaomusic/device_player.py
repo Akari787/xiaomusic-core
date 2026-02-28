@@ -73,6 +73,7 @@ class XiaoMusicDevice:
         self._play_failed_cnt = 0
         self._play_fail_first_ts = 0.0
         self._play_fail_last_reason = ""
+        self._duration_probe_task = None
         self._degraded = False
         self._degraded_notified = False
 
@@ -112,6 +113,49 @@ class XiaoMusicDevice:
             return 0, duration
         offset = time.time() - self._start_time - self._paused_time
         return offset, duration
+
+    @staticmethod
+    def _extract_duration_seconds(info: dict) -> float:
+        """Best-effort parse duration from player_get_status payload."""
+        if not isinstance(info, dict):
+            return 0.0
+        for key in ("duration", "duration_ms", "media_duration", "audio_duration", "total_duration"):
+            val = info.get(key)
+            if val is None:
+                continue
+            try:
+                d = float(val)
+            except Exception:
+                continue
+            if d <= 0:
+                continue
+            # Some firmwares return milliseconds.
+            if d > 10000:
+                d = d / 1000.0
+            return max(d, 0.0)
+        return 0.0
+
+    def _start_duration_probe(self, name: str, sid: int):
+        if self._duration_probe_task and not self._duration_probe_task.done():
+            self._duration_probe_task.cancel()
+
+        async def _probe():
+            for _ in range(5):
+                await asyncio.sleep(2)
+                if sid != self._play_session_id:
+                    return
+                try:
+                    info = await self.get_player_status()
+                    d = self._extract_duration_seconds(info)
+                    if d > 0.1:
+                        self._duration = d
+                        self.log.info("duration_probe_success name=%s duration=%.3fs", name, d)
+                        return
+                except Exception as e:
+                    self.log.debug("duration_probe_retry name=%s err=%s", name, e)
+            self.log.info("duration_probe_failed name=%s", name)
+
+        self._duration_probe_task = asyncio.create_task(_probe())
 
     # 自动搜歌并加入当前歌单
     async def auto_add_song(self, cur_list_name, sleep_sec=20):
@@ -468,6 +512,9 @@ class XiaoMusicDevice:
 
         # 设置下一首歌曲的播放定时器
         if sec <= 0.1:
+            # After OAuth2 re-login the first status query may lag behind.
+            # Probe duration from player status so UI can recover from 00:00.
+            self._start_duration_probe(name, sid)
             self.log.info(f"【{name}】不会设置下一首歌的定时器")
             return
 

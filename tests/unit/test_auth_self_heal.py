@@ -2,6 +2,7 @@ import json
 import asyncio
 import sys
 import types
+import time
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,11 @@ class _DummyConfig:
         self.oauth2_token_path = str(base / "auth.json")
         self.mi_did = "981257654"
         self.devices = {}
+        self.oauth2_refresh_interval_hours = 12
+        self.oauth2_refresh_min_interval_minutes = 30
+        self.mina_high_freq_min_interval_seconds = 8
+        self.mina_auth_fail_threshold = 3
+        self.mina_auth_cooldown_seconds = 600
 
     def get_one_device_id(self):
         return "dev0001"
@@ -93,8 +99,9 @@ async def auth_manager(tmp_path):
 async def test_auth_call_triggers_relogin_and_retries_once(auth_manager):
     calls = {"fn": 0, "ensure": 0}
 
-    async def _ensure(force=False, reason=""):  # noqa: ARG001
+    async def _ensure(force=False, reason="", prefer_refresh=False):  # noqa: ARG001
         calls["ensure"] += 1
+        assert prefer_refresh is True
         return True
 
     auth_manager.ensure_logged_in = _ensure
@@ -113,18 +120,29 @@ async def test_auth_call_triggers_relogin_and_retries_once(auth_manager):
 
 @pytest.mark.asyncio
 async def test_concurrent_auth_call_only_one_relogin(auth_manager):
-    relogin_calls = {"count": 0}
+    relogin_calls = {"rebuild": 0, "refresh": 0}
 
     async def _need_login():
         return False
 
-    async def _init_all_data():
-        relogin_calls["count"] += 1
+    async def _refresh(reason, force=False):  # noqa: ARG001
+        relogin_calls["refresh"] += 1
+        return {
+            "refreshed": True,
+            "token_saved": True,
+            "last_error": None,
+            "fallback_allowed": False,
+        }
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        relogin_calls["rebuild"] += 1
         auth_manager.mina_service = object()
         auth_manager.login_signature = auth_manager._get_login_signature()
+        return True
 
     auth_manager.need_login = _need_login
-    auth_manager.init_all_data = _init_all_data
+    auth_manager.refresh_oauth2_token_if_needed = _refresh
+    auth_manager.rebuild_services = _rebuild
     auth_manager._last_ok_ts = 0
 
     def make_fn(i):
@@ -141,7 +159,8 @@ async def test_concurrent_auth_call_only_one_relogin(auth_manager):
     tasks = [auth_manager.auth_call(make_fn(i), retry=1, ctx=f"concurrent-{i}") for i in range(10)]
     results = await asyncio.gather(*tasks)
     assert results == list(range(10))
-    assert relogin_calls["count"] == 1
+    assert relogin_calls["refresh"] == 1
+    assert relogin_calls["rebuild"] == 1
 
 
 @pytest.mark.parametrize(
@@ -163,6 +182,33 @@ def test_is_auth_error_matrix(exc, status, body, expected):
     if status is not None:
         resp = type("_Resp", (), {"status": status})()
     assert is_auth_error(exc=exc, resp=resp, body=body) is expected
+
+
+@pytest.mark.parametrize(
+    ("exc", "status", "expected"),
+    [
+        (RuntimeError("401 unauthorized"), None, True),
+        (RuntimeError("Login failed"), None, True),
+        (RuntimeError("connection timeout"), None, False),
+        (RuntimeError("dns failed"), None, False),
+        (RuntimeError("boom"), 403, True),
+    ],
+)
+def test_is_auth_error_strict_matrix(exc, status, expected):
+    from xiaomusic.auth import is_auth_error_strict
+
+    resp = None
+    if status is not None:
+        resp = type("_Resp", (), {"status": status})()
+    assert is_auth_error_strict(exc=exc, resp=resp) is expected
+
+
+def test_is_network_error_matrix():
+    from xiaomusic.auth import is_network_error
+
+    assert is_network_error(exc=RuntimeError("connection timeout")) is True
+    assert is_network_error(exc=RuntimeError("dns lookup failed")) is True
+    assert is_network_error(exc=RuntimeError("401 unauthorized")) is False
 
 
 @pytest.mark.asyncio
@@ -218,3 +264,138 @@ async def test_keepalive_recovers_from_degraded(auth_manager, monkeypatch):
     assert auth_manager._keepalive_degraded is False
     assert auth_manager._keepalive_fail_streak == 0
     assert delays == [7]
+
+
+@pytest.mark.asyncio
+async def test_auth_call_network_error_does_not_trigger_relogin(auth_manager):
+    calls = {"ensure": 0}
+
+    async def _ensure(*args, **kwargs):  # noqa: ARG001
+        calls["ensure"] += 1
+        return True
+
+    auth_manager.ensure_logged_in = _ensure
+
+    async def fn():
+        raise RuntimeError("connection timeout")
+
+    with pytest.raises(RuntimeError):
+        await auth_manager.auth_call(fn, retry=1, ctx="ut-network")
+    assert calls["ensure"] == 0
+
+
+@pytest.mark.asyncio
+async def test_ensure_logged_in_prefers_refresh_then_rebuild(auth_manager):
+    events = []
+
+    async def _need_login():
+        return True
+
+    async def _refresh(reason, force=False):  # noqa: ARG001
+        events.append("refresh")
+        return {
+            "refreshed": True,
+            "token_saved": True,
+            "last_error": None,
+            "fallback_allowed": False,
+        }
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        events.append(f"rebuild:{allow_login_fallback}")
+        return True
+
+    auth_manager.need_login = _need_login
+    auth_manager.refresh_oauth2_token_if_needed = _refresh
+    auth_manager.rebuild_services = _rebuild
+
+    out = await auth_manager.ensure_logged_in(force=True, reason="ut-auth", prefer_refresh=True)
+    assert out is True
+    assert events == ["refresh", "rebuild:False"]
+
+
+@pytest.mark.asyncio
+async def test_ensure_logged_in_fallback_login_only_when_refresh_failed(auth_manager):
+    events = []
+
+    async def _need_login():
+        return True
+
+    async def _refresh(reason, force=False):  # noqa: ARG001
+        events.append("refresh")
+        return {
+            "refreshed": False,
+            "token_saved": False,
+            "last_error": "刷新Token失败，请重新登录",
+            "fallback_allowed": True,
+        }
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        events.append(f"rebuild:{allow_login_fallback}")
+        return True
+
+    auth_manager.need_login = _need_login
+    auth_manager.refresh_oauth2_token_if_needed = _refresh
+    auth_manager.rebuild_services = _rebuild
+
+    out = await auth_manager.ensure_logged_in(force=True, reason="ut-fallback", prefer_refresh=True)
+    assert out is True
+    assert events == ["refresh", "rebuild:True"]
+
+
+@pytest.mark.asyncio
+async def test_high_freq_mina_call_rate_limit_and_circuit(auth_manager):
+    auth_manager.config.mina_high_freq_min_interval_seconds = 1
+    auth_manager.config.mina_auth_fail_threshold = 2
+    auth_manager.config.mina_auth_cooldown_seconds = 600
+
+    calls = {"auth_call": 0}
+
+    async def _auth_call(*args, **kwargs):  # noqa: ARG001
+        calls["auth_call"] += 1
+        raise RuntimeError("401 unauthorized")
+
+    auth_manager.auth_call = _auth_call
+
+    r1 = await auth_manager.mina_call("device_list", ctx="keepalive")
+    auth_manager._hf_last_call_ts["device_list"] = 0
+    r2 = await auth_manager.mina_call("device_list", ctx="keepalive")
+    auth_manager._hf_last_call_ts["device_list"] = 0
+    r3 = await auth_manager.mina_call("device_list", ctx="keepalive")
+
+    assert r1 == []
+    assert r2 == []
+    assert r3 == []
+    # 2 次达到阈值后熔断，第三次不再进入 auth_call
+    assert calls["auth_call"] == 2
+
+
+@pytest.mark.asyncio
+async def test_scheduled_refresh_trigger(auth_manager):
+    auth_manager.config.oauth2_refresh_interval_hours = 0.01
+    auth_manager.config.oauth2_refresh_min_interval_minutes = 1
+    auth_manager._last_refresh_ts = 0
+
+    calls = {"refresh": 0, "rebuild": 0}
+
+    def _token_save_ts():
+        return time.time() - 7200
+
+    async def _refresh(reason, force=False):  # noqa: ARG001
+        calls["refresh"] += 1
+        return {
+            "refreshed": True,
+            "token_saved": True,
+            "last_error": None,
+            "fallback_allowed": False,
+        }
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        calls["rebuild"] += 1
+        return True
+
+    auth_manager._token_save_ts = _token_save_ts
+    auth_manager.refresh_oauth2_token_if_needed = _refresh
+    auth_manager.rebuild_services = _rebuild
+
+    await auth_manager._maybe_scheduled_refresh()
+    assert calls == {"refresh": 1, "rebuild": 1}
