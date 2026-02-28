@@ -3,16 +3,18 @@
 import asyncio
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
 from xiaomusic import __version__
+from xiaomusic.api import response as api_response
 from xiaomusic.api.dependencies import (
     AuthStaticFiles,
     reset_http_server,
@@ -89,7 +91,14 @@ try:
             detail = "self update disabled"
         else:
             detail = "blocked by security policy"
-        return JSONResponse(status_code=403, content={"detail": detail})
+        return api_response.fail(
+            "E_FORBIDDEN",
+            detail,
+            http_status=403,
+            contract="detail",
+            request=request,
+            exc=exc,
+        )
 
 except Exception:
     # If security modules are unavailable for some reason, don't break app import.
@@ -111,6 +120,30 @@ def _configure_cors(app: FastAPI, allow_origins: list[str]):
 
 # 添加 GZip 中间件
 app.add_middleware(GZipMiddleware, minimum_size=500)
+
+
+@app.middleware("http")
+async def _request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16]
+    api_response.bind_request_id(request_id)
+    response = await call_next(request)
+    response.headers.setdefault("X-Request-ID", request_id)
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def _handle_http_exception(request: Request, exc: HTTPException):
+    return api_response.from_exception(exc, request=request)
+
+
+@app.exception_handler(RequestValidationError)
+async def _handle_validation_exception(request: Request, exc: RequestValidationError):
+    return api_response.from_exception(exc, request=request)
+
+
+@app.exception_handler(Exception)
+async def _handle_unexpected_exception(request: Request, exc: Exception):
+    return api_response.from_exception(exc, request=request)
 
 
 def HttpInit(_xiaomusic: "XiaoMusic"):
