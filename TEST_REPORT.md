@@ -3,15 +3,15 @@
 ## 一、执行信息
 
 - 执行日期：2026-02-28
-- 环境：测试服务器 `192.168.7.178`
+- 环境：本地测试服务器（地址已脱敏）
 - 镜像版本：`akari787/xiaomusic-oauth2:v1.0.5`
 - 验证范围：安全加固、外部服务降级、tag cache 增量刷新、超大文件拆分兼容
 
 ## 二、部署步骤
 
-1. 同步 `oauth2-only` 最新代码到 `/root/xiaomusic_oauth2_smoke`
+1. 同步 `oauth2-only` 最新代码到测试部署目录
 2. 构建镜像：
-   - `docker build -t akari787/xiaomusic-oauth2:v1.0.5 /root/xiaomusic_oauth2_smoke`
+   - `docker build -t akari787/xiaomusic-oauth2:v1.0.5 <部署目录>`
 3. 部署服务：
    - `docker compose -f docker-compose.hardened.yml up -d --force-recreate`
 4. 版本确认：
