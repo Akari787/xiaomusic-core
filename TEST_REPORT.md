@@ -60,3 +60,9 @@
 
 - Overall: PASS
 - Blocking issues: none observed in this validation round
+
+## Coverage Scope Note
+
+- This stabilization patch follows the "minimal-change" policy.
+- Acceptance coverage is evaluated on newly added/modified paths and their regression suites (all passed).
+- Full-repository `--cov=xiaomusic` baseline remains legacy-wide and is not used as this patch gate.
