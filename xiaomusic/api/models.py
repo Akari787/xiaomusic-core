@@ -1,6 +1,6 @@
 """Pydantic 数据模型定义"""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Did(BaseModel):
@@ -114,3 +114,34 @@ class ApiV1PlayMusicListRequest(BaseModel):
     speaker_id: str
     list_name: str
     music_name: str = ""
+
+
+class ApiResponseBase(BaseModel):
+    ok: bool
+    error_code: str | None = None
+    message: str | None = None
+    # Backward compatibility for older callers that read `success`.
+    success: bool | None = None
+
+
+class ApiPlaybackResponse(ApiResponseBase):
+    sid: str = ""
+    speaker_id: str = ""
+    state: str = "unknown"
+    title: str | None = None
+    stream_url: str = ""
+    is_live: bool | None = None
+    uptime: int | None = None
+    reconnect_count: int | None = None
+    deprecated: bool | None = None
+
+
+class ApiSessionsResponse(ApiResponseBase):
+    sessions: list[dict] = Field(default_factory=list)
+    removed: int | None = None
+    remaining: int | None = None
+
+
+class ApiSessionsCleanupRequest(BaseModel):
+    max_sessions: int = 100
+    ttl_seconds: int | None = None

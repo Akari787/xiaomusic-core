@@ -43,6 +43,11 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 - 默认主题“播放测试”已整合为单一“播放链接”入口：同一输入框可直接处理普通音频链接、B 站与 YouTube 链接。
 - 网络视频/直播播放统一通过站内路径 `/network_audio/stream/{sid}` 回放，不再需要额外暴露独立转流端口。
 
+### API 收敛说明
+
+- 对外稳定接口统一推荐使用 `/api/v1/*`。
+- `/network_audio/play_url`、`/network_audio/play_link`、`/network_audio/stop` 为兼容 wrapper（deprecated），会继续兼容但不建议新接入。
+
 ## 🐳 Docker 使用说明
 
 本仓库已发布 Docker Hub 镜像：`akari787/xiaomusic-oauth2`（多架构：`linux/amd64`、`linux/arm64`、`linux/arm/v7`）。

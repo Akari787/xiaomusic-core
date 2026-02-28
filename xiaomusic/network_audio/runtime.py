@@ -27,6 +27,7 @@ class NetworkAudioRuntime:
             stream_port = os.getenv("XIAOMUSIC_M1_STREAM_PORT", "18090")
         self.stream_port = int(stream_port)
         self._started_at = time.monotonic()
+        self._last_cleanup_at: float | None = None
         self._lock = Lock()
         self._strategy = getattr(xiaomusic, "link_playback_strategy", None)
         if self._strategy is None:
@@ -119,10 +120,22 @@ class NetworkAudioRuntime:
             "status": "ok",
             "uptime_seconds": int(time.monotonic() - self._started_at),
             "stream_port": self.stream_port,
+            "session_count": len(self.session_manager.list_sessions()),
+            "last_cleanup_at": self._last_cleanup_at,
         }
 
     def sessions(self) -> dict:
-        return {"sessions": [asdict(s) for s in self.session_manager.list_sessions()]}
+        sessions = [asdict(s) for s in self.session_manager.list_sessions()]
+        return {
+            "sessions": sessions,
+            "session_count": len(sessions),
+            "last_cleanup_at": self._last_cleanup_at,
+        }
+
+    def cleanup_sessions(self, max_sessions: int = 100, ttl_seconds: int | None = None) -> dict:
+        ret = self.session_manager.cleanup(max_sessions=max_sessions, ttl_seconds=ttl_seconds)
+        self._last_cleanup_at = int(time.time())
+        return ret
 
     def stream_chunks(self, sid: str):
         self.ensure_started()

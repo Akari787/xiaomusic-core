@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from xiaomusic.api.base_url import detect_base_url
 from xiaomusic.api.dependencies import verification, xiaomusic
+from xiaomusic.api.models import ApiSessionsCleanupRequest
 from xiaomusic.api.routers.network_audio import _get_runtime as _shared_runtime
 from xiaomusic.api.models import (
     ApiV1PlayMusicListRequest,
@@ -15,6 +16,7 @@ from xiaomusic.api.models import (
     ApiV1ReachabilityRequest,
     ApiV1StopRequest,
 )
+from xiaomusic.api.response_utils import playback_response
 from xiaomusic.network_audio.contracts import ERROR_CODES
 from xiaomusic.playback.facade import PlaybackFacade
 
@@ -50,13 +52,45 @@ def _is_live(out: dict) -> bool | None:
     return None
 
 
+def _playback_from_facade(out: dict, *, fallback_state: str = "unknown", deprecated: bool | None = None) -> dict:
+    raw = out.get("raw") or {}
+    uptime = None
+    reconnect_count = None
+    if isinstance(raw.get("session"), dict):
+        sess = raw.get("session") or {}
+        if sess.get("uptime") is not None:
+            uptime = int(sess.get("uptime") or 0)
+        reconnect_count = sess.get("reconnect_count")
+    return playback_response(
+        ok=bool(out.get("ok")),
+        sid=out.get("sid") or "",
+        speaker_id=out.get("speaker_id") or "",
+        state=str(out.get("state") or fallback_state),
+        title=out.get("title"),
+        stream_url=out.get("stream_url") or "",
+        is_live=_is_live(raw),
+        uptime=uptime,
+        reconnect_count=reconnect_count,
+        error_code=out.get("error_code"),
+        deprecated=deprecated,
+    )
+
+
 @router.get("/api/v1/detect_base_url")
 async def api_v1_detect_base_url(request: Request):
     base = detect_base_url(request, xiaomusic.getconfig())
     if base:
-        return {"success": True, "base_url": base, "message": "检测到推荐地址"}
+        return {
+            "ok": True,
+            "success": True,
+            "error_code": None,
+            "message": "检测到推荐地址",
+            "base_url": base,
+        }
     return {
+        "ok": False,
         "success": True,
+        "error_code": "E_INTERNAL",
         "base_url": None,
         "message": "自动检测失败，请手动填写",
     }
@@ -81,22 +115,15 @@ async def api_v1_play_url(data: ApiV1PlayUrlRequest):
             options={"mode": mode, "prefer_proxy": False},
         )
     except Exception:
-        return {
-            "sid": "",
-            "state": "failed",
-            "title": None,
-            "is_live": None,
-            "error_code": "E_STREAM_NOT_FOUND",
-        }
+        return playback_response(
+            ok=False,
+            speaker_id=speaker_id,
+            state="failed",
+            error_code="E_STREAM_NOT_FOUND",
+        )
 
-    raw = out.get("raw") or {}
-    return {
-        "sid": out.get("sid") or "",
-        "state": _state_to_api(out.get("state"), bool(out.get("ok"))),
-        "title": out.get("title"),
-        "is_live": _is_live(raw),
-        "error_code": out.get("error_code"),
-    }
+    out["state"] = _state_to_api(out.get("state"), bool(out.get("ok")))
+    return _playback_from_facade(out, fallback_state="failed")
 
 
 @router.post("/api/v1/play_music")
@@ -107,17 +134,14 @@ async def api_v1_play_music(data: ApiV1PlayMusicRequest):
             name=data.music_name,
             search_key=data.search_key or "",
         )
-        return {
-            "success": True,
-            "state": "playing",
-            "error_code": None,
-        }
+        return playback_response(ok=True, speaker_id=data.speaker_id, state="playing")
     except Exception:
-        return {
-            "success": False,
-            "state": "failed",
-            "error_code": "E_XIAOMI_PLAY_FAILED",
-        }
+        return playback_response(
+            ok=False,
+            speaker_id=data.speaker_id,
+            state="failed",
+            error_code="E_XIAOMI_PLAY_FAILED",
+        )
 
 
 @router.post("/api/v1/play_music_list")
@@ -128,17 +152,14 @@ async def api_v1_play_music_list(data: ApiV1PlayMusicListRequest):
             list_name=data.list_name,
             music_name=data.music_name or "",
         )
-        return {
-            "success": True,
-            "state": "playing",
-            "error_code": None,
-        }
+        return playback_response(ok=True, speaker_id=data.speaker_id, state="playing")
     except Exception:
-        return {
-            "success": False,
-            "state": "failed",
-            "error_code": "E_XIAOMI_PLAY_FAILED",
-        }
+        return playback_response(
+            ok=False,
+            speaker_id=data.speaker_id,
+            state="failed",
+            error_code="E_XIAOMI_PLAY_FAILED",
+        )
 
 
 @router.post("/api/v1/stop")
@@ -149,12 +170,7 @@ async def api_v1_stop(data: ApiV1StopRequest):
             "speaker_id": data.speaker_id or "",
         }
     )
-    return {
-        "sid": out.get("sid") or "",
-        "speaker_id": out.get("speaker_id") or "",
-        "state": out.get("state") or "stopped",
-        "error_code": out.get("error_code"),
-    }
+    return _playback_from_facade(out, fallback_state="stopped")
 
 
 @router.get("/api/v1/status")
@@ -163,22 +179,23 @@ async def api_v1_status(
     sid: str | None = Query(default=None),
 ):
     out = await _get_facade().status({"speaker_id": speaker_id or "", "sid": sid or ""})
-    raw = out.get("raw") or {}
-    uptime = None
-    reconnect_count = None
-    if isinstance(raw.get("session"), dict):
-        sess: dict = raw["session"]
-        uptime = int(sess.get("uptime") or 0) if sess.get("uptime") is not None else None
-        reconnect_count = sess.get("reconnect_count")
+    return _playback_from_facade(out)
 
+
+@router.post("/api/v1/sessions/cleanup")
+async def api_v1_sessions_cleanup(data: ApiSessionsCleanupRequest):
+    runtime = _shared_runtime()
+    ret = runtime.cleanup_sessions(
+        max_sessions=int(data.max_sessions or 100),
+        ttl_seconds=data.ttl_seconds,
+    )
     return {
-        "sid": out.get("sid") or "",
-        "state": out.get("state") or "unknown",
-        "title": out.get("title"),
-        "is_live": _is_live(raw),
-        "uptime": uptime,
-        "reconnect_count": reconnect_count,
-        "error_code": out.get("error_code"),
+        "ok": True,
+        "success": True,
+        "error_code": None,
+        "message": "cleanup done",
+        "removed": ret.get("removed", 0),
+        "remaining": ret.get("remaining", 0),
     }
 
 
@@ -187,6 +204,7 @@ async def api_v1_test_reachability(request: Request, data: ApiV1ReachabilityRequ
     base_url = data.base_url or detect_base_url(request, xiaomusic.getconfig())
     if not base_url:
         return {
+            "ok": False,
             "success": False,
             "reachable": False,
             "error_code": "E_INTERNAL",
@@ -196,6 +214,7 @@ async def api_v1_test_reachability(request: Request, data: ApiV1ReachabilityRequ
     parsed = urlparse(base_url)
     if not parsed.scheme or not parsed.hostname:
         return {
+            "ok": False,
             "success": False,
             "reachable": False,
             "error_code": "E_INTERNAL",
@@ -211,6 +230,7 @@ async def api_v1_test_reachability(request: Request, data: ApiV1ReachabilityRequ
         )
     except Exception:
         return {
+            "ok": False,
             "success": False,
             "reachable": False,
             "error_code": "E_STREAM_NOT_FOUND",
@@ -220,6 +240,7 @@ async def api_v1_test_reachability(request: Request, data: ApiV1ReachabilityRequ
     st = await _get_facade().status({"speaker_id": data.speaker_id})
     reachable = bool(out.get("ok")) and str(st.get("state")) in {"1", "playing", "streaming"}
     return {
+        "ok": reachable,
         "success": True,
         "reachable": reachable,
         "test_url": test_url,
