@@ -368,7 +368,9 @@ class XiaoMusic:
     async def play_url(self, did="", arg1="", **kwargs):
         self.log.info(f"手动推送链接：{arg1}")
         url = arg1
-        return await self.device_manager.devices[did].group_player_play(url)
+        device = self.device_manager.devices[did]
+        await device.on_external_url_play()
+        return await device.group_player_play(url)
 
     # 口令:单曲循环
     async def set_play_type_one(self, did="", **kwargs):

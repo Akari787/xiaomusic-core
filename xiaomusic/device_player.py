@@ -934,6 +934,17 @@ class XiaoMusicDevice:
         self.log.info(f"group_player_play {url} {device_id_list} {results}")
         return results
 
+    async def on_external_url_play(self):
+        """Reset local playlist progress state for external URL playback."""
+        self._bump_play_session(reason="external_url_play")
+        await self.cancel_group_next_timer()
+        self.is_playing = False
+        self._start_time = 0
+        self._paused_time = 0
+        self._duration = 0
+        self._last_cmd = "external_play"
+        self.device.cur_music = ""
+
     async def play_one_url(self, device_id, url, name):
         """在单个设备上播放URL"""
         ret = None

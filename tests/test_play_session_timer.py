@@ -140,3 +140,21 @@ async def test_overdue_offset_triggers_autonext_guard_when_idle():
     await asyncio.sleep(0)
 
     assert d._next_called == 1
+
+
+@pytest.mark.asyncio
+async def test_external_url_play_resets_local_progress_state():
+    d = _build_device_for_timer_tests()
+    d._duration = 120.0
+    d._start_time = time.time() - 20.0
+    d._paused_time = 2.0
+    d._last_cmd = "play"
+    d.device.cur_music = "old-song"
+
+    await d.on_external_url_play()
+
+    assert d.is_playing is False
+    assert d._duration == 0
+    assert d._start_time == 0
+    assert d._paused_time == 0
+    assert d.device.cur_music == ""
