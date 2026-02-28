@@ -186,6 +186,25 @@ docker compose up -d --force-recreate
 - 启动必须注入以下环境变量（支持 `.env`）：`API_SECRET`、`HTTP_AUTH_HASH`。
 - Self-update 默认关闭：`enable_self_update=false`。
 
+### 升级注意事项（v1.0.6 起）
+
+- 旧版 `key/code` 链接鉴权模式已移除。
+- 若你此前依赖链接参数访问资源，请迁移到以下方式：
+  1. HTTP Basic + `HTTP_AUTH_HASH`
+  2. OAuth2 登录态
+- 生成哈希口令：
+
+```bash
+python scripts/generate_password_hash.py
+```
+
+- `.env` 示例：
+
+```env
+API_SECRET=your_analytics_secret
+HTTP_AUTH_HASH=$2b$12$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
 ### 迁移说明（安全默认）
 
 - 之前配置里如包含 `exec#...`（如放在 `user_key_word_dict`），升级后会默认被拦截；需要手动设置 `enable_exec_plugin=true` 并配置 `allowed_exec_commands` 白名单。

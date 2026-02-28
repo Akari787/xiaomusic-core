@@ -22,6 +22,11 @@
 - 修复外部二维码登录链路降级能力：新增超时、指数退避重试与结构化错误返回（含 error_id）。
 - 重构超大文件布局：`online_music.py`、`js_plugin_manager.py` 拆分到 `services/providers/managers` 并保留兼容入口。
 
+### 弃用与移除
+
+- 从 `v1.0.6` 起移除旧版 `key/code` 链接鉴权能力（历史模式）。
+- 迁移方案：使用 HTTP Basic + `HTTP_AUTH_HASH`（bcrypt）或 OAuth2 登录态。
+
 ## v1.0.4 (2026-02-26)
 
 ### Feat

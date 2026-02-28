@@ -146,3 +146,11 @@ curl -X POST http://<HOST>:<PORT>/api/v1/stop \
 
 curl "http://<HOST>:<PORT>/api/v1/status?speaker_id=<SPEAKER_ID>"
 ```
+
+## 5. 迁移说明（旧版链接鉴权）
+
+- 旧版通过 URL 参数 `key/code` 访问 `/music/*`、`/picture/*` 的模式已移除。
+- 若仍传入 `key/code`，服务会返回 `410`，并给出迁移提示。
+- 推荐迁移到：
+  - HTTP Basic + `HTTP_AUTH_HASH`
+  - OAuth2 登录态
