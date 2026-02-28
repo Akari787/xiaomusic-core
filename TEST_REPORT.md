@@ -5,7 +5,8 @@
 - 执行日期：2026-02-28
 - 环境：本地测试服务器（地址已脱敏）
 - 镜像版本：`akari787/xiaomusic-oauth2:v1.0.5`
-- 验证范围：安全加固、外部服务降级、tag cache 增量刷新、超大文件拆分兼容
+- 验证范围：旧版 key/code 鉴权移除（弃用清理）+ OAuth2/HTTP Basic 回归
+- 代码提交：`90922d5`、`6e36b7e`、`cd650c6`
 
 ## 二、部署步骤
 
@@ -39,12 +40,26 @@
 - `GET /api/v1/status`：`ok=true, stage=stream`
 - `POST /api/v1/stop`：`ok=true, state=stopped`
 
-### 5) 外部服务不可用降级
+### 5) HTTP Basic + HTTP_AUTH_HASH 鉴权行为
+
+- 开启 HTTP 认证后：
+  - 无认证访问受保护接口：`401`
+  - 错误口令：`401`
+  - 正确口令：`200`
+
+### 6) 旧版 key/code 鉴权移除行为
+
+- 访问 `/music/*?key=...` 与 `/picture/*?code=...`：
+  - 返回 `410`
+  - 响应结构：`ok=false, success=false, error_code=E_LEGACY_LINK_AUTH_REMOVED`
+  - 日志包含迁移提示：`legacy_link_auth_removed: migrate to HTTP Basic + HTTP_AUTH_HASH or OAuth2`
+
+### 7) 外部服务不可用降级
 
 - 人工注入不可用 MiJia 服务地址
 - 返回结构化错误：`E_EXTERNAL_SERVICE_UNAVAILABLE`，并包含 `error_id`
 
-### 6) tag cache 重建
+### 8) tag cache 重建
 
 - 调用 `/refreshmusictag`
 - 日志出现基准统计：
@@ -59,7 +74,7 @@
 
 - 持续运行时长：30 分钟
 - 日志扫描关键字：`Traceback`、`ERROR`、`Exception`
-- 结果：未发现致命异常堆栈
+- 结果：未发现致命异常堆栈，也未观察到鉴权循环异常
 
 ## 六、性能对比（Tag Cache）
 
