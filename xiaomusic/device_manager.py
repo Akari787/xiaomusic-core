@@ -44,10 +44,10 @@ class DeviceManager:
         根据配置中的设备信息和分组信息，更新设备列表和分组映射。
         这个方法需要在设备信息已经从小米服务器获取后调用。
         """
-        XiaoMusicDevice.dict_clear(self.devices)
-
+        old_devices = self.devices
         self.device_id_did = {}
         self.groups = {}
+        self.devices = {}
 
         # 遍历配置中的设备，构建基本映射
         did2group = parse_str_to_dict(self.config.group_list, d1=",", d2=":")
@@ -58,7 +58,22 @@ class DeviceManager:
             if not group_name or group_name is None:
                 group_name = device.name
             self.groups.setdefault(group_name, []).append(device.device_id)
-            self.devices[did] = XiaoMusicDevice(self.xiaomusic, device, group_name)
+
+            prev = old_devices.pop(did, None)
+            if prev is not None and prev.device.device_id == device.device_id:
+                prev.device = device
+                prev.group_name = group_name
+                prev.config = self.config
+                prev.update_playlist()
+                self.devices[did] = prev
+            else:
+                if prev is not None:
+                    prev.cancel_all_timer()
+                self.devices[did] = XiaoMusicDevice(self.xiaomusic, device, group_name)
+
+        # Removed devices are no longer tracked: cancel their timers.
+        for stale in old_devices.values():
+            stale.cancel_all_timer()
 
         self.log.info(f"设备列表已更新: device_id_did={self.device_id_did}")
         self.log.info(f"设备分组已更新: groups={self.groups}")
