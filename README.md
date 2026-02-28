@@ -161,6 +161,40 @@ docker compose pull
 docker compose up -d --force-recreate
 ```
 
+## 🧩 WebUI 前后端分离（Vite + React + TS）
+
+当前仓库已提供 `webui/` 前端工程，默认只保留一套主题（Default）。
+
+### 模式 A：后端托管前端构建产物（推荐）
+
+1. 构建前端：
+
+```bash
+cd webui
+npm install
+npm run build
+```
+
+2. 使用 compose 挂载 `webui/dist`（示例已包含）。
+3. 启动后访问：`/webui/`。
+
+说明：
+
+- 后端会在检测到 `webui/dist` 存在时自动挂载 `/webui`（支持 SPA history fallback）。
+- 可通过 `XIAOMUSIC_WEBUI_DIST_PATH` 自定义构建产物路径。
+
+### 模式 B：完全分离部署（文档方案）
+
+- 使用 Nginx/Node 托管 `webui/dist`
+- 后端 API 独立部署
+- 通过 `VITE_API_BASE_URL` 指向后端地址（或前置反向代理统一 `/api`）
+
+### 主题策略
+
+- 当前仅支持 Default 主题。
+- 历史多主题入口已标记弃用并从主入口移除。
+- 后续如需开放用户主题，将基于 `webui/src/theme` 的 token 标准扩展。
+
 ## ⚠️ 安全建议
 
 ### 内网安全部署（默认安全）
@@ -184,6 +218,7 @@ docker compose up -d --force-recreate
 - 域名白名单优先级：`outbound_allowlist_domains` > `allowlist_domains`（后者保留兼容但视为 deprecated）。
 - CORS 默认仅允许 `http://localhost`、`http://127.0.0.1`。
 - 启动必须注入以下环境变量（支持 `.env`）：`API_SECRET`、`HTTP_AUTH_HASH`。
+- 当 `enable_analytics=false` 时，`API_SECRET` 可为空；仅在 analytics 启用时需要提供。
 - Self-update 默认关闭：`enable_self_update=false`。
 
 ### 升级注意事项（v1.0.6 起）

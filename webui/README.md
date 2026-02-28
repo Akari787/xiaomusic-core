@@ -7,3 +7,8 @@
 ## 环境变量
 
 - `VITE_API_BASE_URL`：后端 API 根地址（默认空，表示同源）
+
+## 主题说明
+
+- 当前仅提供 `defaultTheme`。
+- 多主题能力在本阶段已弃用，后续将基于 `src/theme` token 标准扩展。

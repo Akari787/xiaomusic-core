@@ -25,6 +25,12 @@
 - 已注入 `API_SECRET`、`HTTP_AUTH_HASH`
 - 缺失必填 secret 时服务无法通过配置校验启动
 
+### 1.1) analytics 禁用时最小配置启动
+
+- 配置 `XIAOMUSIC_ENABLE_ANALYTICS=false`
+- 未提供 `API_SECRET` 仍可正常启动服务
+- 验证点：应用初始化、API 路由、OAuth2 状态接口均正常
+
 ### 2) OAuth 状态与 token 持久化
 
 - 重启前：`/api/oauth2/status` 显示 `token_valid=true`
@@ -39,6 +45,13 @@
 - `POST /api/v1/play_url`：`ok=true, state=streaming`
 - `GET /api/v1/status`：`ok=true, stage=stream`
 - `POST /api/v1/stop`：`ok=true, state=stopped`
+
+### 4.1) WebUI（前后端分离）
+
+- 在测试环境构建 `webui`：`npm run build`
+- 后端托管构建产物（`/webui/`）可访问
+- 页面可读取 `/api/oauth2/status` 并展示登录状态
+- 主入口仅保留默认主题入口，并新增 `/webui/` 入口
 
 ### 5) HTTP Basic + HTTP_AUTH_HASH 鉴权行为
 
