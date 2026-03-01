@@ -115,7 +115,7 @@ docker compose -f docker-compose.hardened.yml up -d --build
 2) 使用 profile 化 compose（production/test）：
 
 ```bash
-# 先准备 .env（必须包含 API_SECRET 与 HTTP_AUTH_HASH）
+# 先准备 .env（必须包含 HTTP_AUTH_HASH；仅在启用 analytics 时需要 API_SECRET）
 python scripts/generate_password_hash.py
 
 # 生产
@@ -215,8 +215,8 @@ npm run build
 - 出站访问（SSRF 防护）：默认拒绝所有出站请求。
 - 域名白名单优先级：`outbound_allowlist_domains` > `allowlist_domains`（后者保留兼容但视为 deprecated）。
 - CORS 默认仅允许 `http://localhost`、`http://127.0.0.1`。
-- 启动必须注入以下环境变量（支持 `.env`）：`API_SECRET`、`HTTP_AUTH_HASH`。
-- 当 `enable_analytics=false` 时，`API_SECRET` 可为空；仅在 analytics 启用时需要提供。
+- 启动必须注入 `HTTP_AUTH_HASH`（支持 `.env`）。
+- `API_SECRET` 仅在 `enable_analytics=true` 时需要；缺失会在 analytics 初始化阶段明确失败。
 - Self-update 默认关闭：`enable_self_update=false`。
 
 ### 升级注意事项（v1.0.6 起）
@@ -234,8 +234,10 @@ python scripts/generate_password_hash.py
 - `.env` 示例：
 
 ```env
-API_SECRET=your_analytics_secret
 HTTP_AUTH_HASH=$2b$12$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+XIAOMUSIC_ENABLE_ANALYTICS=false
+# 仅在开启 analytics 时需要：
+# API_SECRET=your_analytics_secret
 ```
 
 ### 迁移说明（安全默认）

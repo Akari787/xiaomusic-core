@@ -111,3 +111,40 @@
 
 - 本次为最小改动稳定性补丁，覆盖率以“新增/改动模块 + 回归用例”作为验收口径。
 - 全仓 `--cov=xiaomusic` 为历史基线，不作为本次补丁阻塞条件。
+
+## 九、2026-03-01 补充验收：修掉 API_SECRET 强制依赖
+
+### 变更提交
+
+- `9c82965`：`fix: analytics secret optional + lazy init (no API_SECRET required when disabled)`
+- `test/docs` 提交：见本报告更新所在提交
+
+### 目标与结论
+
+- 在 `XIAOMUSIC_ENABLE_ANALYTICS=false` 且 `API_SECRET` 为空时，服务可正常启动。
+- analytics 初始化保持 lazy：禁用时不读取 analytics secret；启用时若缺失 `API_SECRET`，在 analytics 初始化阶段抛出明确错误（测试覆盖）。
+- HTTP Basic 校验路径仅依赖 `HTTP_AUTH_HASH`（测试覆盖）。
+
+### 本地自动化测试
+
+- 执行：
+  - `pytest tests/test_app_init_without_api_secret.py`
+  - `pytest tests/test_analytics_lazy_init.py`
+  - `pytest tests/test_httpauth_hash.py`
+  - `pytest tests/test_secret_settings.py`
+  - 以及核心回归集合（system/api/play/session）
+- 结果：`24 passed`
+
+### 测试服务器实机验收（192.168.7.178）
+
+- 部署方式：同步本次改动后，使用
+  - `API_SECRET=`
+  - `XIAOMUSIC_ENABLE_ANALYTICS=false`
+  进行重建启动。
+- 核心 API 抽检（契约保持不变）：
+  - `GET /getversion` -> `{"version":"1.0.5"}`
+  - `GET /api/oauth2/status` -> 保持 `success/token_valid/runtime_auth_ready/...` 结构
+  - `POST /api/v1/set_play_mode` -> 保持 `ok/success/error_code/message` 结构
+- WebUI：`GET /webui/` 返回 `200`，页面可打开。
+- 日志安全检查：未发现 `API_SECRET`、`HTTP_AUTH_HASH`、bcrypt 明文片段泄露。
+- 稳定性观察：连续运行约 15 分钟（20:12:26 ~ 20:27:32）无异常日志。

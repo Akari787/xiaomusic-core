@@ -13,7 +13,7 @@ async def test_analytics_disabled_does_not_load_settings(monkeypatch):
     def _boom():
         raise AssertionError("settings should not be loaded when analytics disabled")
 
-    monkeypatch.setattr(analytics_mod, "get_settings", _boom)
+    monkeypatch.setattr(analytics_mod, "get_analytics_settings", _boom)
 
     a = analytics_mod.Analytics(log, cfg)
     a.init()
@@ -60,7 +60,7 @@ def test_analytics_enabled_initializes_lazily(monkeypatch):
         calls["settings"] += 1
         return SimpleNamespace(API_SECRET="secret")
 
-    monkeypatch.setattr(analytics_mod, "get_settings", _settings)
+    monkeypatch.setattr(analytics_mod, "get_analytics_settings", _settings)
     monkeypatch.setattr(analytics_mod, "GtagMP", _FakeGtag)
 
     a = analytics_mod.Analytics(log, cfg)
@@ -68,3 +68,18 @@ def test_analytics_enabled_initializes_lazily(monkeypatch):
     a.init()
     assert calls["settings"] == 1
     assert a.gtag is not None
+
+
+def test_analytics_enabled_requires_api_secret(monkeypatch):
+    cfg = SimpleNamespace(enable_analytics=True, hostname="http://localhost")
+    log = SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None)
+
+    monkeypatch.setattr(
+        analytics_mod,
+        "get_analytics_settings",
+        lambda: SimpleNamespace(API_SECRET=None),
+    )
+
+    a = analytics_mod.Analytics(log, cfg)
+    with pytest.raises(RuntimeError, match="API_SECRET"):
+        a.init()
