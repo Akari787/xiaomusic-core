@@ -419,7 +419,16 @@ export function HomePage() {
       .map((x) => x.trim())
       .filter(Boolean);
     setSelectedSettingDids(dids);
-    setSettingDeviceList(Array.isArray(out.device_list) ? out.device_list : []);
+    const rows = Array.isArray(out.device_list) ? out.device_list : [];
+    setSettingDeviceList(rows);
+    if (rows.length) {
+      setDevices(rows);
+      const fallbackDid = deviceCandidates(rows[0])[0] || "";
+      const preferredDid = dids[0] || fallbackDid;
+      if (preferredDid) {
+        setActiveDid((prev) => prev || preferredDid);
+      }
+    }
     setPullAskEnabled(Boolean(out.enable_pull_ask));
   }
 
@@ -448,11 +457,30 @@ export function HomePage() {
       setMessage("未获取到设备，请在设置页完成 OAuth2 登录。");
       return;
     }
-    const did = await tryResolveDid(rows[0]);
-    setActiveDid(did);
-    if (!did) {
-      setMessage("未匹配到可用设备 DID，请在设置页刷新设备列表。");
+    const fallbackDid = deviceCandidates(rows[0])[0] || "";
+    if (fallbackDid) {
+      setActiveDid((prev) => prev || fallbackDid);
+      void (async () => {
+        const probe = (await apiGet<PlayingInfo>(`/playingmusic?did=${encodeURIComponent(fallbackDid)}`)) as PlayingInfo;
+        if (probe.ret !== "Did not exist") {
+          return;
+        }
+        const resolved = await tryResolveDid(rows[0]);
+        if (resolved) {
+          setActiveDid(resolved);
+          return;
+        }
+        setMessage("未匹配到可用设备 DID，请在设置页刷新设备列表。");
+      })();
+      return;
     }
+
+    const did = await tryResolveDid(rows[0]);
+    if (did) {
+      setActiveDid(did);
+      return;
+    }
+    setMessage("未匹配到可用设备 DID，请在设置页刷新设备列表。");
   }
 
   async function loadPlaylists() {
@@ -468,23 +496,25 @@ export function HomePage() {
     if (!did) {
       return;
     }
-    const out = (await apiGet<PlayingInfo>(`/playingmusic?did=${encodeURIComponent(did)}`)) as PlayingInfo;
-    setStatus(out);
-    const vol = (await apiGet<{ volume?: number }>(`/getvolume?did=${encodeURIComponent(did)}`)) as {
-      volume?: number;
-    };
-    if (typeof vol.volume === "number") {
-      setVolume(vol.volume);
+    const [playingResp, volumeResp] = await Promise.allSettled([
+      apiGet<PlayingInfo>(`/playingmusic?did=${encodeURIComponent(did)}`),
+      apiGet<{ volume?: number }>(`/getvolume?did=${encodeURIComponent(did)}`),
+    ]);
+    if (playingResp.status === "fulfilled") {
+      setStatus(playingResp.value as PlayingInfo);
+    }
+    if (volumeResp.status === "fulfilled") {
+      const vol = volumeResp.value as { volume?: number };
+      if (typeof vol.volume === "number") {
+        setVolume(vol.volume);
+      }
     }
   }
 
   useEffect(() => {
     void (async () => {
-      await loadVersion();
-      await loadOAuthStatus();
-      await loadSettingData();
-      await loadDevices();
-      await loadPlaylists();
+      await Promise.allSettled([loadVersion(), loadOAuthStatus(), loadSettingData(), loadPlaylists()]);
+      void loadDevices();
     })();
   }, []);
 
