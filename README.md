@@ -182,6 +182,9 @@ npm run build
 
 - 后端会在检测到 `xiaomusic/webui/static` 存在时自动挂载 `/webui`（支持 SPA history fallback）。
 - 可通过 `XIAOMUSIC_WEBUI_DIST_PATH` 自定义构建产物路径。
+- WebUI 默认自动使用当前访问地址作为“公共访问地址”（通常无需手动填写）。
+- 仅在反向代理/内外网分流等场景下，才需要在“安全访问 -> 公共访问地址（高级）”里手动覆盖 `PUBLIC_BASE_URL`。
+- 旧版 `hostname + public_port` 配置仍兼容；当 `PUBLIC_BASE_URL` 为空时会继续读取旧字段，并在设置页自动迁移回显。
 
 ### 主题策略
 

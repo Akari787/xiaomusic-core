@@ -25,3 +25,15 @@ def test_config_defaults_and_priority():
         }
     )
     assert cfg.outbound_allowlist_domains == ["legacy.test"]
+
+
+def test_public_base_url_prefers_manual_override():
+    cfg = Config(hostname="http://192.168.1.10", public_port=58090, public_base_url="https://edge.example.com:9443")
+    assert cfg.get_public_base_url() == "https://edge.example.com:9443"
+    assert cfg.get_self_netloc() == "edge.example.com:9443"
+
+
+def test_public_base_url_falls_back_to_legacy_host_port():
+    cfg = Config(hostname="http://192.168.1.10", public_port=58090, public_base_url="")
+    assert cfg.get_public_base_url() == "http://192.168.1.10:58090"
+    assert cfg.get_self_netloc() == "192.168.1.10:58090"

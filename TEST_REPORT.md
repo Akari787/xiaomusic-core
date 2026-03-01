@@ -148,3 +148,48 @@
 - WebUI：`GET /webui/` 返回 `200`，页面可打开。
 - 日志安全检查：未发现 `API_SECRET`、`HTTP_AUTH_HASH`、bcrypt 明文片段泄露。
 - 稳定性观察：连续运行约 15 分钟（20:12:26 ~ 20:27:32）无异常日志。
+
+## 十、2026-03-01 补充验收：公共访问地址 UI 迁移 + 默认自动化
+
+### 变更提交
+
+- `1d205e0`：`refactor(ui): move public base url config to security page (collapsed)`
+- `f1e530c`：`feat: auto-detect base url (origin/forwarded) + compatibility read`
+
+### 验收环境
+
+- 测试服务器：`192.168.7.178:58090`
+- 部署目录：`/root/xiaomusic_oauth2_smoke`
+- WebUI 构建产物：`/assets/index-DcQRMKxG.js`
+
+### 验收步骤与结果
+
+1. **默认自动地址（无手动填写）**
+   - 通过 `GET /api/v1/detect_base_url` 获取自动地址：`http://192.168.7.178:58090`
+   - WebUI 已迁移：原“基础设置”不再显示“NAS 的 IP/域名 + 本地端口”输入；该配置移至“安全访问 -> 公共访问地址（高级）”，且默认折叠。
+
+2. **生成 URL 使用自动值**
+   - 开启 `web_music_proxy=true` 后，调用 `GET /musicinfo?name=831143-nero`
+   - 返回 `url` 前缀为：`http://192.168.7.178:58090/proxy/...`（与自动值一致）
+
+3. **手动覆盖后生效**
+   - 设置 `public_base_url=http://manual.example:12345`
+   - 再次调用 `GET /musicinfo?name=831143-nero`
+   - 返回 `url` 前缀为：`http://manual.example:12345/proxy/...`（覆盖生效）
+
+4. **重置为自动后恢复**
+   - 清空 `public_base_url` 并恢复兼容字段 `hostname/public_port` 为自动值
+   - 再次调用 `GET /musicinfo?name=831143-nero`
+   - 返回 `url` 前缀恢复为：`http://192.168.7.178:58090/proxy/...`
+
+5. **日志安全检查**
+   - 检索关键字：`API_SECRET`、`HTTP_AUTH_HASH`、`$2b$`
+   - 结果：未发现敏感信息泄露。
+
+### 结论
+
+- 方案 A 验收通过：
+  - 公共访问地址已迁移到“安全访问”的高级折叠区；
+  - 默认场景无需手动填写；
+  - 手动覆盖与重置自动均按预期生效；
+  - 兼容旧配置 `hostname/public_port`。

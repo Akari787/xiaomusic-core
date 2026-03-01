@@ -46,3 +46,16 @@ def test_detect_base_url_returns_none_when_no_signal():
     req = _request(host="", scheme="http")
     cfg = _config(public_base_url="")
     assert detect_base_url(req, cfg) is None
+
+
+def test_detect_base_url_prefers_forwarded_headers():
+    req = SimpleNamespace(
+        headers={
+            "host": "127.0.0.1:8090",
+            "x-forwarded-host": "music.example.com",
+            "x-forwarded-proto": "https",
+        },
+        url=SimpleNamespace(scheme="http"),
+    )
+    cfg = _config(public_base_url="")
+    assert detect_base_url(req, cfg) == "https://music.example.com"
