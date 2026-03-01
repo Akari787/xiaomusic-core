@@ -19,7 +19,7 @@ from fastapi.security import (
 from fastapi.staticfiles import StaticFiles
 import bcrypt
 
-from xiaomusic.core.settings import get_settings
+from xiaomusic.core.settings import get_auth_settings
 
 if TYPE_CHECKING:
     import logging
@@ -111,7 +111,7 @@ def verification(
     is_correct_username = secrets.compare_digest(
         current_username_bytes, correct_username_bytes
     )
-    settings = get_settings()
+    settings = get_auth_settings()
     try:
         is_correct_password = bcrypt.checkpw(
             credentials.password.encode("utf8"),

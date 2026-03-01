@@ -8,7 +8,7 @@ import aiohttp
 from ga4mp import GtagMP
 
 from xiaomusic import __version__
-from xiaomusic.core.settings import get_settings
+from xiaomusic.core.settings import get_analytics_settings
 from xiaomusic.security.redaction import redact_text
 
 MAX_PARAM_LENGTH = 100
@@ -32,7 +32,11 @@ class Analytics:
         if not getattr(self.config, "enable_analytics", False):
             return
 
-        settings = get_settings()
+        settings = get_analytics_settings()
+        if not settings.API_SECRET:
+            raise RuntimeError(
+                "analytics enabled but API_SECRET is missing; set API_SECRET when XIAOMUSIC_ENABLE_ANALYTICS=true"
+            )
 
         gtag = GtagMP(
             api_secret=settings.API_SECRET,
