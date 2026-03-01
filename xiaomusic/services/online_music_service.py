@@ -554,8 +554,8 @@ class OnlineMusicService:
     def default_url(self):
         # 先推送默认【搜索中】音频，搜索到播放url后推送给小爱
         config = self.xiaomusic.config
-        if config and hasattr(config, "hostname") and hasattr(config, "public_port"):
-            proxy_base = f"{config.hostname}:{config.public_port}"
+        if config and hasattr(config, "get_public_base_url"):
+            proxy_base = config.get_public_base_url()
         else:
             proxy_base = "http://192.168.31.241:8090"
         # return proxy_base + "/static/search.mp3"

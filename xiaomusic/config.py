@@ -7,6 +7,7 @@ import os
 import warnings
 from dataclasses import asdict, dataclass, field
 from typing import get_args, get_origin, get_type_hints
+from urllib.parse import urlparse
 
 from xiaomusic.const import (
     PLAY_TYPE_ALL,
@@ -611,7 +612,28 @@ class Config:
         encoded_credentials = base64.b64encode(credentials.encode()).decode()
         return f"Basic {encoded_credentials}"
 
+    def get_public_base_url(self):
+        base = str(self.public_base_url or "").strip()
+        if not base:
+            host = str(self.hostname or "").strip()
+            if host:
+                return f"{host.rstrip('/')}:{self.public_port}"
+            return ""
+        if not base.startswith(("http://", "https://")):
+            base = f"http://{base}"
+        parsed = urlparse(base)
+        if not parsed.hostname:
+            return ""
+        if parsed.port is None:
+            return f"{parsed.scheme}://{parsed.hostname}"
+        return f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
+
     def get_self_netloc(self):
         """获取网络地址"""
-        host = self.hostname.split("//", 1)[1]
-        return f"{host}:{self.public_port}"
+        parsed = urlparse(self.get_public_base_url())
+        host = parsed.hostname or ""
+        if not host:
+            return ""
+        if parsed.port is None:
+            return host
+        return f"{host}:{parsed.port}"

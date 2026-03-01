@@ -6,7 +6,6 @@ import os
 import time
 from dataclasses import asdict
 from threading import Lock
-from urllib.parse import urlparse
 from urllib.request import urlopen
 
 from xiaomusic.network_audio.audio_streamer import AudioStreamer
@@ -69,10 +68,7 @@ class NetworkAudioRuntime:
             self.stream_server.start()
 
     def _public_base(self) -> str:
-        parsed = urlparse(self.xiaomusic.config.hostname)
-        host = parsed.hostname or "127.0.0.1"
-        scheme = parsed.scheme or "http"
-        return f"{scheme}://{host}:{self.xiaomusic.config.public_port}"
+        return self.xiaomusic.config.get_public_base_url()
 
     def _internal_stream_url(self, sid: str) -> str:
         return f"http://127.0.0.1:{self.stream_port}/stream/{sid}"

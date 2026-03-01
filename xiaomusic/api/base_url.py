@@ -111,9 +111,11 @@ def detect_base_url(request, config) -> Optional[str]:
     if explicit:
         return explicit
 
-    # 2) request host + scheme
-    scheme = getattr(getattr(request, "url", None), "scheme", None) or "http"
-    host_hdr = request.headers.get("host", "")
+    # 2) request host + scheme (prefer reverse-proxy forwarded headers)
+    forwarded_proto = (request.headers.get("x-forwarded-proto", "") or "").split(",", 1)[0].strip()
+    forwarded_host = (request.headers.get("x-forwarded-host", "") or "").split(",", 1)[0].strip()
+    scheme = forwarded_proto or getattr(getattr(request, "url", None), "scheme", None) or "http"
+    host_hdr = forwarded_host or request.headers.get("host", "")
     if host_hdr:
         cand = _normalize_base_url(f"{scheme}://{host_hdr}")
         if cand:
