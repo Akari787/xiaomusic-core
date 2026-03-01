@@ -117,7 +117,7 @@
 ### 变更提交
 
 - `9c82965`：`fix: analytics secret optional + lazy init (no API_SECRET required when disabled)`
-- `test/docs` 提交：见本报告更新所在提交
+- `3ec6759`：`test/docs: add tests + update docs + update TEST_REPORT`
 
 ### 目标与结论
 
