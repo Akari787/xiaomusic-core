@@ -1175,7 +1175,7 @@ class XiaoMusicDevice:
             self.log.warning(f"Execption {e}")
         return {"volume": 0, "status": 0}
 
-    async def set_play_type(self, play_type, dotts=True):
+    async def set_play_type(self, play_type, dotts=True, refresh_playlist=True):
         """设置播放类型"""
         self.device.play_type = play_type
         # 发布设备配置变更事件
@@ -1184,7 +1184,8 @@ class XiaoMusicDevice:
         if dotts:
             tts = self.config.get_play_type_tts(play_type)
             await self.do_tts(tts)
-        self.update_playlist()
+        if refresh_playlist:
+            self.update_playlist()
 
     async def play_music_list(self, list_name, music_name):
         """播放指定播放列表"""

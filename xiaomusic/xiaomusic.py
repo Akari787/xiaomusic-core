@@ -315,8 +315,9 @@ class XiaoMusic:
         assert (
             analytics_task is not None
         )  # to keep the reference to task, do not remove this
-        await self.sync_jellyfin_music_lists_if_needed()
+        # 先完成认证与设备初始化，避免 Jellyfin 同步耗时导致 runtime_auth_ready 长时间为 false。
         await self.auth_manager.init_all_data()
+        await self.sync_jellyfin_music_lists_if_needed()
         keepalive_task = asyncio.create_task(self.auth_manager.keepalive_loop())
         self.append_running_task(keepalive_task)
         # 启动对话循环，传递回调函数
@@ -392,8 +393,18 @@ class XiaoMusic:
     async def set_play_type_seq(self, did="", **kwargs):
         await self.set_play_type(did, PLAY_TYPE_SEQ)
 
-    async def set_play_type(self, did="", play_type=PLAY_TYPE_RND, dotts=True):
-        await self.device_manager.devices[did].set_play_type(play_type, dotts)
+    async def set_play_type(
+        self,
+        did="",
+        play_type=PLAY_TYPE_RND,
+        dotts=True,
+        refresh_playlist=True,
+    ):
+        await self.device_manager.devices[did].set_play_type(
+            play_type,
+            dotts,
+            refresh_playlist,
+        )
 
     # 口令:刷新列表
     async def gen_music_list(self, **kwargs):
@@ -736,6 +747,10 @@ class XiaoMusic:
             device_list = await self.auth_manager.mina_call(
                 "device_list", retry=1, ctx="getalldevices"
             )
+            # 运行时可能拿到设备列表但本地 device_manager 仍为空（例如重建会话后）。
+            # 这里做一次轻量自愈，保证 did_exist 与控制接口可用。
+            if device_list and not self.device_manager.devices:
+                await self.device_manager.update_device_info(self.auth_manager)
         except Exception as e:
             self.log.warning(f"Execption {e}")
             # 重新初始化
@@ -745,6 +760,7 @@ class XiaoMusic:
                     reason="getalldevices",
                     prefer_refresh=True,
                 )
+                await self.device_manager.update_device_info(self.auth_manager)
                 device_list = await self.auth_manager.mina_call(
                     "device_list", retry=0, ctx="getalldevices-retry"
                 )

@@ -163,24 +163,24 @@ docker compose up -d --force-recreate
 
 ## 🧩 WebUI 前后端分离（Vite + React + TS）
 
-当前仓库已提供 `webui/` 前端工程，默认只保留一套主题（Default）。
+当前仓库已提供 `xiaomusic/webui/` 前端工程，默认只保留一套主题（Default）。
 
 ### 模式 A：后端托管前端构建产物（推荐）
 
 1. 构建前端：
 
 ```bash
-cd webui
+cd xiaomusic/webui
 npm install
 npm run build
 ```
 
-2. 使用 compose 挂载 `webui/dist`（示例已包含）。
+2. 构建产物输出到 `xiaomusic/webui/static`，由后端统一挂载。
 3. 启动后访问根路径 `/`（会自动进入 `/webui/`）。
 
 说明：
 
-- 后端会在检测到 `webui/dist` 存在时自动挂载 `/webui`（支持 SPA history fallback）。
+- 后端会在检测到 `xiaomusic/webui/static` 存在时自动挂载 `/webui`（支持 SPA history fallback）。
 - 可通过 `XIAOMUSIC_WEBUI_DIST_PATH` 自定义构建产物路径。
 
 ### 主题策略

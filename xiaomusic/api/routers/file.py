@@ -119,6 +119,29 @@ async def downloadjson(data: UrlInfo, Verifcation=Depends(verification)):
     return api_response.ok({"content": content}, contract="ret", ret=ret)
 
 
+@router.post("/api/file/fetch_playlist_json")
+async def fetch_playlist_json(data: UrlInfo, Verifcation=Depends(verification)):
+    """通过后端拉取歌单 JSON 内容。"""
+    log.info(data)
+    url = data.url
+    content = ""
+    try:
+        content = await downloadfile(url, config)
+        return api_response.ok({"content": content}, contract="ret")
+    except Exception as e:
+        log.exception(f"Execption {e}")
+        detail = str(e).strip()
+        if detail:
+            ret = f"Download JSON file failed: {type(e).__name__}: {detail}"
+        else:
+            ret = f"Download JSON file failed: {type(e).__name__}"
+        return api_response.ok(
+            {"content": content},
+            contract="ret",
+            ret=ret,
+        )
+
+
 @router.post("/downloadplaylist")
 async def downloadplaylist(data: DownloadPlayList, Verifcation=Depends(verification)):
     """下载歌单"""

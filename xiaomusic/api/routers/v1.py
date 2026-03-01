@@ -12,6 +12,7 @@ from xiaomusic.api.dependencies import verification, xiaomusic
 from xiaomusic.api.models import ApiSessionsCleanupRequest
 from xiaomusic.api.runtime_provider import get_runtime
 from xiaomusic.api.models import (
+    ApiV1SetPlayModeRequest,
     ApiV1PlayMusicListRequest,
     ApiV1PlayMusicRequest,
     ApiV1PlayUrlRequest,
@@ -19,6 +20,7 @@ from xiaomusic.api.models import (
     ApiV1StopRequest,
 )
 from xiaomusic.api.response_utils import make_error, make_ok, playback_response
+from xiaomusic.const import PLAY_TYPE_ALL, PLAY_TYPE_ONE, PLAY_TYPE_RND, PLAY_TYPE_SEQ, PLAY_TYPE_SIN
 from xiaomusic.playback.facade import PlaybackFacade
 
 router = APIRouter(dependencies=[Depends(verification)])
@@ -198,6 +200,35 @@ async def api_v1_play_music_list(data: ApiV1PlayMusicListRequest):
             speaker_id=data.speaker_id,
             state="failed",
             error_code="E_XIAOMI_PLAY_FAILED",
+        )
+
+
+@router.post("/api/v1/set_play_mode")
+async def api_v1_set_play_mode(data: ApiV1SetPlayModeRequest):
+    mapping = {
+        0: PLAY_TYPE_ONE,
+        1: PLAY_TYPE_ALL,
+        2: PLAY_TYPE_RND,
+        3: PLAY_TYPE_SIN,
+        4: PLAY_TYPE_SEQ,
+    }
+    mode = mapping.get(int(data.mode_index), PLAY_TYPE_RND)
+    try:
+        await xiaomusic.set_play_type(
+            data.speaker_id,
+            mode,
+            False,
+            refresh_playlist=False,
+        )
+        return make_ok(
+            payload={"speaker_id": data.speaker_id, "mode_index": int(data.mode_index)},
+            message="play mode updated",
+        )
+    except Exception:
+        return make_error(
+            "E_XIAOMI_PLAY_FAILED",
+            message="set play mode failed",
+            payload={"speaker_id": data.speaker_id, "mode_index": int(data.mode_index)},
         )
 
 

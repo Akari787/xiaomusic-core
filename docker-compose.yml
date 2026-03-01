@@ -16,7 +16,7 @@ services:
     volumes:
       - ./conf:/app/conf
       - ./music:/app/music
-      - ./webui/dist:/app/webui/dist:ro
+      - ./xiaomusic/webui/static:/app/xiaomusic/webui/static:ro
 
   xiaomusic-test:
     profiles: ["test"]
@@ -35,4 +35,4 @@ services:
     volumes:
       - ./conf:/app/conf
       - ./music:/app/music
-      - ./webui/dist:/app/webui/dist:ro
+      - ./xiaomusic/webui/static:/app/xiaomusic/webui/static:ro

@@ -117,6 +117,11 @@ class ApiV1PlayMusicListRequest(BaseModel):
     music_name: str = ""
 
 
+class ApiV1SetPlayModeRequest(BaseModel):
+    speaker_id: str
+    mode_index: int
+
+
 class ApiResponseBase(BaseModel):
     ok: bool
     error_code: str | None = None

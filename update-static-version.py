@@ -47,7 +47,7 @@ if __name__ == "__main__":
     t = str(int(time.time()))
 
     # 指定目录
-    html_directory = "xiaomusic/static/default"  # 修改为实际的HTML文件目录路径
+    html_directory = "xiaomusic/webui/static/default"  # 修改为实际的HTML文件目录路径
 
     # 获取HTML文件列表
     html_files_to_update = get_html_files(html_directory)

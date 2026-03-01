@@ -48,7 +48,7 @@
 
 ### 4.1) WebUI（前后端分离）
 
-- 在测试环境构建 `webui`：`npm run build`
+- 在测试环境构建 `xiaomusic/webui`：`npm run build`
 - 后端托管构建产物（`/webui/`）可访问
 - 页面可读取 `/api/oauth2/status` 并展示登录状态
 - 主入口仅保留默认主题入口，并新增 `/webui/` 入口

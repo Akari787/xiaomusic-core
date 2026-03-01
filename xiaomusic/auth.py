@@ -647,8 +647,8 @@ class AuthManager:
 
             # If OAuth2 token file already contains micoapi serviceToken, inject it into MiAccount
             # to avoid triggering MiAccount.login() (which may require captcha).
-            oauth_service_token = auth_data.get("serviceToken") or auth_data.get(
-                "yetAnotherServiceToken"
+            oauth_service_token = auth_data.get("yetAnotherServiceToken") or auth_data.get(
+                "serviceToken"
             )
             oauth_ssecurity = auth_data.get("ssecurity")
             if oauth_service_token and oauth_ssecurity:
@@ -700,8 +700,9 @@ class AuthManager:
                 self.miio_service = MiIOService(mi_account)
 
             self.login_acount = account_name
-            self.login_signature = self._get_login_signature()
             self._persist_oauth2_token(auth_data=auth_data, mi_account=mi_account, reason="login")
+            # token 落盘后再计算签名，避免 mtime 变化导致运行时一直被判定为 need_login。
+            self.login_signature = self._get_login_signature()
             # Clear relogin backoff immediately after a successful login/reinit.
             self._relogin_fail_streak = 0
             self._next_relogin_allowed_ts = 0.0
@@ -828,8 +829,8 @@ class AuthManager:
             CookieJar: Cookie容器，失败返回None
         """
         auth_data = self._get_oauth2_auth_data()
-        service_token = auth_data.get("serviceToken") or auth_data.get(
-            "yetAnotherServiceToken"
+        service_token = auth_data.get("yetAnotherServiceToken") or auth_data.get(
+            "serviceToken"
         )
         if service_token and auth_data.get("userId"):
             device_id = auth_data.get("deviceId") or self.config.get_one_device_id()
@@ -858,8 +859,8 @@ class AuthManager:
 
     def get_cookie_dict(self, device_id=""):
         auth_data = self._get_oauth2_auth_data()
-        service_token = auth_data.get("serviceToken") or auth_data.get(
-            "yetAnotherServiceToken"
+        service_token = auth_data.get("yetAnotherServiceToken") or auth_data.get(
+            "serviceToken"
         )
         user_id = auth_data.get("userId", "")
         c_user_id = auth_data.get("cUserId") or user_id

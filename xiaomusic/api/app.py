@@ -163,13 +163,13 @@ def HttpInit(_xiaomusic: "XiaoMusic"):
 
     # 挂载静态文件
     folder = os.path.dirname(os.path.dirname(__file__))  # xiaomusic 目录
-    app.mount("/static", AuthStaticFiles(directory=f"{folder}/static"), name="static")
+    webui_static = os.path.join(folder, "webui", "static")
+    app.mount("/static", AuthStaticFiles(directory=webui_static), name="static")
 
-    # Optional: host separated webui build output under /webui.
-    repo_root = os.path.dirname(folder)
+    # Optional: host webui build output under /webui.
     webui_dist = os.getenv(
         "XIAOMUSIC_WEBUI_DIST_PATH",
-        os.path.join(repo_root, "webui", "dist"),
+        webui_static,
     )
     if os.path.isdir(webui_dist):
         if not any(getattr(r, "path", "") == "/webui" for r in app.routes):
