@@ -99,17 +99,7 @@ async def _runtime_auth_ready() -> bool:
 @router.get("/")
 async def read_index():
     """首页"""
-    folder = os.path.dirname(
-        os.path.dirname(os.path.dirname(__file__))
-    )  # xiaomusic 目录
-    repo_root = os.path.dirname(folder)
-    webui_dist = os.getenv(
-        "XIAOMUSIC_WEBUI_DIST_PATH",
-        os.path.join(repo_root, "webui", "dist"),
-    )
-    if os.path.isdir(webui_dist):
-        return RedirectResponse(url="/webui/", status_code=302)
-    return RedirectResponse(url="/static/default/index.html", status_code=302)
+    return RedirectResponse(url="/webui/", status_code=302)
 
 @router.get("/api/get_qrcode")
 async def get_qrcode():

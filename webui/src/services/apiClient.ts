@@ -23,3 +23,18 @@ export async function apiGet<T = unknown>(path: string): Promise<ApiResponse<T>>
   });
   return (await resp.json()) as ApiResponse<T>;
 }
+
+export async function apiPost<T = unknown>(
+  path: string,
+  payload: unknown,
+): Promise<ApiResponse<T>> {
+  const resp = await fetch(buildUrl(path), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  return (await resp.json()) as ApiResponse<T>;
+}

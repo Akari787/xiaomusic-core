@@ -30,9 +30,9 @@ export function OAuthStatusCard() {
   }, []);
 
   return (
-    <section>
+    <section className="oauth-card">
       <h2>OAuth2 状态</h2>
-      {error ? <p>请求失败：{error}</p> : null}
+      {error ? <p className="oauth-error">请求失败：{error}</p> : null}
       {status ? (
         <ul>
           <li>token_exists: {String(status.token_exists)}</li>
@@ -41,7 +41,7 @@ export function OAuthStatusCard() {
           <li>last_error: {status.last_error || ""}</li>
         </ul>
       ) : (
-        <p>加载中...</p>
+        <p className="oauth-loading">加载中...</p>
       )}
     </section>
   );

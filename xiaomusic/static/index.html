@@ -30,15 +30,11 @@
       <p class="answer">哎，我在</p>
     </div>
     <div class="options">
-      <!-- 选择主题 /static/[theme] -->
       <div class="options_list">
         <a href="/static/default/index.html">默认主题</a>
       </div>
       <div class="options_list">
         <a href="/webui/">新 WebUI（React/TS）</a>
-      </div>
-      <div class="options_list deprecated-note">
-        <span>多主题入口已弃用，当前仅保留默认主题</span>
       </div>
       <div class="options_list weapp">
         <a href="https://github.com/F-loat/xiaoplayer" target="_blank">微信小程序</a>
@@ -236,20 +232,6 @@
 
     .options .options_list.weapp {
       overflow: visible;
-    }
-
-    .options .options_list.deprecated-note {
-      grid-column: span 2;
-      min-width: 220px;
-      background: rgba(246, 196, 57, 0.12);
-      border-color: rgba(246, 196, 57, 0.45);
-      color: #fff6d6;
-      font-size: 0.92em;
-      padding: 0 12px;
-    }
-
-    .options .options_list.deprecated-note span {
-      color: #fff6d6;
     }
 
     .weapp-qrcode-modal {
