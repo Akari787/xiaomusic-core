@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiGet, apiPost } from "../services/apiClient";
 import "../styles/home.css";
@@ -260,6 +260,65 @@ function explainPlaybackError(
   return message || code || "未知错误";
 }
 
+function normalizeBaseUrlInput(raw: unknown): string {
+  const s = String(raw || "").trim();
+  if (!s) {
+    return "";
+  }
+  try {
+    const withScheme = s.startsWith("http://") || s.startsWith("https://") ? s : `http://${s}`;
+    const u = new URL(withScheme);
+    if (!u.hostname) {
+      return "";
+    }
+    return u.port ? `${u.protocol}//${u.hostname}:${u.port}` : `${u.protocol}//${u.hostname}`;
+  } catch {
+    return "";
+  }
+}
+
+function browserOriginBaseUrl(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return normalizeBaseUrlInput(window.location.origin);
+}
+
+function legacyBaseUrl(hostnameRaw: unknown, portRaw: unknown): string {
+  const host = String(hostnameRaw || "").trim();
+  if (!host) {
+    return "";
+  }
+  const normalizedHost = normalizeBaseUrlInput(host);
+  if (!normalizedHost) {
+    return "";
+  }
+  const u = new URL(normalizedHost);
+  const portNum = Number(portRaw || 0);
+  if (Number.isFinite(portNum) && portNum > 0) {
+    return `${u.protocol}//${u.hostname}:${portNum}`;
+  }
+  return normalizedHost;
+}
+
+function legacyLooksUnconfigured(hostnameRaw: unknown, portRaw: unknown): boolean {
+  const host = String(hostnameRaw || "").trim();
+  const portNum = Number(portRaw || 0);
+  return !host || (host === "http://192.168.2.5" && (!portNum || portNum === 58090));
+}
+
+function baseUrlToLegacyHostPort(baseUrl: string): { hostname: string; public_port: number } | null {
+  const normalized = normalizeBaseUrlInput(baseUrl);
+  if (!normalized) {
+    return null;
+  }
+  const u = new URL(normalized);
+  return {
+    hostname: `${u.protocol}//${u.hostname}`,
+    public_port: Number(u.port || (u.protocol === "https:" ? "443" : "80")),
+  };
+}
+
 export function HomePage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [activeDid, setActiveDid] = useState<string>("");
@@ -295,11 +354,13 @@ export function HomePage() {
   const [selectedSettingDids, setSelectedSettingDids] = useState<string[]>([]);
   const [advancedOpen, setAdvancedOpen] = useState<boolean>(false);
   const [activeAdvancedTab, setActiveAdvancedTab] = useState<string>("filepath");
+  const [securityAdvancedOpen, setSecurityAdvancedOpen] = useState<boolean>(false);
   const [operationOpen, setOperationOpen] = useState<boolean>(false);
   const [toolsOpen, setToolsOpen] = useState<boolean>(false);
   const [qrcodeExpireAt, setQrcodeExpireAt] = useState<number>(0);
   const [qrcodeRemain, setQrcodeRemain] = useState<number>(0);
   const [pullAskEnabled, setPullAskEnabled] = useState<boolean>(false);
+  const publicBaseMigratedRef = useRef<boolean>(false);
 
   const songs = useMemo(() => playlists[playlist] || [], [playlists, playlist]);
   const oauthLoggedIn = Boolean(oauthStatus.token_valid);
@@ -307,6 +368,15 @@ export function HomePage() {
   const oauthInProgress = Boolean(oauthStatus.login_in_progress);
   const oauthStatusLabel = oauthReady ? "已登录" : oauthLoggedIn ? "登录待恢复" : "未登录";
   const oauthStatusClass = oauthReady ? "ok" : "warn";
+  const autoDetectedBaseUrl = useMemo(() => browserOriginBaseUrl(), []);
+  const effectivePublicBaseUrl = useMemo(() => {
+    const manual = normalizeBaseUrlInput(settingData.public_base_url);
+    if (manual) {
+      return manual;
+    }
+    const legacy = legacyBaseUrl(settingData.hostname, settingData.public_port);
+    return legacy || autoDetectedBaseUrl;
+  }, [settingData.public_base_url, settingData.hostname, settingData.public_port, autoDetectedBaseUrl]);
   const progress = useMemo(() => {
     const d = Number(status.duration || 0);
     const o = Number(status.offset || 0);
@@ -408,16 +478,46 @@ export function HomePage() {
     setOauthStatus(out);
   }
 
+  function withPublicBaseCompat(data: Record<string, unknown>, baseUrl: string): Record<string, unknown> {
+    const normalized = normalizeBaseUrlInput(baseUrl);
+    if (!normalized) {
+      return data;
+    }
+    const legacy = baseUrlToLegacyHostPort(normalized);
+    if (!legacy) {
+      return data;
+    }
+    return {
+      ...data,
+      public_base_url: normalized,
+      hostname: legacy.hostname,
+      public_port: legacy.public_port,
+    };
+  }
+
   async function loadSettingData() {
     const out = (await apiGet<Record<string, unknown> & { device_list?: Device[] }>(
       "/getsetting?need_device_list=true",
     )) as Record<string, unknown> & { device_list?: Device[] };
-    setSettingData(out);
-    setSettingJsonText(JSON.stringify(out, null, 2));
     const dids = String(out.mi_did || "")
       .split(",")
       .map((x) => x.trim())
       .filter(Boolean);
+
+    const manual = normalizeBaseUrlInput(out.public_base_url);
+    const legacy = legacyBaseUrl(out.hostname, out.public_port);
+    const auto = autoDetectedBaseUrl;
+    let hydrated = { ...out };
+    if (!manual) {
+      if (legacy) {
+        hydrated = withPublicBaseCompat(hydrated, legacy);
+      } else if (auto) {
+        hydrated = withPublicBaseCompat(hydrated, auto);
+      }
+    }
+
+    setSettingData(hydrated);
+    setSettingJsonText(JSON.stringify(hydrated, null, 2));
     setSelectedSettingDids(dids);
     const rows = Array.isArray(out.device_list) ? out.device_list : [];
     setSettingDeviceList(rows);
@@ -430,6 +530,19 @@ export function HomePage() {
       }
     }
     setPullAskEnabled(Boolean(out.enable_pull_ask));
+
+    if (!publicBaseMigratedRef.current && !manual) {
+      const shouldUseLegacy = Boolean(legacy) && !legacyLooksUnconfigured(out.hostname, out.public_port);
+      const target = shouldUseLegacy ? legacy : auto;
+      if (target) {
+        publicBaseMigratedRef.current = true;
+        const payload = {
+          ...withPublicBaseCompat({ ...out }, target),
+          mi_did: dids.join(",") || String(out.mi_did || ""),
+        };
+        await apiPost("/savesetting", payload);
+      }
+    }
   }
 
   function updateSettingField(key: string, value: unknown) {
@@ -789,22 +902,27 @@ export function HomePage() {
     await loadDevices();
   }
 
-  async function autoFillHost() {
-    const out = (await apiGet<{ ok?: boolean; base_url?: string; message?: string }>(
-      "/api/v1/detect_base_url",
-    )) as { ok?: boolean; base_url?: string; message?: string };
-    if (!out.base_url) {
-      setMessage(out.message || "自动检测失败");
+  async function resetPublicBaseUrlToAuto() {
+    if (!autoDetectedBaseUrl) {
+      setMessage("当前无法自动识别访问地址，请手动填写覆盖地址");
       return;
     }
-    try {
-      const u = new URL(out.base_url);
-      updateSettingField("hostname", `${u.protocol}//${u.hostname}`);
-      updateSettingField("public_port", Number(u.port || (u.protocol === "https:" ? "443" : "80")));
-      setMessage(`已自动填充 ${out.base_url}`);
-    } catch {
-      setMessage("自动检测结果解析失败");
+    const next = withPublicBaseCompat({ ...settingData, public_base_url: "" }, autoDetectedBaseUrl);
+    updateSettingField("public_base_url", "");
+    updateSettingField("hostname", String(next.hostname || ""));
+    updateSettingField("public_port", Number(next.public_port || 0));
+
+    const payload: Record<string, unknown> = {
+      ...next,
+      mi_did: selectedSettingDids.join(","),
+    };
+    const out = (await apiPost<unknown>("/savesetting", payload)) as unknown;
+    if (typeof out === "string" && out.includes("save success")) {
+      setMessage(`已恢复自动地址：${autoDetectedBaseUrl}`);
+    } else {
+      setMessage(`已恢复自动地址：${autoDetectedBaseUrl}`);
     }
+    await loadSettingData();
   }
 
   async function saveSettings() {
@@ -1353,29 +1471,6 @@ export function HomePage() {
         <div className="setting-card setting-panel">
           <h3 className="card-title">基础设置</h3>
           <div className="card-content">
-            <label htmlFor="hostname" className="setting-label">
-              *NAS的IP或域名:
-            </label>
-            <input
-              id="hostname"
-              type="text"
-              value={String(settingData.hostname || "")}
-              onChange={(e) => updateSettingField("hostname", e.target.value)}
-            />
-            <div className="component-button-group">
-              <button onClick={() => void autoFillHost()}>自动填</button>
-            </div>
-
-            <label htmlFor="public_port" className="setting-label">
-              *本地端口:
-            </label>
-            <input
-              id="public_port"
-              type="number"
-              value={String(settingData.public_port ?? 58090)}
-              onChange={(e) => updateSettingField("public_port", Number(e.target.value || 0))}
-            />
-
             <label htmlFor="jellyfin_enabled">启用 Jellyfin 客户端:</label>
             <select
               id="jellyfin_enabled"
@@ -1454,33 +1549,61 @@ export function HomePage() {
                           <button onClick={() => void fetchMusicListJson()}>获取歌单</button>
                         </div>
                       ) : null}
+                      {tab.key === "security" ? (
+                        <div className="setting-card setting-panel" style={{ marginTop: 12 }}>
+                          <h3 className="card-title">公共访问地址（高级）</h3>
+                          <div className="card-content">
+                            <p className="oauth-hint">通常无需修改。仅当分享链接/设备无法访问时，才手动覆盖。</p>
+                            <label htmlFor="public-base-url-auto">自动检测:</label>
+                            <input id="public-base-url-auto" type="text" value={autoDetectedBaseUrl} readOnly />
+                            <label htmlFor="public-base-url-effective">当前生效地址:</label>
+                            <input id="public-base-url-effective" type="text" value={effectivePublicBaseUrl} readOnly />
+                            <div className="component-button-group">
+                              <button onClick={() => void resetPublicBaseUrlToAuto()}>重置为自动</button>
+                            </div>
+                            <div
+                              className="section-header"
+                              style={{ marginTop: 8 }}
+                              onClick={() => setSecurityAdvancedOpen((v) => !v)}
+                            >
+                              <h3 className="button-section-title">手动覆盖公共访问地址</h3>
+                              <span className="section-toggle-icon">{securityAdvancedOpen ? "▲" : "▼"}</span>
+                            </div>
+                            <div style={{ display: securityAdvancedOpen ? "block" : "none", marginTop: 8 }}>
+                              <label htmlFor="public_base_url">PUBLIC_BASE_URL:</label>
+                              <input
+                                id="public_base_url"
+                                type="text"
+                                placeholder="例如: http://192.168.7.178:58090"
+                                value={String(settingData.public_base_url || "")}
+                                onChange={(e) => updateSettingField("public_base_url", e.target.value)}
+                              />
+                              <p className="oauth-hint">留空表示使用自动检测地址（当前访问地址）。</p>
+                              <details>
+                                <summary>旧版兼容（host + port）</summary>
+                                <label htmlFor="hostname">旧版 hostname:</label>
+                                <input
+                                  id="hostname"
+                                  type="text"
+                                  value={String(settingData.hostname || "")}
+                                  onChange={(e) => updateSettingField("hostname", e.target.value)}
+                                />
+                                <label htmlFor="public_port">旧版 public_port:</label>
+                                <input
+                                  id="public_port"
+                                  type="number"
+                                  value={String(settingData.public_port ?? 58090)}
+                                  onChange={(e) => updateSettingField("public_port", Number(e.target.value || 0))}
+                                />
+                              </details>
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>
               ))}
-            </div>
-
-            <div className="setting-card setting-panel">
-              <h3 className="card-title">高级配置(JSON)</h3>
-              <textarea
-                id="setting-json"
-                className="search-input"
-                style={{ minHeight: 260, fontFamily: "monospace" }}
-                value={settingJsonText}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setSettingJsonText(next);
-                  try {
-                    const parsed = JSON.parse(next) as Record<string, unknown>;
-                    setSettingData(parsed);
-                  } catch {
-                    // keep free editing until valid JSON
-                  }
-                }}
-              />
-              <div className="component-button-group">
-                <button onClick={() => void saveSettings()}>保存配置</button>
-              </div>
             </div>
           </div>
         ) : null}
