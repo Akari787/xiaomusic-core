@@ -667,9 +667,11 @@ class AuthManager:
             self.mina_service = MiNAService(mi_account)
             self.miio_service = MiIOService(mi_account)
 
+            runtime_verified = False
             if has_service_token:
                 try:
                     await self.mina_service.device_list()
+                    runtime_verified = True
                 except Exception as verify_err:
                     self._auth_log(
                         reason=reason or "login_verify",
@@ -698,6 +700,23 @@ class AuthManager:
                 await mi_account.login("micoapi")
                 self.mina_service = MiNAService(mi_account)
                 self.miio_service = MiIOService(mi_account)
+
+            if not runtime_verified:
+                try:
+                    await self.mina_service.device_list()
+                    self._auth_log(
+                        reason=reason or "login_verify",
+                        action="verify_runtime_after_login",
+                        result="success",
+                    )
+                except Exception as verify_err:
+                    self._auth_log(
+                        reason=reason or "login_verify",
+                        action="verify_runtime_after_login",
+                        result="fail",
+                        err=f"{type(verify_err).__name__}:{verify_err}",
+                    )
+                    raise RuntimeError(f"runtime verify after login failed: {verify_err}")
 
             self.login_acount = account_name
             self._persist_oauth2_token(auth_data=auth_data, mi_account=mi_account, reason="login")
@@ -786,6 +805,7 @@ class AuthManager:
         if self.token_store is None:
             return
         merged = deepcopy(auth_data or {})
+        merged["saveTime"] = int(time.time() * 1000)
         try:
             acct = getattr(mi_account, "token", {}) or {}
             for key in ("passToken", "userId", "deviceId", "cUserId"):

@@ -88,6 +88,16 @@ class TokenStore:
 
     def _load_from_disk_unlocked(self) -> dict[str, Any]:
         if not self.path.exists():
+            bak = self.path.with_name(self.path.name + ".bak")
+            if bak.exists():
+                try:
+                    with bak.open(encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict):
+                        self._log("warning", "TokenStore load: main missing, recovered from backup")
+                        return data
+                except Exception as e:
+                    self._log("warning", "TokenStore load: backup read failed: %s", e)
             self._log("info", "TokenStore load: token file missing (%s)", str(self.path))
             return {}
         self._warn_if_insecure_permissions(str(self.path))

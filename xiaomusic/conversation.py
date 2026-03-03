@@ -178,6 +178,9 @@ class ConversationPoller:
 
             except Exception as e:
                 self.log.warning(f"Execption {e}")
+                if self.auth_manager.is_auth_error(exc=e):
+                    # Auth failures are recovered in auth_call; avoid local retry storm.
+                    break
                 continue
         self.log.warning("get_latest_ask_from_xiaoai. All retries failed.")
 
