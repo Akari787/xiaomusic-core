@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiGet, apiPost } from "../services/apiClient";
+import { useTheme } from "../theme/ThemeProvider";
 import "../styles/home.css";
 
 type Device = {
@@ -74,6 +75,11 @@ const EDGE_TTS_VOICE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "zh-TW-HsiaoChenNeural", label: "曉臻 (女声,台湾)" },
   { value: "zh-TW-YunJheNeural", label: "雲哲 (男声,台湾)" },
   { value: "zh-TW-HsiaoYuNeural", label: "曉雨 (女声,台湾)" },
+];
+
+const BUILT_IN_THEME_OPTIONS: Array<{ value: "default" | "dark"; label: string }> = [
+  { value: "default", label: "Default" },
+  { value: "dark", label: "Dark" },
 ];
 
 const ADVANCED_TABS: Array<{ key: string; label: string; fields: SettingField[] }> = [
@@ -342,6 +348,7 @@ export function HomePage() {
   const [ttsText, setTtsText] = useState<string>("播放文字测试");
   const [customCmd, setCustomCmd] = useState<string>("");
   const [searchKeyword, setSearchKeyword] = useState<string>("");
+  const [soundscapeFilter, setSoundscapeFilter] = useState<string>("");
   const [searchResults, setSearchResults] = useState<OnlineSearchItem[]>([]);
   const [selectedSearchIndex, setSelectedSearchIndex] = useState<number>(-1);
 
@@ -361,8 +368,25 @@ export function HomePage() {
   const [qrcodeRemain, setQrcodeRemain] = useState<number>(0);
   const [pullAskEnabled, setPullAskEnabled] = useState<boolean>(false);
   const publicBaseMigratedRef = useRef<boolean>(false);
+  const themeFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const {
+    selectedThemeId,
+    activeLayout,
+    customThemes,
+    setTheme,
+    uploadThemePackage,
+    validationError,
+  } = useTheme();
 
   const songs = useMemo(() => playlists[playlist] || [], [playlists, playlist]);
+  const filteredSongs = useMemo(() => {
+    const key = soundscapeFilter.trim().toLowerCase();
+    if (!key) {
+      return songs;
+    }
+    return songs.filter((name) => name.toLowerCase().includes(key));
+  }, [songs, soundscapeFilter]);
   const oauthLoggedIn = Boolean(oauthStatus.token_valid);
   const oauthReady = Boolean(oauthStatus.runtime_auth_ready);
   const oauthInProgress = Boolean(oauthStatus.login_in_progress);
@@ -377,6 +401,13 @@ export function HomePage() {
     const legacy = legacyBaseUrl(settingData.hostname, settingData.public_port);
     return legacy || autoDetectedBaseUrl;
   }, [settingData.public_base_url, settingData.hostname, settingData.public_port, autoDetectedBaseUrl]);
+  const themeSelectOptions = useMemo(
+    () => [
+      ...BUILT_IN_THEME_OPTIONS,
+      ...customThemes.map((t) => ({ value: t.id, label: t.name })),
+    ],
+    [customThemes],
+  );
   const progress = useMemo(() => {
     const d = Number(status.duration || 0);
     const o = Number(status.offset || 0);
@@ -385,6 +416,7 @@ export function HomePage() {
     }
     return Math.max(0, Math.min(100, Math.round((o / d) * 100)));
   }, [status.duration, status.offset]);
+  const isSoundscapeLayout = activeLayout === "soundscape";
 
   useEffect(() => {
     const mainStyleId = "webui-default-main-css";
@@ -667,7 +699,7 @@ export function HomePage() {
     await loadStatus(activeDid);
   }
 
-  async function playCurrent() {
+  async function playSongByName(songName: string) {
     if (!requireDid()) {
       return;
     }
@@ -676,15 +708,20 @@ export function HomePage() {
       {
         speaker_id: activeDid,
         list_name: playlist,
-        music_name: music || "",
+        music_name: songName || "",
       },
     )) as { ok?: boolean; error_code?: string; message?: string };
     if (out.ok) {
+      setMusic(songName);
       setMessage("开始播放");
       await loadStatus(activeDid);
     } else {
       setMessage(`播放失败：${explainPlaybackError(out.error_code, out.message, null)}`);
     }
+  }
+
+  async function playCurrent() {
+    await playSongByName(music);
   }
 
   async function togglePlayMode() {
@@ -998,6 +1035,28 @@ export function HomePage() {
     setMessage(out.ret || "临时目录清理已触发");
   }
 
+  async function onThemeCssFileSelected(file: File | null) {
+    const out = await uploadThemePackage(file);
+    if (!file) {
+      return;
+    }
+    if (out.ok) {
+      setMessage(`主题已应用：${out.name || file.name}`);
+    } else {
+      setMessage(out.error || "主题包校验失败");
+    }
+  }
+
+  function applySoundscapePlaylist(nextPlaylist: string) {
+    setPlaylist(nextPlaylist);
+    const nextSongs = playlists[nextPlaylist] || [];
+    if (!nextSongs.length) {
+      setMusic("");
+      return;
+    }
+    setMusic(nextSongs[0]);
+  }
+
   function fieldValue(key: string): string {
     const v = settingData[key];
     if (v === undefined || v === null) {
@@ -1101,195 +1160,351 @@ export function HomePage() {
 
   return (
     <>
-      <div className="player" role="main" aria-label="音乐播放器">
-        <h1>
-          XiaoMusic 播放器
-          <a
-            href="https://github.com/Akari787/xiaomusic-oauth2"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="version-link"
-          >
-            <span>{version || "-"}</span>
-          </a>
-        </h1>
-
-        <label htmlFor="did" className="label-with-toggle">
-          选择播放设备:
-          <div className="toggle-switch-container">
-            <label className="toggle-label">语音口令</label>
-            <div
-              id="pullAskToggle"
-              className={`toggle-switch ${pullAskEnabled ? "active" : ""}`}
-              role="switch"
-              aria-checked={pullAskEnabled ? "true" : "false"}
-              aria-label="语音口令开关"
-              onClick={() => void togglePullAsk()}
-            >
-              <div className="toggle-slider"></div>
+      {isSoundscapeLayout ? (
+        <div className="soundscape-app" role="main" aria-label="SoundScape 播放器">
+          <aside className="soundscape-sidebar">
+            <div className="soundscape-brand">
+              <h1>SoundScape</h1>
+              <p>xiaomusic音乐播放器</p>
             </div>
-          </div>
-        </label>
-        <select id="did" className="device-selector" value={activeDid} onChange={(e) => setActiveDid(e.target.value)}>
-          {devices.map((d) => {
-            const did = d.miotDID || d.did || d.deviceID || "";
-            return (
-              <option key={`${did}-${resolveDisplayName(d)}`} value={did}>
-                {resolveDisplayName(d)}
-              </option>
-            );
-          })}
-        </select>
-
-        <label htmlFor="music_list" className="label-with-action">
-          选择播放列表:
-          <div
-            className="option-inline"
-            role="button"
-            tabIndex={0}
-            onClick={() =>
-              void (async () => {
-                await apiPost("/api/music/refreshlist", {});
-                await loadPlaylists();
-                setMessage("列表已刷新");
-              })()
-            }
-          >
-            <span className="material-icons" aria-hidden="true">
-              refresh
-            </span>
-            <span className="tooltip">刷新列表</span>
-          </div>
-        </label>
-        <select id="music_list" className="playlist-selector" value={playlist} onChange={(e) => setPlaylist(e.target.value)}>
-          {Object.keys(playlists).map((name) => (
-            <option key={name} value={name}>
-              {`${name} (${(playlists[name] || []).length})`}
-            </option>
-          ))}
-        </select>
-
-        <label htmlFor="music_name" className="label-with-action">
-          选择歌曲:
-        </label>
-        <select id="music_name" className="song-selector" value={music} onChange={(e) => setMusic(e.target.value)}>
-          {songs.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-
-        <div id="device-audio" className="audio-section">
-          <progress className="progress" id="progress" value={progress} max={100}></progress>
-          <div className="time-info">
-            <span className="current-time" id="current-time">
-              {formatTime(Number(status.offset || 0))}
-            </span>
-            <div className="current-song" id="playering-music">
-              当前播放歌曲：{status.cur_music || "无"}
+            <div className="soundscape-sidebar-head">
+              <span>播放列表</span>
+              <button
+                onClick={() =>
+                  void (async () => {
+                    await apiPost("/api/music/refreshlist", {});
+                    await loadPlaylists();
+                    setMessage("列表已刷新");
+                  })()
+                }
+                className="soundscape-refresh"
+              >
+                <span className="material-icons" aria-hidden="true">
+                  refresh
+                </span>
+              </button>
             </div>
-            <span className="duration" id="duration">
-              {formatTime(Number(status.duration || 0))}
-            </span>
-          </div>
-        </div>
-
-        <div className="buttons">
-          <div className="player-controls button-group">
-            <div id="modeBtn" onClick={() => void togglePlayMode()} className="control-button device-enable" role="button" tabIndex={0}>
-              <span className="material-icons" aria-hidden="true">
-                {PLAY_MODES[playModeIndex]?.icon || "shuffle"}
-              </span>
-              <span className="tooltip">{PLAY_MODES[playModeIndex]?.cmd || "切换播放模式"}</span>
+            <div className="soundscape-playlist-list">
+              {Object.keys(playlists).map((name) => (
+                <button
+                  key={`soundscape-${name}`}
+                  className={`soundscape-playlist-item ${playlist === name ? "active" : ""}`}
+                  onClick={() => applySoundscapePlaylist(name)}
+                >
+                  <span className="soundscape-playlist-name">{name}</span>
+                  <span className="soundscape-playlist-count">{(playlists[name] || []).length}</span>
+                </button>
+              ))}
             </div>
-            <div onClick={() => void callRetApi("/cmd", { did: activeDid, cmd: "上一首" }, "已发送上一首")} className="control-button device-enable" role="button" tabIndex={0}>
-              <span className="material-icons" aria-hidden="true">
-                skip_previous
-              </span>
-              <span className="tooltip">上一首</span>
-            </div>
-            <div onClick={() => void playCurrent()} className="control-button" role="button" tabIndex={0}>
-              <span className="material-icons-outlined play" aria-hidden="true">
-                play_circle_outline
-              </span>
-              <span className="tooltip">播放</span>
-            </div>
-            <div onClick={() => void callRetApi("/cmd", { did: activeDid, cmd: "下一首" }, "已发送下一首")} className="control-button device-enable" role="button" tabIndex={0}>
-              <span className="material-icons" aria-hidden="true">
-                skip_next
-              </span>
-              <span className="tooltip">下一首</span>
-            </div>
-            <div
-              onClick={() =>
-                void (async () => {
-                  if (!requireDid()) {
-                    return;
-                  }
-                  const out = (await apiPost<{ ok?: boolean; error_code?: string; message?: string }>(
-                    "/api/v1/stop",
-                    { speaker_id: activeDid },
-                  )) as { ok?: boolean; error_code?: string; message?: string };
-                  setMessage(
-                    out.ok
-                      ? "已停止"
-                      : `停止失败：${explainPlaybackError(out.error_code, out.message, null)}`,
-                  );
-                  await loadStatus(activeDid);
-                })()
-              }
-              className="control-button device-enable"
-              role="button"
-              tabIndex={0}
-            >
-              <span className="material-icons" aria-hidden="true">
-                stop
-              </span>
-              <span className="tooltip">关机</span>
-            </div>
-          </div>
-
-          <div className="mode-controls button-group">
-            <div onClick={() => void callRetApi("/cmd", { did: activeDid, cmd: "加入收藏" }, "已发送收藏命令")} className="favorite icon-item device-enable" role="button" tabIndex={0}>
-              <span className="material-icons" aria-hidden="true">
-                favorite
-              </span>
-              <p>收藏</p>
-            </div>
-            <div onClick={() => setShowVolume(true)} className="icon-item device-enable" role="button" tabIndex={0}>
-              <span className="material-icons" aria-hidden="true">
-                volume_up
-              </span>
-              <p>音量</p>
-            </div>
-            <div onClick={() => setShowSearch(true)} className="icon-item device-enable" role="button" tabIndex={0}>
-              <span className="material-icons" aria-hidden="true">
-                search
-              </span>
-              <p>搜索</p>
-            </div>
-            <div onClick={() => setShowTimer(true)} className="icon-item device-enable" role="button" tabIndex={0}>
-              <span className="material-icons" aria-hidden="true">
-                timer
-              </span>
-              <p>定时</p>
-            </div>
-            <div onClick={() => setShowPlaylink(true)} className="icon-item device-enable" role="button" tabIndex={0}>
-              <span className="material-icons" aria-hidden="true">
-                emoji_nature
-              </span>
-              <p>测试</p>
-            </div>
-            <div onClick={() => setShowSettings(true)} className="icon-item" role="button" tabIndex={0}>
+            <button className="soundscape-settings-entry" onClick={() => setShowSettings(true)}>
               <span className="material-icons" aria-hidden="true">
                 settings
               </span>
-              <p>设置</p>
+              设置
+            </button>
+          </aside>
+
+          <section className="soundscape-main">
+            <header className="soundscape-toolbar">
+              <input
+                type="text"
+                value={soundscapeFilter}
+                placeholder="搜索歌曲..."
+                onChange={(e) => setSoundscapeFilter(e.target.value)}
+              />
+              <button onClick={() => setSoundscapeFilter(soundscapeFilter.trim())}>搜索</button>
+              <div className="soundscape-toolbar-right">共 {filteredSongs.length} 首</div>
+            </header>
+
+            <div className="soundscape-meta-row">
+              <span className="soundscape-meta-chip">当前列表：{playlist || "-"}</span>
+              <div className="soundscape-device-group">
+                <select id="did" className="device-selector" value={activeDid} onChange={(e) => setActiveDid(e.target.value)}>
+                  {devices.map((d) => {
+                    const did = d.miotDID || d.did || d.deviceID || "";
+                    return (
+                      <option key={`${did}-${resolveDisplayName(d)}`} value={did}>
+                        {resolveDisplayName(d)}
+                      </option>
+                    );
+                  })}
+                </select>
+                <div
+                  id="pullAskToggle"
+                  className={`toggle-switch ${pullAskEnabled ? "active" : ""}`}
+                  role="switch"
+                  aria-checked={pullAskEnabled ? "true" : "false"}
+                  aria-label="语音口令开关"
+                  onClick={() => void togglePullAsk()}
+                >
+                  <div className="toggle-slider"></div>
+                </div>
+              </div>
+            </div>
+
+            <div className="soundscape-table-wrap">
+              <table className="soundscape-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>歌曲</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSongs.map((name, idx) => (
+                    <tr
+                      key={`song-${name}-${idx}`}
+                      className={music === name ? "active" : ""}
+                      onClick={() => setMusic(name)}
+                      onDoubleClick={() => void playSongByName(name)}
+                    >
+                      <td>{idx + 1}</td>
+                      <td>{name}</td>
+                      <td>
+                        <button onClick={() => void playSongByName(name)}>播放</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <footer className="soundscape-dock">
+            <div className="soundscape-dock-left">
+              <button onClick={() => void playCurrent()} className="soundscape-dock-main-btn">
+                <span className="material-icons-outlined" aria-hidden="true">
+                  play_circle_outline
+                </span>
+              </button>
+              <div className="soundscape-dock-song">{status.cur_music || music || "未播放"}</div>
+            </div>
+
+            <div className="soundscape-dock-center">
+              <button onClick={() => void togglePlayMode()}>
+                <span className="material-icons" aria-hidden="true">
+                  {PLAY_MODES[playModeIndex]?.icon || "shuffle"}
+                </span>
+              </button>
+              <button onClick={() => void callRetApi("/cmd", { did: activeDid, cmd: "上一首" }, "已发送上一首")}>
+                <span className="material-icons" aria-hidden="true">
+                  skip_previous
+                </span>
+              </button>
+              <button onClick={() => void callRetApi("/cmd", { did: activeDid, cmd: "下一首" }, "已发送下一首")}>
+                <span className="material-icons" aria-hidden="true">
+                  skip_next
+                </span>
+              </button>
+              <button onClick={() => setShowVolume(true)}>
+                <span className="material-icons" aria-hidden="true">
+                  volume_up
+                </span>
+              </button>
+              <button onClick={() => setShowSearch(true)}>
+                <span className="material-icons" aria-hidden="true">
+                  search
+                </span>
+              </button>
+            </div>
+
+            <div className="soundscape-dock-right">
+              {formatTime(Number(status.offset || 0))} / {formatTime(Number(status.duration || 0))}
+            </div>
+          </footer>
+        </div>
+      ) : (
+        <div className="player" role="main" aria-label="音乐播放器">
+          <h1>
+            XiaoMusic 播放器
+            <a
+              href="https://github.com/Akari787/xiaomusic-oauth2"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="version-link"
+            >
+              <span>{version || "-"}</span>
+            </a>
+          </h1>
+
+          <label htmlFor="did" className="label-with-toggle">
+            选择播放设备:
+            <div className="toggle-switch-container">
+              <label className="toggle-label">语音口令</label>
+              <div
+                id="pullAskToggle"
+                className={`toggle-switch ${pullAskEnabled ? "active" : ""}`}
+                role="switch"
+                aria-checked={pullAskEnabled ? "true" : "false"}
+                aria-label="语音口令开关"
+                onClick={() => void togglePullAsk()}
+              >
+                <div className="toggle-slider"></div>
+              </div>
+            </div>
+          </label>
+          <select id="did" className="device-selector" value={activeDid} onChange={(e) => setActiveDid(e.target.value)}>
+            {devices.map((d) => {
+              const did = d.miotDID || d.did || d.deviceID || "";
+              return (
+                <option key={`${did}-${resolveDisplayName(d)}`} value={did}>
+                  {resolveDisplayName(d)}
+                </option>
+              );
+            })}
+          </select>
+
+          <label htmlFor="music_list" className="label-with-action">
+            选择播放列表:
+            <div
+              className="option-inline"
+              role="button"
+              tabIndex={0}
+              onClick={() =>
+                void (async () => {
+                  await apiPost("/api/music/refreshlist", {});
+                  await loadPlaylists();
+                  setMessage("列表已刷新");
+                })()
+              }
+            >
+              <span className="material-icons" aria-hidden="true">
+                refresh
+              </span>
+              <span className="tooltip">刷新列表</span>
+            </div>
+          </label>
+          <select id="music_list" className="playlist-selector" value={playlist} onChange={(e) => setPlaylist(e.target.value)}>
+            {Object.keys(playlists).map((name) => (
+              <option key={name} value={name}>
+                {`${name} (${(playlists[name] || []).length})`}
+              </option>
+            ))}
+          </select>
+
+          <label htmlFor="music_name" className="label-with-action">
+            选择歌曲:
+          </label>
+          <select id="music_name" className="song-selector" value={music} onChange={(e) => setMusic(e.target.value)}>
+            {songs.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+
+          <div id="device-audio" className="audio-section">
+            <progress className="progress" id="progress" value={progress} max={100}></progress>
+            <div className="time-info">
+              <span className="current-time" id="current-time">
+                {formatTime(Number(status.offset || 0))}
+              </span>
+              <div className="current-song" id="playering-music">
+                当前播放歌曲：{status.cur_music || "无"}
+              </div>
+              <span className="duration" id="duration">
+                {formatTime(Number(status.duration || 0))}
+              </span>
+            </div>
+          </div>
+
+          <div className="buttons">
+            <div className="player-controls button-group">
+              <div id="modeBtn" onClick={() => void togglePlayMode()} className="control-button device-enable" role="button" tabIndex={0}>
+                <span className="material-icons" aria-hidden="true">
+                  {PLAY_MODES[playModeIndex]?.icon || "shuffle"}
+                </span>
+                <span className="tooltip">{PLAY_MODES[playModeIndex]?.cmd || "切换播放模式"}</span>
+              </div>
+              <div onClick={() => void callRetApi("/cmd", { did: activeDid, cmd: "上一首" }, "已发送上一首")} className="control-button device-enable" role="button" tabIndex={0}>
+                <span className="material-icons" aria-hidden="true">
+                  skip_previous
+                </span>
+                <span className="tooltip">上一首</span>
+              </div>
+              <div onClick={() => void playCurrent()} className="control-button" role="button" tabIndex={0}>
+                <span className="material-icons-outlined play" aria-hidden="true">
+                  play_circle_outline
+                </span>
+                <span className="tooltip">播放</span>
+              </div>
+              <div onClick={() => void callRetApi("/cmd", { did: activeDid, cmd: "下一首" }, "已发送下一首")} className="control-button device-enable" role="button" tabIndex={0}>
+                <span className="material-icons" aria-hidden="true">
+                  skip_next
+                </span>
+                <span className="tooltip">下一首</span>
+              </div>
+              <div
+                onClick={() =>
+                  void (async () => {
+                    if (!requireDid()) {
+                      return;
+                    }
+                    const out = (await apiPost<{ ok?: boolean; error_code?: string; message?: string }>(
+                      "/api/v1/stop",
+                      { speaker_id: activeDid },
+                    )) as { ok?: boolean; error_code?: string; message?: string };
+                    setMessage(
+                      out.ok
+                        ? "已停止"
+                        : `停止失败：${explainPlaybackError(out.error_code, out.message, null)}`,
+                    );
+                    await loadStatus(activeDid);
+                  })()
+                }
+                className="control-button device-enable"
+                role="button"
+                tabIndex={0}
+              >
+                <span className="material-icons" aria-hidden="true">
+                  stop
+                </span>
+                <span className="tooltip">关机</span>
+              </div>
+            </div>
+
+            <div className="mode-controls button-group">
+              <div onClick={() => void callRetApi("/cmd", { did: activeDid, cmd: "加入收藏" }, "已发送收藏命令")} className="favorite icon-item device-enable" role="button" tabIndex={0}>
+                <span className="material-icons" aria-hidden="true">
+                  favorite
+                </span>
+                <p>收藏</p>
+              </div>
+              <div onClick={() => setShowVolume(true)} className="icon-item device-enable" role="button" tabIndex={0}>
+                <span className="material-icons" aria-hidden="true">
+                  volume_up
+                </span>
+                <p>音量</p>
+              </div>
+              <div onClick={() => setShowSearch(true)} className="icon-item device-enable" role="button" tabIndex={0}>
+                <span className="material-icons" aria-hidden="true">
+                  search
+                </span>
+                <p>搜索</p>
+              </div>
+              <div onClick={() => setShowTimer(true)} className="icon-item device-enable" role="button" tabIndex={0}>
+                <span className="material-icons" aria-hidden="true">
+                  timer
+                </span>
+                <p>定时</p>
+              </div>
+              <div onClick={() => setShowPlaylink(true)} className="icon-item device-enable" role="button" tabIndex={0}>
+                <span className="material-icons" aria-hidden="true">
+                  emoji_nature
+                </span>
+                <p>测试</p>
+              </div>
+              <div onClick={() => setShowSettings(true)} className="icon-item" role="button" tabIndex={0}>
+                <span className="material-icons" aria-hidden="true">
+                  settings
+                </span>
+                <p>设置</p>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div
         className={`component-overlay ${
@@ -1505,6 +1720,39 @@ export function HomePage() {
               onChange={(e) => updateSettingField("jellyfin_user_id", e.target.value)}
             />
 
+            <h3 className="card-title" style={{ marginTop: 12 }}>主题</h3>
+            <div className="theme-select-row">
+              <select
+                id="theme-mode-select"
+                value={selectedThemeId}
+                onChange={(e) => setTheme(e.target.value)}
+              >
+                {themeSelectOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={() => themeFileInputRef.current?.click()}>
+                上传主题
+              </button>
+            </div>
+            <input
+              ref={themeFileInputRef}
+              type="file"
+              accept=".json,.xmtheme,application/json,text/plain"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                void onThemeCssFileSelected(e.target.files?.[0] || null);
+                e.currentTarget.value = "";
+              }}
+            />
+            {validationError ? <p className="oauth-hint">{validationError}</p> : null}
+          </div>
+        </div>
+
+        <div className="setting-card setting-panel">
+          <div className="card-content">
             <div className="component-button-group">
               <button onClick={() => void saveSettings()}>保存配置</button>
               <button onClick={() => void loadSettingData()}>重载配置</button>
