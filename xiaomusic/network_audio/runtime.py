@@ -191,21 +191,24 @@ class NetworkAudioRuntime:
         self.ensure_started()
         if self.session_manager.get_session(sid) is None:
             raise KeyError(ERROR_CODES["E_STREAM_NOT_FOUND"])
-        self.session_manager.touch_client(sid)
 
-        stream_url = self._internal_stream_url(sid)
-        with urlopen(stream_url, timeout=60) as resp:  # noqa: S310
-            while True:
-                try:
-                    chunk = resp.read(8192)
-                except TimeoutError:
-                    if self.session_manager.get_session(sid) is None:
+        def _iter_chunks():
+            self.session_manager.touch_client(sid)
+            stream_url = self._internal_stream_url(sid)
+            with urlopen(stream_url, timeout=60) as resp:  # noqa: S310
+                while True:
+                    try:
+                        chunk = resp.read(8192)
+                    except TimeoutError:
+                        if self.session_manager.get_session(sid) is None:
+                            break
+                        continue
+                    if not chunk:
                         break
-                    continue
-                if not chunk:
-                    break
-                self.session_manager.touch_client(sid)
-                yield chunk
+                    self.session_manager.touch_client(sid)
+                    yield chunk
+
+        return _iter_chunks()
 
     def stop_session(self, sid: str) -> dict:
         self.audio_streamer.stop_stream(sid)

@@ -218,7 +218,7 @@ class AuthManager:
 
     @property
     def _refresh_interval_hours(self) -> float:
-        return max(0.01, float(getattr(self.config, "oauth2_refresh_interval_hours", 12.0)))
+        return max(0.01, float(getattr(self.config, "oauth2_refresh_interval_hours", 6.0)))
 
     @property
     def _refresh_min_interval_sec(self) -> int:
@@ -338,6 +338,17 @@ class AuthManager:
             return 0.0
         return 0.0
 
+    @staticmethod
+    def _token_fp(data: dict[str, Any]) -> str:
+        if not isinstance(data, dict):
+            return "none"
+        uid = str(data.get("userId") or "")
+        pt = str(data.get("passToken") or "")
+        st = str(data.get("yetAnotherServiceToken") or data.get("serviceToken") or "")
+        save = str(data.get("saveTime") or "")
+        uid_tail = uid[-6:] if uid else ""
+        return f"uid={uid_tail}|pt={len(pt)}|st={len(st)}|save={save}"
+
     async def _verify_runtime_auth_ready(self) -> bool:
         try:
             if self.mina_service is None:
@@ -377,17 +388,38 @@ class AuthManager:
 
         token_path = self.oauth2_token_path
         auth_dir = os.path.dirname(token_path) if token_path else None
+        before = self._get_oauth2_auth_data()
+        before_save_ms = int(before.get("saveTime") or 0)
+        before_pass = str(before.get("passToken") or "")
         try:
             api = MiJiaAPI(auth_data_path=auth_dir, token_store=self.token_store)
             if not hasattr(api, "_refresh_token"):
                 raise RuntimeError("refresh api unavailable")
-            await asyncio.to_thread(api._refresh_token)
+            await asyncio.to_thread(api._refresh_token, force)
+
+            # Ensure persisted token snapshot is updated and visible to runtime.
+            if self.token_store is not None:
+                self.token_store.reload_from_disk()
+            after = self._get_oauth2_auth_data()
+            after_save_ms = int(after.get("saveTime") or 0)
+            after_pass = str(after.get("passToken") or "")
+            token_saved = bool(after.get("userId") and after.get("passToken") and after_save_ms >= before_save_ms)
+            refresh_rotated = bool(before_pass and after_pass and before_pass != after_pass)
+
             self._last_refresh_ts = time.time()
             self._last_refresh_error = ""
-            self._auth_log(reason=reason, action="refresh", result="success")
+            self._auth_log(
+                reason=reason,
+                action="refresh",
+                result="success",
+                err=(
+                    f"saved={token_saved} rotated={refresh_rotated} "
+                    f"before={self._token_fp(before)} after={self._token_fp(after)}"
+                ),
+            )
             return {
                 "refreshed": True,
-                "token_saved": True,
+                "token_saved": token_saved,
                 "last_error": None,
                 "fallback_allowed": False,
             }
@@ -595,6 +627,28 @@ class AuthManager:
                     self._keepalive_fail_streak,
                     e,
                 )
+
+                # Auto-heal without waiting for WebUI getalldevices trigger.
+                # After repeated keepalive failures, proactively run the same
+                # relogin/rebuild path used by getalldevices.
+                if self._keepalive_fail_streak >= 2:
+                    try:
+                        await self.ensure_logged_in(
+                            force=True,
+                            reason="keepalive_auto_recover",
+                            prefer_refresh=True,
+                        )
+                        await self.mina_call("device_list", retry=0, ctx="keepalive-auto-recover")
+                        self._keepalive_fail_streak = 0
+                        if self._keepalive_degraded:
+                            self.log.info("auth keepalive recovered from degraded state")
+                            self._keepalive_degraded = False
+                        self.log.info("auth keepalive auto-recover success")
+                        await asyncio.sleep(interval_sec)
+                        continue
+                    except Exception as recover_err:
+                        self.log.warning("auth keepalive auto-recover failed: %s", recover_err)
+
                 if self._keepalive_fail_streak < 3:
                     delay = min(30 * (2 ** (self._keepalive_fail_streak - 1)), 120)
                     await asyncio.sleep(delay)

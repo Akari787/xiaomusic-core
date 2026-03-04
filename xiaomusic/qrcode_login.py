@@ -297,8 +297,8 @@ class MiJiaAPI:
         location_data = parse.parse_qs(parse.urlparse(location).query)
         return {k: v[0] for k, v in location_data.items()}
 
-    def _refresh_token(self) -> dict:
-        if self.available:
+    def _refresh_token(self, force: bool = False) -> dict:
+        if not force and self.available:
             print("Token 有效，无需刷新")
             return self.auth_data
         location_data = self._get_location()
