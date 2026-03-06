@@ -467,7 +467,14 @@ class AuthManager:
             after = self._get_oauth2_auth_data()
             after_save_ms = int(after.get("saveTime") or 0)
             after_pass = str(after.get("passToken") or "")
-            token_saved = bool(after.get("userId") and after.get("passToken") and after_save_ms >= before_save_ms)
+            st = after.get("yetAnotherServiceToken") or after.get("serviceToken")
+            token_saved = bool(
+                after.get("userId")
+                and after.get("passToken")
+                and after.get("ssecurity")
+                and st
+                and after_save_ms >= before_save_ms
+            )
             refresh_rotated = bool(before_pass and after_pass and before_pass != after_pass)
 
             self._last_refresh_ts = time.time()
@@ -770,8 +777,7 @@ class AuthManager:
             auth_data = self._get_oauth2_auth_data()
             account_name = auth_data.get("userId", "")
             if not account_name:
-                self.log.warning("OAuth2 token 文件缺少 userId，无法登录")
-                return
+                raise RuntimeError("oauth2 token missing userId")
             mi_account = MiAccount(
                 self.mi_session,
                 account_name,
@@ -877,6 +883,7 @@ class AuthManager:
                 result="fail",
                 err=f"{type(e).__name__}:{e}",
             )
+            raise
 
     async def try_update_device_id(self):
         """更新设备ID

@@ -172,10 +172,13 @@ class MiJiaAPI:
     def available(self) -> bool:
         if not self.auth_data:
             return False
+        st = self.auth_data.get("serviceToken") or self.auth_data.get("yetAnotherServiceToken")
         if any(
                 key not in self.auth_data
-                for key in ["ua", "ssecurity", "userId", "cUserId", "serviceToken"]
+                for key in ["ua", "ssecurity", "userId", "cUserId"]
         ):
+            return False
+        if not st:
             return False
 
         current_time = int(time.time())
@@ -481,6 +484,12 @@ class MiJiaAPI:
         self._http_request("get", callback_url, session=session, headers=headers)
         cookies = session.cookies.get_dict()
         self.auth_data.update(cookies)
+
+        st = self.auth_data.get("serviceToken") or self.auth_data.get("yetAnotherServiceToken")
+        if st:
+            self.auth_data["serviceToken"] = st
+            self.auth_data.setdefault("yetAnotherServiceToken", st)
+
         self.auth_data.update(
             {
                 "expireTime": int(
