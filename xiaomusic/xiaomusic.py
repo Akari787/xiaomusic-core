@@ -741,6 +741,22 @@ class XiaoMusic:
         self.log.info(f"reinit success. data:{debug_config}")
 
     # 获取所有设备
+    def _cached_device_list(self):
+        cached = []
+        for did, dev in self.config.devices.items():
+            if not dev.device_id:
+                continue
+            cached.append(
+                {
+                    "deviceID": dev.device_id,
+                    "miotDID": did,
+                    "hardware": dev.hardware,
+                    "name": dev.name,
+                    "alias": dev.name,
+                }
+            )
+        return cached
+
     async def getalldevices(self, **kwargs):
         device_list = []
         try:
@@ -753,7 +769,12 @@ class XiaoMusic:
                 await self.device_manager.update_device_info(self.auth_manager)
         except Exception as e:
             self.log.warning(f"Execption {e}")
-            # 重新初始化
+            if self.auth_manager.is_auth_locked():
+                cached = self._cached_device_list()
+                if cached:
+                    self.log.info("getalldevices auth locked, return cached list count=%d", len(cached))
+                    return cached
+            # 认证失效时不在此路径重试风暴，改为返回缓存设备并等待人工重登。
             try:
                 await self.auth_manager.ensure_logged_in(
                     force=True,
@@ -766,6 +787,10 @@ class XiaoMusic:
                 )
             except Exception as e2:
                 self.log.warning(f"Execption after reinit {e2}")
+                cached = self._cached_device_list()
+                if cached:
+                    self.log.info("getalldevices fallback to cached list count=%d", len(cached))
+                    return cached
         return device_list
 
     async def debug_play_by_music_url(self, arg1=None):

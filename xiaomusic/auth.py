@@ -179,6 +179,9 @@ class AuthManager:
         self._keepalive_degraded = False
         self._last_refresh_ts = 0.0
         self._last_refresh_error = ""
+        self._auth_mode = "healthy"
+        self._auth_locked_until_ts = 0.0
+        self._auth_lock_reason = ""
 
         self._high_freq_methods = {
             "device_list",
@@ -204,6 +207,64 @@ class AuthManager:
             err_text,
         )
 
+    def _set_auth_mode(self, mode: str, reason: str = "") -> None:
+        if self._auth_mode == mode:
+            return
+        self._auth_mode = mode
+        self._auth_log(
+            reason=reason or "auth_state",
+            action="auth_mode",
+            result=mode,
+        )
+
+    def _is_auth_locked(self) -> bool:
+        return time.time() < self._auth_locked_until_ts
+
+    @property
+    def _auth_lock_sec(self) -> int:
+        return max(300, int(getattr(self.config, "auth_lock_seconds", 1800)))
+
+    def _enter_auth_lock(self, reason: str = "") -> None:
+        self._auth_locked_until_ts = time.time() + self._auth_lock_sec
+        self._auth_lock_reason = (reason or "auth failed")[:200]
+        self._set_auth_mode("locked", reason=reason or "auth_lock")
+        self._auth_log(
+            reason=reason or "auth_lock",
+            action="lock",
+            result="fail",
+            err=f"until={int(self._auth_locked_until_ts)} reason={self._auth_lock_reason}",
+        )
+
+    def clear_auth_lock(self, reason: str = "", mode: str = "degraded") -> None:
+        self._auth_locked_until_ts = 0.0
+        self._auth_lock_reason = ""
+        self._relogin_fail_streak = 0
+        self._next_relogin_allowed_ts = 0.0
+        if mode in {"healthy", "degraded"}:
+            self._set_auth_mode(mode, reason=reason or "auth_unlock")
+        self._auth_log(
+            reason=reason or "auth_unlock",
+            action="unlock",
+            result="success",
+        )
+
+    def auth_status_snapshot(self) -> dict[str, Any]:
+        locked = self._is_auth_locked()
+        if not locked and self._auth_mode == "locked":
+            self._set_auth_mode("degraded", reason="auth_lock_expired")
+        return {
+            "mode": self._auth_mode,
+            "locked": locked,
+            "locked_until_ts": int(self._auth_locked_until_ts * 1000)
+            if self._auth_locked_until_ts
+            else None,
+            "lock_reason": self._auth_lock_reason,
+            "relogin_fail_streak": self._relogin_fail_streak,
+            "next_relogin_allowed_ts": int(self._next_relogin_allowed_ts * 1000)
+            if self._next_relogin_allowed_ts
+            else None,
+        }
+
     @property
     def _hf_min_interval_sec(self) -> int:
         return max(1, int(getattr(self.config, "mina_high_freq_min_interval_seconds", 8)))
@@ -227,6 +288,9 @@ class AuthManager:
 
     def is_auth_error(self, exc=None, resp=None, body=None) -> bool:
         return is_auth_error(exc=exc, resp=resp, body=body)
+
+    def is_auth_locked(self) -> bool:
+        return self._is_auth_locked()
 
     async def init_all_data(self):
         """初始化所有数据
@@ -487,6 +551,10 @@ class AuthManager:
             if reason:
                 self._last_relogin_reason = reason
 
+            if self._is_auth_locked():
+                wait_sec = int(self._auth_locked_until_ts - now)
+                raise RuntimeError(f"auth locked, manual relogin required ({wait_sec}s)")
+
             need = await self.need_login()
             if force and not need and self._last_ok_ts and (now - self._last_ok_ts < 30):
                 return False
@@ -531,12 +599,23 @@ class AuthManager:
                 self._last_ok_ts = time.time()
                 self._relogin_fail_streak = 0
                 self._next_relogin_allowed_ts = 0.0
+                self._auth_locked_until_ts = 0.0
+                self._auth_lock_reason = ""
+                self._set_auth_mode("healthy", reason=reason or "ensure_logged_in")
                 self.log.info("ensure_logged_in success")
                 return True
-            except Exception:
+            except Exception as e:
                 self._relogin_fail_streak += 1
                 delay = min(30 * (2 ** max(self._relogin_fail_streak - 1, 0)), 300)
                 self._next_relogin_allowed_ts = time.time() + delay
+                self._set_auth_mode("degraded", reason=reason or "ensure_logged_in")
+                err_text = str(e).lower()
+                if (
+                    self._refresh_failed_requires_relogin(e)
+                    or "runtime verify after login failed" in err_text
+                    or "login failed" in err_text
+                ):
+                    self._enter_auth_lock(reason=reason or str(e))
                 self.log.warning(
                     "ensure_logged_in failed. streak=%d next_retry_after=%ss",
                     self._relogin_fail_streak,
@@ -545,6 +624,8 @@ class AuthManager:
                 raise
 
     async def auth_call(self, fn, *, retry=1, ctx=""):
+        if self._is_auth_locked():
+            raise RuntimeError("auth locked, manual relogin required")
         try:
             return await fn()
         except Exception as e:

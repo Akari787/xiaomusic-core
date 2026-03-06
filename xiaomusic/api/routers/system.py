@@ -174,6 +174,14 @@ async def get_logint_status(api: MiJiaAPI, lp: str):
         qrcode_login_error = ""
         # 扫码登录成功后立即重建认证状态，避免前端刷新后仍使用旧会话
         await xiaomusic.reinit()
+        # If auth was previously locked by backoff/circuit-breaker,
+        # clear the lock after successful QR login + reinit.
+        try:
+            am = getattr(xiaomusic, "auth_manager", None)
+            if am is not None and hasattr(am, "clear_auth_lock"):
+                am.clear_auth_lock(reason="qrcode_login_success", mode="healthy")
+        except Exception:
+            log.exception("clear auth lock after qrcode login failed")
     except asyncio.CancelledError:
         log.info("qrcode login polling cancelled")
         raise
@@ -248,6 +256,13 @@ async def oauth2_status():
         token_valid = False
     runtime_ready = await _runtime_auth_ready()
     login_in_progress = bool(qrcode_login_task and not qrcode_login_task.done())
+    auth_state = {}
+    try:
+        am = getattr(xiaomusic, "auth_manager", None)
+        if am is not None and hasattr(am, "auth_status_snapshot"):
+            auth_state = am.auth_status_snapshot()
+    except Exception:
+        auth_state = {}
     if login_in_progress:
         expire_after = int(getattr(config, "qrcode_timeout", 120)) + 15
         if qrcode_login_started_at > 0 and (time.time() - qrcode_login_started_at) > expire_after:
@@ -266,6 +281,10 @@ async def oauth2_status():
             "runtime_auth_ready": runtime_ready,
             "login_in_progress": login_in_progress,
             "last_error": qrcode_login_error,
+            "auth_mode": auth_state.get("mode", "healthy"),
+            "auth_locked": bool(auth_state.get("locked", False)),
+            "auth_lock_until": auth_state.get("locked_until_ts"),
+            "auth_lock_reason": auth_state.get("lock_reason", ""),
         },
         contract="success_error",
     )
