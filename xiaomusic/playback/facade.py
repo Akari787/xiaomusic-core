@@ -3,7 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
+from uuid import uuid4
 from typing import Any, Callable
+
+from xiaomusic.adapters.mina import MinaTransport
+from xiaomusic.adapters.miio import MiioTransport
+from xiaomusic.adapters.sources import HttpUrlSourcePlugin
+from xiaomusic.core.coordinator import PlaybackCoordinator
+from xiaomusic.core.delivery import DeliveryAdapter
+from xiaomusic.core.device import DeviceRegistry
+from xiaomusic.core.errors import ExpiredStreamError, SourceResolveError, TransportError
+from xiaomusic.core.models import MediaRequest
+from xiaomusic.core.source import SourceRegistry
+from xiaomusic.core.transport import TransportPolicy, TransportRouter
 
 
 class PlaybackFacade:
@@ -16,11 +28,31 @@ class PlaybackFacade:
     def __init__(self, xiaomusic, runtime_provider: Callable[[], Any] | None = None) -> None:
         self.xiaomusic = xiaomusic
         self._runtime_provider = runtime_provider
+        self._core_coordinator: PlaybackCoordinator | None = None
 
     def _runtime(self):
         if self._runtime_provider is None:
             raise RuntimeError("network audio runtime provider is not configured")
         return self._runtime_provider()
+
+    def _core(self) -> PlaybackCoordinator:
+        if self._core_coordinator is not None:
+            return self._core_coordinator
+
+        source_registry = SourceRegistry()
+        source_registry.register(HttpUrlSourcePlugin())
+        device_registry = DeviceRegistry(self.xiaomusic)
+        delivery_adapter = DeliveryAdapter()
+        router = TransportRouter(policy=TransportPolicy())
+        router.register_transport(MinaTransport(self.xiaomusic))
+        router.register_transport(MiioTransport(self.xiaomusic))
+        self._core_coordinator = PlaybackCoordinator(
+            source_registry=source_registry,
+            device_registry=device_registry,
+            delivery_adapter=delivery_adapter,
+            transport_router=router,
+        )
+        return self._core_coordinator
 
     @staticmethod
     def _to_state(ok: bool, raw: dict[str, Any], default_state: str = "playing") -> str:
@@ -82,6 +114,36 @@ class PlaybackFacade:
                 no_cache=no_cache,
             )
             ok = bool(raw.get("ok", False))
+        elif mode == "core_minimal":
+            try:
+                result = await self._core().play(
+                    MediaRequest(
+                        request_id=str(uuid4()),
+                        source_hint="http_url",
+                        query=url,
+                        device_id=speaker_id,
+                    ),
+                    device_id=speaker_id,
+                )
+                prepared = result["prepared_stream"]
+                dispatch = result["dispatch"]
+                raw = {
+                    "ok": True,
+                    "mode": "core_minimal",
+                    "stream_url": prepared.final_url,
+                    "source": prepared.source,
+                    "transport": dispatch.transport,
+                    "dispatch": dispatch.data,
+                }
+                ok = True
+            except (SourceResolveError, ExpiredStreamError, TransportError, KeyError, ValueError):
+                raw = {
+                    "ok": False,
+                    "mode": "core_minimal",
+                    "error_code": "E_XIAOMI_PLAY_FAILED",
+                    "stream_url": url,
+                }
+                ok = False
         else:
             cast_ret = await self.xiaomusic.play_url(did=speaker_id, arg1=url)
             raw = {

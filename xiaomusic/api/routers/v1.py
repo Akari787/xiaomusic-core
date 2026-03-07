@@ -147,7 +147,7 @@ async def api_v1_play_url(data: ApiV1PlayUrlRequest):
         except Exception:
             pass
 
-    mode = "network_audio_link" if str(data.url).startswith(("http://", "https://")) else "direct"
+    mode = "core_minimal" if str(data.url).startswith(("http://", "https://")) else "direct"
     no_cache = bool(options.get("no_cache", False))
     try:
         out = await _get_facade().play_url(
