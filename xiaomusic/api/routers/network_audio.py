@@ -1,13 +1,12 @@
 """Network audio URL-to-stream workflow routes."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from xiaomusic.api import response as api_response
-from xiaomusic.api.dependencies import verification
 from xiaomusic.api.runtime_provider import get_runtime
 
-router = APIRouter(dependencies=[Depends(verification)])
+router = APIRouter()
 
 
 @router.get("/network_audio/healthz")

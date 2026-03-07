@@ -25,3 +25,10 @@ def test_import_api_package_no_bcrypt_dependency_load():
     if not bcrypt_loaded_before:
         assert "bcrypt" not in sys.modules
     assert "xiaomusic.api.app" not in sys.modules
+
+
+def test_import_api_v1_and_network_audio_without_dependencies_chain():
+    _clear_api_modules()
+    importlib.import_module("xiaomusic.api.routers.v1")
+    importlib.import_module("xiaomusic.api.routers.network_audio")
+    assert "xiaomusic.api.dependencies" not in sys.modules

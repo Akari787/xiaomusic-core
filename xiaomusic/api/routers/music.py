@@ -2,12 +2,10 @@
 
 import base64
 import json
-import urllib.parse
 
 from fastapi import (
     APIRouter,
     Depends,
-    HTTPException,
     Query,
     Request,
 )
@@ -20,21 +18,11 @@ from xiaomusic.api.dependencies import (
     xiaomusic,
 )
 from xiaomusic.api.models import (
-    DidPlayMusic,
     MusicInfoObj,
     MusicItem,
 )
-from xiaomusic.playback.facade import PlaybackFacade
 
 router = APIRouter(dependencies=[Depends(verification)])
-_facade: PlaybackFacade | None = None
-
-
-def _get_facade() -> PlaybackFacade:
-    global _facade
-    if _facade is None:
-        _facade = PlaybackFacade(xiaomusic)
-    return _facade
 
 
 @router.get("/searchmusic")
@@ -157,54 +145,6 @@ async def get_media_lyric(request: Request):
         )
 
 
-@router.post("/api/device/pushUrl")
-async def device_push_url(request: Request):
-    """推送媒体给设备播放（通过统一 core 链路）。"""
-    try:
-        data = await request.json()
-        did = str(data.get("did") or "")
-        out = await _get_facade().play_payload(data, did)
-        if not out.get("ok"):
-            return api_response.fail(
-                "E_XIAOMI_PLAY_FAILED",
-                "play failed",
-                contract="success_error",
-            )
-        return api_response.ok(out.get("raw") or {"ret": "OK"}, contract="raw")
-    except Exception as e:
-        return api_response.fail(
-            "E_INTERNAL",
-            str(e),
-            contract="success_error",
-            exc=e,
-        )
-
-
-@router.post("/api/device/pushList")
-async def device_push_list(request: Request):
-    """WEB前端推送歌单给设备端播放"""
-    try:
-        # 获取请求数据
-        data = await request.json()
-        did = data.get("did")
-        song_list = data.get("songList")
-        list_name = data.get("playlistName")
-        # 调用公共函数处理,处理歌曲信息 -> 添加歌单 -> 播放歌单
-        return api_response.ok(
-            await xiaomusic.push_music_list_play(
-                did=did, song_list=song_list, list_name=list_name
-            ),
-            contract="raw",
-        )
-    except Exception as e:
-        return api_response.fail(
-            "E_INTERNAL",
-            str(e),
-            contract="success_error",
-            exc=e,
-        )
-
-
 """======================在线搜索相关接口END============================="""
 
 
@@ -281,42 +221,11 @@ async def delmusic(data: MusicItem):
     return api_response.ok("success", contract="raw")
 
 
-@router.post("/playmusic")
-async def playmusic(data: DidPlayMusic):
-    """播放音乐（compatibility_layer: legacy endpoint, remove after v2 API migration）"""
-    did = data.did
-    musicname = data.musicname
-    searchkey = data.searchkey
-    if not xiaomusic.did_exist(did):
-        return api_response.ok(contract="ret", ret="Did not exist")
-
-    log.info(f"playmusic {did} musicname:{musicname} searchkey:{searchkey}")
-    out = await _get_facade().play_local_library(did, musicname, searchkey)
-    if not out.get("ok"):
-        return api_response.ok(contract="ret", ret="Did not exist")
-    return api_response.ok(contract="ret")
-
-
 @router.post("/refreshmusictag")
 async def refreshmusictag(Verifcation=Depends(verification)):
     """刷新音乐标签"""
     xiaomusic.music_library.refresh_music_tag()
     return api_response.ok(contract="ret")
-
-
-@router.post("/debug_play_by_music_url")
-async def debug_play_by_music_url(request: Request, Verifcation=Depends(verification)):
-    """调试播放音乐URL"""
-    try:
-        data = await request.body()
-        data_dict = json.loads(data.decode("utf-8"))
-        log.info(f"data:{data_dict}")
-        return api_response.ok(
-            await xiaomusic.debug_play_by_music_url(arg1=data_dict),
-            contract="raw",
-        )
-    except json.JSONDecodeError as err:
-        raise HTTPException(status_code=400, detail="Invalid JSON") from err
 
 
 @router.post("/api/music/refreshlist")

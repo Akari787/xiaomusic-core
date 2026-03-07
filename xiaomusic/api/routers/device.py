@@ -1,7 +1,6 @@
 """设备控制路由"""
 
 import asyncio
-import urllib.parse
 
 from fastapi import (
     APIRouter,
@@ -127,21 +126,6 @@ async def cmd_status():
     if finish:
         return api_response.ok({"status": "finish"}, contract="ret")
     return api_response.ok({"status": "running"}, contract="ret")
-
-
-@router.get("/playurl")
-async def playurl(did: str, url: str):
-    """播放 URL（deprecated wrapper，内部已收敛到统一播放入口）"""
-    if not xiaomusic.did_exist(did):
-        return api_response.ok(contract="ret", ret="Did not exist")
-    decoded_url = urllib.parse.unquote(url)
-    log.info(f"playurl did: {did} url: {decoded_url}")
-    out = await _get_facade().play_url(
-        url=decoded_url,
-        speaker_id=did,
-        options={"mode": "core"},
-    )
-    return out["raw"].get("cast_ret", out["raw"])
 
 
 @router.get("/playtts")

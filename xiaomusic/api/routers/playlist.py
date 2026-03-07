@@ -12,7 +12,6 @@ from xiaomusic.api.dependencies import (
     xiaomusic,
 )
 from xiaomusic.api.models import (
-    DidPlayMusicList,
     PlayListMusicObj,
     PlayListObj,
     PlayListUpdateObj,
@@ -27,20 +26,6 @@ async def curplaylist(did: str = ""):
     if not xiaomusic.did_exist(did):
         return ""
     return api_response.ok(xiaomusic.get_cur_play_list(did), contract="raw")
-
-
-@router.post("/playmusiclist")
-async def playmusiclist(data: DidPlayMusicList):
-    """播放音乐列表"""
-    did = data.did
-    listname = data.listname
-    musicname = data.musicname
-    if not xiaomusic.did_exist(did):
-        return api_response.ok(contract="ret", ret="Did not exist")
-
-    log.info(f"playmusiclist {did} listname:{listname} musicname:{musicname}")
-    await xiaomusic.do_play_music_list(did, listname, musicname)
-    return api_response.ok(contract="ret")
 
 
 @router.post("/playlistadd")

@@ -1,7 +1,3 @@
-import pytest
-
-pytest.importorskip("aiofiles")
-
 from xiaomusic.api.routers import network_audio
 
 

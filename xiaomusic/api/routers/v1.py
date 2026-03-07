@@ -3,11 +3,10 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
 from xiaomusic import __version__
 from xiaomusic.api.api_error import ApiError
-from xiaomusic.api.dependencies import verification, xiaomusic
 from xiaomusic.api.models import (
     ApiResponse,
     ControlRequest,
@@ -25,14 +24,20 @@ from xiaomusic.core.errors import (
 )
 from xiaomusic.playback.facade import PlaybackFacade
 
-router = APIRouter(dependencies=[Depends(verification)])
+router = APIRouter()
 _facade: PlaybackFacade | None = None
+
+
+def _get_xiaomusic():
+    from xiaomusic.api.dependencies import xiaomusic
+
+    return xiaomusic
 
 
 def _get_facade() -> PlaybackFacade:
     global _facade
     if _facade is None:
-        _facade = PlaybackFacade(xiaomusic)
+        _facade = PlaybackFacade(_get_xiaomusic())
     return _facade
 
 
@@ -187,7 +192,7 @@ async def api_v1_control_probe(data: ControlRequest):
 async def api_v1_devices():
     request_id = _next_request_id(None)
     try:
-        devices = await xiaomusic.getalldevices()
+        devices = await _get_xiaomusic().getalldevices()
         rows = [_normalize_device(item) for item in (devices or []) if isinstance(item, dict)]
         return _api_ok({"devices": rows}, request_id=request_id)
     except Exception as exc:
@@ -198,7 +203,7 @@ async def api_v1_devices():
 async def api_v1_system_status():
     request_id = _next_request_id(None)
     try:
-        devices = await xiaomusic.getalldevices()
+        devices = await _get_xiaomusic().getalldevices()
         return _api_ok(
             {
                 "status": "ok",

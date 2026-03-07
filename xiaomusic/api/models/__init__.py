@@ -54,18 +54,6 @@ class SidObj(BaseModel):
     sid: str
 
 
-class DidPlayMusic(BaseModel):
-    did: str
-    musicname: str = ""
-    searchkey: str = ""
-
-
-class DidPlayMusicList(BaseModel):
-    did: str
-    listname: str = ""
-    musicname: str = ""
-
-
 class DownloadPlayList(BaseModel):
     dirname: str
     url: str
@@ -126,8 +114,6 @@ __all__ = [
     "ControlRequest",
     "Did",
     "DidCmd",
-    "DidPlayMusic",
-    "DidPlayMusicList",
     "DidUrl",
     "DidVolume",
     "DownloadOneMusic",
