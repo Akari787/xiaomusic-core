@@ -61,6 +61,12 @@ class PlaybackCoordinator:
                 profile=profile,
                 capability_matrix=capability,
             )
+            LOG.info(
+                "core_chain prepared source=%s transport=%s final_url=%s",
+                prepared.source,
+                dispatch_result.transport,
+                prepared.final_url,
+            )
             return {
                 "ok": dispatch_result.ok,
                 "transport": dispatch_result.transport,

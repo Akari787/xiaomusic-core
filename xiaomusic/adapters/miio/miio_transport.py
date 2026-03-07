@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from xiaomusic.core.errors.transport_errors import TransportError
 from xiaomusic.core.models.media import PreparedStream
 from xiaomusic.core.transport.transport import Transport
 
@@ -9,10 +10,9 @@ from xiaomusic.core.transport.transport import Transport
 class MiioTransport(Transport):
     """Miio transport adapter.
 
-    Phase 2 status:
+    Phase 3 strategy:
     - stop/pause/tts/set_volume/probe: direct device-path compatibility adapter
-    - play_url: compatibility placeholder that still delegates to legacy play_url path
-      (not a standalone local Miio media streaming implementation)
+    - play_url: explicitly unsupported as official play transport
     """
 
     name = "miio"
@@ -21,13 +21,8 @@ class MiioTransport(Transport):
         self._xiaomusic = xiaomusic
 
     async def play_url(self, device_id: str, prepared: PreparedStream) -> dict[str, Any]:
-        # Compatibility placeholder only. Keep explicit marker for follow-up phase.
-        ret = await self._xiaomusic.play_url(did=device_id, arg1=prepared.final_url)
-        return {
-            "ret": ret,
-            "url": prepared.final_url,
-            "compat_mode": "delegated_legacy_play_url",
-        }
+        _ = (device_id, prepared)
+        raise TransportError("miio play_url is not supported in phase3 strategy")
 
     async def stop(self, device_id: str) -> dict[str, Any]:
         player = self._xiaomusic.device_manager.devices[device_id]

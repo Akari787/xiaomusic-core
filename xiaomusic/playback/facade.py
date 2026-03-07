@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
+from urllib.parse import urlparse
 from uuid import uuid4
 from typing import Any, Callable
 
 from xiaomusic.adapters.mina import MinaTransport
 from xiaomusic.adapters.miio import MiioTransport
-from xiaomusic.adapters.sources import HttpUrlSourcePlugin, LegacyPayloadSourcePlugin
+from xiaomusic.adapters.sources import (
+    HttpUrlSourcePlugin,
+    JellyfinSourcePlugin,
+    LegacyPayloadSourcePlugin,
+)
 from xiaomusic.core.coordinator import PlaybackCoordinator
 from xiaomusic.core.delivery import DeliveryAdapter
 from xiaomusic.core.device import DeviceRegistry
@@ -50,6 +55,7 @@ class PlaybackFacade:
 
         source_registry = SourceRegistry()
         source_registry.register(HttpUrlSourcePlugin())
+        source_registry.register(JellyfinSourcePlugin(self._resolve_jellyfin_source_url))
         source_registry.register(LegacyPayloadSourcePlugin(self._resolve_legacy_source_url))
         device_registry = DeviceRegistry(self.xiaomusic)
         delivery_adapter = DeliveryAdapter()
@@ -63,6 +69,34 @@ class PlaybackFacade:
             transport_router=router,
         )
         return self._core_coordinator
+
+    @staticmethod
+    def _source_hint_from_payload(payload: dict[str, Any]) -> str:
+        source = str(payload.get("source") or "").strip().lower()
+        if source == "jellyfin":
+            return "jellyfin"
+        return "legacy_payload"
+
+    @staticmethod
+    def _is_http_url(url: str) -> bool:
+        parsed = urlparse(url)
+        return parsed.scheme in {"http", "https"}
+
+    @staticmethod
+    def _normalize_mode(mode: Any) -> str:
+        value = str(mode or "core").strip().lower()
+        if value == "core_minimal":
+            return "core"
+        return value
+
+    def _resolve_jellyfin_source_url(self, payload: dict[str, Any]) -> str:
+        direct_url = str(payload.get("url") or "")
+        if direct_url.startswith(("http://", "https://")):
+            return direct_url
+
+        plugin_url = str(self.xiaomusic.online_music_service._get_plugin_proxy_url(payload) or "")
+        _, expanded_url = self.xiaomusic.music_library.expand_self_url(plugin_url)
+        return str(expanded_url)
 
     def _resolve_legacy_source_url(self, payload: dict[str, Any]) -> str:
         direct_url = str(payload.get("url") or "")
@@ -142,7 +176,7 @@ class PlaybackFacade:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         options = options or {}
-        mode = options.get("mode", "direct")
+        mode = self._normalize_mode(options.get("mode", "core"))
         prefer_proxy = bool(options.get("prefer_proxy", False))
         no_cache = bool(options.get("no_cache", False))
 
@@ -157,7 +191,8 @@ class PlaybackFacade:
                 no_cache=no_cache,
             )
             ok = bool(raw.get("ok", False))
-        elif mode == "core_minimal":
+        elif mode == "core":
+            # Compatibility fallback only for websites that currently rely on network_audio resolver.
             if self._runtime_provider is not None and self._should_use_network_audio(url):
                 raw = await self._runtime().play_link(
                     did=speaker_id,
@@ -180,35 +215,46 @@ class PlaybackFacade:
                     "raw": raw,
                 }
                 return result
-            try:
-                result = await self._core().play(
-                    MediaRequest(
-                        request_id=str(uuid4()),
-                        source_hint="http_url",
-                        query=url,
-                        device_id=speaker_id,
-                    ),
-                    device_id=speaker_id,
-                )
-                prepared = result["prepared_stream"]
-                dispatch = result["dispatch"]
+
+            if not self._is_http_url(url):
+                cast_ret = await self.xiaomusic.play_url(did=speaker_id, arg1=url)
                 raw = {
                     "ok": True,
-                    "mode": "core_minimal",
-                    "stream_url": prepared.final_url,
-                    "source": prepared.source,
-                    "transport": dispatch.transport,
-                    "dispatch": dispatch.data,
-                }
-                ok = True
-            except (SourceResolveError, ExpiredStreamError, TransportError, KeyError, ValueError):
-                raw = {
-                    "ok": False,
-                    "mode": "core_minimal",
-                    "error_code": "E_XIAOMI_PLAY_FAILED",
+                    "mode": "legacy_direct_fallback",
+                    "cast_ret": cast_ret,
                     "stream_url": url,
                 }
-                ok = False
+                ok = True
+            else:
+                try:
+                    result = await self._core().play(
+                        MediaRequest(
+                            request_id=str(uuid4()),
+                            source_hint="http_url",
+                            query=url,
+                            device_id=speaker_id,
+                        ),
+                        device_id=speaker_id,
+                    )
+                    prepared = result["prepared_stream"]
+                    dispatch = result["dispatch"]
+                    raw = {
+                        "ok": True,
+                        "mode": "core",
+                        "stream_url": prepared.final_url,
+                        "source": prepared.source,
+                        "transport": dispatch.transport,
+                        "dispatch": dispatch.data,
+                    }
+                    ok = True
+                except (SourceResolveError, ExpiredStreamError, TransportError, KeyError, ValueError):
+                    raw = {
+                        "ok": False,
+                        "mode": "core",
+                        "error_code": "E_XIAOMI_PLAY_FAILED",
+                        "stream_url": url,
+                    }
+                    ok = False
         else:
             cast_ret = await self.xiaomusic.play_url(did=speaker_id, arg1=url)
             raw = {
@@ -235,11 +281,12 @@ class PlaybackFacade:
         return result
 
     async def play_payload(self, payload: dict[str, Any], speaker_id: str) -> dict[str, Any]:
+        source_hint = self._source_hint_from_payload(payload)
         try:
             result = await self._core().play(
                 MediaRequest(
                     request_id=str(uuid4()),
-                    source_hint="legacy_payload",
+                    source_hint=source_hint,
                     query=str(payload.get("url") or "legacy_payload"),
                     device_id=speaker_id,
                     context={
@@ -264,7 +311,7 @@ class PlaybackFacade:
             "ok": True,
             "raw": {
                 "ok": True,
-                "mode": "core_minimal",
+                "mode": "core",
                 "source": prepared.source,
                 "transport": dispatch.transport,
                 "dispatch": dispatch.data,

@@ -151,7 +151,7 @@ async def api_v1_play_url(data: ApiV1PlayUrlRequest):
         except Exception:
             pass
 
-    mode = "core_minimal" if str(data.url).startswith(("http://", "https://")) else "direct"
+    mode = "core"
     no_cache = bool(options.get("no_cache", False))
     try:
         out = await _get_facade().play_url(
@@ -350,7 +350,7 @@ async def api_v1_test_reachability(request: Request, data: ApiV1ReachabilityRequ
         out = await _get_facade().play_url(
             url=test_url,
             speaker_id=data.speaker_id,
-            options={"mode": "core_minimal"},
+            options={"mode": "core"},
         )
     except Exception:
         return make_error(

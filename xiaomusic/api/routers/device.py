@@ -139,7 +139,7 @@ async def playurl(did: str, url: str):
     out = await _get_facade().play_url(
         url=decoded_url,
         speaker_id=did,
-        options={"mode": "core_minimal"},
+        options={"mode": "core"},
     )
     return out["raw"].get("cast_ret", out["raw"])
 

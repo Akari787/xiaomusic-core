@@ -80,7 +80,7 @@ class DeviceRegistry:
             last_probe_ts=now_ts,
         )
         capability = TransportCapabilityMatrix(
-            play=["mina", "miio"],
+            play=["mina"],
             tts=["miio", "mina"],
             volume=["miio", "mina"],
             stop=["miio", "mina"],

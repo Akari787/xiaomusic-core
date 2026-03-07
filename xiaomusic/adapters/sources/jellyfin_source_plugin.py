@@ -8,52 +8,40 @@ from xiaomusic.core.models.media import MediaRequest, ResolvedMedia
 from xiaomusic.core.source.source_plugin import SourcePlugin
 
 
-class LegacyPayloadSourcePlugin(SourcePlugin):
-    """Compatibility source adapter for legacy payload-based media sources.
+class JellyfinSourcePlugin(SourcePlugin):
+    """Official Jellyfin source plugin for unified core playback chain."""
 
-    Phase 2 scope:
-    - Keep Jellyfin/OpenAPI payload translation outside API handlers.
-    - Produce standard ResolvedMedia for unified core chain.
-
-    Current scope:
-    - Compatibility-only plugin for non-migrated payload sources.
-    - Jellyfin main path is owned by JellyfinSourcePlugin in Phase 3.
-    """
-
-    name = "legacy_payload"
+    name = "jellyfin"
 
     def __init__(self, payload_url_resolver: Callable[[dict[str, Any]], str]) -> None:
         self._payload_url_resolver = payload_url_resolver
 
     def can_resolve(self, request: MediaRequest) -> bool:
+        if request.source_hint == self.name:
+            return True
         payload = request.context.get("source_payload")
         if not isinstance(payload, dict):
             return False
-        return str(payload.get("source") or "").lower() != "jellyfin"
+        return str(payload.get("source") or "").lower() == self.name
 
     async def resolve(self, request: MediaRequest) -> ResolvedMedia:
         payload = request.context.get("source_payload")
         if not isinstance(payload, dict):
-            raise SourceResolveError("legacy source payload is required")
+            raise SourceResolveError("jellyfin source payload is required")
 
         stream_url = self._payload_url_resolver(payload)
         parsed = urlparse(stream_url)
         if parsed.scheme not in {"http", "https"}:
-            raise SourceResolveError("legacy payload did not resolve to HTTP URL")
+            raise SourceResolveError("jellyfin payload did not resolve to HTTP URL")
 
-        title = request.context.get("title") or payload.get("name") or payload.get("title")
-        source = payload.get("source") or self._infer_source(stream_url)
+        title = request.context.get("title") or payload.get("title") or payload.get("name")
+        media_id = str(payload.get("id") or request.request_id)
         return ResolvedMedia(
-            media_id=request.request_id,
-            source=str(source),
-            title=str(title or "legacy-media"),
+            media_id=media_id,
+            source=self.name,
+            title=str(title or "jellyfin-media"),
             stream_url=stream_url,
             headers={},
             expires_at=None,
             is_live=False,
         )
-
-    @staticmethod
-    def _infer_source(stream_url: str) -> str:
-        _ = stream_url
-        return "legacy_payload"
