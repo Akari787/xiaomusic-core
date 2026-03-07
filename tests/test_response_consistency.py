@@ -23,7 +23,8 @@ async def test_v1_play_url_response_success_and_failure_consistency(monkeypatch)
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _FacadeOK())
     out_ok = await v1.api_v1_play_url(ApiV1PlayUrlRequest(url="http://a/b.mp3", speaker_id="did-1"))
-    assert out_ok["success"] is out_ok["ok"]
+    assert out_ok["code"] == 0
+    assert out_ok["data"]["success"] is out_ok["data"]["ok"]
 
     class _FacadeFail:
         async def play_url(self, url, speaker_id, options):  # noqa: ARG002
@@ -31,9 +32,10 @@ async def test_v1_play_url_response_success_and_failure_consistency(monkeypatch)
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _FacadeFail())
     out_fail = await v1.api_v1_play_url(ApiV1PlayUrlRequest(url="http://a/b.mp3", speaker_id="did-1"))
-    assert out_fail["success"] is out_fail["ok"]
-    assert out_fail["ok"] is False
-    assert out_fail["error_code"]
+    assert out_fail["code"] != 0
+    assert out_fail["data"]["success"] is out_fail["data"]["ok"]
+    assert out_fail["data"]["ok"] is False
+    assert out_fail["data"]["error_code"]
     assert out_fail["message"]
 
 
@@ -52,10 +54,11 @@ async def test_v1_stop_failure_always_has_error_code(monkeypatch):
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
     out = await v1.api_v1_stop(ApiV1StopRequest(speaker_id="did-1"))
-    assert out["ok"] is False
-    assert out["success"] is False
-    assert out["success"] is out["ok"]
-    assert out["error_code"] == "E_INTERNAL"
+    assert out["code"] != 0
+    assert out["data"]["ok"] is False
+    assert out["data"]["success"] is False
+    assert out["data"]["success"] is out["data"]["ok"]
+    assert out["data"]["error_code"] == "E_INTERNAL"
     assert out["message"]
 
 
@@ -67,6 +70,6 @@ async def test_v1_sessions_cleanup_success_consistency(monkeypatch):
 
     monkeypatch.setattr(v1, "get_runtime", lambda: _Runtime())
     out = await v1.api_v1_sessions_cleanup(v1.ApiSessionsCleanupRequest())
-    assert out["ok"] is True
-    assert out["success"] is True
-    assert out["success"] is out["ok"]
+    assert out["code"] == 0
+    assert out["data"]["removed"] == 1
+    assert out["data"]["remaining"] == 2

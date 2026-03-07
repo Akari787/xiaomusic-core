@@ -1,0 +1,27 @@
+# XiaoMusic OAuth2 example runtime config
+
+hostname: 192.168.7.178
+port: 8090
+public_port: 58090
+
+# Core playback defaults
+disable_httpauth: false
+enable_analytics: false
+enable_self_update: false
+persist_token: true
+log_redact: true
+
+# Jellyfin
+jellyfin_enabled: true
+jellyfin_base_url: "http://192.168.7.4:30013"
+jellyfin_api_key: "replace_me"
+jellyfin_user_id: ""
+
+# Outbound controls
+outbound_allowlist_domains: []
+cors_allow_origins:
+  - "http://localhost"
+  - "http://127.0.0.1"
+
+# Keep single process worker model
+workers: 1

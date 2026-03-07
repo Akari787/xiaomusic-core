@@ -194,9 +194,11 @@ class PlaybackFacade:
         no_cache = bool(options.get("no_cache", False))
 
         if mode == "network_audio_cast":
+            # compatibility_layer: legacy runtime mode, planned removal after v2 API freeze.
             raw = await self._runtime().play_and_cast(did=speaker_id, url=url, no_cache=no_cache)
             ok = bool(raw.get("ok", False))
         elif mode == "network_audio_link":
+            # compatibility_layer: legacy runtime mode, planned removal after v2 API freeze.
             raw = await self._runtime().play_link(
                 did=speaker_id,
                 url=url,
@@ -206,6 +208,7 @@ class PlaybackFacade:
             ok = bool(raw.get("ok", False))
         elif mode == "core":
             if not self._is_http_url(url):
+                # compatibility_layer: support historical non-http inputs, planned removal in next major release.
                 cast_ret = await self.xiaomusic.play_url(did=speaker_id, arg1=url)
                 raw = {
                     "ok": True,

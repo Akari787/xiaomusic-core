@@ -6,9 +6,23 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from xiaomusic.api import response as api_response
 from xiaomusic.api.models import ApiPlaybackResponse
 from xiaomusic.network_audio.contracts import ERROR_CODES
+
+
+OK_CODE = 0
+DEFAULT_ERROR_CODE = 10000
+ERROR_CODE_INT: dict[str, int] = {
+    "E_URL_UNSUPPORTED": 10001,
+    "E_RESOLVE_TIMEOUT": 10002,
+    "E_RESOLVE_NONZERO_EXIT": 10003,
+    "E_STREAM_START_FAILED": 10004,
+    "E_STREAM_NOT_FOUND": 10005,
+    "E_STREAM_SINGLE_CLIENT_ONLY": 10006,
+    "E_XIAOMI_PLAY_FAILED": 10007,
+    "E_TOO_MANY_SESSIONS": 10008,
+    "E_INTERNAL": 10009,
+}
 
 
 def error_message(error_code: str | None, fallback: str | None = None) -> str | None:
@@ -27,8 +41,26 @@ def _payload_to_dict(payload: dict | BaseModel | None) -> dict:
     return dict(payload)
 
 
+def _code_to_int(error_code: str | None) -> int:
+    if not error_code:
+        return OK_CODE
+    return ERROR_CODE_INT.get(error_code, DEFAULT_ERROR_CODE)
+
+
+def _build_response(code: int, message: str, data: dict | None = None) -> dict[str, Any]:
+    return {
+        "code": int(code),
+        "message": str(message),
+        "data": data or {},
+    }
+
+
 def make_ok(payload: dict | BaseModel | None = None, message: str | None = None) -> Any:
-    return api_response.ok(_payload_to_dict(payload), message=message)
+    return _build_response(
+        code=OK_CODE,
+        message=message or "ok",
+        data=_payload_to_dict(payload),
+    )
 
 
 def make_error(
@@ -38,13 +70,12 @@ def make_error(
 ) -> Any:
     body = _payload_to_dict(payload)
     request_id = uuid.uuid4().hex[:16]
-    return api_response.fail(
-        error_code,
-        error_message(error_code, message) or "Unknown error",
-        include_request_id=True,
-        request_id=request_id,
-        code=error_code,
-        **body,
+    body["request_id"] = request_id
+    body["error_code"] = error_code
+    return _build_response(
+        code=_code_to_int(error_code),
+        message=error_message(error_code, message) or "Unknown error",
+        data=body,
     )
 
 
@@ -68,14 +99,8 @@ def playback_response(
     message: str | None = None,
     deprecated: bool | None = None,
 ) -> dict:
-    if ok:
-        resolved_error_code = None
-        resolved_message = message
-        request_id = None
-    else:
-        resolved_error_code = error_code or "E_INTERNAL"
-        resolved_message = error_message(resolved_error_code, message)
-        request_id = uuid.uuid4().hex[:16]
+    resolved_error_code = None if ok else (error_code or "E_INTERNAL")
+    resolved_message = message if ok else error_message(resolved_error_code, message)
 
     payload = ApiPlaybackResponse(
         ok=ok,
@@ -97,8 +122,12 @@ def playback_response(
         resolve_ms=resolve_ms,
         deprecated=deprecated,
     )
-    out = payload.model_dump()
+    data = payload.model_dump()
     if not ok:
-        out["code"] = resolved_error_code
-        out["request_id"] = request_id
-    return out
+        data["request_id"] = uuid.uuid4().hex[:16]
+        data["error_code"] = resolved_error_code
+    return _build_response(
+        code=_code_to_int(resolved_error_code),
+        message=resolved_message or ("ok" if ok else "Unknown error"),
+        data=data,
+    )

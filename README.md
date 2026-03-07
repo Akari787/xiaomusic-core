@@ -20,6 +20,35 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 - OAuth2-only：仅保留 OAuth2 扫码登录，不再维护账号密码/cookie 登录路径。
 - Jellyfin 联动：支持在线搜索与歌单同步，适配家庭媒体库场景。
 
+## 📦 安装
+
+1. 准备目录：`conf/`、`music/`
+2. 复制环境模板：
+
+```bash
+cp .env.example .env
+```
+
+3. 生成并填入 `HTTP_AUTH_HASH`：
+
+```bash
+python scripts/generate_password_hash.py
+```
+
+## ⚙️ 配置
+
+- Docker 环境变量：参考 `.env.example`
+- 应用配置模板：参考 `config.example.yaml`
+- 核心插件链路：`HttpUrlSourcePlugin` / `JellyfinSourcePlugin` / `NetworkAudioSourcePlugin`
+
+## ▶️ 启动
+
+```bash
+docker compose -f docker-compose.hardened.yml up -d --build
+```
+
+服务启动后默认访问：`http://<HOST>:58090/`
+
 ## ✨ 主要改动
 
 ### OAuth2 登录改造
@@ -190,11 +219,20 @@ npm run build
 
 - 当前仅支持 Default 主题。
 
-### API 响应契约（当前阶段）
+### API 响应契约
 
-- 本阶段仅做内部统一封装（Response 工具层 + 异常处理收敛）。
-- 对外响应契约保持不变（继续兼容现有 `ok/success/error_code/message` 及历史结构）。
-- 暂不引入 `code/message/data` 全量切换；如需变更，将在后续独立版本（如 v2）评估。
+- `/api/v1/*` 统一返回：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {}
+}
+```
+
+- 播放与控制详情位于 `data` 字段中。
+- 失败时 `code != 0`，并包含可追踪 `request_id`。
 
 ## ⚠️ 安全建议
 
@@ -275,6 +313,16 @@ XIAOMUSIC_ENABLE_ANALYTICS=false
 
 - Bug 反馈: <https://github.com/Akari787/xiaomusic-oauth2/issues>
 - 文档与功能建议: 欢迎提交 issue / pull request
+
+## 🛠️ 常见问题与日志排查
+
+- 查看容器日志：`docker logs --tail 200 xiaomusic-oauth2`
+- 查看应用日志文件：`conf/xiaomusic.log.txt`
+- 关键结构化日志字段：
+  - Coordinator：`request_id`、`device_id`、`source_plugin`、`transport`
+  - Delivery：`url_prepare_result`、`proxy_decision`
+  - Router：`candidate_transports`、`selected_transport`、`fallback_triggered`
+  - Transport：`action`、`latency_ms`、`success`
 
 ## 版本
 

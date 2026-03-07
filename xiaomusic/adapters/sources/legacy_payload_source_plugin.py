@@ -18,6 +18,10 @@ class LegacyPayloadSourcePlugin(SourcePlugin):
     Current scope:
     - Compatibility-only plugin for non-migrated payload sources.
     - Jellyfin and network-audio main paths are owned by dedicated plugins.
+
+    compatibility_layer:
+    - reason: preserve legacy payload callers while dedicated plugins are rolled out.
+    - planned_removal_phase: post-release cleanup after legacy API callers are migrated.
     """
 
     name = "legacy_payload"

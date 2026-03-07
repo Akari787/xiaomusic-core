@@ -23,13 +23,12 @@ async def test_v1_play_url_success_shape(monkeypatch):
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
     out = await v1.api_v1_play_url(ApiV1PlayUrlRequest(url="http://a/b.mp3", speaker_id="did-1"))
-    assert out["ok"] is True
-    assert out["success"] is True
-    assert out["error_code"] is None
-    assert out["sid"] == "s_1"
-    assert out["speaker_id"] == "did-1"
-    assert out["state"] == "streaming"
-    assert "message" in out
+    assert out["code"] == 0
+    assert out["message"]
+    assert out["data"]["ok"] is True
+    assert out["data"]["sid"] == "s_1"
+    assert out["data"]["speaker_id"] == "did-1"
+    assert out["data"]["state"] == "streaming"
 
 
 @pytest.mark.asyncio
@@ -40,8 +39,8 @@ async def test_v1_play_url_failed_shape(monkeypatch):
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
     out = await v1.api_v1_play_url(ApiV1PlayUrlRequest(url="http://a/b.mp3", speaker_id="did-1"))
-    assert out["ok"] is False
-    assert out["success"] is False
-    assert out["error_code"] == "E_STREAM_NOT_FOUND"
+    assert out["code"] != 0
     assert out["message"]
-    assert out["state"] == "failed"
+    assert out["data"]["ok"] is False
+    assert out["data"]["error_code"] == "E_STREAM_NOT_FOUND"
+    assert out["data"]["state"] == "failed"
