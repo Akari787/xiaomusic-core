@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from xiaomusic.core.errors.device_errors import DeviceNotFoundError
 from xiaomusic.core.models.device import DeviceProfile, DeviceReachability
 from xiaomusic.core.models.transport import TransportCapabilityMatrix
 
@@ -58,12 +59,12 @@ class DeviceRegistry:
 
     def _hydrate_from_legacy(self, device_id: str) -> None:
         if self._xiaomusic is None:
-            raise KeyError(f"unknown device_id: {device_id}")
+            raise DeviceNotFoundError(f"unknown device_id: {device_id}")
 
         devices = getattr(getattr(self._xiaomusic, "device_manager", None), "devices", {})
         device_player = devices.get(device_id)
         if device_player is None:
-            raise KeyError(f"unknown device_id: {device_id}")
+            raise DeviceNotFoundError(f"unknown device_id: {device_id}")
 
         device = getattr(device_player, "device", None)
         profile = DeviceProfile(

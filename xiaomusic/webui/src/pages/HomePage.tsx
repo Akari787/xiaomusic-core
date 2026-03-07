@@ -754,18 +754,26 @@ export function HomePage() {
     if (!requireDid()) {
       return;
     }
+    const picked = String(songName || "").trim() || String(songs[0] || "").trim();
+    if (!picked) {
+      setMessage("当前歌单为空，请先刷新歌单或切换列表");
+      return;
+    }
     const out = await apiPost<Record<string, unknown>>(
-      "/api/v1/play_music_list",
+      "/api/v1/play",
       {
-        speaker_id: activeDid,
-        list_name: playlist,
-        music_name: songName || "",
+        device_id: activeDid,
+        query: picked,
+        source_hint: "auto",
+        options: {
+          list_name: playlist,
+        },
       },
     );
     const parsed = unwrapPlaybackEnvelope(out);
     if (parsed.ok) {
-      setMusic(songName);
-      setMessage("开始播放");
+      setMusic(picked);
+      setMessage(`开始播放（来源: ${parsed.sourcePlugin || "local_library"}, 传输: ${parsed.transport || "unknown"}）`);
       await loadStatus(activeDid);
     } else {
       setMessage(`播放失败：${explainPlaybackError(parsed.errorCode, parsed.message, parsed.stage)}`);
@@ -811,11 +819,32 @@ export function HomePage() {
       return;
     }
     try {
+      const url = String(linkUrl || "").trim();
+      if (!url) {
+        setMessage("请输入媒体链接后再播放");
+        return;
+      }
+
+      const resolveOut = (await apiPost<Record<string, unknown>>("/api/v1/resolve", {
+        query: url,
+        source_hint: "auto",
+        options: {},
+      })) as Record<string, unknown>;
+      const resolved = unwrapPlaybackEnvelope(resolveOut);
+      const resolvedData = ((resolveOut as { data?: Record<string, unknown> }).data || {}) as Record<string, unknown>;
+      if (!resolved.ok) {
+        setMessage(`解析失败：${explainPlaybackError(resolved.errorCode, resolved.message, resolved.stage)}`);
+        return;
+      }
+
+      const resolvedSource = String(resolvedData.source_plugin || "auto") || "auto";
+
       const runApiV1Play = async (preferProxy: boolean) => {
-        const out = await apiPost<Record<string, unknown>>("/api/v1/play_url", {
-          speaker_id: activeDid,
-          url: linkUrl,
-          options: { mode: "core", no_cache: false, prefer_proxy: preferProxy, prefer_codec: "auto" },
+        const out = await apiPost<Record<string, unknown>>("/api/v1/play", {
+          device_id: activeDid,
+          query: url,
+          source_hint: resolvedSource,
+          options: { no_cache: false, prefer_proxy: preferProxy, prefer_codec: "auto" },
         });
         return unwrapPlaybackEnvelope(out);
       };
@@ -830,7 +859,7 @@ export function HomePage() {
         return;
       }
 
-      // Unified source plugin path via /api/v1/play_url.
+      // Unified source plugin path via /api/v1/play.
       const directOut = await runApiV1Play(false);
       if (directOut.ok) {
         setMessage(
@@ -920,12 +949,13 @@ export function HomePage() {
       setMessage("选中结果缺少歌曲名");
       return;
     }
-    const out = (await apiPost<{ ok?: boolean; error_code?: string; message?: string }>(
-      "/api/v1/play_music",
+    const out = (await apiPost<Record<string, unknown>>(
+      "/api/v1/play",
       {
-        speaker_id: activeDid,
-        music_name: title,
-        search_key: searchKeyword || "",
+        device_id: activeDid,
+        query: title,
+        source_hint: "auto",
+        options: { search_key: searchKeyword || "" },
       },
     )) as unknown;
     const parsed = unwrapPlaybackEnvelope(out);

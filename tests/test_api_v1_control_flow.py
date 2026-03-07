@@ -21,31 +21,31 @@ async def test_api_v1_tts_stop_set_volume_call_facade(monkeypatch):
     }
 
     class _Facade:
-        async def tts(self, speaker_id: str, text: str):
-            assert speaker_id == "did-1"
+        async def control_tts(self, device_id: str, text: str, request_id: str | None = None):
+            _ = request_id
+            assert device_id == "did-1"
             assert text
             called["tts"] = True
-            return {"ok": True}
+            return {"status": "ok", "device_id": device_id, "transport": "miio", "request_id": "r1", "extra": {}}
 
-        async def stop(self, target: dict):
-            assert target["speaker_id"] == "did-1"
+        async def control_stop(self, device_id: str, request_id: str | None = None):
+            _ = request_id
+            assert device_id == "did-1"
             called["stop"] = True
             return {
-                "ok": True,
-                "sid": "",
-                "speaker_id": "did-1",
-                "state": "stopped",
-                "title": None,
-                "stream_url": "",
-                "error_code": None,
-                "raw": {},
+                "status": "stopped",
+                "device_id": device_id,
+                "transport": "miio",
+                "request_id": "r2",
+                "extra": {},
             }
 
-        async def set_volume(self, speaker_id: str, volume: int):
-            assert speaker_id == "did-1"
+        async def control_set_volume(self, device_id: str, volume: int, request_id: str | None = None):
+            _ = request_id
+            assert device_id == "did-1"
             assert volume == 40
             called["set_volume"] = True
-            return {"ok": True}
+            return {"status": "ok", "device_id": device_id, "transport": "miio", "request_id": "r3", "extra": {}}
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
 

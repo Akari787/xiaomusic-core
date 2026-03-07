@@ -92,11 +92,32 @@ class PlaybackCoordinator:
         )
         raise RuntimeError("playback failed without transport dispatch")
 
+    async def resolve(self, request: MediaRequest) -> dict:
+        plugin = self._source_registry.get_plugin(request.source_hint, request)
+        LOG.info(
+            "core_chain action=resolve request_id=%s source_hint=%s source_plugin=%s",
+            request.request_id,
+            request.source_hint,
+            plugin.name,
+        )
+        resolved = await plugin.resolve(request)
+        return {
+            "ok": True,
+            "request_id": request.request_id,
+            "source_plugin": plugin.name,
+            "resolved_media": resolved,
+        }
+
     async def stop(self, device_id: str) -> dict:
         return await self._dispatch_action("stop", device_id)
 
     async def pause(self, device_id: str) -> dict:
         return await self._dispatch_action("pause", device_id)
+
+    async def resume(self, device_id: str) -> dict:
+        # compatibility_layer: current transports expose pause only.
+        # Xiaomi device pause command behaves as pause/resume toggle on supported models.
+        return await self._dispatch_action("resume", device_id, transport_action="pause")
 
     async def tts(self, device_id: str, text: str) -> dict:
         return await self._dispatch_action("tts", device_id, text=text)
@@ -119,13 +140,15 @@ class PlaybackCoordinator:
         device_id: str,
         text: str | None = None,
         volume: int | None = None,
+        transport_action: str | None = None,
     ) -> dict:
         profile = self._device_registry.get_profile(device_id)
         capability = self._device_registry.get_capability_matrix(device_id)
         LOG.info("core_chain action=%s device_id=%s request_id=control-%s", action, device_id, device_id)
+        routed_action = transport_action or action
         try:
             dispatch_result = await self._transport_router.dispatch(
-                action=action,
+                action=routed_action,
                 device_id=device_id,
                 profile=profile,
                 capability_matrix=capability,

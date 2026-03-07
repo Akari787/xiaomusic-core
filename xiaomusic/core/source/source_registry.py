@@ -70,7 +70,7 @@ class SourceRegistry:
 
         parsed = urlparse(query)
         if parsed.scheme in {"http", "https"}:
-            return "direct_url"
+            return None
         if self._looks_like_local(query):
             return "local_library"
         return None

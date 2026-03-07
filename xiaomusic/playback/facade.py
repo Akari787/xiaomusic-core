@@ -290,6 +290,174 @@ class PlaybackFacade:
         }
         return result
 
+    async def play(
+        self,
+        *,
+        device_id: str,
+        query: str,
+        source_hint: str = "auto",
+        options: dict[str, Any] | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        options = options or {}
+        normalized_hint = str(source_hint or "auto").strip().lower()
+        hint = None if normalized_hint in {"", "auto"} else normalized_hint
+        media_request = MediaRequest(
+            request_id=str(request_id or uuid4()),
+            source_hint=hint,
+            query=str(query),
+            device_id=device_id,
+            context={
+                "resolve_timeout_seconds": float(options.get("resolve_timeout_seconds", 8)),
+                "prefer_proxy": bool(options.get("prefer_proxy", False)),
+            },
+        )
+        try:
+            result = await self._core().play(media_request, device_id=device_id)
+        except (
+            SourceResolveError,
+            ExpiredStreamError,
+            UndeliverableStreamError,
+            TransportError,
+            KeyError,
+            ValueError,
+        ):
+            list_name = str(options.get("list_name") or "").strip()
+            if list_name:
+                # compatibility_layer: keep playlist semantic playback for mixed web/local items.
+                # removal_condition: remove after playlist source plugin fully supports mixed catalog entries.
+                await self.xiaomusic.do_play_music_list(
+                    did=device_id,
+                    list_name=list_name,
+                    music_name=str(query or ""),
+                )
+                return {
+                    "status": "playing",
+                    "device_id": device_id,
+                    "source_plugin": "legacy_playlist",
+                    "transport": "mina",
+                    "request_id": media_request.request_id,
+                    "media": {
+                        "title": str(query or ""),
+                        "stream_url": "",
+                        "is_live": False,
+                    },
+                    "extra": {
+                        "fallback": "playlist_legacy",
+                        "list_name": list_name,
+                    },
+                }
+            raise
+        prepared = result["prepared_stream"]
+        dispatch = result["dispatch"]
+        resolved = result["resolved_media"]
+        return {
+            "status": "playing",
+            "device_id": device_id,
+            "source_plugin": prepared.source,
+            "transport": dispatch.transport,
+            "request_id": media_request.request_id,
+            "media": {
+                "title": resolved.title,
+                "stream_url": prepared.final_url,
+                "is_live": bool(resolved.is_live),
+            },
+            "extra": {
+                "dispatch": dispatch.data,
+            },
+        }
+
+    async def resolve(
+        self,
+        *,
+        query: str,
+        source_hint: str = "auto",
+        options: dict[str, Any] | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        options = options or {}
+        normalized_hint = str(source_hint or "auto").strip().lower()
+        hint = None if normalized_hint in {"", "auto"} else normalized_hint
+        media_request = MediaRequest(
+            request_id=str(request_id or uuid4()),
+            source_hint=hint,
+            query=str(query),
+            device_id=None,
+            context={
+                "resolve_timeout_seconds": float(options.get("resolve_timeout_seconds", 8)),
+            },
+        )
+        result = await self._core().resolve(media_request)
+        resolved = result["resolved_media"]
+        return {
+            "resolved": True,
+            "source_plugin": result["source_plugin"],
+            "request_id": media_request.request_id,
+            "media": {
+                "media_id": resolved.media_id,
+                "title": resolved.title,
+                "stream_url": resolved.stream_url,
+                "source": resolved.source,
+                "is_live": bool(resolved.is_live),
+            },
+            "extra": {},
+        }
+
+    async def control_stop(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+        result = await self._core().stop(device_id)
+        return {
+            "status": "stopped",
+            "device_id": device_id,
+            "transport": result["transport"],
+            "request_id": str(request_id or uuid4()),
+            "extra": {"dispatch": result["dispatch"].data},
+        }
+
+    async def control_pause(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+        result = await self._core().pause(device_id)
+        return {
+            "status": "paused",
+            "device_id": device_id,
+            "transport": result["transport"],
+            "request_id": str(request_id or uuid4()),
+            "extra": {"dispatch": result["dispatch"].data},
+        }
+
+    async def control_resume(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+        result = await self._core().resume(device_id)
+        return {
+            "status": "resumed",
+            "device_id": device_id,
+            "transport": result["transport"],
+            "request_id": str(request_id or uuid4()),
+            "extra": {"dispatch": result["dispatch"].data},
+        }
+
+    async def control_tts(self, device_id: str, text: str, request_id: str | None = None) -> dict[str, Any]:
+        result = await self._core().tts(device_id, text=text)
+        return {
+            "status": "ok",
+            "device_id": device_id,
+            "transport": result["transport"],
+            "request_id": str(request_id or uuid4()),
+            "extra": {"dispatch": result["dispatch"].data},
+        }
+
+    async def control_set_volume(
+        self,
+        device_id: str,
+        volume: int,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        result = await self._core().set_volume(device_id, volume=volume)
+        return {
+            "status": "ok",
+            "device_id": device_id,
+            "transport": result["transport"],
+            "request_id": str(request_id or uuid4()),
+            "extra": {"volume": int(volume), "dispatch": result["dispatch"].data},
+        }
+
     async def play_payload(self, payload: dict[str, Any], speaker_id: str) -> dict[str, Any]:
         source_hint = self._source_hint_from_payload(payload)
         try:

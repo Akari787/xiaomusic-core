@@ -50,17 +50,12 @@ class _FakeRequest:
 
 
 @pytest.mark.asyncio
-async def test_api_v1_play_url_enters_playback_coordinator_for_direct_and_site_media(monkeypatch):
+async def test_api_v1_play_url_enters_playback_coordinator_via_unified_play(monkeypatch):
     coordinator = _CoordinatorStub()
     xiaomusic = type("X", (), {"link_playback_strategy": None})()
     facade = PlaybackFacade(xiaomusic)
     facade._core_coordinator = cast(Any, coordinator)
 
-    class _Strategy:
-        def should_use_network_audio(self, url: str) -> bool:
-            return "youtube.com" in url
-
-    facade.xiaomusic.link_playback_strategy = _Strategy()
     monkeypatch.setattr(v1, "_get_facade", lambda: facade)
 
     await v1.api_v1_play_url(ApiV1PlayUrlRequest(url="http://example.com/a.mp3", speaker_id="d1"))
@@ -68,8 +63,8 @@ async def test_api_v1_play_url_enters_playback_coordinator_for_direct_and_site_m
         ApiV1PlayUrlRequest(url="https://www.youtube.com/watch?v=iPnaF8Ngk3Q", speaker_id="d1")
     )
 
-    assert coordinator.calls[0][0] == "direct_url"
-    assert coordinator.calls[1][0] == "site_media"
+    assert coordinator.calls[0][0] is None
+    assert coordinator.calls[1][0] is None
 
 
 @pytest.mark.asyncio

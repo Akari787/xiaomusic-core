@@ -8,14 +8,19 @@ from xiaomusic.api.routers import v1
 
 @pytest.mark.asyncio
 async def test_api_v1_play_music_success(monkeypatch):
-    calls = {}
+    class _Facade:
+        async def play(self, *, device_id, query, source_hint="auto", options=None, request_id=None):  # noqa: ANN001
+            _ = request_id
+            return {
+                "status": "playing",
+                "device_id": device_id,
+                "source_plugin": source_hint,
+                "transport": "mina",
+                "media": {"title": query, "stream_url": "http://a/b.mp3", "is_live": False},
+                "extra": options or {},
+            }
 
-    async def _do_play(did, name, search_key=""):
-        calls["did"] = did
-        calls["name"] = name
-        calls["search_key"] = search_key
-
-    monkeypatch.setattr(v1.xiaomusic, "do_play", _do_play)
+    monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
     out = await v1.api_v1_play_music(
         ApiV1PlayMusicRequest(
             speaker_id="did-1",
@@ -23,21 +28,26 @@ async def test_api_v1_play_music_success(monkeypatch):
             search_key="song-a",
         )
     )
-    assert out["success"] is True
-    assert out["state"] == "playing"
-    assert calls == {"did": "did-1", "name": "song-a", "search_key": "song-a"}
+    assert out["code"] == 0
+    assert out["data"]["device_id"] == "did-1"
+    assert out["data"]["source_plugin"] == "local_library"
 
 
 @pytest.mark.asyncio
 async def test_api_v1_play_music_list_success(monkeypatch):
-    calls = {}
+    class _Facade:
+        async def play(self, *, device_id, query, source_hint="auto", options=None, request_id=None):  # noqa: ANN001
+            _ = request_id
+            return {
+                "status": "playing",
+                "device_id": device_id,
+                "source_plugin": source_hint,
+                "transport": "mina",
+                "media": {"title": query, "stream_url": "http://a/b.mp3", "is_live": False},
+                "extra": options or {},
+            }
 
-    async def _do_play_music_list(did, list_name, music_name=""):
-        calls["did"] = did
-        calls["list_name"] = list_name
-        calls["music_name"] = music_name
-
-    monkeypatch.setattr(v1.xiaomusic, "do_play_music_list", _do_play_music_list)
+    monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
     out = await v1.api_v1_play_music_list(
         ApiV1PlayMusicListRequest(
             speaker_id="did-1",
@@ -45,6 +55,6 @@ async def test_api_v1_play_music_list_success(monkeypatch):
             music_name="song-a",
         )
     )
-    assert out["success"] is True
-    assert out["state"] == "playing"
-    assert calls == {"did": "did-1", "list_name": "全部", "music_name": "song-a"}
+    assert out["code"] == 0
+    assert out["data"]["device_id"] == "did-1"
+    assert out["data"]["source_plugin"] == "local_library"

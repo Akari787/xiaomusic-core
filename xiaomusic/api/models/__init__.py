@@ -2,6 +2,15 @@
 
 from pydantic import BaseModel, Field
 
+from xiaomusic.api.models.play_request import (
+    ControlRequest,
+    PlayRequest,
+    ResolveRequest,
+    TtsRequest,
+    VolumeRequest,
+)
+from xiaomusic.api.models.response import ApiResponse
+
 
 class Did(BaseModel):
     did: str
@@ -176,3 +185,43 @@ class ApiSessionsResponse(ApiResponseBase):
 class ApiSessionsCleanupRequest(BaseModel):
     max_sessions: int = 100
     ttl_seconds: int | None = None
+
+
+__all__ = [
+    "ApiPlaybackResponse",
+    "ApiResponse",
+    "ApiResponseBase",
+    "ApiSessionsCleanupRequest",
+    "ApiSessionsResponse",
+    "ApiV1PauseRequest",
+    "ApiV1PlayMusicListRequest",
+    "ApiV1PlayMusicRequest",
+    "ApiV1PlayUrlRequest",
+    "ApiV1ProbeRequest",
+    "ApiV1ReachabilityRequest",
+    "ApiV1SetPlayModeRequest",
+    "ApiV1SetVolumeRequest",
+    "ApiV1StopRequest",
+    "ApiV1TtsRequest",
+    "ControlRequest",
+    "Did",
+    "DidCmd",
+    "DidPlayMusic",
+    "DidPlayMusicList",
+    "DidUrl",
+    "DidVolume",
+    "DownloadOneMusic",
+    "DownloadPlayList",
+    "MusicInfoObj",
+    "MusicItem",
+    "PlayListMusicObj",
+    "PlayListObj",
+    "PlayListUpdateObj",
+    "PlayRequest",
+    "PlayUrlOptions",
+    "ResolveRequest",
+    "SidObj",
+    "TtsRequest",
+    "UrlInfo",
+    "VolumeRequest",
+]

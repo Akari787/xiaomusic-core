@@ -3,15 +3,18 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlparse
 from dataclasses import asdict, is_dataclass
+from uuid import uuid4
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 
+from xiaomusic.api.api_error import ApiError
 from xiaomusic.api.base_url import detect_base_url
 from xiaomusic.api.dependencies import verification, xiaomusic
 from xiaomusic.api.models import ApiSessionsCleanupRequest
 from xiaomusic.api.runtime_provider import get_runtime
 from xiaomusic.api.models import (
+    ApiResponse,
     ApiV1PauseRequest,
     ApiV1SetPlayModeRequest,
     ApiV1PlayMusicListRequest,
@@ -22,9 +25,15 @@ from xiaomusic.api.models import (
     ApiV1SetVolumeRequest,
     ApiV1StopRequest,
     ApiV1TtsRequest,
+    ControlRequest,
+    PlayRequest,
+    ResolveRequest,
+    TtsRequest,
+    VolumeRequest,
 )
 from xiaomusic.api.response_utils import make_error, make_ok, playback_response
 from xiaomusic.const import PLAY_TYPE_ALL, PLAY_TYPE_ONE, PLAY_TYPE_RND, PLAY_TYPE_SEQ, PLAY_TYPE_SIN
+from xiaomusic.core.errors import DeliveryPrepareError, DeviceNotFoundError, SourceResolveError, TransportError
 from xiaomusic.playback.facade import PlaybackFacade
 
 router = APIRouter(dependencies=[Depends(verification)])
@@ -36,6 +45,57 @@ def _get_facade() -> PlaybackFacade:
     if _facade is None:
         _facade = PlaybackFacade(xiaomusic, runtime_provider=get_runtime)
     return _facade
+
+
+def _next_request_id(raw: str | None = None) -> str:
+    return str(raw or uuid4().hex[:16])
+
+
+def _api_response(code: int, message: str, data: dict[str, Any], request_id: str) -> dict[str, Any]:
+    return ApiResponse(code=int(code), message=str(message), data=data, request_id=str(request_id)).model_dump()
+
+
+def _api_ok(data: dict[str, Any], request_id: str, message: str = "ok") -> dict[str, Any]:
+    return _api_response(code=0, message=message, data=data, request_id=request_id)
+
+
+def _map_api_exception(exc: Exception, request_id: str) -> dict[str, Any]:
+    if isinstance(exc, ApiError):
+        rid = str(exc.request_id or request_id)
+        return _api_response(exc.code, exc.message, exc.data, rid)
+    if isinstance(exc, SourceResolveError):
+        return _api_response(20002, "source resolve failed", {"error_type": exc.__class__.__name__}, request_id)
+    if isinstance(exc, DeliveryPrepareError):
+        return _api_response(30001, "delivery prepare failed", {"error_type": exc.__class__.__name__}, request_id)
+    if isinstance(exc, TransportError):
+        return _api_response(40002, "transport dispatch failed", {"error_type": exc.__class__.__name__}, request_id)
+    if isinstance(exc, DeviceNotFoundError):
+        return _api_response(40004, "device not found", {"error_type": exc.__class__.__name__}, request_id)
+    return _api_response(10000, "internal error", {"error_type": exc.__class__.__name__}, request_id)
+
+
+def _legacy_playback_from_unified_play(out: dict[str, Any], speaker_id: str) -> dict[str, Any]:
+    code = int(out.get("code", 10000))
+    request_id = str(out.get("request_id") or _next_request_id(None))
+    data = out.get("data") or {}
+    if not isinstance(data, dict):
+        data = {}
+    media = data.get("media") or {}
+    if not isinstance(media, dict):
+        media = {}
+    ok = code == 0
+    return playback_response(
+        ok=ok,
+        speaker_id=speaker_id,
+        state="streaming" if ok else "failed",
+        title=str(media.get("title") or "") or None,
+        stream_url=str(media.get("stream_url") or ""),
+        source_plugin=str(data.get("source_plugin") or "") or None,
+        transport=str(data.get("transport") or "") or None,
+        error_code=None if ok else "E_INTERNAL",
+        message=str(out.get("message") or "ok"),
+        request_id=request_id,
+    )
 
 
 def _state_to_api(state, ok: bool) -> str:
@@ -144,64 +204,117 @@ async def api_v1_detect_base_url(request: Request):
     )
 
 
+@router.post("/api/v1/play")
+async def api_v1_play(data: PlayRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        out = await _get_facade().play(
+            device_id=data.device_id,
+            query=data.query,
+            source_hint=data.source_hint,
+            options=data.options,
+            request_id=request_id,
+        )
+        payload = {
+            "status": out.get("status", "playing"),
+            "device_id": out.get("device_id", data.device_id),
+            "source_plugin": out.get("source_plugin", ""),
+            "transport": out.get("transport", ""),
+            "media": out.get("media", {}),
+            "extra": out.get("extra", {}),
+        }
+        return _api_ok(payload, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/resolve")
+async def api_v1_resolve(data: ResolveRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        out = await _get_facade().resolve(
+            query=data.query,
+            source_hint=data.source_hint,
+            options=data.options,
+            request_id=request_id,
+        )
+        payload = {
+            "resolved": bool(out.get("resolved", False)),
+            "source_plugin": out.get("source_plugin", ""),
+            "media": out.get("media", {}),
+            "extra": out.get("extra", {}),
+        }
+        return _api_ok(payload, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
 @router.post("/api/v1/play_url")
 async def api_v1_play_url(data: ApiV1PlayUrlRequest):
-    speaker_id = data.speaker_id
-
-    options = (data.options.model_dump() if data.options else {})
+    options = data.options.model_dump() if data.options else {}
+    request_id = _next_request_id(None)
     if options.get("volume") is not None:
         try:
-            await _get_facade().set_volume(speaker_id, int(options["volume"]))
+            await _get_facade().control_set_volume(data.speaker_id, int(options["volume"]), request_id=request_id)
         except Exception:
             pass
-
-    mode = "core"
-    no_cache = bool(options.get("no_cache", False))
-    try:
-        out = await _get_facade().play_url(
-            url=data.url,
-            speaker_id=speaker_id,
-            options={"mode": mode, "prefer_proxy": False, "no_cache": no_cache},
+    unified = await api_v1_play(
+        PlayRequest(
+            device_id=data.speaker_id,
+            query=data.url,
+            source_hint="auto",
+            options={"no_cache": bool(options.get("no_cache", False))},
+            request_id=request_id,
         )
-    except Exception:
-        return playback_response(
-            ok=False,
-            speaker_id=speaker_id,
-            state="failed",
-            error_code="E_STREAM_NOT_FOUND",
-        )
-
-    out["state"] = _state_to_api(out.get("state"), bool(out.get("ok")))
-    return _playback_from_facade(out, fallback_state="failed")
+    )
+    return _legacy_playback_from_unified_play(unified, data.speaker_id)
 
 
 @router.post("/api/v1/play_music")
 async def api_v1_play_music(data: ApiV1PlayMusicRequest):
-    out = await _get_facade().play_local_library(
-        speaker_id=data.speaker_id,
-        music_name=data.music_name,
-        search_key=data.search_key or "",
+    unified = await api_v1_play(
+        PlayRequest(
+            device_id=data.speaker_id,
+            query=data.music_name or data.search_key,
+            source_hint="local_library",
+            options={"search_key": data.search_key or ""},
+        )
     )
-    out["state"] = _state_to_api(out.get("state"), bool(out.get("ok")))
-    return _playback_from_facade(out, fallback_state="failed")
+    return _legacy_playback_from_unified_play(unified, data.speaker_id)
 
 
 @router.post("/api/v1/play_music_list")
 async def api_v1_play_music_list(data: ApiV1PlayMusicListRequest):
+    unified = await api_v1_play(
+        PlayRequest(
+            device_id=data.speaker_id,
+            query=data.music_name or data.list_name,
+            source_hint="local_library",
+            options={"list_name": data.list_name},
+        )
+    )
+    if int(unified.get("code", 10000)) == 0:
+        return _legacy_playback_from_unified_play(unified, data.speaker_id)
+
+    # compatibility_layer: keep historical mixed-playlist behavior for web/online songs.
+    # removal_condition: remove when playlist play is fully migrated to unified source plugins.
     try:
         await xiaomusic.do_play_music_list(
             did=data.speaker_id,
             list_name=data.list_name,
             music_name=data.music_name or "",
         )
-        return playback_response(ok=True, speaker_id=data.speaker_id, state="playing")
-    except Exception:
         return playback_response(
-            ok=False,
+            ok=True,
             speaker_id=data.speaker_id,
-            state="failed",
-            error_code="E_XIAOMI_PLAY_FAILED",
+            state="playing",
+            source_plugin="legacy_playlist",
+            transport="mina",
+            deprecated=True,
+            message="ok",
         )
+    except Exception:
+        return _legacy_playback_from_unified_play(unified, data.speaker_id)
 
 
 @router.post("/api/v1/set_play_mode")
@@ -233,51 +346,97 @@ async def api_v1_set_play_mode(data: ApiV1SetPlayModeRequest):
         )
 
 
+@router.post("/api/v1/control/stop")
+async def api_v1_control_stop(data: ControlRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        out = await _get_facade().control_stop(data.device_id, request_id=request_id)
+        return _api_ok(out, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/control/pause")
+async def api_v1_control_pause(data: ControlRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        out = await _get_facade().control_pause(data.device_id, request_id=request_id)
+        return _api_ok(out, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/control/resume")
+async def api_v1_control_resume(data: ControlRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        out = await _get_facade().control_resume(data.device_id, request_id=request_id)
+        return _api_ok(out, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/control/tts")
+async def api_v1_control_tts(data: TtsRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        out = await _get_facade().control_tts(data.device_id, data.text, request_id=request_id)
+        return _api_ok(out, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/control/volume")
+async def api_v1_control_volume(data: VolumeRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        out = await _get_facade().control_set_volume(
+            data.device_id,
+            int(data.volume),
+            request_id=request_id,
+        )
+        return _api_ok(out, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
 @router.post("/api/v1/stop")
 async def api_v1_stop(data: ApiV1StopRequest):
-    out = await _get_facade().stop(
-        {
-            "sid": data.sid or "",
-            "speaker_id": data.speaker_id or "",
-        }
+    if not data.speaker_id:
+        rid = _next_request_id(None)
+        return _api_response(50001, "device_id is required", {}, rid)
+    unified = await api_v1_control_stop(ControlRequest(device_id=data.speaker_id))
+    code = int(unified.get("code", 10000))
+    ok = code == 0
+    req = str(unified.get("request_id") or _next_request_id(None))
+    data_payload = unified.get("data") or {}
+    if not isinstance(data_payload, dict):
+        data_payload = {}
+    return playback_response(
+        ok=ok,
+        speaker_id=data.speaker_id,
+        state="stopped" if ok else "failed",
+        source_plugin=None,
+        transport=str(data_payload.get("transport") or "") or None,
+        error_code=None if ok else "E_INTERNAL",
+        message=str(unified.get("message") or "ok"),
+        request_id=req,
     )
-    return _playback_from_facade(out, fallback_state="stopped")
 
 
 @router.post("/api/v1/pause")
 async def api_v1_pause(data: ApiV1PauseRequest):
-    out = await _get_facade().pause(data.speaker_id)
-    if not out.get("ok"):
-        return make_error(
-            out.get("error_code") or "E_XIAOMI_PLAY_FAILED",
-            payload={"speaker_id": data.speaker_id},
-        )
-    return make_ok(payload={"speaker_id": data.speaker_id}, message="paused")
+    return await api_v1_control_pause(ControlRequest(device_id=data.speaker_id))
 
 
 @router.post("/api/v1/tts")
 async def api_v1_tts(data: ApiV1TtsRequest):
-    out = await _get_facade().tts(data.speaker_id, data.text)
-    if not out.get("ok"):
-        return make_error(
-            out.get("error_code") or "E_XIAOMI_PLAY_FAILED",
-            payload={"speaker_id": data.speaker_id},
-        )
-    return make_ok(payload={"speaker_id": data.speaker_id}, message="tts sent")
+    return await api_v1_control_tts(TtsRequest(device_id=data.speaker_id, text=data.text))
 
 
 @router.post("/api/v1/set_volume")
 async def api_v1_set_volume(data: ApiV1SetVolumeRequest):
-    out = await _get_facade().set_volume(data.speaker_id, data.volume)
-    if not out.get("ok"):
-        return make_error(
-            out.get("error_code") or "E_XIAOMI_PLAY_FAILED",
-            payload={"speaker_id": data.speaker_id, "volume": data.volume},
-        )
-    return make_ok(
-        payload={"speaker_id": data.speaker_id, "volume": int(data.volume)},
-        message="volume updated",
-    )
+    return await api_v1_control_volume(VolumeRequest(device_id=data.speaker_id, volume=int(data.volume)))
 
 
 @router.post("/api/v1/probe")
@@ -344,10 +503,11 @@ async def api_v1_test_reachability(request: Request, data: ApiV1ReachabilityRequ
 
     test_url = f"{base_url.rstrip('/')}/static/silence.mp3"
     try:
-        out = await _get_facade().play_url(
-            url=test_url,
-            speaker_id=data.speaker_id,
-            options={"mode": "core"},
+        out = await _get_facade().play(
+            device_id=data.speaker_id,
+            query=test_url,
+            source_hint="auto",
+            options={},
         )
     except Exception:
         return make_error(
@@ -356,11 +516,11 @@ async def api_v1_test_reachability(request: Request, data: ApiV1ReachabilityRequ
         )
     await asyncio.sleep(2)
     st = await _get_facade().status({"speaker_id": data.speaker_id})
-    reachable = bool(out.get("ok")) and str(st.get("state")) in {"1", "playing", "streaming"}
+    reachable = str(st.get("state")) in {"1", "playing", "streaming"}
     payload = {
         "reachable": reachable,
         "test_url": test_url,
-        "sid": out.get("sid") or "",
+        "sid": "",
     }
     if reachable:
         return make_ok(payload=payload, message="地址可达")
