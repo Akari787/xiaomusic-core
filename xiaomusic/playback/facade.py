@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
+import logging
 from urllib.parse import urlparse
 from uuid import uuid4
 from typing import Any, Callable
@@ -13,6 +14,7 @@ from xiaomusic.adapters.sources import (
     HttpUrlSourcePlugin,
     JellyfinSourcePlugin,
     LegacyPayloadSourcePlugin,
+    NetworkAudioSourcePlugin,
 )
 from xiaomusic.core.coordinator import PlaybackCoordinator
 from xiaomusic.core.delivery import DeliveryAdapter
@@ -21,6 +23,9 @@ from xiaomusic.core.errors import ExpiredStreamError, SourceResolveError, Transp
 from xiaomusic.core.models import MediaRequest
 from xiaomusic.core.source import SourceRegistry
 from xiaomusic.core.transport import TransportPolicy, TransportRouter
+
+
+LOG = logging.getLogger("xiaomusic.playback.facade")
 
 
 class PlaybackFacade:
@@ -54,6 +59,7 @@ class PlaybackFacade:
             return self._core_coordinator
 
         source_registry = SourceRegistry()
+        source_registry.register(NetworkAudioSourcePlugin())
         source_registry.register(HttpUrlSourcePlugin())
         source_registry.register(JellyfinSourcePlugin(self._resolve_jellyfin_source_url))
         source_registry.register(LegacyPayloadSourcePlugin(self._resolve_legacy_source_url))
@@ -75,6 +81,8 @@ class PlaybackFacade:
         source = str(payload.get("source") or "").strip().lower()
         if source == "jellyfin":
             return "jellyfin"
+        if source == "network_audio":
+            return "network_audio"
         return "legacy_payload"
 
     @staticmethod
@@ -88,6 +96,11 @@ class PlaybackFacade:
         if value == "core_minimal":
             return "core"
         return value
+
+    def _source_hint_from_url(self, url: str) -> str:
+        if self._should_use_network_audio(url):
+            return "network_audio"
+        return "http_url"
 
     def _resolve_jellyfin_source_url(self, payload: dict[str, Any]) -> str:
         direct_url = str(payload.get("url") or "")
@@ -192,30 +205,6 @@ class PlaybackFacade:
             )
             ok = bool(raw.get("ok", False))
         elif mode == "core":
-            # Compatibility fallback only for websites that currently rely on network_audio resolver.
-            if self._runtime_provider is not None and self._should_use_network_audio(url):
-                raw = await self._runtime().play_link(
-                    did=speaker_id,
-                    url=url,
-                    prefer_proxy=prefer_proxy,
-                    no_cache=no_cache,
-                )
-                ok = bool(raw.get("ok", False))
-                result = {
-                    "sid": self._extract_sid(raw),
-                    "speaker_id": speaker_id,
-                    "state": self._to_state(ok=ok, raw=raw),
-                    "title": raw.get("title"),
-                    "stream_url": self._extract_stream_url(raw, fallback=url),
-                    "error_code": raw.get("error_code"),
-                    "cache_hit": raw.get("cache_hit"),
-                    "resolve_ms": raw.get("resolve_ms"),
-                    "fail_stage": raw.get("fail_stage"),
-                    "ok": ok,
-                    "raw": raw,
-                }
-                return result
-
             if not self._is_http_url(url):
                 cast_ret = await self.xiaomusic.play_url(did=speaker_id, arg1=url)
                 raw = {
@@ -230,9 +219,13 @@ class PlaybackFacade:
                     result = await self._core().play(
                         MediaRequest(
                             request_id=str(uuid4()),
-                            source_hint="http_url",
+                            source_hint=self._source_hint_from_url(url),
                             query=url,
                             device_id=speaker_id,
+                            context={
+                                "resolve_timeout_seconds": 8,
+                                "prefer_proxy": prefer_proxy,
+                            },
                         ),
                         device_id=speaker_id,
                     )
@@ -248,6 +241,29 @@ class PlaybackFacade:
                     }
                     ok = True
                 except (SourceResolveError, ExpiredStreamError, TransportError, KeyError, ValueError):
+                    # Compatibility fallback only for existing network_audio runtime chain.
+                    if self._runtime_provider is not None and self._should_use_network_audio(url):
+                        raw = await self._runtime().play_link(
+                            did=speaker_id,
+                            url=url,
+                            prefer_proxy=prefer_proxy,
+                            no_cache=no_cache,
+                        )
+                        ok = bool(raw.get("ok", False))
+                        result = {
+                            "sid": self._extract_sid(raw),
+                            "speaker_id": speaker_id,
+                            "state": self._to_state(ok=ok, raw=raw),
+                            "title": raw.get("title"),
+                            "stream_url": self._extract_stream_url(raw, fallback=url),
+                            "error_code": raw.get("error_code"),
+                            "cache_hit": raw.get("cache_hit"),
+                            "resolve_ms": raw.get("resolve_ms"),
+                            "fail_stage": raw.get("fail_stage"),
+                            "ok": ok,
+                            "raw": raw,
+                        }
+                        return result
                     raw = {
                         "ok": False,
                         "mode": "core",
@@ -296,7 +312,13 @@ class PlaybackFacade:
                 ),
                 device_id=speaker_id,
             )
-        except (SourceResolveError, ExpiredStreamError, TransportError, KeyError, ValueError):
+        except (SourceResolveError, ExpiredStreamError, TransportError, KeyError, ValueError) as exc:
+            LOG.warning(
+                "core_play_payload_failed source_hint=%s speaker_id=%s error=%s",
+                source_hint,
+                speaker_id,
+                exc,
+            )
             return self._core_error_result(speaker_id)
 
         prepared = result["prepared_stream"]

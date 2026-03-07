@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from xiaomusic.core.errors.transport_errors import TransportError
@@ -8,6 +9,9 @@ from xiaomusic.core.models.media import PreparedStream
 from xiaomusic.core.models.transport import TransportCapabilityMatrix, TransportDispatchResult
 from xiaomusic.core.transport.transport import Transport
 from xiaomusic.core.transport.transport_policy import TransportPolicy
+
+
+LOG = logging.getLogger("xiaomusic.core.transport_router")
 
 
 class TransportRouter:
@@ -46,6 +50,11 @@ class TransportRouter:
     ) -> TransportDispatchResult:
         _ = profile
         candidate_transports = self._candidate_transports(action, capability_matrix)
+        LOG.info(
+            "transport_route action=%s candidate_transports=%s selected_transport= pending fallback_triggered=false",
+            action,
+            candidate_transports,
+        )
         if not candidate_transports:
             raise TransportError(f"no candidate transport for action={action}")
 
@@ -65,6 +74,13 @@ class TransportRouter:
                     text=text,
                     volume=volume,
                 )
+                LOG.info(
+                    "transport_route action=%s candidate_transports=%s selected_transport=%s fallback_triggered=%s",
+                    action,
+                    candidate_transports,
+                    transport_name,
+                    str(bool(errors)).lower(),
+                )
                 return TransportDispatchResult(
                     ok=True,
                     action=action,
@@ -74,6 +90,14 @@ class TransportRouter:
                 )
             except Exception as exc:
                 errors.append(f"{transport_name}: {exc}")
+                LOG.warning(
+                    "transport_route action=%s candidate_transports=%s selected_transport=%s fallback_triggered=true error=%s",
+                    action,
+                    candidate_transports,
+                    transport_name,
+                    exc,
+                )
+                continue
 
         raise TransportError(f"all candidate transports failed for action={action}: {errors}")
 

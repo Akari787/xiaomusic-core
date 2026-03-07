@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import uuid
+
+from typing import Any
+
 from pydantic import BaseModel
 
 from xiaomusic.api import response as api_response
@@ -23,7 +27,7 @@ def _payload_to_dict(payload: dict | BaseModel | None) -> dict:
     return dict(payload)
 
 
-def make_ok(payload: dict | BaseModel | None = None, message: str | None = None) -> dict:
+def make_ok(payload: dict | BaseModel | None = None, message: str | None = None) -> Any:
     return api_response.ok(_payload_to_dict(payload), message=message)
 
 
@@ -31,11 +35,15 @@ def make_error(
     error_code: str,
     message: str | None = None,
     payload: dict | BaseModel | None = None,
-) -> dict:
+) -> Any:
     body = _payload_to_dict(payload)
+    request_id = uuid.uuid4().hex[:16]
     return api_response.fail(
         error_code,
         error_message(error_code, message) or "Unknown error",
+        include_request_id=True,
+        request_id=request_id,
+        code=error_code,
         **body,
     )
 
@@ -63,9 +71,11 @@ def playback_response(
     if ok:
         resolved_error_code = None
         resolved_message = message
+        request_id = None
     else:
         resolved_error_code = error_code or "E_INTERNAL"
         resolved_message = error_message(resolved_error_code, message)
+        request_id = uuid.uuid4().hex[:16]
 
     payload = ApiPlaybackResponse(
         ok=ok,
@@ -87,4 +97,8 @@ def playback_response(
         resolve_ms=resolve_ms,
         deprecated=deprecated,
     )
-    return payload.model_dump()
+    out = payload.model_dump()
+    if not ok:
+        out["code"] = resolved_error_code
+        out["request_id"] = request_id
+    return out

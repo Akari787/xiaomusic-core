@@ -17,7 +17,7 @@ class LegacyPayloadSourcePlugin(SourcePlugin):
 
     Current scope:
     - Compatibility-only plugin for non-migrated payload sources.
-    - Jellyfin main path is owned by JellyfinSourcePlugin in Phase 3.
+    - Jellyfin and network-audio main paths are owned by dedicated plugins.
     """
 
     name = "legacy_payload"
@@ -29,7 +29,8 @@ class LegacyPayloadSourcePlugin(SourcePlugin):
         payload = request.context.get("source_payload")
         if not isinstance(payload, dict):
             return False
-        return str(payload.get("source") or "").lower() != "jellyfin"
+        source = str(payload.get("source") or "").lower()
+        return source not in {"jellyfin", "network_audio"}
 
     async def resolve(self, request: MediaRequest) -> ResolvedMedia:
         payload = request.context.get("source_payload")

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from xiaomusic.adapters.sources.http_url_source_plugin import HttpUrlSourcePlugin
 from xiaomusic.adapters.sources.jellyfin_source_plugin import JellyfinSourcePlugin
+from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
 from xiaomusic.core.models.media import MediaRequest
 from xiaomusic.core.source.source_registry import SourceRegistry
 
@@ -17,17 +20,24 @@ async def test_http_url_source_plugin_resolve_with_context_fields():
         source_hint="http_url",
         query="https://example.com/a.mp3",
         device_id="d1",
-        context={"title": "hello", "headers": {"Auth": "x"}, "expires_at": "123", "is_live": True},
+        context={
+            "title": "hello",
+            "headers": {"Auth": "x"},
+            "expires_at": str(int(time.time()) + 3600),
+            "is_live": True,
+        },
     )
 
     out = await plugin.resolve(req)
+    prepared = DeliveryAdapter().prepare(out)
 
     assert out.source == "http_url"
     assert out.title == "hello"
     assert out.stream_url == "https://example.com/a.mp3"
     assert out.headers == {"Auth": "x"}
-    assert out.expires_at == 123
+    assert (out.expires_at or 0) > int(time.time())
     assert out.is_live is True
+    assert prepared.final_url == "https://example.com/a.mp3"
 
 
 @pytest.mark.unit
@@ -50,11 +60,13 @@ async def test_jellyfin_source_plugin_resolve_from_payload():
     )
 
     out = await plugin.resolve(req)
+    prepared = DeliveryAdapter().prepare(out)
 
     assert out.media_id == "jf-1"
     assert out.source == "jellyfin"
     assert out.title == "jf-title"
     assert out.stream_url.startswith("http://192.168.7.4")
+    assert prepared.final_url.startswith("http://192.168.7.4")
 
 
 @pytest.mark.unit
