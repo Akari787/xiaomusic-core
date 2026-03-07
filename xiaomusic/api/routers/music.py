@@ -291,7 +291,7 @@ async def playmusic(data: DidPlayMusic):
         return api_response.ok(contract="ret", ret="Did not exist")
 
     log.info(f"playmusic {did} musicname:{musicname} searchkey:{searchkey}")
-    out = await _get_facade().play_local_music(did, musicname, searchkey)
+    out = await _get_facade().play_local_library(did, musicname, searchkey)
     if not out.get("ok"):
         return api_response.ok(contract="ret", ret="Did not exist")
     return api_response.ok(contract="ret")

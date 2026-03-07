@@ -162,6 +162,8 @@ class ApiPlaybackResponse(ApiResponseBase):
     last_error_code: str | None = None
     cache_hit: bool | None = None
     resolve_ms: int | None = None
+    source_plugin: str | None = None
+    transport: str | None = None
     deprecated: bool | None = None
 
 

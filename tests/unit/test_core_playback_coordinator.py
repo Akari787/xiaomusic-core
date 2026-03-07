@@ -104,7 +104,7 @@ async def test_playback_coordinator_play_success_and_retry_on_expired():
         outputs=[
             ResolvedMedia(
                 media_id="m-expired",
-                source="http_url",
+                source="direct_url",
                 title="expired",
                 stream_url="https://example.com/expired.mp3",
                 expires_at=int(time.time()) - 1,
@@ -112,7 +112,7 @@ async def test_playback_coordinator_play_success_and_retry_on_expired():
             ),
             ResolvedMedia(
                 media_id="m-ok",
-                source="http_url",
+                source="direct_url",
                 title="ok",
                 stream_url="https://example.com/ok.mp3",
                 expires_at=None,
@@ -143,7 +143,7 @@ async def test_playback_coordinator_control_actions_and_probe_update():
         outputs=[
             ResolvedMedia(
                 media_id="m-ok",
-                source="http_url",
+                source="direct_url",
                 title="ok",
                 stream_url="https://example.com/ok.mp3",
                 expires_at=None,

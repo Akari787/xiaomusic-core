@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
-from xiaomusic.adapters.sources.http_url_source_plugin import HttpUrlSourcePlugin
+from xiaomusic.adapters.sources.direct_url_source_plugin import DirectUrlSourcePlugin
 from xiaomusic.adapters.sources.jellyfin_source_plugin import JellyfinSourcePlugin
-from xiaomusic.adapters.sources.local_music_source_plugin import LocalMusicSourcePlugin
-from xiaomusic.adapters.sources.network_audio_source_plugin import NetworkAudioSourcePlugin
+from xiaomusic.adapters.sources.local_library_source_plugin import LocalLibrarySourcePlugin
+from xiaomusic.adapters.sources.site_media_source_plugin import SiteMediaSourcePlugin
 from xiaomusic.core.coordinator.playback_coordinator import PlaybackCoordinator
 from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
 from xiaomusic.core.device.device_registry import DeviceRegistry
@@ -76,9 +77,9 @@ class _LocalLibraryStub:
 def _build_coordinator() -> PlaybackCoordinator:
     source_registry = SourceRegistry()
     source_registry.register(JellyfinSourcePlugin(lambda payload: str(payload.get("url") or "")))
-    source_registry.register(HttpUrlSourcePlugin())
-    source_registry.register(LocalMusicSourcePlugin(_LocalLibraryStub()))
-    source_registry.register(NetworkAudioSourcePlugin(resolver=_ResolverStub()))
+    source_registry.register(DirectUrlSourcePlugin())
+    source_registry.register(LocalLibrarySourcePlugin(_LocalLibraryStub()))
+    source_registry.register(SiteMediaSourcePlugin(resolver=cast(Any, _ResolverStub())))
 
     device_registry = DeviceRegistry()
     device_registry.register_device(
@@ -116,29 +117,29 @@ def _build_coordinator() -> PlaybackCoordinator:
         (
             MediaRequest(
                 request_id="r-http",
-                source_hint="http_url",
+                source_hint="direct_url",
                 query="https://example.com/a.mp3",
                 device_id="d1",
             ),
-            "http_url",
+            "direct_url",
         ),
         (
             MediaRequest(
                 request_id="r-local",
-                source_hint="local_music",
+                source_hint="local_library",
                 query="local-song",
                 device_id="d1",
             ),
-            "local_music",
+            "local_library",
         ),
         (
             MediaRequest(
                 request_id="r-na",
-                source_hint="network_audio",
+                source_hint="site_media",
                 query="https://www.youtube.com/watch?v=iPnaF8Ngk3Q",
                 device_id="d1",
             ),
-            "network_audio",
+            "site_media",
         ),
     ],
 )

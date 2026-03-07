@@ -10,10 +10,10 @@ from xiaomusic.network_audio.resolver import Resolver
 from xiaomusic.network_audio.url_classifier import UrlClassifier
 
 
-class NetworkAudioSourcePlugin(SourcePlugin):
-    """Official source plugin for network-audio websites."""
+class SiteMediaSourcePlugin(SourcePlugin):
+    """Source plugin for site-page media URLs (YouTube/Bilibili and similar)."""
 
-    name = "network_audio"
+    name = "site_media"
 
     def __init__(
         self,
@@ -32,7 +32,7 @@ class NetworkAudioSourcePlugin(SourcePlugin):
     async def resolve(self, request: MediaRequest) -> ResolvedMedia:
         info = self._classifier.classify(request.query)
         if info.site not in {"youtube", "bilibili"}:
-            raise SourceResolveError("network_audio plugin only supports youtube/bilibili urls")
+            raise SourceResolveError("site_media plugin only supports recognized site-page URLs")
 
         timeout_seconds = float(request.context.get("resolve_timeout_seconds", 8))
         resolved = await asyncio.to_thread(
@@ -41,7 +41,7 @@ class NetworkAudioSourcePlugin(SourcePlugin):
             timeout_seconds,
         )
         if not resolved.ok or not resolved.source_url:
-            detail = resolved.error_message or resolved.error_code or "network audio resolve failed"
+            detail = resolved.error_message or resolved.error_code or "site media resolve failed"
             raise SourceResolveError(detail)
 
         media_id = str(resolved.meta.get("raw_id") or request.request_id)

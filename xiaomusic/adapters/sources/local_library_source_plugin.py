@@ -8,10 +8,10 @@ from xiaomusic.core.models.media import MediaRequest, ResolvedMedia
 from xiaomusic.core.source.source_plugin import SourcePlugin
 
 
-class LocalMusicSourcePlugin(SourcePlugin):
-    """Official source plugin for local music playback."""
+class LocalLibrarySourcePlugin(SourcePlugin):
+    """Source plugin for local media library references and file paths."""
 
-    name = "local_music"
+    name = "local_library"
 
     def __init__(self, music_library) -> None:
         self._music_library = music_library
@@ -37,6 +37,7 @@ class LocalMusicSourcePlugin(SourcePlugin):
         payload = request.context.get("source_payload") if isinstance(request.context, dict) else {}
         if not isinstance(payload, dict):
             payload = {}
+
         raw_query = str(request.query or "").strip()
         candidate = str(
             payload.get("music_name")
@@ -47,7 +48,7 @@ class LocalMusicSourcePlugin(SourcePlugin):
             or ""
         )
         if not candidate:
-            raise SourceResolveError("local music query is required")
+            raise SourceResolveError("local library query is required")
 
         title = str(request.context.get("title") or payload.get("name") or payload.get("title") or candidate)
         path_candidate = self._candidate_path(candidate)
@@ -66,7 +67,7 @@ class LocalMusicSourcePlugin(SourcePlugin):
         if candidate in self._music_library.all_music and not self._music_library.is_web_music(candidate):
             filename = self._music_library.get_filename(candidate)
             if not filename:
-                raise SourceResolveError(f"local music file missing: {candidate}")
+                raise SourceResolveError(f"local library file missing: {candidate}")
             return ResolvedMedia(
                 media_id=request.request_id,
                 source=self.name,
@@ -92,7 +93,7 @@ class LocalMusicSourcePlugin(SourcePlugin):
                         is_live=False,
                     )
 
-        raise SourceResolveError(f"local music not found: {candidate}")
+        raise SourceResolveError(f"local library media not found: {candidate}")
 
     @staticmethod
     def _looks_like_path(query: str) -> bool:
@@ -110,7 +111,7 @@ class LocalMusicSourcePlugin(SourcePlugin):
         if candidate.startswith("file://"):
             parsed = urlparse(candidate)
             return Path(unquote(parsed.path))
-        if LocalMusicSourcePlugin._looks_like_path(candidate):
+        if LocalLibrarySourcePlugin._looks_like_path(candidate):
             return Path(candidate)
         return None
 
@@ -118,5 +119,5 @@ class LocalMusicSourcePlugin(SourcePlugin):
     def _validate_path(path: Path) -> Path:
         resolved = path.expanduser().resolve()
         if not resolved.exists() or not resolved.is_file():
-            raise SourceResolveError(f"local music path does not exist: {resolved}")
+            raise SourceResolveError(f"local library path does not exist: {resolved}")
         return resolved

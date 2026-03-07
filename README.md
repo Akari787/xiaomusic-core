@@ -39,7 +39,7 @@ python scripts/generate_password_hash.py
 
 - Docker 环境变量：参考 `.env.example`
 - 应用配置模板：参考 `config.example.yaml`
-- 核心插件链路：`HttpUrlSourcePlugin` / `JellyfinSourcePlugin` / `NetworkAudioSourcePlugin`
+- 核心插件链路：`DirectUrlSourcePlugin` / `SiteMediaSourcePlugin` / `JellyfinSourcePlugin` / `LocalLibrarySourcePlugin`
 
 ## ▶️ 启动
 

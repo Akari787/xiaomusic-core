@@ -17,5 +17,5 @@ async def test_miio_play_url_is_explicitly_unsupported_in_phase3():
     with pytest.raises(TransportError):
         await transport.play_url(
             "d1",
-            PreparedStream(final_url="https://example.com/a.mp3", source="http_url"),
+            PreparedStream(final_url="https://example.com/a.mp3", source="direct_url"),
         )

@@ -62,7 +62,7 @@ async def test_transport_router_uses_capability_policy_intersection_for_play():
 
     profile = DeviceProfile(did="d1", model="m", name="n", group="g")
     capability = TransportCapabilityMatrix(play=["mina"])
-    prepared = PreparedStream(final_url="https://example.com/a.mp3", source="http_url")
+    prepared = PreparedStream(final_url="https://example.com/a.mp3", source="direct_url")
 
     out = await router.dispatch_play_url(prepared=prepared, profile=profile, capability_matrix=capability)
 
@@ -101,7 +101,7 @@ async def test_transport_router_raises_when_no_candidates():
 
     profile = DeviceProfile(did="d1", model="m", name="n", group="g")
     capability = TransportCapabilityMatrix(play=["mina"])
-    prepared = PreparedStream(final_url="https://example.com/a.mp3", source="http_url")
+    prepared = PreparedStream(final_url="https://example.com/a.mp3", source="direct_url")
 
     with pytest.raises(TransportError):
         await router.dispatch_play_url(prepared=prepared, profile=profile, capability_matrix=capability)

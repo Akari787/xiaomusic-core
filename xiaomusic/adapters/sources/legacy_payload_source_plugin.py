@@ -18,14 +18,14 @@ class LegacyPayloadSourcePlugin:
     - planned_removal_phase: post-release cleanup after legacy API callers are migrated.
     """
 
-    KNOWN_HINTS = {"jellyfin", "http_url", "network_audio", "local_music"}
+    KNOWN_HINTS = {"jellyfin", "direct_url", "site_media", "local_library"}
 
     def adapt_request(
         self,
         request_id: str,
         speaker_id: str,
         payload: dict[str, Any],
-        fallback_hint: str = "http_url",
+        fallback_hint: str = "direct_url",
     ) -> MediaRequest:
         if not isinstance(payload, dict):
             raise SourceResolveError("legacy payload must be a dict")
@@ -46,8 +46,8 @@ class LegacyPayloadSourcePlugin:
         if not query:
             raise SourceResolveError("legacy payload has no playable query")
 
-        if source_hint == "http_url" and not str(payload.get("url") or "").startswith(("http://", "https://")):
-            source_hint = "local_music"
+        if source_hint == "direct_url" and not str(payload.get("url") or "").startswith(("http://", "https://")):
+            source_hint = "local_library"
 
         return MediaRequest(
             request_id=request_id,

@@ -4,7 +4,7 @@
 
 适用范围：
 
-- 播放来源插件化（Jellyfin / 本地文件 / HTTP URL）
+- 播放来源插件化（Jellyfin / 本地媒体库 / 直链媒体 / 网站媒体）
 - Transport 分层（Mina / Miio）
 - 云依赖最小化
 - 统一播放与设备模型
@@ -103,6 +103,15 @@ PlaybackCoordinator
   - `PlaybackCoordinator -> SourceRegistry.get_plugin() -> SourcePlugin.resolve()`
 
 ### 3.2 Source 插件层
+
+当前官方来源插件命名：
+
+- `JellyfinSourcePlugin`
+- `DirectUrlSourcePlugin`
+- `SiteMediaSourcePlugin`
+- `LocalLibrarySourcePlugin`
+
+旧 source-hint 兼容映射：`http_url -> direct_url`、`network_audio -> site_media`、`local_music -> local_library`。
 
 职责：
 

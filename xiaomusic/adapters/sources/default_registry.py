@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from xiaomusic.adapters.sources.http_url_source_plugin import HttpUrlSourcePlugin
+from xiaomusic.adapters.sources.direct_url_source_plugin import DirectUrlSourcePlugin
 from xiaomusic.adapters.sources.jellyfin_source_plugin import JellyfinSourcePlugin
-from xiaomusic.adapters.sources.local_music_source_plugin import LocalMusicSourcePlugin
-from xiaomusic.adapters.sources.network_audio_source_plugin import NetworkAudioSourcePlugin
+from xiaomusic.adapters.sources.local_library_source_plugin import LocalLibrarySourcePlugin
+from xiaomusic.adapters.sources.site_media_source_plugin import SiteMediaSourcePlugin
 from xiaomusic.core.source import SourceRegistry
 
 
@@ -11,9 +11,9 @@ def register_default_source_plugins(source_registry: SourceRegistry, xiaomusic) 
     """Register built-in source plugins in deterministic order."""
 
     source_registry.register(JellyfinSourcePlugin(_resolve_jellyfin_source_url(xiaomusic)))
-    source_registry.register(HttpUrlSourcePlugin())
-    source_registry.register(LocalMusicSourcePlugin(xiaomusic.music_library))
-    source_registry.register(NetworkAudioSourcePlugin())
+    source_registry.register(DirectUrlSourcePlugin())
+    source_registry.register(LocalLibrarySourcePlugin(xiaomusic.music_library))
+    source_registry.register(SiteMediaSourcePlugin())
 
 
 def _resolve_jellyfin_source_url(xiaomusic):

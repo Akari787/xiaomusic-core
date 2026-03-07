@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-from xiaomusic.adapters.sources.local_music_source_plugin import LocalMusicSourcePlugin
+from xiaomusic.adapters.sources.local_library_source_plugin import LocalLibrarySourcePlugin
 from xiaomusic.core.errors.source_errors import SourceResolveError
 from xiaomusic.core.models.media import MediaRequest
 
@@ -33,24 +33,24 @@ class _LocalLibraryStub:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_local_music_source_plugin_resolve_success_by_name_and_path():
+async def test_local_library_source_plugin_resolve_success_by_name_and_path():
     with TemporaryDirectory() as tmp_dir:
         p = Path(tmp_dir) / "song.mp3"
         p.write_bytes(b"demo")
-        plugin = LocalMusicSourcePlugin(_LocalLibraryStub("song", str(p)))
+        plugin = LocalLibrarySourcePlugin(_LocalLibraryStub("song", str(p)))
 
-        by_name = await plugin.resolve(MediaRequest(request_id="r1", source_hint="local_music", query="song"))
-        by_path = await plugin.resolve(MediaRequest(request_id="r2", source_hint="local_music", query=str(p)))
+        by_name = await plugin.resolve(MediaRequest(request_id="r1", source_hint="local_library", query="song"))
+        by_path = await plugin.resolve(MediaRequest(request_id="r2", source_hint="local_library", query=str(p)))
 
-        assert by_name.source == "local_music"
+        assert by_name.source == "local_library"
         assert by_name.stream_url.endswith("/music/song.mp3")
         assert by_path.stream_url.endswith("/music/song.mp3")
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_local_music_source_plugin_resolve_not_found_raises():
-    plugin = LocalMusicSourcePlugin(_LocalLibraryStub("song", "/music/song.mp3"))
+async def test_local_library_source_plugin_resolve_not_found_raises():
+    plugin = LocalLibrarySourcePlugin(_LocalLibraryStub("song", "/music/song.mp3"))
 
     with pytest.raises(SourceResolveError):
-        await plugin.resolve(MediaRequest(request_id="r3", source_hint="local_music", query="not-found"))
+        await plugin.resolve(MediaRequest(request_id="r3", source_hint="local_library", query="not-found"))

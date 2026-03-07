@@ -95,6 +95,8 @@ def playback_response(
     last_error_code: str | None = None,
     cache_hit: bool | None = None,
     resolve_ms: int | None = None,
+    source_plugin: str | None = None,
+    transport: str | None = None,
     error_code: str | None = None,
     message: str | None = None,
     deprecated: bool | None = None,
@@ -120,6 +122,8 @@ def playback_response(
         last_error_code=last_error_code,
         cache_hit=cache_hit,
         resolve_ms=resolve_ms,
+        source_plugin=source_plugin,
+        transport=transport,
         deprecated=deprecated,
     )
     data = payload.model_dump()

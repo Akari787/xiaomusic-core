@@ -50,7 +50,7 @@ class _FakeRequest:
 
 
 @pytest.mark.asyncio
-async def test_api_v1_play_url_enters_playback_coordinator_for_http_and_network_audio(monkeypatch):
+async def test_api_v1_play_url_enters_playback_coordinator_for_direct_and_site_media(monkeypatch):
     coordinator = _CoordinatorStub()
     xiaomusic = type("X", (), {"link_playback_strategy": None})()
     facade = PlaybackFacade(xiaomusic)
@@ -68,8 +68,8 @@ async def test_api_v1_play_url_enters_playback_coordinator_for_http_and_network_
         ApiV1PlayUrlRequest(url="https://www.youtube.com/watch?v=iPnaF8Ngk3Q", speaker_id="d1")
     )
 
-    assert coordinator.calls[0][0] == "http_url"
-    assert coordinator.calls[1][0] == "network_audio"
+    assert coordinator.calls[0][0] == "direct_url"
+    assert coordinator.calls[1][0] == "site_media"
 
 
 @pytest.mark.asyncio

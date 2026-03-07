@@ -42,7 +42,7 @@
   - `url_prepare_result=ok ... source=jellyfin`
   - `selected_transport=mina`
 
-## 6. http_url 播放结果
+## 6. direct_url 播放结果
 
 ### 验收路径
 
@@ -57,7 +57,7 @@
   - `data.state=streaming`
 - 音箱实机开始播放。
 
-## 7. network_audio 播放结果
+## 7. site_media 播放结果
 
 ### 验收路径
 
@@ -67,7 +67,7 @@
 ### 结果
 
 - API 返回统一结构：`code=0`, `data.state=streaming`
-- Source 由统一链路选择：`source_hint=network_audio source_plugin=network_audio`
+- Source 由统一链路选择：`source_hint=site_media source_plugin=site_media`
 - 音箱实机开始播放。
 
 ## 8. 控制动作结果
@@ -119,7 +119,7 @@ Final Phase 新增 / 完善：
 
 ## 11. 系统限制
 
-- `NetworkAudioSourcePlugin` 依赖 yt-dlp 可用性与上游站点策略。
+- `SiteMediaSourcePlugin` 依赖 yt-dlp 可用性与上游站点策略。
 - legacy 路由仍存在，但已收敛为兼容层并标注移除阶段。
 - `/api/device/pushUrl` 保留历史响应结构（非 `/api/v1/*`），用于旧调用兼容。
 

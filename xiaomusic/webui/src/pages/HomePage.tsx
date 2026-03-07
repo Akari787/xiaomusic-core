@@ -263,7 +263,58 @@ function explainPlaybackError(
   if (stage === "resolve") {
     return `解析阶段失败：${message || code || "未知错误"}`;
   }
+  if (stage === "prepare") {
+    return `预处理阶段失败：${message || code || "未知错误"}`;
+  }
+  if (stage === "dispatch" || stage === "xiaomi") {
+    return `下发播放阶段失败：${message || code || "未知错误"}`;
+  }
+  if (stage === "transport") {
+    return `传输执行阶段失败：${message || code || "未知错误"}`;
+  }
   return message || code || "未知错误";
+}
+
+type PlaybackV1Envelope = {
+  code?: number;
+  message?: string;
+  data?: Record<string, unknown>;
+};
+
+function unwrapApiEnvelope(out: unknown): {
+  ok: boolean;
+  message: string;
+  errorCode: string;
+} {
+  const env = (out || {}) as PlaybackV1Envelope;
+  const data = (env.data || {}) as Record<string, unknown>;
+  return {
+    ok: Number(env.code || 0) === 0,
+    message: String(env.message || data.message || ""),
+    errorCode: String(data.error_code || ""),
+  };
+}
+
+function unwrapPlaybackEnvelope(out: unknown): {
+  ok: boolean;
+  message: string;
+  errorCode: string;
+  stage: string | null;
+  sid: string;
+  sourcePlugin: string;
+  transport: string;
+} {
+  const env = (out || {}) as PlaybackV1Envelope;
+  const data = (env.data || {}) as Record<string, unknown>;
+  return {
+    ok: Number(env.code || 0) === 0,
+    message: String(env.message || data.message || ""),
+    errorCode: String(data.error_code || ""),
+    stage: data.stage ? String(data.stage) : null,
+    sid: String(data.sid || ""),
+    sourcePlugin: String(data.source_plugin || ""),
+    transport: String(data.transport || ""),
+  };
 }
 
 function normalizeBaseUrlInput(raw: unknown): string {
@@ -703,20 +754,21 @@ export function HomePage() {
     if (!requireDid()) {
       return;
     }
-    const out = (await apiPost<{ ok?: boolean; error_code?: string; message?: string }>(
+    const out = await apiPost<Record<string, unknown>>(
       "/api/v1/play_music_list",
       {
         speaker_id: activeDid,
         list_name: playlist,
         music_name: songName || "",
       },
-    )) as { ok?: boolean; error_code?: string; message?: string };
-    if (out.ok) {
+    );
+    const parsed = unwrapPlaybackEnvelope(out);
+    if (parsed.ok) {
       setMusic(songName);
       setMessage("开始播放");
       await loadStatus(activeDid);
     } else {
-      setMessage(`播放失败：${explainPlaybackError(out.error_code, out.message, null)}`);
+      setMessage(`播放失败：${explainPlaybackError(parsed.errorCode, parsed.message, parsed.stage)}`);
     }
   }
 
@@ -738,20 +790,17 @@ export function HomePage() {
     }
     setSwitchingPlayMode(true);
     try {
-      const out = (await apiPost<{ ok?: boolean; message?: string; error_code?: string }>(
+      const out = (await apiPost<Record<string, unknown>>(
         "/api/v1/set_play_mode",
         { speaker_id: activeDid, mode_index: next },
-      )) as {
-        ok?: boolean;
-        message?: string;
-        error_code?: string;
-      };
-      if (out.ok) {
+      )) as Record<string, unknown>;
+      const parsed = unwrapApiEnvelope(out);
+      if (parsed.ok) {
         setMessage(`已切换为${cmd}`);
         return;
       }
       setPlayModeIndex(prev);
-      setMessage(out.message || out.error_code || "切换播放模式失败");
+      setMessage(parsed.message || parsed.errorCode || "切换播放模式失败");
     } finally {
       setSwitchingPlayMode(false);
     }
@@ -763,50 +812,49 @@ export function HomePage() {
     }
     try {
       const runApiV1Play = async (preferProxy: boolean) => {
-        const out = (await apiPost<{ ok?: boolean; error_code?: string; message?: string }>("/api/v1/play_url", {
+        const out = await apiPost<Record<string, unknown>>("/api/v1/play_url", {
           speaker_id: activeDid,
           url: linkUrl,
-          options: { mode: "network_audio_link", no_cache: false, prefer_proxy: preferProxy, prefer_codec: "auto" },
-        })) as {
-          ok?: boolean;
-          error_code?: string;
-          message?: string;
-          stage?: string;
-          sid?: string;
-        };
-        return out;
+          options: { mode: "core", no_cache: false, prefer_proxy: preferProxy, prefer_codec: "auto" },
+        });
+        return unwrapPlaybackEnvelope(out);
       };
 
       if (proxy) {
         const out = await runApiV1Play(true);
         if (out.ok) {
-          setMessage(`代理播放已发送${out.sid ? `（sid: ${out.sid}）` : ""}`);
+          setMessage(`网站媒体已发送（来源: ${out.sourcePlugin || "unknown"}, 传输: ${out.transport || "unknown"}${out.sid ? `, sid: ${out.sid}` : ""}）`);
         } else {
-          setMessage(`代理播放失败：${explainPlaybackError(out.error_code, out.message, out.stage)}`);
+          setMessage(`网站媒体失败（${out.sourcePlugin || "unknown"}）：${explainPlaybackError(out.errorCode, out.message, out.stage)}`);
         }
         return;
       }
 
-      // Align with original default theme behavior:
-      // "播放链接" also uses /api/v1/play_url.
+      // Unified source plugin path via /api/v1/play_url.
       const directOut = await runApiV1Play(false);
       if (directOut.ok) {
-        setMessage(`链接播放已发送${directOut.sid ? `（sid: ${directOut.sid}）` : ""}`);
+        setMessage(
+          `播放已发送（来源: ${directOut.sourcePlugin || "unknown"}, 传输: ${directOut.transport || "unknown"}${
+            directOut.sid ? `, sid: ${directOut.sid}` : ""
+          }）`,
+        );
       } else {
         const p = await runApiV1Play(true);
         if (p.ok) {
           setMessage(
-            `链接播放失败：${explainPlaybackError(directOut.error_code, directOut.message, directOut.stage)}；已自动切换代理播放成功${
+            `首轮播放失败：${explainPlaybackError(directOut.errorCode, directOut.message, directOut.stage)}；已自动切换成功（来源: ${
+              p.sourcePlugin || "unknown"
+            }, 传输: ${p.transport || "unknown"}${
               p.sid ? `（sid: ${p.sid}）` : ""
-            }`,
+            }）`,
           );
         } else {
           setMessage(
-            `链接播放失败：${explainPlaybackError(directOut.error_code, directOut.message, directOut.stage)}；代理播放也失败：${explainPlaybackError(
-              p.error_code,
+            `首轮播放失败：${explainPlaybackError(directOut.errorCode, directOut.message, directOut.stage)}；重试也失败：${explainPlaybackError(
+              p.errorCode,
               p.message,
               p.stage,
-            )}`,
+            )}（来源: ${p.sourcePlugin || "unknown"}）`,
           );
         }
       }
@@ -879,13 +927,14 @@ export function HomePage() {
         music_name: title,
         search_key: searchKeyword || "",
       },
-    )) as { ok?: boolean; error_code?: string; message?: string };
-    if (out.ok) {
+    )) as unknown;
+    const parsed = unwrapPlaybackEnvelope(out);
+    if (parsed.ok) {
       setMessage("已发送播放");
       setShowSearch(false);
       await loadStatus(activeDid);
     } else {
-      setMessage(`播放失败：${explainPlaybackError(out.error_code, out.message, null)}`);
+      setMessage(`播放失败：${explainPlaybackError(parsed.errorCode, parsed.message, parsed.stage)}`);
     }
   }
 
@@ -1441,14 +1490,15 @@ export function HomePage() {
                     if (!requireDid()) {
                       return;
                     }
-                    const out = (await apiPost<{ ok?: boolean; error_code?: string; message?: string }>(
+                    const out = (await apiPost<Record<string, unknown>>(
                       "/api/v1/stop",
                       { speaker_id: activeDid },
-                    )) as { ok?: boolean; error_code?: string; message?: string };
+                    )) as Record<string, unknown>;
+                    const parsed = unwrapPlaybackEnvelope(out);
                     setMessage(
-                      out.ok
+                      parsed.ok
                         ? "已停止"
-                        : `停止失败：${explainPlaybackError(out.error_code, out.message, null)}`,
+                        : `停止失败：${explainPlaybackError(parsed.errorCode, parsed.message, parsed.stage)}`,
                     );
                     await loadStatus(activeDid);
                   })()
@@ -1572,11 +1622,12 @@ export function HomePage() {
       <div className={`component ${showPlaylink ? "show" : ""}`} id="playlink-component" style={{ display: showPlaylink ? "block" : "none" }}>
         <h2>播放测试</h2>
         <div className="card-section">
-          <h3 className="card-title">🔗 播放链接</h3>
+          <h3 className="card-title">🔗 直链媒体 / 网站媒体</h3>
+          <p>支持两类输入：可直接播放的媒体直链，或 YouTube/B站等网站页面链接（自动识别为网站媒体来源）。</p>
           <input type="text" className="search-input" value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} />
           <div className="component-button-group">
-            <button onClick={() => void playLink(false)}>播放链接</button>
-            <button onClick={() => void playLink(true)}>代理播放</button>
+            <button onClick={() => void playLink(false)}>播放媒体</button>
+            <button onClick={() => void playLink(true)}>播放媒体（优先代理）</button>
           </div>
         </div>
 

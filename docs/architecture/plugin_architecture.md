@@ -4,9 +4,16 @@
 
 Current official plugins:
 
-- `HttpUrlSourcePlugin`
+- `DirectUrlSourcePlugin`
 - `JellyfinSourcePlugin`
-- `NetworkAudioSourcePlugin`
+- `SiteMediaSourcePlugin`
+- `LocalLibrarySourcePlugin`
+
+Legacy source-hint compatibility (centralized in `SourceRegistry.LEGACY_HINT_MAP`):
+
+- `http_url -> direct_url`
+- `network_audio -> site_media`
+- `local_music -> local_library`
 
 Compatibility plugin:
 

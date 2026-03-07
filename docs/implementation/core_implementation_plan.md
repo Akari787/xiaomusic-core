@@ -12,7 +12,7 @@
 - 建立 `core/` 目录下统一编排骨架
 - 完成最小播放链路可运行骨架
 - 将现有 `MinaTransport` / `MiioTransport` 通过适配层接入
-- 先实现 `HttpUrlSourcePlugin` 作为首个来源插件
+- 先实现 `DirectUrlSourcePlugin` 作为首个来源插件
 
 ### 1.2 架构约束（必须满足）
 
@@ -65,7 +65,7 @@ project_root/
 project_root/
   adapters/
     sources/
-      http_url_source_plugin.py
+      direct_url_source_plugin.py
     transports/
       mina_transport_adapter.py
       miio_transport_adapter.py
@@ -442,7 +442,7 @@ API
 
 仅实现：
 
-- `HttpUrlSourcePlugin`
+- `DirectUrlSourcePlugin`
 - `MinaTransport` 适配层
 - `MiioTransport` 适配层
 - `PlaybackCoordinator` 最小播放流程
@@ -464,7 +464,7 @@ API
 3. 落地 `SourceRegistry` / `DeviceRegistry`（内存实现）
 4. 落地 `DeliveryAdapter.prepare()`
 5. 落地 `TransportRouter` + `TransportPolicy`
-6. 接入 `HttpUrlSourcePlugin`
+6. 接入 `DirectUrlSourcePlugin`
 7. 接入 Mina/Miio 适配层
 8. 打通最小 API 播放链路
 

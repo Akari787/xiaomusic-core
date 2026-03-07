@@ -3,13 +3,14 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any, cast
 
 import pytest
 
-from xiaomusic.adapters.sources.http_url_source_plugin import HttpUrlSourcePlugin
+from xiaomusic.adapters.sources.direct_url_source_plugin import DirectUrlSourcePlugin
 from xiaomusic.adapters.sources.jellyfin_source_plugin import JellyfinSourcePlugin
-from xiaomusic.adapters.sources.local_music_source_plugin import LocalMusicSourcePlugin
-from xiaomusic.adapters.sources.network_audio_source_plugin import NetworkAudioSourcePlugin
+from xiaomusic.adapters.sources.local_library_source_plugin import LocalLibrarySourcePlugin
+from xiaomusic.adapters.sources.site_media_source_plugin import SiteMediaSourcePlugin
 from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
 from xiaomusic.core.models.media import MediaRequest
 from xiaomusic.core.source.source_registry import SourceRegistry
@@ -18,11 +19,11 @@ from xiaomusic.network_audio.contracts import ResolveResult
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_http_url_source_plugin_resolve_with_context_fields():
-    plugin = HttpUrlSourcePlugin()
+async def test_direct_url_source_plugin_resolve_with_context_fields():
+    plugin = DirectUrlSourcePlugin()
     req = MediaRequest(
         request_id="r1",
-        source_hint="http_url",
+        source_hint="direct_url",
         query="https://example.com/a.mp3",
         device_id="d1",
         context={
@@ -36,7 +37,7 @@ async def test_http_url_source_plugin_resolve_with_context_fields():
     out = await plugin.resolve(req)
     prepared = DeliveryAdapter().prepare(out)
 
-    assert out.source == "http_url"
+    assert out.source == "direct_url"
     assert out.title == "hello"
     assert out.stream_url == "https://example.com/a.mp3"
     assert out.headers == {"Auth": "x"}
@@ -77,14 +78,14 @@ async def test_jellyfin_source_plugin_resolve_from_payload():
 @pytest.mark.unit
 def test_source_registry_prefers_source_hint_then_can_resolve():
     registry = SourceRegistry()
-    http_plugin = HttpUrlSourcePlugin()
+    direct_plugin = DirectUrlSourcePlugin()
     jf_plugin = JellyfinSourcePlugin(lambda payload: str(payload.get("url") or ""))
-    network_plugin = NetworkAudioSourcePlugin(resolver=_ResolverStub())
-    local_plugin = LocalMusicSourcePlugin(_LocalMusicLibraryStub())
-    registry.register(http_plugin)
+    site_plugin = SiteMediaSourcePlugin(resolver=cast(Any, _ResolverStub()))
+    local_plugin = LocalLibrarySourcePlugin(_LocalMusicLibraryStub())
+    registry.register(direct_plugin)
     registry.register(jf_plugin)
     registry.register(local_plugin)
-    registry.register(network_plugin)
+    registry.register(site_plugin)
 
     req_hint = MediaRequest(
         request_id="r3",
@@ -101,7 +102,7 @@ def test_source_registry_prefers_source_hint_then_can_resolve():
         query="https://example.com/b.mp3",
     )
     picked_by_match = registry.get_plugin(req_fallback.source_hint, req_fallback)
-    assert picked_by_match.name == "http_url"
+    assert picked_by_match.name == "direct_url"
 
     req_auto_jf = MediaRequest(
         request_id="r4-jf",
@@ -113,43 +114,64 @@ def test_source_registry_prefers_source_hint_then_can_resolve():
 
     req_na = MediaRequest(
         request_id="r5",
+        source_hint="site_media",
+        query="https://www.youtube.com/watch?v=iPnaF8Ngk3Q",
+    )
+    assert registry.get_plugin(req_na.source_hint, req_na).name == "site_media"
+
+    req_na_compat = MediaRequest(
+        request_id="r5c",
         source_hint="network_audio",
         query="https://www.youtube.com/watch?v=iPnaF8Ngk3Q",
     )
-    assert registry.get_plugin(req_na.source_hint, req_na).name == "network_audio"
+    assert registry.get_plugin(req_na_compat.source_hint, req_na_compat).name == "site_media"
 
     req_local = MediaRequest(
         request_id="r6",
+        source_hint="local_library",
+        query="/music/test.mp3",
+    )
+    assert registry.get_plugin(req_local.source_hint, req_local).name == "local_library"
+
+    req_local_compat = MediaRequest(
+        request_id="r6c",
         source_hint="local_music",
         query="/music/test.mp3",
     )
-    assert registry.get_plugin(req_local.source_hint, req_local).name == "local_music"
+    assert registry.get_plugin(req_local_compat.source_hint, req_local_compat).name == "local_library"
 
     req_auto_local = MediaRequest(
         request_id="r6-auto",
         source_hint=None,
         query="/music/test.mp3",
     )
-    assert registry.get_plugin(req_auto_local.source_hint, req_auto_local).name == "local_music"
+    assert registry.get_plugin(req_auto_local.source_hint, req_auto_local).name == "local_library"
+
+    req_direct_compat = MediaRequest(
+        request_id="r4c",
+        source_hint="http_url",
+        query="https://example.com/b.mp3",
+    )
+    assert registry.get_plugin(req_direct_compat.source_hint, req_direct_compat).name == "direct_url"
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_local_music_source_plugin_resolve_by_track_name_and_path():
+async def test_local_library_source_plugin_resolve_by_track_name_and_path():
     with TemporaryDirectory() as tmp_dir:
         p = Path(tmp_dir) / "hello.mp3"
         p.write_bytes(b"demo")
         library = _LocalMusicLibraryStub(track_name="hello", file_path=str(p))
-        plugin = LocalMusicSourcePlugin(library)
+        plugin = LocalLibrarySourcePlugin(library)
 
         by_name = await plugin.resolve(
-            MediaRequest(request_id="r7", source_hint="local_music", query="hello")
+            MediaRequest(request_id="r7", source_hint="local_library", query="hello")
         )
         by_path = await plugin.resolve(
-            MediaRequest(request_id="r8", source_hint="local_music", query=str(p))
+            MediaRequest(request_id="r8", source_hint="local_library", query=str(p))
         )
 
-        assert by_name.source == "local_music"
+        assert by_name.source == "local_library"
         assert by_name.stream_url.endswith("/music/hello.mp3")
         assert by_path.stream_url.endswith("/music/hello.mp3")
 

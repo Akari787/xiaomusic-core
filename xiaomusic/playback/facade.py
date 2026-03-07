@@ -80,16 +80,16 @@ class PlaybackFacade:
     @staticmethod
     def _source_hint_from_payload(payload: dict[str, Any]) -> str:
         source = str(payload.get("source") or "").strip().lower()
-        if source == "jellyfin":
-            return "jellyfin"
-        if source == "network_audio":
-            return "network_audio"
+        if source:
+            canonical = {"jellyfin", "direct_url", "site_media", "local_library"}
+            if source in canonical or source in SourceRegistry.LEGACY_HINT_MAP:
+                return source
         url = str(payload.get("url") or "")
         if url.startswith(("http://", "https://")):
-            return "http_url"
+            return "direct_url"
         if str(payload.get("music_name") or payload.get("track_id") or payload.get("path") or payload.get("name") or ""):
-            return "local_music"
-        return "http_url"
+            return "local_library"
+        return "direct_url"
 
     @staticmethod
     def _is_http_url(url: str) -> bool:
@@ -105,8 +105,8 @@ class PlaybackFacade:
 
     def _source_hint_from_url(self, url: str) -> str:
         if self._should_use_network_audio(url):
-            return "network_audio"
-        return "http_url"
+            return "site_media"
+        return "direct_url"
 
     @staticmethod
     def _as_int(value: Any, default: int = 0) -> int:
@@ -339,7 +339,7 @@ class PlaybackFacade:
             },
         }
 
-    async def play_local_music(self, speaker_id: str, music_name: str, search_key: str = "") -> dict[str, Any]:
+    async def play_local_library(self, speaker_id: str, music_name: str, search_key: str = "") -> dict[str, Any]:
         query = str(music_name or search_key or "").strip()
         if not query:
             return self._core_error_result(speaker_id, error_code="E_STREAM_NOT_FOUND")
@@ -348,7 +348,7 @@ class PlaybackFacade:
             result = await self._core().play(
                 MediaRequest(
                     request_id=str(uuid4()),
-                    source_hint="local_music",
+                    source_hint="local_library",
                     query=query,
                     device_id=speaker_id,
                     context={
@@ -387,6 +387,11 @@ class PlaybackFacade:
                 "stream_url": prepared.final_url,
             },
         }
+
+    async def play_local_music(self, speaker_id: str, music_name: str, search_key: str = "") -> dict[str, Any]:
+        # compatibility_layer: keep legacy method name until all call-sites migrate.
+        # removal_condition: remove after next minor release when /api/v1/play_music callers migrate.
+        return await self.play_local_library(speaker_id, music_name, search_key)
 
     async def stop(self, target: dict[str, Any]) -> dict[str, Any]:
         sid = str(target.get("sid") or "")

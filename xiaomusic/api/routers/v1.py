@@ -107,6 +107,8 @@ def _playback_from_facade(out: dict, *, fallback_state: str = "unknown", depreca
     if resolve_ms is None:
         resolve_ms = sess.get("resolve_ms")
     stage = out.get("fail_stage") or _infer_stage(state, error_code)
+    source_plugin = out.get("source_plugin") or raw.get("source")
+    transport = out.get("transport") or raw.get("transport")
 
     return playback_response(
         ok=bool(out.get("ok")),
@@ -123,6 +125,8 @@ def _playback_from_facade(out: dict, *, fallback_state: str = "unknown", depreca
         last_error_code=last_error_code,
         cache_hit=cache_hit,
         resolve_ms=resolve_ms,
+        source_plugin=source_plugin,
+        transport=transport,
         error_code=error_code,
         deprecated=deprecated,
     )
@@ -173,7 +177,7 @@ async def api_v1_play_url(data: ApiV1PlayUrlRequest):
 
 @router.post("/api/v1/play_music")
 async def api_v1_play_music(data: ApiV1PlayMusicRequest):
-    out = await _get_facade().play_local_music(
+    out = await _get_facade().play_local_library(
         speaker_id=data.speaker_id,
         music_name=data.music_name,
         search_key=data.search_key or "",
