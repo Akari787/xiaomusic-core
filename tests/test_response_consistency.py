@@ -1,9 +1,30 @@
+from __future__ import annotations
+
 import pytest
 
-pytest.importorskip("aiofiles")
-
-from xiaomusic.api.models import ApiV1PlayUrlRequest, ApiV1StopRequest
+from xiaomusic.api.models import ControlRequest, PlayRequest
 from xiaomusic.api.routers import v1
+
+
+def test_api_v1_routes_whitelist_only():
+    routes = {
+        (method, route.path)
+        for route in v1.router.routes
+        for method in (route.methods or set())
+    }
+    expected = {
+        ("POST", "/api/v1/play"),
+        ("POST", "/api/v1/resolve"),
+        ("POST", "/api/v1/control/stop"),
+        ("POST", "/api/v1/control/pause"),
+        ("POST", "/api/v1/control/resume"),
+        ("POST", "/api/v1/control/tts"),
+        ("POST", "/api/v1/control/volume"),
+        ("POST", "/api/v1/control/probe"),
+        ("GET", "/api/v1/devices"),
+        ("GET", "/api/v1/system/status"),
+    }
+    assert routes == expected
 
 
 @pytest.mark.asyncio
@@ -21,30 +42,21 @@ async def test_v1_response_has_unified_top_level_fields(monkeypatch):
                 "extra": {},
             }
 
+        async def stop(self, device_id: str, request_id: str | None = None):
+            _ = request_id
+            return {
+                "status": "stopped",
+                "device_id": device_id,
+                "transport": "mina",
+                "request_id": "rid",
+                "extra": {},
+            }
+
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
-    out = await v1.api_v1_play_url(ApiV1PlayUrlRequest(url="http://a/b.mp3", speaker_id="did-1"))
-    assert set(out.keys()) == {"code", "message", "data", "request_id"}
-    assert out["code"] == 0
-    assert out["request_id"]
-
-
-@pytest.mark.asyncio
-async def test_v1_stop_wrapper_requires_device_id():
-    out = await v1.api_v1_stop(ApiV1StopRequest(speaker_id=None))
-    assert out["code"] == 50001
-    assert out["request_id"]
-    assert out["message"]
-
-
-@pytest.mark.asyncio
-async def test_v1_sessions_cleanup_success_consistency(monkeypatch):
-    class _Runtime:
-        def cleanup_sessions(self, max_sessions=100, ttl_seconds=None):  # noqa: ARG002
-            return {"removed": 1, "remaining": 2}
-
-    monkeypatch.setattr(v1, "get_runtime", lambda: _Runtime())
-    out = await v1.api_v1_sessions_cleanup(v1.ApiSessionsCleanupRequest())
-    assert out["code"] == 0
-    assert out["request_id"]
-    assert out["data"]["removed"] == 1
-    assert out["data"]["remaining"] == 2
+    play_out = await v1.api_v1_play(PlayRequest(device_id="did-1", query="http://a/b.mp3"))
+    stop_out = await v1.api_v1_control_stop(ControlRequest(device_id="did-1"))
+    assert set(play_out.keys()) == {"code", "message", "data", "request_id"}
+    assert set(stop_out.keys()) == {"code", "message", "data", "request_id"}
+    assert "speaker_id" not in play_out
+    assert "sid" not in play_out
+    assert "state" not in play_out

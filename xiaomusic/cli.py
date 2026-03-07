@@ -96,12 +96,7 @@ def _warn_if_httpauth_unsafe(config, bind_host: str, logger: logging.Logger) -> 
 
 def main():
     from xiaomusic import __version__
-    from xiaomusic.api import (
-        HttpInit,
-    )
-    from xiaomusic.api import (
-        app as HttpApp,
-    )
+    from xiaomusic.api.app import HttpInit, app as HttpApp
     from xiaomusic.config import Config
     from xiaomusic.xiaomusic import XiaoMusic
 

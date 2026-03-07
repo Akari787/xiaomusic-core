@@ -4,3 +4,7 @@ class CoreError(Exception):
 
 class CoreValidationError(CoreError):
     """Validation failure in core pipeline."""
+
+
+class InvalidRequestError(CoreValidationError):
+    """Raised when request payload is invalid for core operations."""

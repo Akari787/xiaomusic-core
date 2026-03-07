@@ -11,10 +11,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 
 from xiaomusic import __version__
 from xiaomusic.api import response as api_response
+from xiaomusic.api.models import ApiResponse
 from xiaomusic.api.dependencies import (
     AuthStaticFiles,
     reset_http_server,
@@ -133,16 +135,43 @@ async def _request_id_middleware(request: Request, call_next):
 
 @app.exception_handler(HTTPException)
 async def _handle_http_exception(request: Request, exc: HTTPException):
+    if request.url.path.startswith("/api/v1/"):
+        request_id = api_response.get_request_id() or uuid.uuid4().hex[:16]
+        body = ApiResponse(
+            code=50001 if int(exc.status_code) in {400, 401, 403, 404, 422} else 10000,
+            message=str(exc.detail or "request failed"),
+            data={},
+            request_id=request_id,
+        ).model_dump()
+        return JSONResponse(status_code=int(exc.status_code), content=body)
     return api_response.from_exception(exc, request=request)
 
 
 @app.exception_handler(RequestValidationError)
 async def _handle_validation_exception(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith("/api/v1/"):
+        request_id = api_response.get_request_id() or uuid.uuid4().hex[:16]
+        body = ApiResponse(
+            code=50001,
+            message="invalid request",
+            data={"detail": exc.errors()},
+            request_id=request_id,
+        ).model_dump()
+        return JSONResponse(status_code=422, content=body)
     return api_response.from_exception(exc, request=request)
 
 
 @app.exception_handler(Exception)
 async def _handle_unexpected_exception(request: Request, exc: Exception):
+    if request.url.path.startswith("/api/v1/"):
+        request_id = api_response.get_request_id() or uuid.uuid4().hex[:16]
+        body = ApiResponse(
+            code=10000,
+            message="internal error",
+            data={"error_type": exc.__class__.__name__},
+            request_id=request_id,
+        ).model_dump()
+        return JSONResponse(status_code=500, content=body)
     return api_response.from_exception(exc, request=request)
 
 

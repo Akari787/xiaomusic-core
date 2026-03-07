@@ -798,17 +798,7 @@ export function HomePage() {
     }
     setSwitchingPlayMode(true);
     try {
-      const out = (await apiPost<Record<string, unknown>>(
-        "/api/v1/set_play_mode",
-        { speaker_id: activeDid, mode_index: next },
-      )) as Record<string, unknown>;
-      const parsed = unwrapApiEnvelope(out);
-      if (parsed.ok) {
-        setMessage(`已切换为${cmd}`);
-        return;
-      }
-      setPlayModeIndex(prev);
-      setMessage(parsed.message || parsed.errorCode || "切换播放模式失败");
+      setMessage(`已切换为${cmd}（仅本地显示，正式 API 不提供播放模式控制）`);
     } finally {
       setSwitchingPlayMode(false);
     }
@@ -897,10 +887,12 @@ export function HomePage() {
     if (!requireDid()) {
       return;
     }
-    const out = (await apiGet<{ ret?: string }>(
-      `/playtts?did=${encodeURIComponent(activeDid)}&text=${encodeURIComponent(ttsText)}`,
-    )) as { ret?: string };
-    setMessage(out.ret === "OK" ? "文字播放已发送" : out.ret || "文字播放失败");
+    const out = (await apiPost<Record<string, unknown>>("/api/v1/control/tts", {
+      device_id: activeDid,
+      text: ttsText,
+    })) as Record<string, unknown>;
+    const parsed = unwrapApiEnvelope(out);
+    setMessage(parsed.ok ? "文字播放已发送" : parsed.message || parsed.errorCode || "文字播放失败");
   }
 
   async function sendCustomCmd() {
@@ -1520,10 +1512,9 @@ export function HomePage() {
                     if (!requireDid()) {
                       return;
                     }
-                    const out = (await apiPost<Record<string, unknown>>(
-                      "/api/v1/stop",
-                      { speaker_id: activeDid },
-                    )) as Record<string, unknown>;
+                    const out = (await apiPost<Record<string, unknown>>("/api/v1/control/stop", {
+                      device_id: activeDid,
+                    })) as Record<string, unknown>;
                     const parsed = unwrapPlaybackEnvelope(out);
                     setMessage(
                       parsed.ok
@@ -1696,8 +1687,34 @@ export function HomePage() {
           max={100}
           value={volume}
           onChange={(e) => setVolume(Number(e.target.value))}
-          onMouseUp={() => void callRetApi("/setvolume", { did: activeDid, volume }, "音量已设置")}
-          onTouchEnd={() => void callRetApi("/setvolume", { did: activeDid, volume }, "音量已设置")}
+          onMouseUp={() =>
+            void (async () => {
+              if (!requireDid()) {
+                return;
+              }
+              const out = (await apiPost<Record<string, unknown>>("/api/v1/control/volume", {
+                device_id: activeDid,
+                volume,
+              })) as Record<string, unknown>;
+              const parsed = unwrapApiEnvelope(out);
+              setMessage(parsed.ok ? "音量已设置" : parsed.message || parsed.errorCode || "音量设置失败");
+              await loadStatus(activeDid);
+            })()
+          }
+          onTouchEnd={() =>
+            void (async () => {
+              if (!requireDid()) {
+                return;
+              }
+              const out = (await apiPost<Record<string, unknown>>("/api/v1/control/volume", {
+                device_id: activeDid,
+                volume,
+              })) as Record<string, unknown>;
+              const parsed = unwrapApiEnvelope(out);
+              setMessage(parsed.ok ? "音量已设置" : parsed.message || parsed.errorCode || "音量设置失败");
+              await loadStatus(activeDid);
+            })()
+          }
         />
         <div className="component-button-one">
           <button onClick={() => setShowVolume(false)} className="close-button">

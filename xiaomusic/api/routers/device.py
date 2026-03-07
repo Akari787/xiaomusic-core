@@ -166,7 +166,7 @@ async def stop(data: Did):
         return api_response.ok(contract="ret", ret="Did not exist")
 
     try:
-        await _get_facade().stop({"speaker_id": did})
+        await _get_facade().stop_legacy({"speaker_id": did})
     except Exception as e:
         log.warning(f"Execption {e}")
     return api_response.ok(contract="ret")

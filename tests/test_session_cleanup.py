@@ -35,21 +35,3 @@ def test_session_cleanup_ttl_removes_old_non_active_only():
     assert ret["removed"] >= 1
     assert mgr.get_session(old_stopped.sid) is None
     assert mgr.get_session(running.sid) is not None
-
-
-@pytest.mark.asyncio
-async def test_v1_sessions_cleanup_endpoint_shape(monkeypatch):
-    pytest.importorskip("aiofiles")
-    from xiaomusic.api.models import ApiSessionsCleanupRequest
-    from xiaomusic.api.routers import v1
-
-    class _Runtime:
-        def cleanup_sessions(self, max_sessions=100, ttl_seconds=None):  # noqa: ARG002
-            return {"removed": 5, "remaining": 10}
-
-    monkeypatch.setattr(v1, "get_runtime", lambda: _Runtime())
-    out = await v1.api_v1_sessions_cleanup(ApiSessionsCleanupRequest(max_sessions=10, ttl_seconds=60))
-    assert out["ok"] is True
-    assert out["success"] is True
-    assert out["removed"] == 5
-    assert out["remaining"] == 10

@@ -1,24 +1,14 @@
 """路由注册"""
 
-from xiaomusic.api import websocket
-from xiaomusic.api.routers import (
-    device,
-    file,
-    network_audio,
-    music,
-    playlist,
-    plugin,
-    system,
-    v1,
-)
-
-
 def register_routers(app):
     """注册所有路由到应用
 
     Args:
         app: FastAPI 应用实例
     """
+    from xiaomusic.api import websocket
+    from xiaomusic.api.routers import device, file, music, network_audio, playlist, plugin, system, v1
+
     # 注册各个路由模块
     app.include_router(system.router, tags=["系统管理"])
     app.include_router(device.router, tags=["设备控制"])

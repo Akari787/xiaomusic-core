@@ -7,10 +7,11 @@ def test_playback_response_error_uses_error_code_mapping():
         ok=False,
         error_code="E_STREAM_NOT_FOUND",
     )
-    assert out["ok"] is False
-    assert out["success"] is False
-    assert out["error_code"] == "E_STREAM_NOT_FOUND"
+    assert out["code"] != 0
     assert out["message"] == ERROR_CODES["E_STREAM_NOT_FOUND"]
+    assert out["data"]["ok"] is False
+    assert out["data"]["success"] is False
+    assert out["data"]["error_code"] == "E_STREAM_NOT_FOUND"
 
 
 def test_playback_response_error_prefers_explicit_message():
@@ -19,5 +20,5 @@ def test_playback_response_error_prefers_explicit_message():
         error_code="E_STREAM_NOT_FOUND",
         message="custom not found",
     )
-    assert out["error_code"] == "E_STREAM_NOT_FOUND"
+    assert out["data"]["error_code"] == "E_STREAM_NOT_FOUND"
     assert out["message"] == "custom not found"
