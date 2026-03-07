@@ -7,6 +7,12 @@ from xiaomusic.core.transport.transport import Transport
 
 
 class MinaTransport(Transport):
+    """Mina transport adapter.
+
+    Real action coverage in Phase 2:
+    - play_url, stop, pause, tts, set_volume, probe
+    """
+
     name = "mina"
 
     def __init__(self, xiaomusic: Any) -> None:

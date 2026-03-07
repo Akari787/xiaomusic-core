@@ -77,7 +77,9 @@ async def setvolume(data: DidVolume):
         return api_response.ok(contract="ret", ret="Did not exist")
 
     log.info(f"set_volume {did} {volume}")
-    await xiaomusic.set_volume(did=did, arg1=volume)
+    out = await _get_facade().set_volume(did, int(volume))
+    if not out.get("ok"):
+        return api_response.ok(contract="ret", ret="Did not exist")
     return api_response.ok({"volume": volume}, contract="ret")
 
 
@@ -137,7 +139,7 @@ async def playurl(did: str, url: str):
     out = await _get_facade().play_url(
         url=decoded_url,
         speaker_id=did,
-        options={"mode": "direct"},
+        options={"mode": "core_minimal"},
     )
     return out["raw"].get("cast_ret", out["raw"])
 
@@ -149,7 +151,9 @@ async def playtts(did: str, text: str):
         return api_response.ok(contract="ret", ret="Did not exist")
 
     log.info(f"tts {did} {text}")
-    await xiaomusic.do_tts(did=did, value=text)
+    out = await _get_facade().tts(did, text)
+    if not out.get("ok"):
+        return api_response.ok(contract="ret", ret="Did not exist")
     return api_response.ok(contract="ret")
 
 

@@ -122,6 +122,24 @@ class ApiV1SetPlayModeRequest(BaseModel):
     mode_index: int
 
 
+class ApiV1PauseRequest(BaseModel):
+    speaker_id: str
+
+
+class ApiV1TtsRequest(BaseModel):
+    speaker_id: str
+    text: str
+
+
+class ApiV1SetVolumeRequest(BaseModel):
+    speaker_id: str
+    volume: int
+
+
+class ApiV1ProbeRequest(BaseModel):
+    speaker_id: str
+
+
 class ApiResponseBase(BaseModel):
     ok: bool
     error_code: str | None = None

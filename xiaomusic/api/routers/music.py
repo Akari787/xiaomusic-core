@@ -24,8 +24,17 @@ from xiaomusic.api.models import (
     MusicInfoObj,
     MusicItem,
 )
+from xiaomusic.playback.facade import PlaybackFacade
 
 router = APIRouter(dependencies=[Depends(verification)])
+_facade: PlaybackFacade | None = None
+
+
+def _get_facade() -> PlaybackFacade:
+    global _facade
+    if _facade is None:
+        _facade = PlaybackFacade(xiaomusic)
+    return _facade
 
 
 @router.get("/searchmusic")
@@ -150,22 +159,18 @@ async def get_media_lyric(request: Request):
 
 @router.post("/api/device/pushUrl")
 async def device_push_url(request: Request):
-    """推送url给设备端播放"""
+    """推送媒体给设备播放（通过统一 core 链路）。"""
     try:
-        # 获取请求数据
         data = await request.json()
-        did = data.get("did")
-        openapi_info = xiaomusic.js_plugin_manager.get_openapi_info()
-        if openapi_info.get("enabled", False):
-            url = data.get("url")
-        else:
-            # 调用公共函数处理,获取音乐真实播放URL
-            url = xiaomusic.get_plugin_proxy_url(data)
-        decoded_url = urllib.parse.unquote(url)
-        return api_response.ok(
-            await xiaomusic.play_url(did=did, arg1=decoded_url),
-            contract="raw",
-        )
+        did = str(data.get("did") or "")
+        out = await _get_facade().play_payload(data, did)
+        if not out.get("ok"):
+            return api_response.fail(
+                "E_XIAOMI_PLAY_FAILED",
+                "play failed",
+                contract="success_error",
+            )
+        return api_response.ok(out.get("raw") or {"ret": "OK"}, contract="raw")
     except Exception as e:
         return api_response.fail(
             "E_INTERNAL",

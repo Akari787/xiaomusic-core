@@ -12,12 +12,16 @@ from xiaomusic.api.dependencies import verification, xiaomusic
 from xiaomusic.api.models import ApiSessionsCleanupRequest
 from xiaomusic.api.runtime_provider import get_runtime
 from xiaomusic.api.models import (
+    ApiV1PauseRequest,
     ApiV1SetPlayModeRequest,
     ApiV1PlayMusicListRequest,
     ApiV1PlayMusicRequest,
+    ApiV1ProbeRequest,
     ApiV1PlayUrlRequest,
     ApiV1ReachabilityRequest,
+    ApiV1SetVolumeRequest,
     ApiV1StopRequest,
+    ApiV1TtsRequest,
 )
 from xiaomusic.api.response_utils import make_error, make_ok, playback_response
 from xiaomusic.const import PLAY_TYPE_ALL, PLAY_TYPE_ONE, PLAY_TYPE_RND, PLAY_TYPE_SEQ, PLAY_TYPE_SIN
@@ -143,7 +147,7 @@ async def api_v1_play_url(data: ApiV1PlayUrlRequest):
     options = (data.options.model_dump() if data.options else {})
     if options.get("volume") is not None:
         try:
-            await xiaomusic.set_volume(speaker_id, int(options["volume"]))
+            await _get_facade().set_volume(speaker_id, int(options["volume"]))
         except Exception:
             pass
 
@@ -243,6 +247,61 @@ async def api_v1_stop(data: ApiV1StopRequest):
     return _playback_from_facade(out, fallback_state="stopped")
 
 
+@router.post("/api/v1/pause")
+async def api_v1_pause(data: ApiV1PauseRequest):
+    out = await _get_facade().pause(data.speaker_id)
+    if not out.get("ok"):
+        return make_error(
+            out.get("error_code") or "E_XIAOMI_PLAY_FAILED",
+            payload={"speaker_id": data.speaker_id},
+        )
+    return make_ok(payload={"speaker_id": data.speaker_id}, message="paused")
+
+
+@router.post("/api/v1/tts")
+async def api_v1_tts(data: ApiV1TtsRequest):
+    out = await _get_facade().tts(data.speaker_id, data.text)
+    if not out.get("ok"):
+        return make_error(
+            out.get("error_code") or "E_XIAOMI_PLAY_FAILED",
+            payload={"speaker_id": data.speaker_id},
+        )
+    return make_ok(payload={"speaker_id": data.speaker_id}, message="tts sent")
+
+
+@router.post("/api/v1/set_volume")
+async def api_v1_set_volume(data: ApiV1SetVolumeRequest):
+    out = await _get_facade().set_volume(data.speaker_id, data.volume)
+    if not out.get("ok"):
+        return make_error(
+            out.get("error_code") or "E_XIAOMI_PLAY_FAILED",
+            payload={"speaker_id": data.speaker_id, "volume": data.volume},
+        )
+    return make_ok(
+        payload={"speaker_id": data.speaker_id, "volume": int(data.volume)},
+        message="volume updated",
+    )
+
+
+@router.post("/api/v1/probe")
+async def api_v1_probe(data: ApiV1ProbeRequest):
+    out = await _get_facade().probe(data.speaker_id)
+    if not out.get("ok"):
+        return make_error(
+            out.get("error_code") or "E_XIAOMI_PLAY_FAILED",
+            payload={"speaker_id": data.speaker_id},
+        )
+    raw = out.get("raw") or {}
+    return make_ok(
+        payload={
+            "speaker_id": data.speaker_id,
+            "transport": raw.get("transport"),
+            "reachability": raw.get("reachability") or {},
+        },
+        message="probe done",
+    )
+
+
 @router.get("/api/v1/status")
 async def api_v1_status(
     speaker_id: str | None = Query(default=None),
@@ -291,7 +350,7 @@ async def api_v1_test_reachability(request: Request, data: ApiV1ReachabilityRequ
         out = await _get_facade().play_url(
             url=test_url,
             speaker_id=data.speaker_id,
-            options={"mode": "direct"},
+            options={"mode": "core_minimal"},
         )
     except Exception:
         return make_error(
