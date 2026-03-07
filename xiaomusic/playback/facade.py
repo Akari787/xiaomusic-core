@@ -17,7 +17,12 @@ from xiaomusic.adapters.sources import (
 from xiaomusic.core.coordinator import PlaybackCoordinator
 from xiaomusic.core.delivery import DeliveryAdapter
 from xiaomusic.core.device import DeviceRegistry
-from xiaomusic.core.errors import ExpiredStreamError, SourceResolveError, TransportError
+from xiaomusic.core.errors import (
+    ExpiredStreamError,
+    SourceResolveError,
+    TransportError,
+    UndeliverableStreamError,
+)
 from xiaomusic.core.models import MediaRequest
 from xiaomusic.core.source import SourceRegistry
 from xiaomusic.core.transport import TransportPolicy, TransportRouter
@@ -222,7 +227,14 @@ class PlaybackFacade:
                         "dispatch": dispatch.data,
                     }
                     ok = True
-                except (SourceResolveError, ExpiredStreamError, TransportError, KeyError, ValueError):
+                except (
+                    SourceResolveError,
+                    ExpiredStreamError,
+                    UndeliverableStreamError,
+                    TransportError,
+                    KeyError,
+                    ValueError,
+                ):
                     # Compatibility fallback only for existing network_audio runtime chain.
                     if self._runtime_provider is not None and self._should_use_network_audio(url):
                         raw = await self._runtime().play_link(
@@ -291,7 +303,14 @@ class PlaybackFacade:
                 media_request,
                 device_id=speaker_id,
             )
-        except (SourceResolveError, ExpiredStreamError, TransportError, KeyError, ValueError) as exc:
+        except (
+            SourceResolveError,
+            ExpiredStreamError,
+            UndeliverableStreamError,
+            TransportError,
+            KeyError,
+            ValueError,
+        ) as exc:
             LOG.warning(
                 "core_play_payload_failed source_hint=%s speaker_id=%s error=%s",
                 source_hint,
@@ -339,7 +358,14 @@ class PlaybackFacade:
                 ),
                 device_id=speaker_id,
             )
-        except (SourceResolveError, ExpiredStreamError, TransportError, KeyError, ValueError):
+        except (
+            SourceResolveError,
+            ExpiredStreamError,
+            UndeliverableStreamError,
+            TransportError,
+            KeyError,
+            ValueError,
+        ):
             return self._core_error_result(speaker_id, error_code="E_XIAOMI_PLAY_FAILED")
 
         prepared = result["prepared_stream"]

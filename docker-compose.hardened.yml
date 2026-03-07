@@ -26,6 +26,8 @@ services:
       WEB_CONCURRENCY: "1"
     volumes:
       - ./conf:/app/conf
+      # SECURITY: ensure token file is not world-readable after first login.
+      # Run once on host after initial QR login: chmod 600 conf/auth.json
       - ./music:/app/music
       - ./xiaomusic/webui/static:/app/xiaomusic/webui/static:ro
     # Harden runtime

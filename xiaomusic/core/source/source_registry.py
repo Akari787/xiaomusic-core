@@ -60,8 +60,6 @@ class SourceRegistry:
 
         parsed = urlparse(query)
         if parsed.scheme in {"http", "https"}:
-            if "youtube.com" in parsed.netloc.lower() or "youtu.be" in parsed.netloc.lower() or "bilibili.com" in parsed.netloc.lower():
-                return "network_audio"
             return "http_url"
         if self._looks_like_local(query):
             return "local_music"

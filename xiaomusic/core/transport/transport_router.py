@@ -50,8 +50,8 @@ class TransportRouter:
     ) -> TransportDispatchResult:
         _ = profile
         candidate_transports = self._candidate_transports(action, capability_matrix)
-        LOG.info(
-            "transport_route action=%s candidate_transports=%s selected_transport= pending fallback_triggered=false",
+        LOG.debug(
+            "transport_route action=%s candidate_transports=%s",
             action,
             candidate_transports,
         )

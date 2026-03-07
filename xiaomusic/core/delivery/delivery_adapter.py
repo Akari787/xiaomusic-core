@@ -4,7 +4,7 @@ import logging
 import time
 from urllib.parse import urlparse
 
-from xiaomusic.core.errors.stream_errors import ExpiredStreamError
+from xiaomusic.core.errors.stream_errors import ExpiredStreamError, UndeliverableStreamError
 from xiaomusic.core.models.media import PreparedStream, ResolvedMedia
 
 
@@ -25,7 +25,7 @@ class DeliveryAdapter:
                 media.source,
                 media.stream_url,
             )
-            raise ExpiredStreamError("stream url is not dispatchable")
+            raise UndeliverableStreamError("stream url is not dispatchable")
 
         if media.expires_at is not None:
             now_ts = int(time.time())
@@ -44,6 +44,11 @@ class DeliveryAdapter:
             media.source,
             media.stream_url,
         )
+        # TODO(phase-next): Implement proxy rewrite path.
+        # When the direct URL is not reachable from the speaker's network,
+        # DeliveryAdapter should rewrite final_url to a local proxy URL and set is_proxy=True.
+        # Design spec: architecture_unified_refactor_design.md §6.2 rule 2.
+        # Current state: always direct, is_proxy is always False.
         return PreparedStream(
             final_url=media.stream_url,
             headers=dict(media.headers),

@@ -4,7 +4,7 @@ import logging
 
 from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
 from xiaomusic.core.device.device_registry import DeviceRegistry
-from xiaomusic.core.errors.stream_errors import ExpiredStreamError
+from xiaomusic.core.errors.stream_errors import ExpiredStreamError, UndeliverableStreamError
 from xiaomusic.core.models.media import MediaRequest
 from xiaomusic.core.source.source_registry import SourceRegistry
 from xiaomusic.core.transport.transport_router import TransportRouter
@@ -52,6 +52,8 @@ class PlaybackCoordinator:
             resolved = await plugin.resolve(request)
             try:
                 prepared = self._delivery_adapter.prepare(resolved)
+            except UndeliverableStreamError:
+                raise
             except ExpiredStreamError as exc:
                 last_expired_error = exc
                 continue

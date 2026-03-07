@@ -457,9 +457,12 @@ class AuthManager:
         before_pass = str(before.get("passToken") or "")
         try:
             api = MiJiaAPI(auth_data_path=auth_dir, token_store=self.token_store)
-            if not hasattr(api, "_refresh_token"):
-                raise RuntimeError("refresh api unavailable")
-            await asyncio.to_thread(api._refresh_token, force)
+            refresh_fn = getattr(api, "_refresh_token", None)
+            if not callable(refresh_fn):
+                raise RuntimeError(
+                    f"refresh api unavailable: {type(api).__name__} does not have a callable _refresh_token"
+                )
+            await asyncio.to_thread(refresh_fn, force)
 
             # Ensure persisted token snapshot is updated and visible to runtime.
             if self.token_store is not None:

@@ -1,3 +1,12 @@
+"""Exec-plugin manager for custom voice command handlers (exec# prefix).
+
+NOTE: This PluginManager is NOT the "PluginManager complex edition" referenced in
+architecture_unified_refactor_design.md §13 deletion list. That refers to a planned
+removal of the old source-plugin orchestration system, which has been superseded by
+xiaomusic/core/source/. This file manages exec# command plugins only and is unrelated
+to the core Source Plugin architecture.
+"""
+
 import importlib
 import inspect
 import pkgutil
