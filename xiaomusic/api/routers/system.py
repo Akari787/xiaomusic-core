@@ -101,6 +101,12 @@ async def read_index():
     """首页"""
     return RedirectResponse(url="/webui/", status_code=302)
 
+
+@router.get("/debug/api-v1")
+async def debug_api_v1_index():
+    """API v1 调试页入口。"""
+    return RedirectResponse(url="/webui/#/debug/api-v1", status_code=302)
+
 @router.get("/api/get_qrcode")
 async def get_qrcode():
     """生成小米账号扫码登录用二维码，返回 base64 图片 URL。"""
