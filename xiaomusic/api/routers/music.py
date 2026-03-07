@@ -283,7 +283,7 @@ async def delmusic(data: MusicItem):
 
 @router.post("/playmusic")
 async def playmusic(data: DidPlayMusic):
-    """播放音乐"""
+    """播放音乐（compatibility_layer: legacy endpoint, remove after v2 API migration）"""
     did = data.did
     musicname = data.musicname
     searchkey = data.searchkey
@@ -291,7 +291,9 @@ async def playmusic(data: DidPlayMusic):
         return api_response.ok(contract="ret", ret="Did not exist")
 
     log.info(f"playmusic {did} musicname:{musicname} searchkey:{searchkey}")
-    await xiaomusic.do_play(did, musicname, searchkey)
+    out = await _get_facade().play_local_music(did, musicname, searchkey)
+    if not out.get("ok"):
+        return api_response.ok(contract="ret", ret="Did not exist")
     return api_response.ok(contract="ret")
 
 

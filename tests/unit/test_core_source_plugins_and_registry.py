@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
 from xiaomusic.adapters.sources.http_url_source_plugin import HttpUrlSourcePlugin
 from xiaomusic.adapters.sources.jellyfin_source_plugin import JellyfinSourcePlugin
+from xiaomusic.adapters.sources.local_music_source_plugin import LocalMusicSourcePlugin
+from xiaomusic.adapters.sources.network_audio_source_plugin import NetworkAudioSourcePlugin
 from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
 from xiaomusic.core.models.media import MediaRequest
 from xiaomusic.core.source.source_registry import SourceRegistry
+from xiaomusic.network_audio.contracts import ResolveResult
 
 
 @pytest.mark.unit
@@ -74,8 +79,12 @@ def test_source_registry_prefers_source_hint_then_can_resolve():
     registry = SourceRegistry()
     http_plugin = HttpUrlSourcePlugin()
     jf_plugin = JellyfinSourcePlugin(lambda payload: str(payload.get("url") or ""))
+    network_plugin = NetworkAudioSourcePlugin(resolver=_ResolverStub())
+    local_plugin = LocalMusicSourcePlugin(_LocalMusicLibraryStub())
     registry.register(http_plugin)
     registry.register(jf_plugin)
+    registry.register(local_plugin)
+    registry.register(network_plugin)
 
     req_hint = MediaRequest(
         request_id="r3",
@@ -93,3 +102,88 @@ def test_source_registry_prefers_source_hint_then_can_resolve():
     )
     picked_by_match = registry.get_plugin(req_fallback.source_hint, req_fallback)
     assert picked_by_match.name == "http_url"
+
+    req_auto_jf = MediaRequest(
+        request_id="r4-jf",
+        source_hint=None,
+        query="legacy://jellyfin",
+        context={"source_payload": {"source": "jellyfin", "url": "http://x/jf.mp3"}},
+    )
+    assert registry.get_plugin(req_auto_jf.source_hint, req_auto_jf).name == "jellyfin"
+
+    req_na = MediaRequest(
+        request_id="r5",
+        source_hint="network_audio",
+        query="https://www.youtube.com/watch?v=iPnaF8Ngk3Q",
+    )
+    assert registry.get_plugin(req_na.source_hint, req_na).name == "network_audio"
+
+    req_local = MediaRequest(
+        request_id="r6",
+        source_hint="local_music",
+        query="/music/test.mp3",
+    )
+    assert registry.get_plugin(req_local.source_hint, req_local).name == "local_music"
+
+    req_auto_local = MediaRequest(
+        request_id="r6-auto",
+        source_hint=None,
+        query="/music/test.mp3",
+    )
+    assert registry.get_plugin(req_auto_local.source_hint, req_auto_local).name == "local_music"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_local_music_source_plugin_resolve_by_track_name_and_path():
+    with TemporaryDirectory() as tmp_dir:
+        p = Path(tmp_dir) / "hello.mp3"
+        p.write_bytes(b"demo")
+        library = _LocalMusicLibraryStub(track_name="hello", file_path=str(p))
+        plugin = LocalMusicSourcePlugin(library)
+
+        by_name = await plugin.resolve(
+            MediaRequest(request_id="r7", source_hint="local_music", query="hello")
+        )
+        by_path = await plugin.resolve(
+            MediaRequest(request_id="r8", source_hint="local_music", query=str(p))
+        )
+
+        assert by_name.source == "local_music"
+        assert by_name.stream_url.endswith("/music/hello.mp3")
+        assert by_path.stream_url.endswith("/music/hello.mp3")
+
+
+class _ResolverStub:
+    def resolve(self, url: str, timeout_seconds: float = 8) -> ResolveResult:
+        _ = (url, timeout_seconds)
+        return ResolveResult(
+            ok=True,
+            source_url="https://cdn.example.com/audio.m4a",
+            title="na",
+            is_live=False,
+            container_hint="m4a",
+            meta={"raw_id": "na-1"},
+        )
+
+
+class _LocalMusicLibraryStub:
+    def __init__(self, track_name: str = "local-song", file_path: str = "/music/local-song.mp3") -> None:
+        self.all_music = {track_name: file_path}
+        self._track_name = track_name
+        self._file_path = file_path
+
+    def is_web_music(self, name: str) -> bool:
+        _ = name
+        return False
+
+    def get_filename(self, name: str) -> str:
+        return self.all_music.get(name, "")
+
+    def _get_file_url(self, filepath: str) -> str:
+        return f"http://127.0.0.1:58090/music/{Path(filepath).name}"
+
+    def searchmusic(self, query: str):
+        if query in self.all_music:
+            return [query]
+        return [self._track_name] if query in self._track_name else []

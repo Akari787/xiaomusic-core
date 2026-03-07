@@ -173,20 +173,13 @@ async def api_v1_play_url(data: ApiV1PlayUrlRequest):
 
 @router.post("/api/v1/play_music")
 async def api_v1_play_music(data: ApiV1PlayMusicRequest):
-    try:
-        await xiaomusic.do_play(
-            did=data.speaker_id,
-            name=data.music_name,
-            search_key=data.search_key or "",
-        )
-        return playback_response(ok=True, speaker_id=data.speaker_id, state="playing")
-    except Exception:
-        return playback_response(
-            ok=False,
-            speaker_id=data.speaker_id,
-            state="failed",
-            error_code="E_XIAOMI_PLAY_FAILED",
-        )
+    out = await _get_facade().play_local_music(
+        speaker_id=data.speaker_id,
+        music_name=data.music_name,
+        search_key=data.search_key or "",
+    )
+    out["state"] = _state_to_api(out.get("state"), bool(out.get("ok")))
+    return _playback_from_facade(out, fallback_state="failed")
 
 
 @router.post("/api/v1/play_music_list")

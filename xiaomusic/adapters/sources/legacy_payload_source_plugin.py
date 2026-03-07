@@ -1,64 +1,61 @@
 from __future__ import annotations
 
-from typing import Any, Callable
-from urllib.parse import urlparse
+from typing import Any
 
 from xiaomusic.core.errors.source_errors import SourceResolveError
-from xiaomusic.core.models.media import MediaRequest, ResolvedMedia
-from xiaomusic.core.source.source_plugin import SourcePlugin
+from xiaomusic.core.models.media import MediaRequest
 
 
-class LegacyPayloadSourcePlugin(SourcePlugin):
-    """Compatibility source adapter for legacy payload-based media sources.
-
-    Phase 2 scope:
-    - Keep Jellyfin/OpenAPI payload translation outside API handlers.
-    - Produce standard ResolvedMedia for unified core chain.
+class LegacyPayloadSourcePlugin:
+    """Compatibility adapter for legacy payload-based media requests.
 
     Current scope:
-    - Compatibility-only plugin for non-migrated payload sources.
-    - Jellyfin and network-audio main paths are owned by dedicated plugins.
+    - Compatibility-only request adapter for legacy payload callers.
+    - Converts legacy payload into standard MediaRequest for official plugins.
 
     compatibility_layer:
     - reason: preserve legacy payload callers while dedicated plugins are rolled out.
     - planned_removal_phase: post-release cleanup after legacy API callers are migrated.
     """
 
-    name = "legacy_payload"
+    KNOWN_HINTS = {"jellyfin", "http_url", "network_audio", "local_music"}
 
-    def __init__(self, payload_url_resolver: Callable[[dict[str, Any]], str]) -> None:
-        self._payload_url_resolver = payload_url_resolver
-
-    def can_resolve(self, request: MediaRequest) -> bool:
-        payload = request.context.get("source_payload")
+    def adapt_request(
+        self,
+        request_id: str,
+        speaker_id: str,
+        payload: dict[str, Any],
+        fallback_hint: str = "http_url",
+    ) -> MediaRequest:
         if not isinstance(payload, dict):
-            return False
-        source = str(payload.get("source") or "").lower()
-        return source not in {"jellyfin", "network_audio"}
+            raise SourceResolveError("legacy payload must be a dict")
 
-    async def resolve(self, request: MediaRequest) -> ResolvedMedia:
-        payload = request.context.get("source_payload")
-        if not isinstance(payload, dict):
-            raise SourceResolveError("legacy source payload is required")
+        source_raw = str(payload.get("source") or "").strip().lower()
+        source_hint = source_raw if source_raw in self.KNOWN_HINTS else fallback_hint
 
-        stream_url = self._payload_url_resolver(payload)
-        parsed = urlparse(stream_url)
-        if parsed.scheme not in {"http", "https"}:
-            raise SourceResolveError("legacy payload did not resolve to HTTP URL")
-
-        title = request.context.get("title") or payload.get("name") or payload.get("title")
-        source = payload.get("source") or self._infer_source(stream_url)
-        return ResolvedMedia(
-            media_id=request.request_id,
-            source=str(source),
-            title=str(title or "legacy-media"),
-            stream_url=stream_url,
-            headers={},
-            expires_at=None,
-            is_live=False,
+        local_query = str(
+            payload.get("music_name")
+            or payload.get("track_id")
+            or payload.get("name")
+            or payload.get("title")
+            or payload.get("path")
+            or ""
         )
+        query = str(payload.get("url") or local_query or "")
 
-    @staticmethod
-    def _infer_source(stream_url: str) -> str:
-        _ = stream_url
-        return "legacy_payload"
+        if not query:
+            raise SourceResolveError("legacy payload has no playable query")
+
+        if source_hint == "http_url" and not str(payload.get("url") or "").startswith(("http://", "https://")):
+            source_hint = "local_music"
+
+        return MediaRequest(
+            request_id=request_id,
+            source_hint=source_hint,
+            query=query,
+            device_id=speaker_id,
+            context={
+                "source_payload": payload,
+                "title": payload.get("name") or payload.get("title"),
+            },
+        )

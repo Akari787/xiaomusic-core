@@ -11,10 +11,8 @@ from typing import Any, Callable
 from xiaomusic.adapters.mina import MinaTransport
 from xiaomusic.adapters.miio import MiioTransport
 from xiaomusic.adapters.sources import (
-    HttpUrlSourcePlugin,
-    JellyfinSourcePlugin,
     LegacyPayloadSourcePlugin,
-    NetworkAudioSourcePlugin,
+    register_default_source_plugins,
 )
 from xiaomusic.core.coordinator import PlaybackCoordinator
 from xiaomusic.core.delivery import DeliveryAdapter
@@ -39,6 +37,7 @@ class PlaybackFacade:
         self.xiaomusic = xiaomusic
         self._runtime_provider = runtime_provider
         self._core_coordinator: PlaybackCoordinator | None = None
+        self._legacy_adapter = LegacyPayloadSourcePlugin()
 
     def _runtime(self):
         if self._runtime_provider is None:
@@ -59,10 +58,7 @@ class PlaybackFacade:
             return self._core_coordinator
 
         source_registry = SourceRegistry()
-        source_registry.register(NetworkAudioSourcePlugin())
-        source_registry.register(HttpUrlSourcePlugin())
-        source_registry.register(JellyfinSourcePlugin(self._resolve_jellyfin_source_url))
-        source_registry.register(LegacyPayloadSourcePlugin(self._resolve_legacy_source_url))
+        register_default_source_plugins(source_registry, self.xiaomusic)
         device_registry = DeviceRegistry(self.xiaomusic)
         delivery_adapter = DeliveryAdapter()
         router = TransportRouter(policy=TransportPolicy())
@@ -83,7 +79,12 @@ class PlaybackFacade:
             return "jellyfin"
         if source == "network_audio":
             return "network_audio"
-        return "legacy_payload"
+        url = str(payload.get("url") or "")
+        if url.startswith(("http://", "https://")):
+            return "http_url"
+        if str(payload.get("music_name") or payload.get("track_id") or payload.get("path") or payload.get("name") or ""):
+            return "local_music"
+        return "http_url"
 
     @staticmethod
     def _is_http_url(url: str) -> bool:
@@ -101,28 +102,6 @@ class PlaybackFacade:
         if self._should_use_network_audio(url):
             return "network_audio"
         return "http_url"
-
-    def _resolve_jellyfin_source_url(self, payload: dict[str, Any]) -> str:
-        direct_url = str(payload.get("url") or "")
-        if direct_url.startswith(("http://", "https://")):
-            return direct_url
-
-        plugin_url = str(self.xiaomusic.online_music_service._get_plugin_proxy_url(payload) or "")
-        _, expanded_url = self.xiaomusic.music_library.expand_self_url(plugin_url)
-        return str(expanded_url)
-
-    def _resolve_legacy_source_url(self, payload: dict[str, Any]) -> str:
-        direct_url = str(payload.get("url") or "")
-        if direct_url.startswith(("http://", "https://")):
-            return direct_url
-
-        openapi_info = self.xiaomusic.js_plugin_manager.get_openapi_info()
-        if openapi_info.get("enabled", False):
-            return direct_url
-
-        plugin_url = str(self.xiaomusic.online_music_service._get_plugin_proxy_url(payload) or "")
-        _, expanded_url = self.xiaomusic.music_library.expand_self_url(plugin_url)
-        return str(expanded_url)
 
     @staticmethod
     def _as_int(value: Any, default: int = 0) -> int:
@@ -302,17 +281,14 @@ class PlaybackFacade:
     async def play_payload(self, payload: dict[str, Any], speaker_id: str) -> dict[str, Any]:
         source_hint = self._source_hint_from_payload(payload)
         try:
+            media_request = self._legacy_adapter.adapt_request(
+                request_id=str(uuid4()),
+                speaker_id=speaker_id,
+                payload=payload,
+                fallback_hint=source_hint,
+            )
             result = await self._core().play(
-                MediaRequest(
-                    request_id=str(uuid4()),
-                    source_hint=source_hint,
-                    query=str(payload.get("url") or "legacy_payload"),
-                    device_id=speaker_id,
-                    context={
-                        "source_payload": payload,
-                        "title": payload.get("name") or payload.get("title"),
-                    },
-                ),
+                media_request,
                 device_id=speaker_id,
             )
         except (SourceResolveError, ExpiredStreamError, TransportError, KeyError, ValueError) as exc:
@@ -323,6 +299,48 @@ class PlaybackFacade:
                 exc,
             )
             return self._core_error_result(speaker_id)
+
+        prepared = result["prepared_stream"]
+        dispatch = result["dispatch"]
+        return {
+            "sid": "",
+            "speaker_id": speaker_id,
+            "state": "playing",
+            "title": result["resolved_media"].title,
+            "stream_url": prepared.final_url,
+            "error_code": None,
+            "ok": True,
+            "raw": {
+                "ok": True,
+                "mode": "core",
+                "source": prepared.source,
+                "transport": dispatch.transport,
+                "dispatch": dispatch.data,
+                "stream_url": prepared.final_url,
+            },
+        }
+
+    async def play_local_music(self, speaker_id: str, music_name: str, search_key: str = "") -> dict[str, Any]:
+        query = str(music_name or search_key or "").strip()
+        if not query:
+            return self._core_error_result(speaker_id, error_code="E_STREAM_NOT_FOUND")
+
+        try:
+            result = await self._core().play(
+                MediaRequest(
+                    request_id=str(uuid4()),
+                    source_hint="local_music",
+                    query=query,
+                    device_id=speaker_id,
+                    context={
+                        "search_key": search_key,
+                        "title": music_name,
+                    },
+                ),
+                device_id=speaker_id,
+            )
+        except (SourceResolveError, ExpiredStreamError, TransportError, KeyError, ValueError):
+            return self._core_error_result(speaker_id, error_code="E_XIAOMI_PLAY_FAILED")
 
         prepared = result["prepared_stream"]
         dispatch = result["dispatch"]
