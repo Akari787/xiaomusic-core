@@ -1,11 +1,6 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export interface ApiResponse<T = unknown> {
-  ok?: boolean;
-  success?: boolean;
-  error_code?: string | null;
-  message?: string | null;
-  data?: T;
   [key: string]: unknown;
 }
 

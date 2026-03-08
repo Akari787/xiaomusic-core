@@ -7,8 +7,12 @@ vi.mock("../src/services/apiClient", () => ({
 
 import { apiGetJson, apiPostJson } from "../src/services/apiClient";
 import {
+  apiErrorInfo,
+  apiErrorText,
   getDevices,
+  getPlayerState,
   getSystemStatus,
+  isApiOk,
   pause,
   play,
   probe,
@@ -56,7 +60,25 @@ describe("v1Api service", () => {
   it("calls official device and system status endpoints", async () => {
     await getDevices();
     await getSystemStatus();
+    await getPlayerState("did-1");
     expect(mockedGet).toHaveBeenCalledWith("/api/v1/devices");
     expect(mockedGet).toHaveBeenCalledWith("/api/v1/system/status");
+    expect(mockedGet).toHaveBeenCalledWith("/api/v1/player/state?device_id=did-1");
+  });
+
+  it("parses standardized envelope error details", () => {
+    const out = {
+      code: 40002,
+      message: "dispatch failed",
+      data: { stage: "dispatch" },
+      request_id: "rid-1",
+    };
+    expect(isApiOk(out)).toBe(false);
+    expect(apiErrorText(out)).toContain("dispatch");
+    expect(apiErrorInfo(out)).toEqual({
+      message: "dispatch failed",
+      errorCode: "E_XIAOMI_PLAY_FAILED",
+      stage: "dispatch",
+    });
   });
 });

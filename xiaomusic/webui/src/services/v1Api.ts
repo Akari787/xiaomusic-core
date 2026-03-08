@@ -36,6 +36,9 @@ export interface PlayData {
   source_plugin?: string;
   transport?: string;
   stage?: string;
+  sid?: string;
+  error_code?: string;
+  extra?: Record<string, unknown>;
 }
 
 export interface ControlData {
@@ -44,6 +47,15 @@ export interface ControlData {
   transport?: string;
   reachable?: boolean;
   stage?: string;
+  error_code?: string;
+}
+
+export interface PlayerStateData {
+  device_id?: string;
+  is_playing?: boolean;
+  cur_music?: string;
+  offset?: number;
+  duration?: number;
 }
 
 export interface DeviceRow {
@@ -61,6 +73,12 @@ export interface SystemStatusData {
   status?: string;
   version?: string;
   devices_count?: number;
+}
+
+export interface ApiErrorInfo {
+  message: string;
+  errorCode: string;
+  stage: string | null;
 }
 
 export interface PlayRequest {
@@ -113,6 +131,32 @@ export function apiErrorText<T>(out: ApiEnvelope<T>): string {
   const stage = (out.data as { stage?: string })?.stage;
   const stageText = stage ? `阶段=${stage}，` : "";
   return `${stageText}${out.message || "请求失败"}`;
+}
+
+export function apiErrorInfo<T>(out: ApiEnvelope<T>): ApiErrorInfo {
+  const data = (out.data || {}) as Record<string, unknown>;
+  const numCode = Number(out.code ?? 0);
+  const codeToErrorCode: Record<number, string> = {
+    20002: "E_RESOLVE_NONZERO_EXIT",
+    30001: "E_STREAM_NOT_FOUND",
+    40002: "E_XIAOMI_PLAY_FAILED",
+    40004: "E_XIAOMI_PLAY_FAILED",
+  };
+  const stage =
+    String(data.stage || "") ||
+    (numCode === 20002
+      ? "resolve"
+      : numCode === 30001
+        ? "prepare"
+        : numCode === 40002 || numCode === 40004
+          ? "dispatch"
+          : "");
+  const errorCode = String(data.error_code || "") || (numCode !== 0 ? codeToErrorCode[numCode] || "" : "");
+  return {
+    message: String(out.message || data.message || "请求失败"),
+    errorCode,
+    stage: stage || null,
+  };
 }
 
 export function mapPluginName(plugin: string | undefined): string {
@@ -173,4 +217,8 @@ export async function getDevices(): Promise<ApiEnvelope<DevicesData>> {
 
 export async function getSystemStatus(): Promise<ApiEnvelope<SystemStatusData>> {
   return await safeGet<SystemStatusData>("/api/v1/system/status");
+}
+
+export async function getPlayerState(deviceId: string): Promise<ApiEnvelope<PlayerStateData>> {
+  return await safeGet<PlayerStateData>(`/api/v1/player/state?device_id=${encodeURIComponent(deviceId)}`);
 }

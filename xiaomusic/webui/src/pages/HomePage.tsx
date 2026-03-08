@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiGet, apiPost } from "../services/apiClient";
+import {
+  apiErrorInfo,
+  getDevices as v1GetDevices,
+  getPlayerState,
+  isApiOk,
+  play as v1Play,
+  setVolume as v1SetVolume,
+  stop as v1Stop,
+  tts as v1Tts,
+  type ApiEnvelope,
+  type PlayerStateData,
+} from "../services/v1Api";
 import { useTheme } from "../theme/ThemeProvider";
 import "../styles/home.css";
 
@@ -20,13 +32,6 @@ type PlayingInfo = {
   cur_playlist?: string;
   offset?: number;
   duration?: number;
-};
-
-type ApiV1Envelope<T = Record<string, unknown>> = {
-  code?: number;
-  message?: string;
-  data?: T;
-  request_id?: string;
 };
 
 type OnlineSearchItem = {
@@ -286,67 +291,6 @@ function explainPlaybackError(
   return message || code || "未知错误";
 }
 
-type PlaybackV1Envelope = {
-  code?: number;
-  message?: string;
-  request_id?: string;
-  data?: Record<string, unknown>;
-};
-
-function unwrapApiEnvelope(out: unknown): {
-  ok: boolean;
-  message: string;
-  errorCode: string;
-} {
-  const env = (out || {}) as PlaybackV1Envelope;
-  const data = (env.data || {}) as Record<string, unknown>;
-  return {
-    ok: Number(env.code || 0) === 0,
-    message: String(env.message || data.message || ""),
-    errorCode: String(data.error_code || ""),
-  };
-}
-
-function unwrapPlaybackEnvelope(out: unknown): {
-  ok: boolean;
-  message: string;
-  errorCode: string;
-  stage: string | null;
-  sid: string;
-  sourcePlugin: string;
-  transport: string;
-} {
-  const env = (out || {}) as PlaybackV1Envelope;
-  const data = (env.data || {}) as Record<string, unknown>;
-  const numCode = Number(env.code ?? 0);
-  const codeToErrorCode: Record<number, string> = {
-    20002: "E_RESOLVE_NONZERO_EXIT",
-    30001: "E_STREAM_NOT_FOUND",
-    40002: "E_XIAOMI_PLAY_FAILED",
-    40004: "E_XIAOMI_PLAY_FAILED",
-  };
-  const errorCode = String(data.error_code || "") || (numCode !== 0 ? codeToErrorCode[numCode] ?? "" : "");
-  const stage =
-    data.stage
-      ? String(data.stage)
-      : numCode === 20002
-        ? "resolve"
-        : numCode === 30001
-          ? "prepare"
-          : numCode === 40002 || numCode === 40004
-              ? "dispatch"
-              : null;
-  return {
-    ok: numCode === 0,
-    message: String(env.message || data.message || ""),
-    errorCode,
-    stage,
-    sid: String(data.sid || env.request_id || ""),
-    sourcePlugin: String(data.source_plugin || ""),
-    transport: String(data.transport || ""),
-  };
-}
-
 function normalizeBaseUrlInput(raw: unknown): string {
   const s = String(raw || "").trim();
   if (!s) {
@@ -458,18 +402,6 @@ function removeLocal(key: string): void {
   } catch {
     return;
   }
-}
-
-function firstKeyword(raw: unknown, fallback: string): string {
-  const text = String(raw || "").trim();
-  if (!text) {
-    return fallback;
-  }
-  const parts = text
-    .split(/[，,]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return parts[0] || fallback;
 }
 
 function playbackSnapshotKey(did: string): string {
@@ -713,10 +645,8 @@ export function HomePage() {
   async function tryResolveDid(device: Device): Promise<string> {
     const candidates = deviceCandidates(device);
     for (const did of candidates) {
-      const out = (await apiGet<ApiV1Envelope<PlayingInfo>>(
-        `/api/v1/player/state?device_id=${encodeURIComponent(did)}`,
-      )) as ApiV1Envelope<PlayingInfo>;
-      if (Number(out.code || -1) === 0) {
+      const out = await getPlayerState(did);
+      if (isApiOk(out)) {
         return did;
       }
     }
@@ -820,8 +750,14 @@ export function HomePage() {
   }
 
   async function loadDevices() {
-    const out = (await apiGet<{ devices?: Device[] }>("/device_list")) as { devices?: Device[] };
-    const rows = out.devices || [];
+    const v1Out = await v1GetDevices();
+    const rows: Device[] = isApiOk(v1Out)
+      ? (v1Out.data.devices || []).map((d) => ({ miotDID: d.device_id, name: d.name || d.model || d.device_id }))
+      : [];
+    if (!rows.length) {
+      const out = (await apiGet<{ devices?: Device[] }>("/device_list")) as { devices?: Device[] };
+      rows.push(...(out.devices || []));
+    }
     setDevices(rows);
     if (!rows.length) {
       setMessage("未获取到设备，请在设置页完成 OAuth2 登录。");
@@ -845,10 +781,8 @@ export function HomePage() {
     if (fallbackDid) {
       setActiveDid((prev) => prev || fallbackDid);
       void (async () => {
-        const probe = (await apiGet<ApiV1Envelope<PlayingInfo>>(
-          `/api/v1/player/state?device_id=${encodeURIComponent(fallbackDid)}`,
-        )) as ApiV1Envelope<PlayingInfo>;
-        if (Number(probe.code || -1) === 0) {
+        const probe = await getPlayerState(fallbackDid);
+        if (isApiOk(probe)) {
           return;
         }
         const resolved = await tryResolveDid(rows[0]);
@@ -883,7 +817,7 @@ export function HomePage() {
       return;
     }
     const [stateResp, volumeResp] = await Promise.allSettled([
-      apiGet<ApiV1Envelope<PlayingInfo>>(`/api/v1/player/state?device_id=${encodeURIComponent(did)}`),
+      getPlayerState(did),
       apiGet<{ volume?: number }>(`/getvolume?did=${encodeURIComponent(did)}`),
     ]);
 
@@ -931,8 +865,8 @@ export function HomePage() {
     };
 
     if (stateResp.status === "fulfilled") {
-      const envelope = stateResp.value as ApiV1Envelope<PlayingInfo>;
-      if (Number(envelope.code || -1) !== 0) {
+      const envelope = stateResp.value as ApiEnvelope<PlayerStateData>;
+      if (!isApiOk(envelope)) {
         if (Number(envelope.code || -1) === 40004) {
           const owner = devices.find((d) => deviceCandidates(d).includes(did));
           const preferred = owner ? preferredDidFromDevice(owner) : "";
@@ -942,7 +876,7 @@ export function HomePage() {
           }
         }
       } else {
-        const next = envelope.data || {};
+        const next = (envelope.data || {}) as PlayingInfo;
         const pending = pendingPlayRef.current;
         let merged: PlayingInfo = {
           ...next,
@@ -1275,26 +1209,18 @@ export function HomePage() {
       const info = (await apiGet<{ ret?: string; name?: string; url?: string; tags?: { duration?: number } }>(
         `/musicinfo?name=${encodeURIComponent(picked)}&musictag=true`,
       )) as { ret?: string; name?: string; url?: string; tags?: { duration?: number } };
+      const resolvedUrl = String(info.url || "").trim();
       const infoDuration = Number(info.tags?.duration || 0);
-      const playlistKeyword = firstKeyword(settingData.keywords_playlist, "播放列表");
-      const playLocalKeyword = firstKeyword(settingData.keywords_playlocal, "播放本地歌曲");
+      const playResp = await v1Play({
+        device_id: deviceId,
+        query: resolvedUrl || picked,
+        source_hint: "auto",
+        options: {
+          list_name: playlist,
+        },
+      });
 
-      if (playlist) {
-        const switchPlaylistResp = (await apiPost<{ ret?: string }>("/cmd", {
-          did: deviceId,
-          cmd: `${playlistKeyword}${playlist}`,
-        })) as { ret?: string };
-        if (switchPlaylistResp.ret !== "OK") {
-          throw new Error(switchPlaylistResp.ret || "切换歌单失败");
-        }
-      }
-
-      const playResp = (await apiPost<{ ret?: string }>("/cmd", {
-        did: deviceId,
-        cmd: `${playLocalKeyword}${picked}`,
-      })) as { ret?: string };
-
-      if (playResp.ret === "OK") {
+      if (isApiOk(playResp)) {
         stopSuppressUntilRef.current = 0;
         pendingPlayRef.current = {
           did: deviceId,
@@ -1328,7 +1254,9 @@ export function HomePage() {
             duration: infoDuration > 0 ? Math.floor(infoDuration) : 0,
           }),
         );
-        setMessage("已发送歌单播放，播完将按当前播放模式自动切歌");
+        setMessage(
+          `开始播放（来源: ${playResp.data?.source_plugin || "unknown"}, 传输: ${playResp.data?.transport || "unknown"}）`,
+        );
         await loadStatus(deviceId);
         window.setTimeout(() => {
           void loadStatus(deviceId);
@@ -1338,7 +1266,8 @@ export function HomePage() {
         }, 2200);
       } else {
         pendingPlayRef.current = null;
-        setMessage(`播放失败：${playResp.ret || "未知错误"}`);
+        const err = apiErrorInfo(playResp);
+        setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`);
         await loadStatus(deviceId);
       }
     } catch (err) {
@@ -1384,28 +1313,27 @@ export function HomePage() {
         return;
       }
 
-      const out = await apiPost<Record<string, unknown>>("/api/v1/play", {
+      const out = await v1Play({
         device_id: activeDid,
         query: url,
         source_hint: "auto",
         options: { no_cache: false, prefer_proxy: proxy, prefer_codec: "auto" },
       });
-      const parsed = unwrapPlaybackEnvelope(out);
-      const env = out as { data?: Record<string, unknown> };
-      const data = (env.data || {}) as Record<string, unknown>;
+      const data = (out.data || {}) as Record<string, unknown>;
       const extra = (data.extra || {}) as Record<string, unknown>;
       const outcome = (extra.playback_outcome || {}) as Record<string, unknown>;
       const netAudio = (extra.network_audio || {}) as Record<string, unknown>;
       const finalPath = String(outcome.final_path || netAudio.mode || "");
       const fallbackTriggered = Boolean(outcome.fallback_triggered);
-      if (parsed.ok) {
+      if (isApiOk(out)) {
         setMessage(
-          `播放已发送（来源: ${parsed.sourcePlugin || "unknown"}, 传输: ${parsed.transport || "unknown"}, 路径: ${
+          `播放已发送（来源: ${String(data.source_plugin || "unknown")}, 传输: ${String(data.transport || "unknown")}, 路径: ${
             finalPath || "unknown"
-          }${fallbackTriggered ? "，已触发回退" : ""}${parsed.sid ? `, sid: ${parsed.sid}` : ""}）。点播模式播完会自动停止。`,
+          }${fallbackTriggered ? "，已触发回退" : ""}${String(data.sid || out.request_id || "") ? `, sid: ${String(data.sid || out.request_id || "")}` : ""}）。点播模式播完会自动停止。`,
         );
       } else {
-        setMessage(`播放失败：${explainPlaybackError(parsed.errorCode, parsed.message, parsed.stage)}`);
+        const err = apiErrorInfo(out);
+        setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`);
       }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err || "未知错误");
@@ -1417,12 +1345,13 @@ export function HomePage() {
     if (!requireDid()) {
       return;
     }
-    const out = (await apiPost<Record<string, unknown>>("/api/v1/control/tts", {
-      device_id: activeDid,
-      text: ttsText,
-    })) as Record<string, unknown>;
-    const parsed = unwrapApiEnvelope(out);
-    setMessage(parsed.ok ? "文字播放已发送" : parsed.message || parsed.errorCode || "文字播放失败");
+    const out = await v1Tts(activeDid, ttsText);
+    if (isApiOk(out)) {
+      setMessage("文字播放已发送");
+      return;
+    }
+    const err = apiErrorInfo(out);
+    setMessage(err.message || err.errorCode || "文字播放失败");
   }
 
   async function sendCustomCmd() {
@@ -1471,22 +1400,19 @@ export function HomePage() {
       setMessage("选中结果缺少歌曲名");
       return;
     }
-    const out = (await apiPost<Record<string, unknown>>(
-      "/api/v1/play",
-      {
-        device_id: activeDid,
-        query: title,
-        source_hint: "auto",
-        options: { search_key: searchKeyword || "" },
-      },
-    )) as unknown;
-    const parsed = unwrapPlaybackEnvelope(out);
-    if (parsed.ok) {
+    const out = await v1Play({
+      device_id: activeDid,
+      query: title,
+      source_hint: "auto",
+      options: { search_key: searchKeyword || "" },
+    });
+    if (isApiOk(out)) {
       setMessage("已发送播放");
       setShowSearch(false);
       await loadStatus(activeDid);
     } else {
-      setMessage(`播放失败：${explainPlaybackError(parsed.errorCode, parsed.message, parsed.stage)}`);
+      const err = apiErrorInfo(out);
+      setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`);
     }
   }
 
@@ -2042,11 +1968,8 @@ export function HomePage() {
                     if (!requireDid()) {
                       return;
                     }
-                    const out = (await apiPost<Record<string, unknown>>("/api/v1/control/stop", {
-                      device_id: activeDid,
-                    })) as Record<string, unknown>;
-                    const parsed = unwrapPlaybackEnvelope(out);
-                    if (parsed.ok) {
+                    const out = await v1Stop(activeDid);
+                    if (isApiOk(out)) {
                       stopSuppressUntilRef.current = Date.now() + 6000;
                       pendingPlayRef.current = null;
                       setLocalPlaybackStartedAt(0);
@@ -2064,9 +1987,12 @@ export function HomePage() {
                       }));
                     }
                     setMessage(
-                      parsed.ok
+                      isApiOk(out)
                         ? "已停止"
-                        : `停止失败：${explainPlaybackError(parsed.errorCode, parsed.message, parsed.stage)}`,
+                        : (() => {
+                            const err = apiErrorInfo(out);
+                            return `停止失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`;
+                          })(),
                     );
                     await loadStatus(activeDid);
                   })()
@@ -2239,12 +2165,13 @@ export function HomePage() {
               if (!requireDid()) {
                 return;
               }
-              const out = (await apiPost<Record<string, unknown>>("/api/v1/control/volume", {
-                device_id: activeDid,
-                volume,
-              })) as Record<string, unknown>;
-              const parsed = unwrapApiEnvelope(out);
-              setMessage(parsed.ok ? "音量已设置" : parsed.message || parsed.errorCode || "音量设置失败");
+              const out = await v1SetVolume(activeDid, volume);
+              if (isApiOk(out)) {
+                setMessage("音量已设置");
+              } else {
+                const err = apiErrorInfo(out);
+                setMessage(err.message || err.errorCode || "音量设置失败");
+              }
               await loadStatus(activeDid);
             })()
           }
@@ -2253,12 +2180,13 @@ export function HomePage() {
               if (!requireDid()) {
                 return;
               }
-              const out = (await apiPost<Record<string, unknown>>("/api/v1/control/volume", {
-                device_id: activeDid,
-                volume,
-              })) as Record<string, unknown>;
-              const parsed = unwrapApiEnvelope(out);
-              setMessage(parsed.ok ? "音量已设置" : parsed.message || parsed.errorCode || "音量设置失败");
+              const out = await v1SetVolume(activeDid, volume);
+              if (isApiOk(out)) {
+                setMessage("音量已设置");
+              } else {
+                const err = apiErrorInfo(out);
+                setMessage(err.message || err.errorCode || "音量设置失败");
+              }
               await loadStatus(activeDid);
             })()
           }

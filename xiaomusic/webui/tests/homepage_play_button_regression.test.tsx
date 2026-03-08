@@ -8,9 +8,36 @@ const mockedApi = vi.hoisted(() => ({
   apiPost: vi.fn(),
 }));
 
+const mockedV1 = vi.hoisted(() => ({
+  play: vi.fn(),
+  getDevices: vi.fn(),
+  getPlayerState: vi.fn(),
+  tts: vi.fn(),
+  setVolume: vi.fn(),
+  stop: vi.fn(),
+}));
+
 vi.mock("../src/services/apiClient", () => ({
   apiGet: mockedApi.apiGet,
   apiPost: mockedApi.apiPost,
+}));
+
+vi.mock("../src/services/v1Api", () => ({
+  isApiOk: (out: { code?: number }) => Number(out.code || -1) === 0,
+  apiErrorText: (out: { message?: string }) => String(out.message || "request failed"),
+  apiErrorInfo: (out: { message?: string }) => ({
+    message: String(out.message || "request failed"),
+    errorCode: "",
+    stage: null,
+  }),
+  play: mockedV1.play,
+  getDevices: mockedV1.getDevices,
+  getPlayerState: mockedV1.getPlayerState,
+  tts: mockedV1.tts,
+  setVolume: mockedV1.setVolume,
+  stop: mockedV1.stop,
+  pause: vi.fn(),
+  resume: vi.fn(),
 }));
 
 vi.mock("../src/theme/ThemeProvider", () => ({
@@ -39,6 +66,12 @@ describe("HomePage play button regression", () => {
 
     mockedApi.apiGet.mockReset();
     mockedApi.apiPost.mockReset();
+    mockedV1.play.mockReset();
+    mockedV1.getDevices.mockReset();
+    mockedV1.getPlayerState.mockReset();
+    mockedV1.tts.mockReset();
+    mockedV1.setVolume.mockReset();
+    mockedV1.stop.mockReset();
 
     mockedApi.apiGet.mockImplementation(async (path: string) => {
       if (path === "/getversion") {
@@ -68,9 +101,6 @@ describe("HomePage play button regression", () => {
       if (path === "/device_list") {
         return { devices: [{ miotDID: "981257654", name: "XiaoAI" }] };
       }
-      if (path.startsWith("/playingmusic?did=")) {
-        return { ret: "OK", is_playing: false, cur_music: "", cur_playlist: "所有歌曲", offset: 0, duration: 0 };
-      }
       if (path.startsWith("/getvolume?did=")) {
         return { volume: 45 };
       }
@@ -78,6 +108,27 @@ describe("HomePage play button regression", () => {
     });
 
     mockedApi.apiPost.mockResolvedValue({ ret: "OK" });
+    mockedV1.play.mockResolvedValue({
+      code: 0,
+      message: "ok",
+      data: { status: "playing", device_id: "981257654", source_plugin: "local_library", transport: "mina" },
+      request_id: "rid-play",
+    });
+    mockedV1.getPlayerState.mockResolvedValue({
+      code: 0,
+      message: "ok",
+      data: { device_id: "981257654", is_playing: false, cur_music: "", offset: 0, duration: 0 },
+      request_id: "rid-state",
+    });
+    mockedV1.getDevices.mockResolvedValue({
+      code: 0,
+      message: "ok",
+      data: { devices: [{ device_id: "981257654", name: "XiaoAI", model: "OH2P", online: true }] },
+      request_id: "rid-dev",
+    });
+    mockedV1.tts.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-tts" });
+    mockedV1.setVolume.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-vol" });
+    mockedV1.stop.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-stop" });
 
     await act(async () => {
       root.render(<HomePage />);
@@ -91,7 +142,7 @@ describe("HomePage play button regression", () => {
     container.remove();
   });
 
-  it("clicking play sends playlist+song commands for auto-next playback", async () => {
+  it("clicking play calls v1 service with unified payload", async () => {
     const playTooltip = Array.from(container.querySelectorAll(".control-button .tooltip")).find(
       (el) => (el.textContent || "").trim() === "播放",
     );
@@ -105,15 +156,15 @@ describe("HomePage play button regression", () => {
     const infoCalls = mockedApi.apiGet.mock.calls.filter((args) => String(args[0]).startsWith("/musicinfo?name="));
     expect(infoCalls).toHaveLength(1);
 
-    const cmdCalls = mockedApi.apiPost.mock.calls.filter((args) => args[0] === "/cmd");
-    expect(cmdCalls).toHaveLength(2);
-
-    const switchPlaylist = cmdCalls[0][1] as Record<string, unknown>;
-    const playSong = cmdCalls[1][1] as Record<string, unknown>;
-    expect(switchPlaylist).toMatchObject({ did: "981257654", cmd: "播放列表所有歌曲" });
-    expect(playSong).toMatchObject({ did: "981257654", cmd: "播放本地歌曲Song A" });
+    expect(mockedV1.play).toHaveBeenCalledTimes(1);
+    expect(mockedV1.play).toHaveBeenCalledWith({
+      device_id: "981257654",
+      query: "http://127.0.0.1:58090/static/media/song-a.mp3",
+      source_hint: "auto",
+      options: { list_name: "所有歌曲" },
+    });
 
     const announcer = container.querySelector("#sr-announcer");
-    expect((announcer?.textContent || "").trim()).toContain("自动切歌");
+    expect((announcer?.textContent || "").trim()).not.toContain("/api/v1/play");
   });
 });
