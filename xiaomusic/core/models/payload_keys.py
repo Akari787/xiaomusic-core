@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+from xiaomusic.constants.api_fields import DEVICE_ID, OPTIONS, QUERY, REQUEST_ID, SOURCE_HINT
+
 # Shared payload/context key constants for playback boundary parsing.
 
-KEY_DEVICE_ID = "device_id"
-KEY_QUERY = "query"
-KEY_SOURCE_HINT = "source_hint"
-KEY_OPTIONS = "options"
-KEY_REQUEST_ID = "request_id"
+KEY_DEVICE_ID = DEVICE_ID
+KEY_QUERY = QUERY
+KEY_SOURCE_HINT = SOURCE_HINT
+KEY_OPTIONS = OPTIONS
+KEY_REQUEST_ID = REQUEST_ID
 
 KEY_SPEAKER_ID = "speaker_id"
 
 OPT_RESOLVE_TIMEOUT_SECONDS = "resolve_timeout_seconds"
+OPT_TIMEOUT = "timeout"
+OPT_START_POSITION = "start_position"
+OPT_SHUFFLE = "shuffle"
+OPT_LOOP = "loop"
+OPT_VOLUME = "volume"
 OPT_NO_CACHE = "no_cache"
 OPT_PREFER_PROXY = "prefer_proxy"
 OPT_CONFIRM_START = "confirm_start"

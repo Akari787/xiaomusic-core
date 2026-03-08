@@ -8,13 +8,18 @@ from xiaomusic.core.models.payload_keys import (
     OPT_CONFIRM_START_DELAY_MS,
     OPT_CONFIRM_START_INTERVAL_MS,
     OPT_CONFIRM_START_RETRIES,
+    OPT_LOOP,
     OPT_ID,
     OPT_MEDIA_ID,
     OPT_NO_CACHE,
     OPT_PREFER_PROXY,
     OPT_RESOLVE_TIMEOUT_SECONDS,
+    OPT_SHUFFLE,
     OPT_SOURCE_PAYLOAD,
+    OPT_START_POSITION,
+    OPT_TIMEOUT,
     OPT_TITLE,
+    OPT_VOLUME,
     PAYLOAD_ID,
     PAYLOAD_SOURCE,
     PAYLOAD_TITLE,
@@ -59,6 +64,11 @@ def _as_int(value: Any, default: int, *, min_value: int | None = None) -> int:
 
 @dataclass(slots=True)
 class PlayOptions:
+    start_position: int = 0
+    shuffle: bool = False
+    loop: bool = False
+    volume: int | None = None
+    timeout: float | None = None
     resolve_timeout_seconds: float | None = None
     no_cache: bool = False
     prefer_proxy: bool = False
@@ -79,7 +89,16 @@ class PlayOptions:
         normalized_payload = source_payload if isinstance(source_payload, dict) else None
         media_id = str(payload.get(OPT_MEDIA_ID) or payload.get(OPT_ID) or "").strip()
         title = str(payload.get(OPT_TITLE) or "").strip()
+        volume: int | None = None
+        if OPT_VOLUME in payload and payload.get(OPT_VOLUME) is not None:
+            volume_raw = _as_int(payload.get(OPT_VOLUME), 0, min_value=0)
+            volume = volume_raw if volume_raw <= 100 else 100
         return cls(
+            start_position=_as_int(payload.get(OPT_START_POSITION), 0, min_value=0),
+            shuffle=_as_bool(payload.get(OPT_SHUFFLE), False),
+            loop=_as_bool(payload.get(OPT_LOOP), False),
+            volume=volume,
+            timeout=_as_float(payload.get(OPT_TIMEOUT), None),
             resolve_timeout_seconds=_as_float(payload.get(OPT_RESOLVE_TIMEOUT_SECONDS), None),
             no_cache=_as_bool(payload.get(OPT_NO_CACHE), False),
             prefer_proxy=_as_bool(payload.get(OPT_PREFER_PROXY), False),
@@ -103,7 +122,14 @@ class PlayOptions:
         context: dict[str, Any] = {
             OPT_RESOLVE_TIMEOUT_SECONDS: float(self.resolve_timeout_seconds or default_resolve_timeout),
             OPT_NO_CACHE: bool(self.no_cache),
+            OPT_START_POSITION: int(self.start_position),
+            OPT_SHUFFLE: bool(self.shuffle),
+            OPT_LOOP: bool(self.loop),
         }
+        if self.volume is not None:
+            context[OPT_VOLUME] = int(self.volume)
+        if self.timeout is not None:
+            context[OPT_TIMEOUT] = float(self.timeout)
         if include_prefer_proxy:
             context[OPT_PREFER_PROXY] = bool(self.prefer_proxy)
             context[OPT_CONFIRM_START] = bool(self.confirm_start)

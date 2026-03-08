@@ -6,11 +6,16 @@ from xiaomusic.core.models.payload_keys import (
     OPT_CONFIRM_START_DELAY_MS,
     OPT_CONFIRM_START_INTERVAL_MS,
     OPT_CONFIRM_START_RETRIES,
+    OPT_LOOP,
     OPT_NO_CACHE,
     OPT_PREFER_PROXY,
     OPT_RESOLVE_TIMEOUT_SECONDS,
+    OPT_SHUFFLE,
     OPT_SOURCE_PAYLOAD,
+    OPT_START_POSITION,
+    OPT_TIMEOUT,
     OPT_TITLE,
+    OPT_VOLUME,
     PAYLOAD_ID,
     PAYLOAD_SOURCE,
     PAYLOAD_TITLE,
@@ -20,6 +25,11 @@ from xiaomusic.core.models.payload_keys import (
 
 def test_play_options_defaults_from_empty_payload() -> None:
     opts = PlayOptions.from_payload(None)
+    assert opts.start_position == 0
+    assert opts.shuffle is False
+    assert opts.loop is False
+    assert opts.volume is None
+    assert opts.timeout is None
     assert opts.no_cache is False
     assert opts.prefer_proxy is False
     assert opts.confirm_start is True
@@ -39,10 +49,20 @@ def test_play_options_from_legacy_payload_normalizes_values() -> None:
             "confirm_start_retries": "-3",
             "confirm_start_interval_ms": "50",
             "resolve_timeout_seconds": "15",
+            "start_position": "30",
+            "shuffle": "true",
+            "loop": 1,
+            "volume": "120",
+            "timeout": "20",
             "id": "legacy-id",
             "title": "Legacy Title",
         }
     )
+    assert opts.start_position == 30
+    assert opts.shuffle is True
+    assert opts.loop is True
+    assert opts.volume == 100
+    assert opts.timeout == 20
     assert opts.no_cache is True
     assert opts.prefer_proxy is True
     assert opts.confirm_start is False
@@ -65,6 +85,9 @@ def test_media_request_from_payload_builds_jellyfin_context() -> None:
         include_prefer_proxy=True,
     )
     assert req.context[OPT_RESOLVE_TIMEOUT_SECONDS] == 8
+    assert req.context[OPT_START_POSITION] == 0
+    assert req.context[OPT_SHUFFLE] is False
+    assert req.context[OPT_LOOP] is False
     assert req.context[OPT_NO_CACHE] is False
     assert req.context[OPT_PREFER_PROXY] is False
     assert req.context[OPT_CONFIRM_START] is True
@@ -77,3 +100,18 @@ def test_media_request_from_payload_builds_jellyfin_context() -> None:
     assert payload[PAYLOAD_ID] == "jf-1"
     assert payload[PAYLOAD_TITLE] == "My Song"
     assert req.context[OPT_TITLE] == "My Song"
+
+
+def test_media_request_from_payload_keeps_volume_and_timeout_context() -> None:
+    opts = PlayOptions.from_payload({"volume": 35, "timeout": 9, "start_position": 12})
+    req = MediaRequest.from_payload(
+        request_id="rid-2",
+        query="https://example.com/a.mp3",
+        source_hint="direct_url",
+        device_id="did-2",
+        options=opts,
+        include_prefer_proxy=True,
+    )
+    assert req.context[OPT_VOLUME] == 35
+    assert req.context[OPT_TIMEOUT] == 9
+    assert req.context[OPT_START_POSITION] == 12

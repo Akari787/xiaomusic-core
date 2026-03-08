@@ -9,6 +9,7 @@ from uuid import uuid4
 from xiaomusic.adapters.mina import MinaTransport
 from xiaomusic.adapters.miio import MiioTransport
 from xiaomusic.adapters.sources import register_default_source_plugins
+from xiaomusic.constants.api_fields import DEVICE_ID, REQUEST_ID
 from xiaomusic.core.coordinator import PlaybackCoordinator
 from xiaomusic.core.delivery import DeliveryAdapter
 from xiaomusic.core.device import DeviceRegistry
@@ -86,12 +87,12 @@ class PlaybackFacade:
         device_id: str,
         query: str,
         source_hint: str = "auto",
-        options: PlayOptions | dict[str, Any] | None = None,
+        options: PlayOptions | None = None,
         request_id: str | None = None,
     ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         q = self._validate_query(query)
-        opts = options if isinstance(options, PlayOptions) else PlayOptions.from_payload(options)
+        opts = options or PlayOptions()
         normalized_hint = self._normalize_hint(source_hint)
         req = MediaRequest.from_payload(
             request_id=str(request_id or uuid4().hex[:16]),
@@ -107,10 +108,10 @@ class PlaybackFacade:
         dispatch = result["dispatch"]
         return {
             "status": "playing",
-            "device_id": did,
+            DEVICE_ID: did,
             "source_plugin": prepared.source,
             "transport": dispatch.transport,
-            "request_id": req.request_id,
+            REQUEST_ID: req.request_id,
             "media": {
                 "media_id": resolved.media_id,
                 "title": resolved.title,
@@ -129,11 +130,11 @@ class PlaybackFacade:
         *,
         query: str,
         source_hint: str = "auto",
-        options: PlayOptions | dict[str, Any] | None = None,
+        options: PlayOptions | None = None,
         request_id: str | None = None,
     ) -> dict[str, Any]:
         q = self._validate_query(query)
-        opts = options if isinstance(options, PlayOptions) else PlayOptions.from_payload(options)
+        opts = options or PlayOptions()
         normalized_hint = self._normalize_hint(source_hint)
         req = MediaRequest.from_payload(
             request_id=str(request_id or uuid4().hex[:16]),
@@ -148,7 +149,7 @@ class PlaybackFacade:
         return {
             "resolved": True,
             "source_plugin": result["source_plugin"],
-            "request_id": req.request_id,
+            REQUEST_ID: req.request_id,
             "media": {
                 "media_id": resolved.media_id,
                 "title": resolved.title,
@@ -164,9 +165,9 @@ class PlaybackFacade:
         result = await self._core().stop(did)
         return {
             "status": "stopped",
-            "device_id": did,
+            DEVICE_ID: did,
             "transport": result["transport"],
-            "request_id": str(request_id or uuid4().hex[:16]),
+            REQUEST_ID: str(request_id or uuid4().hex[:16]),
             "extra": {"dispatch": result["dispatch"].data},
         }
 
@@ -175,9 +176,9 @@ class PlaybackFacade:
         result = await self._core().pause(did)
         return {
             "status": "paused",
-            "device_id": did,
+            DEVICE_ID: did,
             "transport": result["transport"],
-            "request_id": str(request_id or uuid4().hex[:16]),
+            REQUEST_ID: str(request_id or uuid4().hex[:16]),
             "extra": {"dispatch": result["dispatch"].data},
         }
 
@@ -186,9 +187,9 @@ class PlaybackFacade:
         result = await self._core().resume(did)
         return {
             "status": "resumed",
-            "device_id": did,
+            DEVICE_ID: did,
             "transport": result["transport"],
-            "request_id": str(request_id or uuid4().hex[:16]),
+            REQUEST_ID: str(request_id or uuid4().hex[:16]),
             "extra": {"dispatch": result["dispatch"].data},
         }
 
@@ -200,9 +201,9 @@ class PlaybackFacade:
         result = await self._core().tts(did, text=content)
         return {
             "status": "ok",
-            "device_id": did,
+            DEVICE_ID: did,
             "transport": result["transport"],
-            "request_id": str(request_id or uuid4().hex[:16]),
+            REQUEST_ID: str(request_id or uuid4().hex[:16]),
             "extra": {"dispatch": result["dispatch"].data},
         }
 
@@ -219,9 +220,9 @@ class PlaybackFacade:
         result = await self._core().set_volume(did, volume=level)
         return {
             "status": "ok",
-            "device_id": did,
+            DEVICE_ID: did,
             "transport": result["transport"],
-            "request_id": str(request_id or uuid4().hex[:16]),
+            REQUEST_ID: str(request_id or uuid4().hex[:16]),
             "extra": {"volume": level, "dispatch": result["dispatch"].data},
         }
 
@@ -231,9 +232,9 @@ class PlaybackFacade:
         reachability = result.get("reachability")
         return {
             "status": "ok",
-            "device_id": did,
+            DEVICE_ID: did,
             "transport": result["transport"],
-            "request_id": str(request_id or uuid4().hex[:16]),
+            REQUEST_ID: str(request_id or uuid4().hex[:16]),
             "reachable": bool(getattr(reachability, "local_reachable", False) or getattr(reachability, "cloud_reachable", False)),
             "extra": {
                 "dispatch": result["dispatch"].data,
@@ -318,7 +319,7 @@ class PlaybackFacade:
             "cur_music": cur_music,
             "offset": safe_offset,
             "duration": safe_duration,
-            "request_id": str(request_id or uuid4().hex[:16]),
+            REQUEST_ID: str(request_id or uuid4().hex[:16]),
         }
 
     async def stop_legacy(self, target: dict[str, Any]) -> dict[str, Any]:

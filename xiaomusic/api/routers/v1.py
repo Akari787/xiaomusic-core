@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query
 
 from xiaomusic import __version__
 from xiaomusic.api.api_error import ApiError
+from xiaomusic.constants.api_fields import DEVICE_ID, OPTIONS, QUERY, REQUEST_ID, SOURCE_HINT
 from xiaomusic.api.models import (
     ApiResponse,
     ControlRequest,
@@ -24,6 +25,7 @@ from xiaomusic.core.errors import (
     SourceResolveError,
     TransportError,
 )
+from xiaomusic.core.models import PlayOptions
 from xiaomusic.playback.facade import PlaybackFacade
 
 router = APIRouter()
@@ -120,7 +122,7 @@ def _map_api_exception(exc: Exception, request_id: str) -> dict[str, Any]:
 def _normalize_device(device: dict[str, Any]) -> dict[str, Any]:
     device_id = str(device.get("miotDID") or device.get("did") or device.get("deviceID") or "")
     return {
-        "device_id": device_id,
+        DEVICE_ID: device_id,
         "name": str(device.get("name") or device.get("alias") or ""),
         "model": str(device.get("hardware") or ""),
         "online": bool(device.get("isOnline") or device.get("online") or False),
@@ -130,18 +132,19 @@ def _normalize_device(device: dict[str, Any]) -> dict[str, Any]:
 @router.post("/api/v1/play")
 async def api_v1_play(data: PlayRequest):
     request_id = _next_request_id(data.request_id)
+    options = PlayOptions.from_payload(getattr(data, OPTIONS, None))
     try:
         out = await _get_facade().play(
-            device_id=data.device_id,
-            query=data.query,
-            source_hint=data.source_hint,
-            options=data.options,
+            device_id=getattr(data, DEVICE_ID),
+            query=getattr(data, QUERY),
+            source_hint=getattr(data, SOURCE_HINT),
+            options=options,
             request_id=request_id,
         )
         return _api_ok(
             {
                 "status": out.get("status", "playing"),
-                "device_id": out.get("device_id", data.device_id),
+                DEVICE_ID: out.get(DEVICE_ID, getattr(data, DEVICE_ID)),
                 "source_plugin": out.get("source_plugin", ""),
                 "transport": out.get("transport", ""),
                 "sid": request_id,
@@ -154,8 +157,8 @@ async def api_v1_play(data: PlayRequest):
         LOG.exception(
             "api_fail endpoint=/api/v1/play request_id=%s device_id=%s source_hint=%s error=%s",
             request_id,
-            data.device_id,
-            data.source_hint,
+            getattr(data, DEVICE_ID),
+            getattr(data, SOURCE_HINT),
             exc.__class__.__name__,
         )
         return _map_api_exception(exc, request_id)
@@ -164,11 +167,12 @@ async def api_v1_play(data: PlayRequest):
 @router.post("/api/v1/resolve")
 async def api_v1_resolve(data: ResolveRequest):
     request_id = _next_request_id(data.request_id)
+    options = PlayOptions.from_payload(getattr(data, OPTIONS, None))
     try:
         out = await _get_facade().resolve(
-            query=data.query,
-            source_hint=data.source_hint,
-            options=data.options,
+            query=getattr(data, QUERY),
+            source_hint=getattr(data, SOURCE_HINT),
+            options=options,
             request_id=request_id,
         )
         return _api_ok(
@@ -189,7 +193,7 @@ async def api_v1_control_stop(data: ControlRequest):
     request_id = _next_request_id(data.request_id)
     try:
         out = await _get_facade().stop(data.device_id, request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != "request_id"}, request_id=request_id)
+        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
@@ -199,7 +203,7 @@ async def api_v1_control_pause(data: ControlRequest):
     request_id = _next_request_id(data.request_id)
     try:
         out = await _get_facade().pause(data.device_id, request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != "request_id"}, request_id=request_id)
+        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
@@ -209,7 +213,7 @@ async def api_v1_control_resume(data: ControlRequest):
     request_id = _next_request_id(data.request_id)
     try:
         out = await _get_facade().resume(data.device_id, request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != "request_id"}, request_id=request_id)
+        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
@@ -219,7 +223,7 @@ async def api_v1_control_tts(data: TtsRequest):
     request_id = _next_request_id(data.request_id)
     try:
         out = await _get_facade().tts(data.device_id, data.text, request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != "request_id"}, request_id=request_id)
+        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
@@ -229,7 +233,7 @@ async def api_v1_control_volume(data: VolumeRequest):
     request_id = _next_request_id(data.request_id)
     try:
         out = await _get_facade().set_volume(data.device_id, int(data.volume), request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != "request_id"}, request_id=request_id)
+        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
@@ -239,7 +243,7 @@ async def api_v1_control_probe(data: ControlRequest):
     request_id = _next_request_id(data.request_id)
     try:
         out = await _get_facade().probe(data.device_id, request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != "request_id"}, request_id=request_id)
+        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
@@ -277,6 +281,6 @@ async def api_v1_player_state(device_id: str = Query(..., min_length=1), request
     rid = _next_request_id(request_id)
     try:
         out = await _get_facade().player_state(device_id=device_id, request_id=rid)
-        return _api_ok({k: v for k, v in out.items() if k != "request_id"}, request_id=rid)
+        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=rid)
     except Exception as exc:
         return _map_api_exception(exc, rid)
