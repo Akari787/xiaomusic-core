@@ -149,7 +149,7 @@ async def get_media_lyric(request: Request):
 
 
 @router.get("/playingmusic")
-def playingmusic(did: str = ""):
+async def playingmusic(did: str = ""):
     """当前播放音乐"""
     if not xiaomusic.did_exist(did):
         return api_response.ok(contract="ret", ret="Did not exist")
@@ -159,6 +159,42 @@ def playingmusic(did: str = ""):
     cur_playlist = xiaomusic.get_cur_play_list(did)
     # 播放进度
     offset, duration = xiaomusic.get_offset_duration(did)
+
+    player_status = {}
+    try:
+        player_status = await xiaomusic.get_player_status(did=did)
+    except Exception as e:
+        log.debug(f"playingmusic fallback get_player_status failed: {e}")
+
+    if isinstance(player_status, dict):
+        status_val = int(player_status.get("status", 0) or 0)
+        if not is_playing and status_val == 1:
+            is_playing = True
+
+        detail = player_status.get("play_song_detail")
+        if isinstance(detail, dict):
+            if not cur_music:
+                cur_music = (
+                    detail.get("audio_name")
+                    or detail.get("title")
+                    or detail.get("name")
+                    or cur_music
+                )
+            raw_pos = detail.get("position")
+            raw_dur = detail.get("duration")
+            try:
+                pos = float(raw_pos or 0)
+            except Exception:
+                pos = 0.0
+            try:
+                dur = float(raw_dur or 0)
+            except Exception:
+                dur = 0.0
+            if pos > 0 and offset <= 0:
+                offset = pos / 1000.0 if pos > 10000 else pos
+            if dur > 0 and duration <= 0:
+                duration = dur / 1000.0 if dur > 10000 else dur
+
     return api_response.ok(
         {
             "is_playing": is_playing,

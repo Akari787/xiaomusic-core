@@ -1,183 +1,96 @@
 # XiaoMusic Runtime API v1 规范
 
-**XiaoMusic Runtime API v1 Specification**
-
-版本：Draft v0.1
-状态：草案
-适用范围：XiaoMusic Runtime HTTP API
-
----
-
-# 1 API 设计原则
-
-Runtime API 遵循以下原则：
-
-## 1.1 单一播放入口
-
-所有播放请求必须通过：
-
-```
-POST /api/v1/play
-```
-
-不允许存在多个播放入口。
+版本：v1.0
+状态：生效中
+最后更新：2026-03-08
+适用范围：XiaoMusic Runtime HTTP API（WebUI 与第三方调用）
 
 ---
 
-## 1.2 统一请求结构
+## 1. 设计原则
 
-所有 API 请求必须使用 JSON。
+1) 单一播放入口
 
-请求结构必须明确。
+- 所有播放请求必须通过 `POST /api/v1/play`。
 
----
+2) 统一 JSON 请求
 
-## 1.3 统一响应结构
+- `/api/v1/*` 的请求体与响应体均为 JSON。
 
-所有 API 返回统一结构：
+3) 统一响应 Envelope
 
 ```json
 {
   "code": 0,
   "message": "ok",
   "data": {},
-  "request_id": "xxxx"
+  "request_id": "req_xxx"
 }
 ```
 
----
+- `code=0` 表示成功；`code!=0` 表示失败。
+- 错误信息仅通过 `code/message/data` 表达，不使用历史顶层字段（如 `ret`、`success`）作为 v1 主语义。
 
-## 1.4 统一错误处理
+4) Runtime 负责业务判断
 
-错误必须使用统一错误码。
-
-不允许返回未定义结构。
-
----
-
-## 1.5 WebUI 不负责业务判断
-
-WebUI 不应判断：
-
-* 来源类型
-* 插件类型
-* transport 类型
-
-这些逻辑必须由 Runtime 完成。
+- 来源识别、插件选择、传输路径、状态聚合都在 Runtime 完成。
+- WebUI 仅展示结果，不做业务推断。
 
 ---
 
-# 2 API 命名空间
+## 2. 命名空间
 
-Runtime API 命名空间：
-
-```
-/api/v1
-```
-
-所有接口必须以 `/api/v1` 开头。
+- 正式接口命名空间：`/api/v1`
+- 正式接口必须以 `/api/v1` 开头。
 
 ---
 
-# 3 API 分类
+## 3. 正式白名单接口（11 个）
 
-Runtime API 分为四类：
+1. `POST /api/v1/play`
+2. `POST /api/v1/resolve`
+3. `POST /api/v1/control/stop`
+4. `POST /api/v1/control/pause`
+5. `POST /api/v1/control/resume`
+6. `POST /api/v1/control/tts`
+7. `POST /api/v1/control/volume`
+8. `POST /api/v1/control/probe`
+9. `GET /api/v1/devices`
+10. `GET /api/v1/system/status`
+11. `GET /api/v1/player/state`
 
-| 类型   | 说明   |
-| ---- | ---- |
-| 播放接口 | 媒体播放 |
-| 控制接口 | 设备控制 |
-| 查询接口 | 状态查询 |
-| 解析接口 | 媒体解析 |
-
----
-
-# 4 播放接口
-
-## POST /api/v1/play
-
-播放媒体。
-
-该接口是 **Runtime 唯一播放入口**。
+说明：第 11 项用于统一播放状态查询，解决旧状态接口与新播放链路不同步问题。
 
 ---
 
-## 请求结构
+## 4. 播放接口
+
+### POST /api/v1/play
+
+请求示例：
 
 ```json
 {
-  "device_id": "speaker123",
+  "device_id": "981257654",
   "query": "https://example.com/song.mp3",
   "source_hint": "auto",
-  "options": {
-    "start_position": 0,
-    "proxy_mode": "auto"
-  }
+  "options": {}
 }
 ```
 
----
+`source_hint` 允许值：`auto` / `direct_url` / `site_media` / `jellyfin` / `local_library`。
 
-## 字段说明
-
-| 字段          | 说明   |
-| ----------- | ---- |
-| device_id   | 目标设备 |
-| query       | 媒体输入 |
-| source_hint | 来源提示 |
-| options     | 播放选项 |
-
----
-
-### source_hint
-
-可选值：
-
-```
-auto
-direct_url
-site_media
-jellyfin
-local_library
-```
-
-默认：
-
-```
-auto
-```
-
-当为 auto 时：
-
-Runtime 自动识别来源。
-
----
-
-### query 示例
-
-可能输入：
-
-```
-https://example.com/song.mp3
-https://youtube.com/...
-https://bilibili.com/...
-jellyfin:track:12345
-/local/music/song.mp3
-```
-
----
-
-## 成功响应
+成功响应示例：
 
 ```json
 {
   "code": 0,
   "message": "ok",
   "data": {
-    "device_id": "speaker123",
-    "source_plugin": "DirectUrlSourcePlugin",
-    "transport": "mina",
-    "status": "playing"
+    "status": "playing",
+    "device_id": "981257654",
+    "source_plugin": "direct_url",
+    "transport": "mina"
   },
   "request_id": "req_123"
 }
@@ -185,206 +98,102 @@ jellyfin:track:12345
 
 ---
 
-## 失败响应
+## 5. 控制接口
+
+- `POST /api/v1/control/stop`
+- `POST /api/v1/control/pause`
+- `POST /api/v1/control/resume`
+- `POST /api/v1/control/tts`
+- `POST /api/v1/control/volume`
+- `POST /api/v1/control/probe`
+
+除 `tts/volume` 外，请求体最小字段为：
 
 ```json
-{
-  "code": 20002,
-  "message": "source resolve failed",
-  "data": {
-    "plugin": "SiteMediaSourcePlugin"
-  },
-  "request_id": "req_123"
-}
+{ "device_id": "981257654" }
 ```
 
 ---
 
-# 5 控制接口
+## 6. 查询接口
 
-## POST /api/v1/control/stop
+### GET /api/v1/devices
 
-停止播放。
+返回设备列表（标准化字段）：`device_id/name/model/online`。
 
-请求：
+### GET /api/v1/system/status
 
-```json
-{
-  "device_id": "speaker123"
-}
-```
+返回 Runtime 基本状态：`status/version/devices_count`。
 
----
+### GET /api/v1/player/state
 
-## POST /api/v1/control/pause
+用途：统一播放状态查询。
 
-暂停播放。
+查询参数：
 
----
+- `device_id`（必填）
 
-## POST /api/v1/control/resume
+`data` 字段定义：
 
-恢复播放。
+- `device_id: string`
+- `is_playing: boolean`
+- `cur_music: string`
+- `offset: number`（秒，整数，>=0）
+- `duration: number`（秒，整数，>=0）
 
----
+约束：
 
-## POST /api/v1/control/volume
-
-设置音量。
-
-请求：
-
-```json
-{
-  "device_id": "speaker123",
-  "volume": 50
-}
-```
+- `offset/duration` 单位固定为秒，WebUI 不允许再做毫秒猜测。
+- 状态由 Runtime 统一聚合，避免前端多接口拼装。
 
 ---
 
-## POST /api/v1/control/tts
+## 7. 解析接口
 
-TTS 播报。
+### POST /api/v1/resolve
 
-请求：
+用途：只解析，不播放。
 
-```json
-{
-  "device_id": "speaker123",
-  "text": "Hello world"
-}
-```
-
----
-
-# 6 查询接口
-
-## GET /api/v1/devices
-
-获取设备列表。
-
-响应：
-
-```json
-{
-  "code": 0,
-  "data": {
-    "devices": [
-      {
-        "device_id": "speaker123",
-        "name": "Living Room",
-        "model": "xiaomi_sound_pro",
-        "online": true
-      }
-    ]
-  }
-}
-```
-
----
-
-## GET /api/v1/system/status
-
-获取 Runtime 状态。
-
----
-
-# 7 解析接口
-
-## POST /api/v1/resolve
-
-解析媒体来源。
-
-该接口不会播放媒体。
-
-仅用于测试与调试。
-
----
-
-## 请求
+请求示例：
 
 ```json
 {
   "query": "https://youtube.com/...",
-  "source_hint": "auto"
+  "source_hint": "auto",
+  "options": {}
 }
 ```
 
 ---
 
-## 响应
+## 8. WebUI 调用约束
 
-```json
-{
-  "code": 0,
-  "data": {
-    "source_plugin": "SiteMediaSourcePlugin",
-    "resolved": true,
-    "media": {
-      "title": "Example Video",
-      "duration": 200
-    }
-  }
-}
-```
-
----
-
-# 8 WebUI 调用规范
-
-WebUI 只允许调用以下接口：
-
-```
-/api/v1/play
-/api/v1/control/*
-/api/v1/devices
-/api/v1/resolve
-```
-
----
+WebUI 仅允许调用白名单 11 个接口。
 
 WebUI 不得调用：
 
-* Runtime 内部函数
-* 插件逻辑
-* Transport
+- Runtime 内部函数
+- 插件内部实现
+- 传输层实现细节
 
 ---
 
-# 9 兼容策略
+## 9. 兼容与迁移策略
 
-旧接口可以暂时保留：
-
-例如：
-
-```
-/api/v1/play_url
-```
-
-但必须：
-
-* 仅作为 wrapper
-* 内部调用 `/api/v1/play`
-
-未来版本将移除旧接口。
+- 非 `/api/v1/*` 历史接口可在迁移期保留，但不属于正式契约。
+- 新功能必须优先落入 `/api/v1/*`。
+- 迁移完成后，历史接口按版本计划逐步下线。
 
 ---
 
-# 10 错误码
+## 10. 错误码
 
-错误码参考：
+错误码分段：
 
-```
-runtime_specification.md
-```
+- `1xxxx` 系统
+- `2xxxx` 来源解析
+- `3xxxx` Delivery
+- `4xxxx` Transport
+- `5xxxx` API 请求
 
-模块划分：
-
-```
-1xxxx 系统
-2xxxx 来源
-3xxxx delivery
-4xxxx transport
-5xxxx API
-```
+详细定义见：`docs/spec/runtime_specification.md`。

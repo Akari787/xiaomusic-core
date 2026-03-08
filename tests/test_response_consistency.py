@@ -23,6 +23,7 @@ def test_api_v1_routes_whitelist_only():
         ("POST", "/api/v1/control/probe"),
         ("GET", "/api/v1/devices"),
         ("GET", "/api/v1/system/status"),
+        ("GET", "/api/v1/player/state"),
     }
     assert routes == expected
 
@@ -52,11 +53,24 @@ async def test_v1_response_has_unified_top_level_fields(monkeypatch):
                 "extra": {},
             }
 
+        async def player_state(self, device_id: str, request_id: str | None = None):
+            _ = request_id
+            return {
+                "device_id": device_id,
+                "is_playing": True,
+                "cur_music": "song",
+                "offset": 3,
+                "duration": 30,
+                "request_id": "rid-state",
+            }
+
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
     play_out = await v1.api_v1_play(PlayRequest(device_id="did-1", query="http://a/b.mp3"))
     stop_out = await v1.api_v1_control_stop(ControlRequest(device_id="did-1"))
+    state_out = await v1.api_v1_player_state(device_id="did-1")
     assert set(play_out.keys()) == {"code", "message", "data", "request_id"}
     assert set(stop_out.keys()) == {"code", "message", "data", "request_id"}
+    assert set(state_out.keys()) == {"code", "message", "data", "request_id"}
     assert "speaker_id" not in play_out
     assert "sid" not in play_out
     assert "state" not in play_out

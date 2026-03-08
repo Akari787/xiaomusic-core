@@ -1,156 +1,21 @@
-# API 文档
+# API 文档（迁移说明）
 
-本文档描述 `xiaomusic-oauth2` 当前稳定的接口约定与调用方式。
+最后更新：2026-03-08
 
-## 1. 总体约定
+> 本文件不再作为正式 API 契约来源，仅保留迁移说明。
 
-- 控制面统一使用 `/api/v1/*`
-- 媒体流回放使用 `/network_audio/stream/{sid}`
-- 响应语义统一：`success == ok`
-- 失败时返回：`error_code` + `message`
+## 正式规范入口
 
-## 2. 控制面接口（/api/v1/*）
+- 请以 `docs/api/api_v1_spec.md` 为唯一规范来源。
+- 该规范定义了 Runtime API v1 的白名单、请求/响应结构和字段约束。
 
-### 2.1 播放链接
+## 为什么本文件降级
 
-- 路径：`POST /api/v1/play_url`
-- 用途：播放任意可解析音频链接（直链、B 站、YouTube 等）
+- 历史内容包含已移除或已改名接口（例如 `play_url`、`/api/v1/status` 等），
+  容易误导前后端联调与测试。
+- 现阶段所有新功能与联调均应严格对齐 v1 规范。
 
-请求体示例：
+## 兼容原则
 
-```json
-{
-  "speaker_id": "<SPEAKER_ID>",
-  "url": "https://example.com/test.mp3",
-  "options": {
-    "no_cache": false
-  }
-}
-```
-
-关键响应字段：
-
-- `ok/success`：请求是否成功
-- `sid`：会话 ID，用于后续 `status/stop`
-- `state`：当前状态（例如 `streaming`）
-- `stream_url`：内部回放地址（通常是 `/network_audio/stream/{sid}`）
-- `error_code/message`：失败信息
-- `cache_hit/resolve_ms`：解析缓存命中与解析耗时
-
-### 2.2 停止播放
-
-- 路径：`POST /api/v1/stop`
-- 用途：停止指定会话或设备播放
-
-请求体示例：
-
-```json
-{
-  "sid": "s_xxx",
-  "speaker_id": "<SPEAKER_ID>"
-}
-```
-
-关键响应字段：
-
-- `ok/success`
-- `sid`
-- `state`（成功通常为 `stopped`）
-- `error_code/message`
-
-### 2.3 查询状态
-
-- 路径：`GET /api/v1/status`
-- 用途：查询会话或设备状态
-
-查询参数：
-
-- `sid`：按会话查询（优先）
-- `speaker_id`：按设备查询
-
-关键响应字段：
-
-- 基础：`ok/success/error_code/message/sid/speaker_id/state`
-- 可观测：`stage/last_transition_at/last_error_code/reconnect_count/cache_hit/resolve_ms`
-
-### 2.4 测试可达性
-
-- 路径：`POST /api/v1/test_reachability`
-- 用途：验证 Base URL 可达性，辅助排障
-
-请求体示例：
-
-```json
-{
-  "speaker_id": "<SPEAKER_ID>",
-  "base_url": "http://<HOST>:<PORT>"
-}
-```
-
-关键响应字段：
-
-- `ok/success`
-- `reachable`
-- `test_url`
-- `sid`
-- `error_code/message`
-
-### 2.5 自动检测 Base URL
-
-- 路径：`GET /api/v1/detect_base_url`
-- 用途：自动检测推荐 base_url
-
-关键响应字段：
-
-- `ok/success`
-- `base_url`
-- `error_code/message`
-
-### 2.6 清理会话
-
-- 路径：`POST /api/v1/sessions/cleanup`
-- 用途：手动清理会话
-
-请求体（可选）示例：
-
-```json
-{
-  "max_sessions": 100,
-  "ttl_seconds": 3600
-}
-```
-
-关键响应字段：
-
-- `ok/success`
-- `removed`
-- `remaining`
-- `error_code/message`
-
-## 3. 非控制面接口（保留）
-
-- `GET /network_audio/stream/{sid}`：音频流回放通道
-- `GET /network_audio/healthz`：健康状态（含缓存与会话统计）
-- `GET /network_audio/sessions`：会话列表观测
-
-## 4. 快速调用示例
-
-```bash
-curl -X POST http://<HOST>:<PORT>/api/v1/play_url \
-  -H "Content-Type: application/json" \
-  -d '{"speaker_id":"<SPEAKER_ID>","url":"https://example.com/test.mp3"}'
-
-curl -X POST http://<HOST>:<PORT>/api/v1/stop \
-  -H "Content-Type: application/json" \
-  -d '{"speaker_id":"<SPEAKER_ID>"}'
-
-curl "http://<HOST>:<PORT>/api/v1/status?speaker_id=<SPEAKER_ID>"
-```
-
-## 5. 迁移说明（旧版链接鉴权）
-
-- 旧版通过 URL 参数 `key/code` 访问 `/music/*`、`/picture/*` 的模式已移除。
-- 若仍传入 `key/code`，服务会返回 `410`，并给出迁移提示。
-- 推荐迁移到：
-  - HTTP Basic + `HTTP_AUTH_HASH`
-  - OAuth2 登录态
+- 非 `/api/v1/*` 的历史路由可能仍存在，但属于兼容层，不属于正式契约。
+- WebUI 与外部调用方都应优先迁移到 `docs/api/api_v1_spec.md` 中定义的接口。

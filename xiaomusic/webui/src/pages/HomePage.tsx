@@ -22,6 +22,13 @@ type PlayingInfo = {
   duration?: number;
 };
 
+type ApiV1Envelope<T = Record<string, unknown>> = {
+  code?: number;
+  message?: string;
+  data?: T;
+  request_id?: string;
+};
+
 type OnlineSearchItem = {
   name?: string;
   title?: string;
@@ -230,6 +237,10 @@ function deviceCandidates(d: Device): string[] {
   return Array.from(new Set(vals));
 }
 
+function preferredDidFromDevice(d: Device): string {
+  return String(d.miotDID || d.did || d.deviceID || "").trim();
+}
+
 function formatTime(sec: number): string {
   const s = Math.max(0, Math.floor(sec || 0));
   const m = Math.floor(s / 60);
@@ -395,12 +406,70 @@ function baseUrlToLegacyHostPort(baseUrl: string): { hostname: string; public_po
   };
 }
 
+function playbackSongStorageKey(did: string): string {
+  return `xm_last_playing_song_${did}`;
+}
+
+function loadRememberedPlayingSong(did: string): string {
+  if (!did) {
+    return "";
+  }
+  try {
+    return String(localStorage.getItem(playbackSongStorageKey(did)) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function saveRememberedPlayingSong(did: string, song: string): void {
+  if (!did) {
+    return;
+  }
+  const value = String(song || "").trim();
+  if (!value) {
+    return;
+  }
+  try {
+    localStorage.setItem(playbackSongStorageKey(did), value);
+  } catch {
+    return;
+  }
+}
+
+function loadLocal(key: string): string {
+  try {
+    return String(localStorage.getItem(key) || "");
+  } catch {
+    return "";
+  }
+}
+
+function saveLocal(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    return;
+  }
+}
+
+function removeLocal(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    return;
+  }
+}
+
+function playbackSnapshotKey(did: string): string {
+  return `xm_playback_snapshot_${did}`;
+}
+
 export function HomePage() {
   const [devices, setDevices] = useState<Device[]>([]);
-  const [activeDid, setActiveDid] = useState<string>("");
+  const [activeDid, setActiveDid] = useState<string>(() => loadLocal("xm_ui_active_did"));
   const [playlists, setPlaylists] = useState<Record<string, string[]>>({});
-  const [playlist, setPlaylist] = useState<string>("");
-  const [music, setMusic] = useState<string>("");
+  const [playlist, setPlaylist] = useState<string>(() => loadLocal("xm_ui_playlist"));
+  const [music, setMusic] = useState<string>(() => loadLocal("xm_ui_music"));
   const [volume, setVolume] = useState<number>(50);
   const [status, setStatus] = useState<PlayingInfo>({});
   const [message, setMessage] = useState<string>("");
@@ -437,7 +506,20 @@ export function HomePage() {
   const [qrcodeExpireAt, setQrcodeExpireAt] = useState<number>(0);
   const [qrcodeRemain, setQrcodeRemain] = useState<number>(0);
   const [pullAskEnabled, setPullAskEnabled] = useState<boolean>(false);
+  const [localPlaybackStartedAt, setLocalPlaybackStartedAt] = useState<number>(0);
+  const [localPlaybackDuration, setLocalPlaybackDuration] = useState<number>(0);
+  const [localPlaybackSong, setLocalPlaybackSong] = useState<string>("");
+  const [rememberedPlayingSong, setRememberedPlayingSong] = useState<string>("");
+  const statusRef = useRef<PlayingInfo>({});
+  const localPlaybackStartedAtRef = useRef<number>(0);
+  const localPlaybackDurationRef = useRef<number>(0);
+  const localPlaybackSongRef = useRef<string>("");
+  const rememberedPlayingSongRef = useRef<string>("");
   const publicBaseMigratedRef = useRef<boolean>(false);
+  const lastPositivePlaybackAtRef = useRef<number>(0);
+  const stopSuppressUntilRef = useRef<number>(0);
+  const autoAlignSelectionRef = useRef<boolean>(true);
+  const pendingPlayRef = useRef<{ did: string; song: string; expiresAt: number } | null>(null);
   const themeFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const {
@@ -478,15 +560,70 @@ export function HomePage() {
     ],
     [customThemes],
   );
+  const { safeOffset, safeDuration } = useMemo(() => {
+    const duration = Math.max(0, Math.floor(Number(status.duration || 0)));
+    let offset = Math.max(0, Math.floor(Number(status.offset || 0)));
+    if (duration > 0) {
+      const maybeMilliseconds = offset > duration * 100 && Math.floor(offset / 1000) <= duration + 30;
+      if (maybeMilliseconds) {
+        offset = Math.floor(offset / 1000);
+      }
+      if (offset > duration + 30) {
+        const elapsed = localPlaybackStartedAt
+          ? Math.max(0, Math.floor((Date.now() - localPlaybackStartedAt) / 1000))
+          : 0;
+        offset = elapsed > 0 ? Math.min(elapsed, duration) : Math.min(offset, duration);
+      }
+    }
+    return { safeOffset: offset, safeDuration: duration };
+  }, [status.duration, status.offset, localPlaybackStartedAt]);
   const progress = useMemo(() => {
-    const d = Number(status.duration || 0);
-    const o = Number(status.offset || 0);
-    if (!d) {
+    if (!safeDuration) {
       return 0;
     }
-    return Math.max(0, Math.min(100, Math.round((o / d) * 100)));
-  }, [status.duration, status.offset]);
+    return Math.max(0, Math.min(100, Math.round((safeOffset / safeDuration) * 100)));
+  }, [safeDuration, safeOffset]);
   const isSoundscapeLayout = activeLayout === "soundscape";
+  const currentMusicName = String(status.cur_music || rememberedPlayingSong || localPlaybackSong || "").trim();
+  const playbackText = status.is_playing ? `正在播放：${currentMusicName || "未知歌曲"}` : "空闲";
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  useEffect(() => {
+    localPlaybackStartedAtRef.current = localPlaybackStartedAt;
+  }, [localPlaybackStartedAt]);
+
+  useEffect(() => {
+    localPlaybackDurationRef.current = localPlaybackDuration;
+  }, [localPlaybackDuration]);
+
+  useEffect(() => {
+    localPlaybackSongRef.current = localPlaybackSong;
+  }, [localPlaybackSong]);
+
+  useEffect(() => {
+    rememberedPlayingSongRef.current = rememberedPlayingSong;
+  }, [rememberedPlayingSong]);
+
+  useEffect(() => {
+    if (activeDid) {
+      saveLocal("xm_ui_active_did", activeDid);
+    }
+  }, [activeDid]);
+
+  useEffect(() => {
+    if (playlist) {
+      saveLocal("xm_ui_playlist", playlist);
+    }
+  }, [playlist]);
+
+  useEffect(() => {
+    if (music) {
+      saveLocal("xm_ui_music", music);
+    }
+  }, [music]);
 
   useEffect(() => {
     const mainStyleId = "webui-default-main-css";
@@ -562,8 +699,10 @@ export function HomePage() {
   async function tryResolveDid(device: Device): Promise<string> {
     const candidates = deviceCandidates(device);
     for (const did of candidates) {
-      const out = (await apiGet<PlayingInfo>(`/playingmusic?did=${encodeURIComponent(did)}`)) as PlayingInfo;
-      if (out.ret !== "Did not exist") {
+      const out = (await apiGet<ApiV1Envelope<PlayingInfo>>(
+        `/api/v1/player/state?device_id=${encodeURIComponent(did)}`,
+      )) as ApiV1Envelope<PlayingInfo>;
+      if (Number(out.code || -1) === 0) {
         return did;
       }
     }
@@ -626,7 +765,9 @@ export function HomePage() {
     if (rows.length) {
       setDevices(rows);
       const fallbackDid = deviceCandidates(rows[0])[0] || "";
-      const preferredDid = dids[0] || fallbackDid;
+      const preferredRaw = dids[0] || fallbackDid;
+      const owner = rows.find((d) => deviceCandidates(d).includes(preferredRaw));
+      const preferredDid = owner ? preferredDidFromDevice(owner) : preferredRaw;
       if (preferredDid) {
         setActiveDid((prev) => prev || preferredDid);
       }
@@ -673,11 +814,27 @@ export function HomePage() {
       return;
     }
     const fallbackDid = deviceCandidates(rows[0])[0] || "";
+    const currentDid = String(activeDid || "").trim();
+    if (currentDid) {
+      const owner = rows.find((d) => deviceCandidates(d).includes(currentDid));
+      if (!owner) {
+        removeLocal("xm_ui_active_did");
+        setActiveDid("");
+      } else {
+        const preferred = preferredDidFromDevice(owner);
+        if (preferred && preferred !== currentDid) {
+          setActiveDid(preferred);
+          saveLocal("xm_ui_active_did", preferred);
+        }
+      }
+    }
     if (fallbackDid) {
       setActiveDid((prev) => prev || fallbackDid);
       void (async () => {
-        const probe = (await apiGet<PlayingInfo>(`/playingmusic?did=${encodeURIComponent(fallbackDid)}`)) as PlayingInfo;
-        if (probe.ret !== "Did not exist") {
+        const probe = (await apiGet<ApiV1Envelope<PlayingInfo>>(
+          `/api/v1/player/state?device_id=${encodeURIComponent(fallbackDid)}`,
+        )) as ApiV1Envelope<PlayingInfo>;
+        if (Number(probe.code || -1) === 0) {
           return;
         }
         const resolved = await tryResolveDid(rows[0]);
@@ -711,12 +868,155 @@ export function HomePage() {
     if (!did) {
       return;
     }
-    const [playingResp, volumeResp] = await Promise.allSettled([
-      apiGet<PlayingInfo>(`/playingmusic?did=${encodeURIComponent(did)}`),
+    const [stateResp, volumeResp] = await Promise.allSettled([
+      apiGet<ApiV1Envelope<PlayingInfo>>(`/api/v1/player/state?device_id=${encodeURIComponent(did)}`),
       apiGet<{ volume?: number }>(`/getvolume?did=${encodeURIComponent(did)}`),
     ]);
-    if (playingResp.status === "fulfilled") {
-      setStatus(playingResp.value as PlayingInfo);
+    if (stateResp.status === "fulfilled") {
+      const envelope = stateResp.value as ApiV1Envelope<PlayingInfo>;
+      if (Number(envelope.code || -1) !== 0) {
+        if (Number(envelope.code || -1) === 40004) {
+          const owner = devices.find((d) => deviceCandidates(d).includes(did));
+          const preferred = owner ? preferredDidFromDevice(owner) : "";
+          if (preferred && preferred !== did) {
+            setActiveDid(preferred);
+            saveLocal("xm_ui_active_did", preferred);
+          }
+        }
+      } else {
+        const next = envelope.data || {};
+        const pending = pendingPlayRef.current;
+        let merged: PlayingInfo = {
+          ...next,
+          is_playing: Boolean(next.is_playing),
+          offset: Math.max(0, Number(next.offset || 0)),
+          duration: Math.max(0, Number(next.duration || 0)),
+        };
+        if (Date.now() < stopSuppressUntilRef.current) {
+          merged = {
+            ...merged,
+            is_playing: false,
+            offset: 0,
+          };
+        }
+        if (merged.is_playing) {
+          lastPositivePlaybackAtRef.current = Date.now();
+        } else {
+          const liveStatus = statusRef.current;
+          const withinStabilityWindow = Date.now() - lastPositivePlaybackAtRef.current < 12000;
+          if (withinStabilityWindow) {
+            merged.is_playing = true;
+            merged.cur_music = String(
+              merged.cur_music ||
+                liveStatus.cur_music ||
+                localPlaybackSongRef.current ||
+                rememberedPlayingSongRef.current ||
+                "",
+            );
+            merged.duration =
+              Number(merged.duration || 0) ||
+              Number(liveStatus.duration || 0) ||
+              localPlaybackDurationRef.current;
+            merged.offset =
+              Number(merged.offset || 0) ||
+              Number(liveStatus.offset || 0) ||
+              Math.max(
+                0,
+                Math.floor(
+                  (Date.now() - Number(localPlaybackStartedAtRef.current || 0)) / 1000,
+                ),
+              );
+          }
+        }
+        if (merged.is_playing && !String(merged.cur_music || "").trim()) {
+          merged.cur_music = loadRememberedPlayingSong(did);
+        }
+        if (merged.is_playing && String(merged.cur_music || "").trim()) {
+          const remembered = String(merged.cur_music || "").trim();
+          saveRememberedPlayingSong(did, remembered);
+          setRememberedPlayingSong(remembered);
+          rememberedPlayingSongRef.current = remembered;
+          const startedAtFromOffset = Math.max(
+            0,
+            Date.now() - Math.max(0, Math.floor(Number(merged.offset || 0))) * 1000,
+          );
+          saveLocal(
+            playbackSnapshotKey(did),
+            JSON.stringify({
+              song: remembered,
+              started_at: startedAtFromOffset || Date.now(),
+              duration: Math.max(0, Math.floor(Number(merged.duration || 0))),
+            }),
+          );
+        }
+        if (pending && pending.did === did) {
+        if (merged.is_playing) {
+          pendingPlayRef.current = null;
+          setStatus((prev) => ({
+            ...prev,
+            ...merged,
+            cur_music: String(merged.cur_music || prev.cur_music || pending.song || ""),
+            duration: Number(merged.duration || 0) || localPlaybackDurationRef.current,
+            offset:
+              Number(merged.offset || 0) ||
+              Math.max(
+                0,
+                Math.floor((Date.now() - Number(localPlaybackStartedAtRef.current || 0)) / 1000),
+              ),
+          }));
+        } else if (Date.now() < pending.expiresAt) {
+          setStatus((prev) => ({
+            ...prev,
+            ...merged,
+            is_playing: true,
+            cur_music: String(merged.cur_music || pending.song || prev.cur_music || ""),
+            duration: Number(merged.duration || 0) || localPlaybackDurationRef.current,
+            offset:
+              Number(merged.offset || 0) ||
+              Math.max(
+                0,
+                Math.floor((Date.now() - Number(localPlaybackStartedAtRef.current || 0)) / 1000),
+              ),
+          }));
+        } else {
+          pendingPlayRef.current = null;
+          if (!merged.is_playing) {
+            setLocalPlaybackStartedAt(0);
+            setLocalPlaybackDuration(0);
+            setLocalPlaybackSong("");
+            localPlaybackStartedAtRef.current = 0;
+            localPlaybackDurationRef.current = 0;
+            localPlaybackSongRef.current = "";
+            removeLocal(playbackSnapshotKey(did));
+          }
+          setStatus(merged);
+        }
+        } else {
+          if (merged.is_playing) {
+            setStatus((prev) => ({
+              ...prev,
+              ...merged,
+              cur_music: String(merged.cur_music || prev.cur_music || localPlaybackSongRef.current || ""),
+              duration: Number(merged.duration || 0) || localPlaybackDurationRef.current,
+              offset:
+                Number(merged.offset || 0) ||
+                Math.max(
+                  0,
+                  Math.floor((Date.now() - Number(localPlaybackStartedAtRef.current || 0)) / 1000),
+                ),
+            }));
+          } else {
+            setLocalPlaybackStartedAt(0);
+            setLocalPlaybackDuration(0);
+            setLocalPlaybackSong("");
+            localPlaybackStartedAtRef.current = 0;
+            localPlaybackDurationRef.current = 0;
+            localPlaybackSongRef.current = "";
+            removeLocal(playbackSnapshotKey(did));
+            setStatus(merged);
+          }
+        }
+      }
     }
     if (volumeResp.status === "fulfilled") {
       const vol = volumeResp.value as { volume?: number };
@@ -735,7 +1035,44 @@ export function HomePage() {
 
   useEffect(() => {
     if (!activeDid) {
+      setRememberedPlayingSong("");
+      rememberedPlayingSongRef.current = "";
+      autoAlignSelectionRef.current = true;
       return;
+    }
+    autoAlignSelectionRef.current = true;
+    const remembered = loadRememberedPlayingSong(activeDid);
+    setRememberedPlayingSong(remembered);
+    rememberedPlayingSongRef.current = remembered;
+    try {
+      const raw = loadLocal(playbackSnapshotKey(activeDid));
+      if (raw) {
+        const parsed = JSON.parse(raw) as { song?: string; started_at?: number; duration?: number };
+        const song = String(parsed.song || remembered || "").trim();
+        const startedAt = Math.max(0, Number(parsed.started_at || 0));
+        const duration = Math.max(0, Math.floor(Number(parsed.duration || 0)));
+        if (song) {
+          setLocalPlaybackSong(song);
+          localPlaybackSongRef.current = song;
+          setStatus((prev) => ({
+            ...prev,
+            is_playing: true,
+            cur_music: song,
+            duration: Number(prev.duration || 0) || duration,
+          }));
+          lastPositivePlaybackAtRef.current = Date.now();
+        }
+        if (startedAt > 0) {
+          setLocalPlaybackStartedAt(startedAt);
+          localPlaybackStartedAtRef.current = startedAt;
+        }
+        if (duration > 0) {
+          setLocalPlaybackDuration(duration);
+          localPlaybackDurationRef.current = duration;
+        }
+      }
+    } catch {
+      // ignore invalid snapshot payload
     }
     void loadStatus(activeDid);
     const timer = window.setInterval(() => {
@@ -745,12 +1082,91 @@ export function HomePage() {
   }, [activeDid]);
 
   useEffect(() => {
+    if (!localPlaybackStartedAt) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setStatus((prev) => {
+        if (!prev.is_playing) {
+          return prev;
+        }
+        const elapsed = Math.max(0, Math.floor((Date.now() - localPlaybackStartedAt) / 1000));
+        const currentOffset = Number(prev.offset || 0);
+        const currentDuration = Number(prev.duration || 0);
+        const offsetLooksReasonable =
+          currentOffset > 0 &&
+          ((currentDuration > 0 && currentOffset <= currentDuration + 30) ||
+            (currentDuration <= 0 && currentOffset < 24 * 3600));
+        const nextOffset = offsetLooksReasonable ? Math.max(currentOffset, elapsed) : elapsed;
+        const nextDuration = Number(prev.duration || 0) > 0 ? Number(prev.duration || 0) : localPlaybackDuration;
+        const nextMusic = String(prev.cur_music || "").trim() || localPlaybackSong;
+        if (
+          nextOffset === Number(prev.offset || 0) &&
+          nextDuration === Number(prev.duration || 0) &&
+          nextMusic === String(prev.cur_music || "")
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          offset: nextOffset,
+          duration: nextDuration,
+          cur_music: nextMusic,
+        };
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [localPlaybackStartedAt, localPlaybackDuration, localPlaybackSong]);
+
+  useEffect(() => {
     if (!songs.length) {
       setMusic("");
       return;
     }
     setMusic((prev) => (prev && songs.includes(prev) ? prev : songs[0]));
   }, [songs]);
+
+  useEffect(() => {
+    if (!status.is_playing) {
+      return;
+    }
+    if (!autoAlignSelectionRef.current) {
+      return;
+    }
+    if (!Object.keys(playlists).length) {
+      return;
+    }
+    const playingName = String(status.cur_music || rememberedPlayingSong || localPlaybackSong || "").trim();
+    if (!playingName) {
+      return;
+    }
+    const currentListSongs = playlists[playlist] || [];
+    if (currentListSongs.includes(playingName)) {
+      if (music !== playingName) {
+        setMusic(playingName);
+      }
+      autoAlignSelectionRef.current = false;
+      return;
+    }
+    const matchedPlaylist = Object.keys(playlists).find((name) => (playlists[name] || []).includes(playingName));
+    if (matchedPlaylist) {
+      if (playlist !== matchedPlaylist) {
+        setPlaylist(matchedPlaylist);
+      }
+      if (music !== playingName) {
+        setMusic(playingName);
+      }
+      autoAlignSelectionRef.current = false;
+    }
+  }, [
+    status.is_playing,
+    status.cur_music,
+    rememberedPlayingSong,
+    localPlaybackSong,
+    playlists,
+    playlist,
+    music,
+  ]);
 
   function requireDid(): boolean {
     if (activeDid) {
@@ -773,19 +1189,45 @@ export function HomePage() {
     if (!requireDid()) {
       return;
     }
+    const deviceId = activeDid;
     const picked = String(songName || "").trim() || String(songs[0] || "").trim();
     if (!picked) {
       setMessage("当前歌单为空，请先刷新歌单或切换列表");
       return;
     }
+    const optimisticStartedAt = Date.now();
+    setMusic(picked);
+    setStatus((prev) => ({
+      ...prev,
+      is_playing: true,
+      cur_music: picked,
+      offset: 0,
+    }));
+    saveRememberedPlayingSong(deviceId, picked);
+    setRememberedPlayingSong(picked);
+    rememberedPlayingSongRef.current = picked;
+    setLocalPlaybackSong(picked);
+    localPlaybackSongRef.current = picked;
+    setLocalPlaybackStartedAt(optimisticStartedAt);
+    localPlaybackStartedAtRef.current = optimisticStartedAt;
+    lastPositivePlaybackAtRef.current = optimisticStartedAt;
+    saveLocal(
+      playbackSnapshotKey(deviceId),
+      JSON.stringify({
+        song: picked,
+        started_at: optimisticStartedAt,
+        duration: 0,
+      }),
+    );
     try {
-      const info = (await apiGet<{ ret?: string; name?: string; url?: string }>(
-        `/musicinfo?name=${encodeURIComponent(picked)}`,
-      )) as { ret?: string; name?: string; url?: string };
+      const info = (await apiGet<{ ret?: string; name?: string; url?: string; tags?: { duration?: number } }>(
+        `/musicinfo?name=${encodeURIComponent(picked)}&musictag=true`,
+      )) as { ret?: string; name?: string; url?: string; tags?: { duration?: number } };
       const resolvedUrl = String(info.url || "").trim();
+      const infoDuration = Number(info.tags?.duration || 0);
       const playQuery = resolvedUrl || picked;
       const out = await apiPost<Record<string, unknown>>("/api/v1/play", {
-        device_id: activeDid,
+        device_id: deviceId,
         query: playQuery,
         source_hint: "auto",
         options: {
@@ -794,15 +1236,57 @@ export function HomePage() {
       });
       const parsed = unwrapPlaybackEnvelope(out);
       if (parsed.ok) {
+        stopSuppressUntilRef.current = 0;
+        pendingPlayRef.current = {
+          did: deviceId,
+          song: picked,
+          expiresAt: Date.now() + 7000,
+        };
         setMusic(picked);
+        setStatus((prev) => ({
+          ...prev,
+          is_playing: true,
+          cur_music: picked,
+          offset: 0,
+          duration: infoDuration > 0 ? infoDuration : Number(prev.duration || 0),
+        }));
+        saveRememberedPlayingSong(deviceId, picked);
+        setRememberedPlayingSong(picked);
+        rememberedPlayingSongRef.current = picked;
+        setLocalPlaybackSong(picked);
+        localPlaybackSongRef.current = picked;
+        const startedAt = Date.now();
+        setLocalPlaybackStartedAt(startedAt);
+        localPlaybackStartedAtRef.current = startedAt;
+        setLocalPlaybackDuration(infoDuration > 0 ? infoDuration : 0);
+        localPlaybackDurationRef.current = infoDuration > 0 ? infoDuration : 0;
+        lastPositivePlaybackAtRef.current = Date.now();
+        saveLocal(
+          playbackSnapshotKey(deviceId),
+          JSON.stringify({
+            song: picked,
+            started_at: startedAt,
+            duration: infoDuration > 0 ? Math.floor(infoDuration) : 0,
+          }),
+        );
         setMessage(`开始播放（来源: ${parsed.sourcePlugin || "unknown"}, 传输: ${parsed.transport || "unknown"}）`);
-        await loadStatus(activeDid);
+        await loadStatus(deviceId);
+        window.setTimeout(() => {
+          void loadStatus(deviceId);
+        }, 900);
+        window.setTimeout(() => {
+          void loadStatus(deviceId);
+        }, 2200);
       } else {
+        pendingPlayRef.current = null;
         setMessage(`播放失败：${explainPlaybackError(parsed.errorCode, parsed.message, parsed.stage)}`);
+        await loadStatus(deviceId);
       }
     } catch (err) {
+      pendingPlayRef.current = null;
       const reason = err instanceof Error ? err.message : String(err || "未知错误");
       setMessage(`播放失败：${reason}`);
+      await loadStatus(deviceId);
     }
   }
 
@@ -1336,7 +1820,7 @@ export function HomePage() {
                   play_circle_outline
                 </span>
               </button>
-              <div className="soundscape-dock-song">{status.is_playing ? status.cur_music || music || "未播放" : "空闲"}</div>
+              <div className="soundscape-dock-song">{playbackText}</div>
             </div>
 
             <div className="soundscape-dock-center">
@@ -1368,7 +1852,7 @@ export function HomePage() {
             </div>
 
             <div className="soundscape-dock-right">
-              {formatTime(Number(status.offset || 0))} / {formatTime(Number(status.duration || 0))}
+              {formatTime(safeOffset)} / {formatTime(safeDuration)}
             </div>
           </footer>
         </div>
@@ -1456,13 +1940,13 @@ export function HomePage() {
             <progress className="progress" id="progress" value={progress} max={100}></progress>
             <div className="time-info">
               <span className="current-time" id="current-time">
-                {formatTime(Number(status.offset || 0))}
+                {formatTime(safeOffset)}
               </span>
               <div className="current-song" id="playering-music">
-                当前播放歌曲：{status.is_playing ? status.cur_music || music || "无" : "空闲"}
+                {playbackText}
               </div>
               <span className="duration" id="duration">
-                {formatTime(Number(status.duration || 0))}
+                {formatTime(safeDuration)}
               </span>
             </div>
           </div>
@@ -1503,6 +1987,23 @@ export function HomePage() {
                       device_id: activeDid,
                     })) as Record<string, unknown>;
                     const parsed = unwrapPlaybackEnvelope(out);
+                    if (parsed.ok) {
+                      stopSuppressUntilRef.current = Date.now() + 6000;
+                      pendingPlayRef.current = null;
+                      setLocalPlaybackStartedAt(0);
+                      setLocalPlaybackDuration(0);
+                      setLocalPlaybackSong("");
+                      localPlaybackStartedAtRef.current = 0;
+                      localPlaybackDurationRef.current = 0;
+                      localPlaybackSongRef.current = "";
+                      lastPositivePlaybackAtRef.current = 0;
+                      removeLocal(playbackSnapshotKey(activeDid));
+                      setStatus((prev) => ({
+                        ...prev,
+                        is_playing: false,
+                        offset: 0,
+                      }));
+                    }
                     setMessage(
                       parsed.ok
                         ? "已停止"
@@ -1634,8 +2135,8 @@ export function HomePage() {
           <p>支持两类输入：可直接播放的媒体直链，或 YouTube/B站等网站页面链接（自动识别为网站媒体来源）。</p>
           <input type="text" className="search-input" value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} />
           <div className="component-button-group">
-            <button onClick={() => void playLink(false)}>播放媒体</button>
-            <button onClick={() => void playLink(true)}>播放媒体（优先代理）</button>
+            <button onClick={() => void playLink(false)}>播放链接</button>
+            <button onClick={() => void playLink(true)}>代理播放</button>
           </div>
         </div>
 

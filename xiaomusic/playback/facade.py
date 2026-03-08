@@ -12,7 +12,7 @@ from xiaomusic.adapters.sources import register_default_source_plugins
 from xiaomusic.core.coordinator import PlaybackCoordinator
 from xiaomusic.core.delivery import DeliveryAdapter
 from xiaomusic.core.device import DeviceRegistry
-from xiaomusic.core.errors import InvalidRequestError
+from xiaomusic.core.errors import DeviceNotFoundError, InvalidRequestError
 from xiaomusic.core.models import MediaRequest
 from xiaomusic.core.source import SourceRegistry
 from xiaomusic.core.transport import TransportPolicy, TransportRouter
@@ -289,6 +289,65 @@ class PlaybackFacade:
             "error_code": None,
             "ok": True,
             "raw": raw,
+        }
+
+    async def player_state(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+        did = self._validate_device_id(device_id)
+        if not bool(getattr(self.xiaomusic, "did_exist", lambda _did: False)(did)):
+            raise DeviceNotFoundError("device not found")
+
+        is_playing = bool(getattr(self.xiaomusic, "isplaying", lambda _did: False)(did))
+        cur_music = str(getattr(self.xiaomusic, "playingmusic", lambda _did: "")(did) or "")
+        raw_offset, raw_duration = getattr(self.xiaomusic, "get_offset_duration", lambda _did: (0, 0))(did)
+        offset = float(raw_offset or 0)
+        duration = float(raw_duration or 0)
+
+        raw_status: dict[str, Any] = {}
+        try:
+            out = await self.xiaomusic.get_player_status(did=did)
+            if isinstance(out, dict):
+                raw_status = out
+        except Exception:
+            raw_status = {}
+
+        if int(raw_status.get("status", 0) or 0) == 1:
+            is_playing = True
+
+        detail = raw_status.get("play_song_detail")
+        if isinstance(detail, dict):
+            if not cur_music:
+                cur_music = str(
+                    detail.get("audio_name")
+                    or detail.get("title")
+                    or detail.get("name")
+                    or ""
+                )
+            try:
+                detail_pos = float(detail.get("position") or 0)
+            except Exception:
+                detail_pos = 0.0
+            try:
+                detail_dur = float(detail.get("duration") or 0)
+            except Exception:
+                detail_dur = 0.0
+
+            if detail_pos > 0 and offset <= 0:
+                offset = detail_pos / 1000.0 if detail_pos > 10000 else detail_pos
+            if detail_dur > 0 and duration <= 0:
+                duration = detail_dur / 1000.0 if detail_dur > 10000 else detail_dur
+
+        safe_offset = max(0, int(offset))
+        safe_duration = max(0, int(duration))
+        if safe_duration > 0:
+            safe_offset = min(safe_offset, safe_duration)
+
+        return {
+            "device_id": did,
+            "is_playing": bool(is_playing),
+            "cur_music": cur_music,
+            "offset": safe_offset,
+            "duration": safe_duration,
+            "request_id": str(request_id or uuid4().hex[:16]),
         }
 
     async def stop_legacy(self, target: dict[str, Any]) -> dict[str, Any]:

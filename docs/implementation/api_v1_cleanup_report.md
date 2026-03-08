@@ -1,5 +1,9 @@
 # API v1 Cleanup Report
 
+> 说明（2026-03-08）：本报告是 2026-03-07 的阶段性清理记录。
+> 当前正式契约请以 `docs/api/api_v1_spec.md` 为准。
+> 若与本报告内容冲突（例如白名单数量），以规范文档优先。
+
 ## 1. 测试时间
 
 - 本地改造与单测：2026-03-07
@@ -19,9 +23,9 @@
 - 本地基线 commit：`7851d06dd3e46c6f7694e1c994c7ca3997a1a37d`
 - 实机部署内容：基于上述 commit + 本次工作区变更（未额外新建发布分支）
 
-## 4. 保留的正式 API 白名单
+## 4. 保留的正式 API 白名单（历史快照）
 
-`/api/v1` 仅保留以下 10 个接口：
+`/api/v1` 在本次清理时仅保留以下 10 个接口：
 
 1. `POST /api/v1/play`
 2. `POST /api/v1/resolve`
@@ -33,6 +37,8 @@
 8. `POST /api/v1/control/probe`
 9. `GET /api/v1/devices`
 10. `GET /api/v1/system/status`
+
+注：后续规范升级已新增 `GET /api/v1/player/state`，最新白名单请查看 `docs/api/api_v1_spec.md`。
 
 ## 5. 删除的旧 /api/v1 接口清单
 
