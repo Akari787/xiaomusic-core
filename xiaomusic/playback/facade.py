@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict, is_dataclass
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -30,9 +31,13 @@ class PlaybackFacade:
             return self._core_coordinator
 
         source_registry = SourceRegistry()
-        register_default_source_plugins(source_registry, self.xiaomusic)
+        register_default_source_plugins(source_registry, self.xiaomusic, runtime_provider=self._runtime_provider)
         device_registry = DeviceRegistry(self.xiaomusic)
-        delivery_adapter = DeliveryAdapter()
+        proxy_builder: Callable[[str, str], str] | None = None
+        raw_proxy_builder = getattr(getattr(self.xiaomusic, "music_library", None), "get_proxy_url", None)
+        if callable(raw_proxy_builder):
+            proxy_builder = lambda origin_url, title: str(raw_proxy_builder(origin_url, name=title))
+        delivery_adapter = DeliveryAdapter(proxy_url_builder=proxy_builder)
         router = TransportRouter(policy=TransportPolicy())
         router.register_transport(MinaTransport(self.xiaomusic))
         router.register_transport(MiioTransport(self.xiaomusic))
@@ -41,8 +46,19 @@ class PlaybackFacade:
             device_registry=device_registry,
             delivery_adapter=delivery_adapter,
             transport_router=router,
+            playback_status_provider=self.xiaomusic.get_player_status,
         )
         return self._core_coordinator
+
+    @staticmethod
+    def _serialize(obj: Any) -> Any:
+        if is_dataclass(obj) and not isinstance(obj, type):
+            return asdict(obj)
+        if isinstance(obj, list):
+            return [PlaybackFacade._serialize(item) for item in obj]
+        if isinstance(obj, dict):
+            return {str(k): PlaybackFacade._serialize(v) for k, v in obj.items()}
+        return obj
 
     @staticmethod
     def _normalize_hint(source_hint: str | None) -> str | None:
@@ -65,11 +81,17 @@ class PlaybackFacade:
 
     @staticmethod
     def _build_context(query: str, hint: str | None, options: dict[str, Any], *, include_prefer_proxy: bool) -> dict[str, Any]:
+        default_resolve_timeout = 15 if hint == "site_media" else 8
         context: dict[str, Any] = {
-            "resolve_timeout_seconds": float(options.get("resolve_timeout_seconds", 8)),
+            "resolve_timeout_seconds": float(options.get("resolve_timeout_seconds", default_resolve_timeout)),
+            "no_cache": bool(options.get("no_cache", False)),
         }
         if include_prefer_proxy:
             context["prefer_proxy"] = bool(options.get("prefer_proxy", False))
+            context["confirm_start"] = bool(options.get("confirm_start", True))
+            context["confirm_start_delay_ms"] = int(options.get("confirm_start_delay_ms", 1200))
+            context["confirm_start_retries"] = int(options.get("confirm_start_retries", 2))
+            context["confirm_start_interval_ms"] = int(options.get("confirm_start_interval_ms", 600))
 
         if hint == "jellyfin":
             payload = options.get("source_payload")
@@ -125,7 +147,11 @@ class PlaybackFacade:
                 "stream_url": prepared.final_url,
                 "is_live": bool(resolved.is_live),
             },
-            "extra": {"dispatch": dispatch.data},
+            "extra": {
+                "dispatch": dispatch.data,
+                "delivery_plan": self._serialize(result.get("delivery_plan")),
+                "playback_outcome": self._serialize(result.get("outcome")),
+            },
         }
 
     async def resolve(

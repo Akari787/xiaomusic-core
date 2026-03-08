@@ -9,11 +9,13 @@ import copy
 import json
 import os
 import random
+import threading
 import time
 import urllib.parse
 from collections import OrderedDict
 from dataclasses import asdict
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from xiaomusic.const import SUPPORT_MUSIC_TYPE
 from xiaomusic.events import CONFIG_CHANGED
@@ -78,6 +80,8 @@ class MusicLibrary:
 
         # URL处理相关
         self.url_cache = MusicUrlCache()  # URL缓存
+        self._proxy_url_tokens = {}
+        self._proxy_url_tokens_lock = threading.Lock()
 
     def gen_all_music_list(self):
         """生成所有音乐列表
@@ -1234,13 +1238,45 @@ class MusicLibrary:
         Returns:
             str: 代理URL
         """
-        urlb64 = base64.b64encode(origin_url.encode("utf-8")).decode("utf-8")
+        token = self.register_proxy_url(origin_url)
+        urlb64 = f"t.{token}"
 
         # 使用路径参数方式，避免查询参数转义问题
         proxy_type = "radio" if is_radio else "music"
         proxy_url = f"{self.config.get_public_base_url()}/proxy/{proxy_type}?urlb64={urlb64}"
         self.log.info(f"Using proxy url: {proxy_url}")
         return proxy_url
+
+    def register_proxy_url(self, origin_url: str, ttl_seconds: int = 7200) -> str:
+        token = uuid4().hex[:16]
+        expires_at = int(time.time()) + max(60, int(ttl_seconds))
+        with self._proxy_url_tokens_lock:
+            self._proxy_url_tokens[token] = (str(origin_url), expires_at)
+            self._cleanup_proxy_tokens_locked(max_items=2048)
+        return token
+
+    def resolve_proxy_url_token(self, token: str) -> str:
+        now_ts = int(time.time())
+        with self._proxy_url_tokens_lock:
+            item = self._proxy_url_tokens.get(token)
+            if not item:
+                return ""
+            url, expires_at = item
+            if expires_at <= now_ts:
+                self._proxy_url_tokens.pop(token, None)
+                return ""
+            return str(url)
+
+    def _cleanup_proxy_tokens_locked(self, max_items: int = 2048) -> None:
+        now_ts = int(time.time())
+        expired = [k for k, (_, exp) in self._proxy_url_tokens.items() if int(exp) <= now_ts]
+        for k in expired:
+            self._proxy_url_tokens.pop(k, None)
+        if len(self._proxy_url_tokens) <= max_items:
+            return
+        items = sorted(self._proxy_url_tokens.items(), key=lambda kv: int(kv[1][1]))
+        for k, _ in items[: max(0, len(items) - max_items)]:
+            self._proxy_url_tokens.pop(k, None)
 
     def _get_local_music_url(self, name):
         """获取本地音乐播放地址

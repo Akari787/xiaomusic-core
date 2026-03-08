@@ -161,6 +161,56 @@ class NetworkAudioRuntime:
             "stream_url": url,
         }
 
+    def prepare_link(
+        self,
+        url: str,
+        prefer_proxy: bool = False,
+        *,
+        no_cache: bool = False,
+    ) -> dict:
+        strategy = self._strategy
+        if strategy is None:
+            return {
+                "ok": False,
+                "error_code": "E_INTERNAL",
+                "error_message": ERROR_CODES["E_INTERNAL"],
+                "fail_stage": "stream",
+            }
+        assert strategy is not None
+        info = strategy.classify(url)
+
+        if prefer_proxy:
+            proxy_url = strategy.build_proxy_url(url)
+            return {
+                "ok": True,
+                "mode": "proxy",
+                "url_info": asdict(info),
+                "stream_url": proxy_url,
+            }
+
+        if strategy.should_use_network_audio(url):
+            self.sweep_idle_sessions()
+            self.ensure_started()
+            out = self.play_service.play_url(info.normalized_url, no_cache=no_cache)
+            out["mode"] = "network_audio"
+            out["url_info"] = asdict(info)
+            if not out.get("ok"):
+                return out
+            sid = str((out.get("session") or {}).get("sid") or "")
+            public_stream_url = self._external_stream_url(sid)
+            self.session_manager.set_stream_url(sid, public_stream_url)
+            if isinstance(out.get("session"), dict):
+                out["session"]["stream_url"] = public_stream_url
+            out["stream_url"] = public_stream_url
+            return out
+
+        return {
+            "ok": True,
+            "mode": "direct",
+            "url_info": asdict(info),
+            "stream_url": url,
+        }
+
     def healthz(self) -> dict:
         self.sweep_idle_sessions()
         return {

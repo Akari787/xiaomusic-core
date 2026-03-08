@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from xiaomusic.api.models import (
     TtsRequest,
     VolumeRequest,
 )
+from xiaomusic.api.runtime_provider import get_runtime
 from xiaomusic.core.errors import (
     DeliveryPrepareError,
     DeviceNotFoundError,
@@ -26,6 +28,7 @@ from xiaomusic.playback.facade import PlaybackFacade
 
 router = APIRouter()
 _facade: PlaybackFacade | None = None
+LOG = logging.getLogger("xiaomusic.api.v1")
 
 
 def _get_xiaomusic():
@@ -37,7 +40,7 @@ def _get_xiaomusic():
 def _get_facade() -> PlaybackFacade:
     global _facade
     if _facade is None:
-        _facade = PlaybackFacade(_get_xiaomusic())
+        _facade = PlaybackFacade(_get_xiaomusic(), runtime_provider=get_runtime)
     return _facade
 
 
@@ -59,14 +62,59 @@ def _map_api_exception(exc: Exception, request_id: str) -> dict[str, Any]:
     if isinstance(exc, InvalidRequestError):
         return _api_response(50001, str(exc), {}, request_id)
     if isinstance(exc, SourceResolveError):
-        return _api_response(20002, "source resolve failed", {"error_type": exc.__class__.__name__}, request_id)
+        return _api_response(
+            20002,
+            "source resolve failed",
+            {
+                "error_type": exc.__class__.__name__,
+                "error_code": "E_RESOLVE_NONZERO_EXIT",
+                "stage": "resolve",
+            },
+            request_id,
+        )
     if isinstance(exc, DeliveryPrepareError):
-        return _api_response(30001, "delivery prepare failed", {"error_type": exc.__class__.__name__}, request_id)
+        return _api_response(
+            30001,
+            "delivery prepare failed",
+            {
+                "error_type": exc.__class__.__name__,
+                "error_code": "E_STREAM_NOT_FOUND",
+                "stage": "prepare",
+            },
+            request_id,
+        )
     if isinstance(exc, TransportError):
-        return _api_response(40002, "transport dispatch failed", {"error_type": exc.__class__.__name__}, request_id)
+        return _api_response(
+            40002,
+            "transport dispatch failed",
+            {
+                "error_type": exc.__class__.__name__,
+                "error_code": "E_XIAOMI_PLAY_FAILED",
+                "stage": "dispatch",
+            },
+            request_id,
+        )
     if isinstance(exc, DeviceNotFoundError):
-        return _api_response(40004, "device not found", {"error_type": exc.__class__.__name__}, request_id)
-    return _api_response(10000, "internal error", {"error_type": exc.__class__.__name__}, request_id)
+        return _api_response(
+            40004,
+            "device not found",
+            {
+                "error_type": exc.__class__.__name__,
+                "error_code": "E_XIAOMI_PLAY_FAILED",
+                "stage": "xiaomi",
+            },
+            request_id,
+        )
+    return _api_response(
+        10000,
+        "internal error",
+        {
+            "error_type": exc.__class__.__name__,
+            "error_code": "E_INTERNAL",
+            "stage": None,
+        },
+        request_id,
+    )
 
 
 def _normalize_device(device: dict[str, Any]) -> dict[str, Any]:
@@ -96,12 +144,20 @@ async def api_v1_play(data: PlayRequest):
                 "device_id": out.get("device_id", data.device_id),
                 "source_plugin": out.get("source_plugin", ""),
                 "transport": out.get("transport", ""),
+                "sid": request_id,
                 "media": out.get("media", {}),
                 "extra": out.get("extra", {}),
             },
             request_id=request_id,
         )
     except Exception as exc:
+        LOG.exception(
+            "api_fail endpoint=/api/v1/play request_id=%s device_id=%s source_hint=%s error=%s",
+            request_id,
+            data.device_id,
+            data.source_hint,
+            exc.__class__.__name__,
+        )
         return _map_api_exception(exc, request_id)
 
 

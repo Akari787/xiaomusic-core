@@ -7,13 +7,17 @@ from xiaomusic.adapters.sources.site_media_source_plugin import SiteMediaSourceP
 from xiaomusic.core.source import SourceRegistry
 
 
-def register_default_source_plugins(source_registry: SourceRegistry, xiaomusic) -> None:
+def register_default_source_plugins(
+    source_registry: SourceRegistry,
+    xiaomusic,
+    runtime_provider=None,
+) -> None:
     """Register built-in source plugins in deterministic order."""
 
     source_registry.register(JellyfinSourcePlugin(_resolve_jellyfin_source_url(xiaomusic)))
     source_registry.register(DirectUrlSourcePlugin())
     source_registry.register(LocalLibrarySourcePlugin(xiaomusic.music_library))
-    source_registry.register(SiteMediaSourcePlugin())
+    source_registry.register(SiteMediaSourcePlugin(runtime_provider=runtime_provider))
 
 
 def _resolve_jellyfin_source_url(xiaomusic):

@@ -54,6 +54,22 @@ from xiaomusic.utils.network_utils import (
 router = APIRouter()
 
 
+def _encode_proxy_urlb64(url: str) -> str:
+    return base64.urlsafe_b64encode(url.encode("utf-8")).decode("utf-8").rstrip("=")
+
+
+def _decode_proxy_urlb64(urlb64: str) -> str:
+    token = str(urlb64 or "").strip().replace(" ", "+")
+    pad = (-len(token)) % 4
+    if pad:
+        token = f"{token}{'=' * pad}"
+    try:
+        data = base64.urlsafe_b64decode(token)
+    except Exception:
+        data = base64.b64decode(token)
+    return data.decode("utf-8")
+
+
 def _process_m3u8_content(m3u8_content: str, base_url: str, is_radio: bool) -> str:
     """处理 m3u8 文件内容，将资源 URL 替换为代理 URL
 
@@ -88,7 +104,7 @@ def _process_m3u8_content(m3u8_content: str, base_url: str, is_radio: bool) -> s
             resource_url = urljoin(base_url, stripped_line)
 
         # 将资源 URL 替换为代理 URL，使用路径参数方式
-        urlb64 = base64.b64encode(resource_url.encode("utf-8")).decode("utf-8")
+        urlb64 = _encode_proxy_urlb64(resource_url)
         proxy_type = "radio" if is_radio else "music"
         proxy_url = f"/proxy/{proxy_type}?urlb64={urlb64}"
 
@@ -451,9 +467,14 @@ async def _proxy_handler(urlb64: str, is_radio: bool):
         Response: 代理响应
     """
     try:
-        # 将Base64编码的URL解码为字符串
-        url_bytes = base64.b64decode(urlb64)
-        url = url_bytes.decode("utf-8")
+        token = str(urlb64 or "")
+        if token.startswith("t."):
+            url = xiaomusic.music_library.resolve_proxy_url_token(token[2:])
+            if not url:
+                raise ValueError("proxy token invalid or expired")
+        else:
+            # 兼容旧格式: Base64编码URL
+            url = _decode_proxy_urlb64(urlb64)
         print(f"解码后的代理请求: {url}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Base64解码失败: {str(e)}") from e

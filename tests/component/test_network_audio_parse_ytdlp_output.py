@@ -60,3 +60,30 @@ def test_ct1_0_parse_ytdlp_output_fallback_to_requested_formats_audio_url():
     assert result.ok is True
     assert result.source_url == "https://cdn.example.local/audio-only.webm"
     assert result.container_hint == "webm"
+
+
+@pytest.mark.component
+def test_ct1_0_parse_ytdlp_output_live_youtube_prefers_non_manifest_audio_url():
+    from xiaomusic.network_audio.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
+
+    payload = {
+        "id": "7CQSzyi8UJE",
+        "title": "YT LIVE",
+        "is_live": True,
+        "url": "https://manifest.googlevideo.com/api/manifest/hls_playlist/.../playlist/index.m3u8",
+        "webpage_url": "https://www.youtube.com/watch?v=7CQSzyi8UJE",
+        "formats": [
+            {
+                "format_id": "251",
+                "vcodec": "none",
+                "acodec": "opus",
+                "url": "https://rr5---sn-aj3pm5-5p.googlevideo.com/videoplayback?itag=251",
+                "ext": "webm",
+            }
+        ],
+    }
+
+    result = parse_ytdlp_output(payload)
+
+    assert result.ok is True
+    assert result.source_url.startswith("https://rr5---sn-aj3pm5-5p.googlevideo.com/videoplayback")

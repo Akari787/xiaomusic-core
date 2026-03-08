@@ -63,7 +63,40 @@ class _TransportStub(Transport):
         }
 
 
-def _build_coordinator(plugin: SourcePlugin) -> PlaybackCoordinator:
+class _RecordingTransportStub(Transport):
+    name = "mina"
+
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    async def play_url(self, device_id: str, prepared: PreparedStream) -> dict:
+        _ = device_id
+        self.urls.append(prepared.final_url)
+        return {"ret": "OK", "url": prepared.final_url}
+
+    async def stop(self, device_id: str) -> dict:
+        return {"ret": "OK", "device_id": device_id}
+
+    async def pause(self, device_id: str) -> dict:
+        return {"ret": "OK", "device_id": device_id}
+
+    async def tts(self, device_id: str, text: str) -> dict:
+        return {"ret": "OK", "device_id": device_id, "text": text}
+
+    async def set_volume(self, device_id: str, volume: int) -> dict:
+        return {"ret": "OK", "device_id": device_id, "volume": volume}
+
+    async def probe(self, device_id: str) -> dict:
+        return {"local_reachable": True, "cloud_reachable": True, "device_id": device_id}
+
+
+def _build_coordinator(
+    plugin: SourcePlugin,
+    *,
+    transport: Transport | None = None,
+    status_provider=None,
+    proxy_builder=None,
+) -> PlaybackCoordinator:
     source_registry = SourceRegistry()
     source_registry.register(plugin)
 
@@ -87,13 +120,14 @@ def _build_coordinator(plugin: SourcePlugin) -> PlaybackCoordinator:
     )
 
     router = TransportRouter(policy=TransportPolicy())
-    router.register_transport(_TransportStub())
+    router.register_transport(transport or _TransportStub())
     return PlaybackCoordinator(
         source_registry=source_registry,
         device_registry=device_registry,
-        delivery_adapter=DeliveryAdapter(expiry_skew_seconds=0),
+        delivery_adapter=DeliveryAdapter(expiry_skew_seconds=0, proxy_url_builder=proxy_builder),
         transport_router=router,
         max_resolve_retry=1,
+        playback_status_provider=status_provider,
     )
 
 
@@ -166,3 +200,56 @@ async def test_playback_coordinator_control_actions_and_probe_update():
     assert probe_out["dispatch"].data["local_reachable"] is True
     assert probe_out["reachability"].local_reachable is True
     assert probe_out["reachability"].last_probe_ts >= 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_playback_coordinator_fallback_to_proxy_when_direct_not_started():
+    plugin = _CyclingSourcePlugin(
+        outputs=[
+            ResolvedMedia(
+                media_id="m-site",
+                source="site_media",
+                title="yt",
+                stream_url="https://googlevideo.example/v1.mp4",
+                expires_at=None,
+                is_live=False,
+            )
+        ]
+    )
+    transport = _RecordingTransportStub()
+
+    status_values = iter([{"status": 0}, {"status": 1}])
+
+    async def _status_provider(device_id: str) -> dict:
+        _ = device_id
+        return next(status_values)
+
+    coordinator = _build_coordinator(
+        plugin,
+        transport=transport,
+        status_provider=_status_provider,
+        proxy_builder=lambda url, name: f"http://127.0.0.1:58090/proxy?name={name}",
+    )
+
+    out = await coordinator.play(
+        MediaRequest(
+            request_id="r-proxy",
+            source_hint="site_media",
+            query="https://www.youtube.com/watch?v=iPnaF8Ngk3Q",
+            device_id="d1",
+            context={
+                "prefer_proxy": False,
+                "confirm_start_delay_ms": 0,
+                "confirm_start_interval_ms": 0,
+                "confirm_start_retries": 0,
+            },
+        )
+    )
+
+    assert out["ok"] is True
+    assert len(transport.urls) == 2
+    assert transport.urls[0].startswith("https://")
+    assert transport.urls[1].startswith("http://127.0.0.1:58090/proxy")
+    assert out["prepared_stream"].is_proxy is True
+    assert out["outcome"].fallback_triggered is True

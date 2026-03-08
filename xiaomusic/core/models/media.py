@@ -31,3 +31,29 @@ class PreparedStream:
     expires_at: int | None = None
     is_proxy: bool = False
     source: str = ""
+
+
+@dataclass(slots=True)
+class DeliveryPlan:
+    primary: PreparedStream
+    fallback: PreparedStream | None = None
+    strategy: str = "direct_only"
+    decision_reason: str = ""
+
+
+@dataclass(slots=True)
+class PlaybackAttempt:
+    path: str
+    transport: str
+    url: str
+    accepted: bool
+    started: bool | None = None
+
+
+@dataclass(slots=True)
+class PlaybackOutcome:
+    accepted: bool
+    started: bool | None
+    final_path: str
+    fallback_triggered: bool
+    attempts: list[PlaybackAttempt] = field(default_factory=list)

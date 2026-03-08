@@ -48,6 +48,7 @@ class XiaoMusic:
         self.device_manager = None
 
         self.running_task = []
+        self.keepalive_task = None
 
         # 音乐库管理器（延迟初始化，在配置准备好之后）
         self.music_library = None
@@ -318,16 +319,17 @@ class XiaoMusic:
         # 先完成认证与设备初始化，避免 Jellyfin 同步耗时导致 runtime_auth_ready 长时间为 false。
         await self.auth_manager.init_all_data()
         await self.sync_jellyfin_music_lists_if_needed()
-        keepalive_task = asyncio.create_task(self.auth_manager.keepalive_loop())
-        self.append_running_task(keepalive_task)
+        self.keepalive_task = asyncio.create_task(self.auth_manager.keepalive_loop())
         # 启动对话循环，传递回调函数
         try:
             await self.conversation_poller.run_conversation_loop(
                 self.do_check_cmd, self.reset_timer_when_answer
             )
         finally:
-            keepalive_task.cancel()
-            await asyncio.gather(keepalive_task, return_exceptions=True)
+            if self.keepalive_task is not None:
+                self.keepalive_task.cancel()
+                await asyncio.gather(self.keepalive_task, return_exceptions=True)
+                self.keepalive_task = None
 
     # 匹配命令
     async def do_check_cmd(self, did="", query="", ctrl_panel=True, **kwargs):

@@ -22,7 +22,15 @@ class YtdlpRunner:
         timeout_seconds: float,
         command_override: list[str] | None = None,
     ) -> RunnerResult:
-        command = command_override or ["yt-dlp", "-J", "--no-playlist", url]
+        command = command_override or [
+            "yt-dlp",
+            "-J",
+            "--no-playlist",
+            "-f",
+            "bestaudio[ext=m4a]/bestaudio[acodec*=mp4a]/bestaudio/best",
+            "--no-warnings",
+            url,
+        ]
         proc = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,

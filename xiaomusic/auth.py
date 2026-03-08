@@ -710,6 +710,7 @@ class AuthManager:
                     self._keepalive_degraded = False
                 await asyncio.sleep(interval_sec)
             except asyncio.CancelledError:
+                self.log.info("auth keepalive loop cancelled")
                 raise
             except Exception as e:
                 self._keepalive_fail_streak += 1

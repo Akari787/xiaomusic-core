@@ -278,6 +278,7 @@ function explainPlaybackError(
 type PlaybackV1Envelope = {
   code?: number;
   message?: string;
+  request_id?: string;
   data?: Record<string, unknown>;
 };
 
@@ -306,12 +307,30 @@ function unwrapPlaybackEnvelope(out: unknown): {
 } {
   const env = (out || {}) as PlaybackV1Envelope;
   const data = (env.data || {}) as Record<string, unknown>;
+  const numCode = Number(env.code ?? 0);
+  const codeToErrorCode: Record<number, string> = {
+    20002: "E_RESOLVE_NONZERO_EXIT",
+    30001: "E_STREAM_NOT_FOUND",
+    40002: "E_XIAOMI_PLAY_FAILED",
+    40004: "E_XIAOMI_PLAY_FAILED",
+  };
+  const errorCode = String(data.error_code || "") || (numCode !== 0 ? codeToErrorCode[numCode] ?? "" : "");
+  const stage =
+    data.stage
+      ? String(data.stage)
+      : numCode === 20002
+        ? "resolve"
+        : numCode === 30001
+          ? "prepare"
+          : numCode === 40002 || numCode === 40004
+              ? "dispatch"
+              : null;
   return {
-    ok: Number(env.code || 0) === 0,
+    ok: numCode === 0,
     message: String(env.message || data.message || ""),
-    errorCode: String(data.error_code || ""),
-    stage: data.stage ? String(data.stage) : null,
-    sid: String(data.sid || ""),
+    errorCode,
+    stage,
+    sid: String(data.sid || env.request_id || ""),
     sourcePlugin: String(data.source_plugin || ""),
     transport: String(data.transport || ""),
   };
@@ -759,24 +778,31 @@ export function HomePage() {
       setMessage("当前歌单为空，请先刷新歌单或切换列表");
       return;
     }
-    const out = await apiPost<Record<string, unknown>>(
-      "/api/v1/play",
-      {
+    try {
+      const info = (await apiGet<{ ret?: string; name?: string; url?: string }>(
+        `/musicinfo?name=${encodeURIComponent(picked)}`,
+      )) as { ret?: string; name?: string; url?: string };
+      const resolvedUrl = String(info.url || "").trim();
+      const playQuery = resolvedUrl || picked;
+      const out = await apiPost<Record<string, unknown>>("/api/v1/play", {
         device_id: activeDid,
-        query: picked,
+        query: playQuery,
         source_hint: "auto",
         options: {
           list_name: playlist,
         },
-      },
-    );
-    const parsed = unwrapPlaybackEnvelope(out);
-    if (parsed.ok) {
-      setMusic(picked);
-      setMessage(`开始播放（来源: ${parsed.sourcePlugin || "local_library"}, 传输: ${parsed.transport || "unknown"}）`);
-      await loadStatus(activeDid);
-    } else {
-      setMessage(`播放失败：${explainPlaybackError(parsed.errorCode, parsed.message, parsed.stage)}`);
+      });
+      const parsed = unwrapPlaybackEnvelope(out);
+      if (parsed.ok) {
+        setMusic(picked);
+        setMessage(`开始播放（来源: ${parsed.sourcePlugin || "unknown"}, 传输: ${parsed.transport || "unknown"}）`);
+        await loadStatus(activeDid);
+      } else {
+        setMessage(`播放失败：${explainPlaybackError(parsed.errorCode, parsed.message, parsed.stage)}`);
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err || "未知错误");
+      setMessage(`播放失败：${reason}`);
     }
   }
 
@@ -815,67 +841,28 @@ export function HomePage() {
         return;
       }
 
-      const resolveOut = (await apiPost<Record<string, unknown>>("/api/v1/resolve", {
+      const out = await apiPost<Record<string, unknown>>("/api/v1/play", {
+        device_id: activeDid,
         query: url,
         source_hint: "auto",
-        options: {},
-      })) as Record<string, unknown>;
-      const resolved = unwrapPlaybackEnvelope(resolveOut);
-      const resolvedData = ((resolveOut as { data?: Record<string, unknown> }).data || {}) as Record<string, unknown>;
-      if (!resolved.ok) {
-        setMessage(`解析失败：${explainPlaybackError(resolved.errorCode, resolved.message, resolved.stage)}`);
-        return;
-      }
-
-      const resolvedSource = String(resolvedData.source_plugin || "auto") || "auto";
-
-      const runApiV1Play = async (preferProxy: boolean) => {
-        const out = await apiPost<Record<string, unknown>>("/api/v1/play", {
-          device_id: activeDid,
-          query: url,
-          source_hint: resolvedSource,
-          options: { no_cache: false, prefer_proxy: preferProxy, prefer_codec: "auto" },
-        });
-        return unwrapPlaybackEnvelope(out);
-      };
-
-      if (proxy) {
-        const out = await runApiV1Play(true);
-        if (out.ok) {
-          setMessage(`网站媒体已发送（来源: ${out.sourcePlugin || "unknown"}, 传输: ${out.transport || "unknown"}${out.sid ? `, sid: ${out.sid}` : ""}）`);
-        } else {
-          setMessage(`网站媒体失败（${out.sourcePlugin || "unknown"}）：${explainPlaybackError(out.errorCode, out.message, out.stage)}`);
-        }
-        return;
-      }
-
-      // Unified source plugin path via /api/v1/play.
-      const directOut = await runApiV1Play(false);
-      if (directOut.ok) {
+        options: { no_cache: false, prefer_proxy: proxy, prefer_codec: "auto" },
+      });
+      const parsed = unwrapPlaybackEnvelope(out);
+      const env = out as { data?: Record<string, unknown> };
+      const data = (env.data || {}) as Record<string, unknown>;
+      const extra = (data.extra || {}) as Record<string, unknown>;
+      const outcome = (extra.playback_outcome || {}) as Record<string, unknown>;
+      const netAudio = (extra.network_audio || {}) as Record<string, unknown>;
+      const finalPath = String(outcome.final_path || netAudio.mode || "");
+      const fallbackTriggered = Boolean(outcome.fallback_triggered);
+      if (parsed.ok) {
         setMessage(
-          `播放已发送（来源: ${directOut.sourcePlugin || "unknown"}, 传输: ${directOut.transport || "unknown"}${
-            directOut.sid ? `, sid: ${directOut.sid}` : ""
-          }）`,
+          `播放已发送（来源: ${parsed.sourcePlugin || "unknown"}, 传输: ${parsed.transport || "unknown"}, 路径: ${
+            finalPath || "unknown"
+          }${fallbackTriggered ? "，已触发回退" : ""}${parsed.sid ? `, sid: ${parsed.sid}` : ""}）`,
         );
       } else {
-        const p = await runApiV1Play(true);
-        if (p.ok) {
-          setMessage(
-            `首轮播放失败：${explainPlaybackError(directOut.errorCode, directOut.message, directOut.stage)}；已自动切换成功（来源: ${
-              p.sourcePlugin || "unknown"
-            }, 传输: ${p.transport || "unknown"}${
-              p.sid ? `（sid: ${p.sid}）` : ""
-            }）`,
-          );
-        } else {
-          setMessage(
-            `首轮播放失败：${explainPlaybackError(directOut.errorCode, directOut.message, directOut.stage)}；重试也失败：${explainPlaybackError(
-              p.errorCode,
-              p.message,
-              p.stage,
-            )}（来源: ${p.sourcePlugin || "unknown"}）`,
-          );
-        }
+        setMessage(`播放失败：${explainPlaybackError(parsed.errorCode, parsed.message, parsed.stage)}`);
       }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err || "未知错误");
@@ -1349,7 +1336,7 @@ export function HomePage() {
                   play_circle_outline
                 </span>
               </button>
-              <div className="soundscape-dock-song">{status.cur_music || music || "未播放"}</div>
+              <div className="soundscape-dock-song">{status.is_playing ? status.cur_music || music || "未播放" : "空闲"}</div>
             </div>
 
             <div className="soundscape-dock-center">
@@ -1472,7 +1459,7 @@ export function HomePage() {
                 {formatTime(Number(status.offset || 0))}
               </span>
               <div className="current-song" id="playering-music">
-                当前播放歌曲：{status.cur_music || "无"}
+                当前播放歌曲：{status.is_playing ? status.cur_music || music || "无" : "空闲"}
               </div>
               <span className="duration" id="duration">
                 {formatTime(Number(status.duration || 0))}
