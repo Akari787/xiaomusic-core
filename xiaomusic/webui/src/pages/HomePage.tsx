@@ -2103,6 +2103,7 @@ export function HomePage() {
 
       <div className={`component ${showTimer ? "show" : ""}`} id="timer-component" style={{ display: showTimer ? "block" : "none" }}>
         <h2>定时关机</h2>
+        <p className="oauth-hint">兼容口令入口：当前通过设备语音命令链路执行。</p>
         <button onClick={() => void timedShutdown("10分钟后关机")}>10分钟后关机</button>
         <button onClick={() => void timedShutdown("30分钟后关机")}>30分钟后关机</button>
         <button onClick={() => void timedShutdown("60分钟后关机")}>60分钟后关机</button>
@@ -2135,6 +2136,7 @@ export function HomePage() {
 
         <div className="card-section">
           <h3 className="card-title">🎤 自定义口令</h3>
+          <p>兼容入口（deprecated）：仅用于历史语音口令调试，不建议作为新接入方案。</p>
           <input type="text" className="search-input" value={customCmd} onChange={(e) => setCustomCmd(e.target.value)} placeholder="请输入自定义口令" />
           <div className="component-button-group">
             <button onClick={() => void sendCustomCmd()}>发送口令</button>
