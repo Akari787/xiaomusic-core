@@ -119,11 +119,42 @@
 
 ### GET /api/v1/devices
 
-返回设备列表（标准化字段）：`device_id/name/model/online`。
+成功响应示例：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "devices": [
+      {
+        "device_id": "981257654",
+        "name": "XiaoAi",
+        "model": "LX06",
+        "online": true
+      }
+    ]
+  },
+  "request_id": "req_123"
+}
+```
 
 ### GET /api/v1/system/status
 
-返回 Runtime 基本状态：`status/version/devices_count`。
+成功响应示例：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "status": "ok",
+    "version": "1.0.6",
+    "devices_count": 1
+  },
+  "request_id": "req_123"
+}
+```
 
 ### GET /api/v1/player/state
 
@@ -145,6 +176,23 @@
 
 - `offset/duration` 单位固定为秒，WebUI 不允许再做毫秒猜测。
 - 状态由 Runtime 统一聚合，避免前端多接口拼装。
+
+成功响应示例：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "device_id": "981257654",
+    "is_playing": true,
+    "cur_music": "test.mp3",
+    "offset": 12,
+    "duration": 180
+  },
+  "request_id": "req_123"
+}
+```
 
 ---
 
@@ -196,4 +244,4 @@ WebUI 不得调用：
 - `4xxxx` Transport
 - `5xxxx` API 请求
 
-详细定义见：`docs/spec/runtime_specification.md`。
+详细定义见：`docs/dev/spec/runtime_specification.md`。

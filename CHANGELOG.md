@@ -1,3 +1,27 @@
+## v1.0.6 (2026-03-08)
+
+### API v1 收敛
+
+- 将 v1 控制面收敛为白名单结构：`/api/v1/play`、`/api/v1/control/*`、`/api/v1/devices`、`/api/v1/system/status`、`/api/v1/player/state`、`/api/v1/resolve`。
+- 统一播放入参语义为 `device_id + query`，并在 v1 响应中固定 `code/message/data/request_id` Envelope。
+- 清理旧 v1 路由与兼容字段依赖（如 `play_url`、`/api/v1/stop`、`/api/v1/status`、`speaker_id`、`url`）。
+
+### WebUI 与交互调整
+
+- 首页恢复默认入口并拆分 v1 调试入口，减少生产页面与调试能力耦合。
+- WebUI 播放态改为对齐 `/api/v1/player/state`，修复刷新后“当前播放”不同步与下一首切换状态回写问题。
+
+### 架构修复与稳定性
+
+- 继续完成播放链路插件化与 API 绑定收敛，来源插件与传输层职责边界更清晰。
+- 修复 API 层导入循环问题并收紧 v1 播放状态契约，降低回归风险。
+- 加固站点媒体（site-media）播放链路与错误映射，提升失败场景可观测性。
+
+### 文档
+
+- API 规范以 `docs/api/api_v1_spec.md` 为唯一正式来源。
+- 清理并重组重构期文档到 `docs/dev/`，减少正式文档与开发过程文档混杂。
+
 ## v1.0.5 (2026-02-28)
 
 ### 稳定性增强

@@ -11,7 +11,7 @@ Note: runtime package path has been standardized to `xiaomusic/network_audio`.
 - `Session`: stream session lifecycle state.
 - `Event`: observable runtime event.
 
-Canonical examples are stored in `docs/network_audio/contracts.examples.json` and are validated by unit tests.
+Canonical examples are stored in `docs/dev/network_audio/contracts.examples.json` and are validated by unit tests.
 
 ## Error Codes
 

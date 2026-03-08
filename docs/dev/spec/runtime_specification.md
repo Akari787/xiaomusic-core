@@ -458,7 +458,7 @@ API 必须保持稳定与一致。
 该文档建议放置在：
 
 ```
-docs/spec/runtime_specification.md
+docs/dev/spec/runtime_specification.md
 ```
 
 原因：
@@ -471,8 +471,8 @@ docs/spec/runtime_specification.md
 
 ```
 docs/
- ├─ spec/
- │   └─ runtime_specification.md
+ ├─ dev/
+ │   └─ spec/runtime_specification.md
  │
  ├─ api/
  │   └─ api_v1_spec.md

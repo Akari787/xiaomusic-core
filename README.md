@@ -81,20 +81,20 @@ docker compose -f docker-compose.hardened.yml up -d --build
 ### API v1 调用示例
 
 ```bash
-curl -X POST http://<HOST>:<PORT>/api/v1/play_url \
+curl -X POST http://<HOST>:<PORT>/api/v1/play \
   -H "Content-Type: application/json" \
-  -d '{"speaker_id":"<SPEAKER_ID>","url":"https://example.com/test.mp3"}'
+  -d '{"device_id":"<DEVICE_ID>","query":"https://example.com/test.mp3"}'
 
-curl -X POST http://<HOST>:<PORT>/api/v1/stop \
+curl -X POST http://<HOST>:<PORT>/api/v1/control/stop \
   -H "Content-Type: application/json" \
-  -d '{"speaker_id":"<SPEAKER_ID>"}'
+  -d '{"device_id":"<DEVICE_ID>"}'
 
-curl "http://<HOST>:<PORT>/api/v1/status?speaker_id=<SPEAKER_ID>"
+curl "http://<HOST>:<PORT>/api/v1/system/status"
 ```
 
 ### API 详细说明
 
-为避免 README 过长，完整 API 文档已独立维护在：`docs/API.md`
+为避免 README 过长，完整 API 规范请查看：`docs/api/api_v1_spec.md`
 
 ## 🐳 Docker 使用说明
 
@@ -104,7 +104,7 @@ curl "http://<HOST>:<PORT>/api/v1/status?speaker_id=<SPEAKER_ID>"
 
 - `stable`：稳定版（推荐）
 - `latest`：最新构建
-- `v1.0.2`：指定版本
+- `v1.0.6`：指定版本
 
 快速启动（示例）：
 
@@ -159,7 +159,7 @@ docker compose --profile test up -d
 ```yaml
 services:
   xiaomusic:
-    image: akari787/xiaomusic-oauth2:v1.0.5
+    image: akari787/xiaomusic-oauth2:v1.0.6
     container_name: xiaomusic-oauth2
     restart: unless-stopped
     ports:
@@ -185,7 +185,7 @@ curl -fsS http://127.0.0.1:58090/getversion
 # 查看日志
 docker logs --tail 200 xiaomusic-oauth2
 
-# 更新到新版本镜像（示例 v1.0.5）
+# 更新到新版本镜像（示例 v1.0.6）
 docker compose pull
 docker compose up -d --force-recreate
 ```
@@ -326,7 +326,7 @@ XIAOMUSIC_ENABLE_ANALYTICS=false
 
 ## 版本
 
-当前维护版本: `1.0.5`
+当前维护版本: `1.0.6`
 
 更新记录: [CHANGELOG.md](CHANGELOG.md)
 
