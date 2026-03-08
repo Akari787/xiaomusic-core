@@ -232,6 +232,15 @@ WebUI 不得调用：
 - 新功能必须优先落入 `/api/v1/*`。
 - 迁移完成后，历史接口按版本计划逐步下线。
 
+当前明确为 deprecated wrapper 的历史入口（示例）：
+
+- `GET /getplayerstatus`
+- `POST /device/stop`
+- `POST /setvolume`
+- `GET /playtts`
+
+这些入口仅用于兼容迁移，不应作为新实现的调用目标。
+
 ---
 
 ## 10. 错误码
@@ -245,3 +254,9 @@ WebUI 不得调用：
 - `5xxxx` API 请求
 
 详细定义见：`docs/dev/spec/runtime_specification.md`。
+
+补充实现边界文档：
+
+- `docs/dev/runtime_contracts.md`
+- `docs/dev/source_transport_matrix.md`
+- `docs/dev/webui_v1_alignment.md`
