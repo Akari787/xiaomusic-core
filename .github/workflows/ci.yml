@@ -57,6 +57,11 @@ jobs:
       - name: Test Docker image for ${{ matrix.platform }}
         run: |
           docker run --rm ${{ env.LOCAL_IMAGE }}:${{ github.ref_name }}-${{ matrix.platform }} /app/.venv/bin/python3 /app/xiaomusic.py -h
+          docker run --rm ${{ env.LOCAL_IMAGE }}:${{ github.ref_name }}-${{ matrix.platform }} sh -lc "test -f /app/xiaomusic/webui/static/index.html && test ! -d /app/xiaomusic/webui/src"
+
+      - name: Show image size for ${{ matrix.platform }}
+        run: |
+          docker image inspect ${{ env.LOCAL_IMAGE }}:${{ github.ref_name }}-${{ matrix.platform }} --format='{{.Size}}'
 
       - name: Save ${{ matrix.platform }} image to tar.gz
         run: |

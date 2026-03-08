@@ -73,6 +73,13 @@ COPY plugins/ ./plugins/
 COPY holiday/ ./holiday/
 COPY xiaomusic.py .
 
+# 构建 WebUI 静态资源（镜像仅保留构建产物）
+RUN if [ -f xiaomusic/webui/package.json ]; then \
+        npm --prefix xiaomusic/webui install --no-audit --no-fund --loglevel=warn; \
+        rm -rf xiaomusic/webui/static/assets; \
+        npm --prefix xiaomusic/webui run build; \
+    fi
+
 # -------------------------- 运行阶段 --------------------------
 # 根据TARGETPLATFORM自动选择对应的runner阶段
 ARG TARGETPLATFORM
@@ -83,14 +90,12 @@ RUN if [ -f /etc/alpine-release ]; then \
         # Alpine运行时依赖
         apk add --no-cache \
         ffmpeg \
-        nodejs \
-        npm; \
+        nodejs; \
     else \
         # Debian运行时依赖
         apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         nodejs \
-        npm \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
@@ -105,7 +110,18 @@ COPY --from=builder /app/plugins/ ./plugins/
 COPY --from=builder /app/holiday/ ./holiday/
 COPY --from=builder /app/xiaomusic.py .
 COPY --from=builder /app/xiaomusic/__init__.py /base_version.py
-COPY --from=builder /app/package.json .
+
+# 仅保留 WebUI 构建后的静态资源，剔除前端源码与测试文件
+RUN if [ -d /app/xiaomusic/webui ]; then \
+      mkdir -p /tmp/webui-static; \
+      if [ -d /app/xiaomusic/webui/static ]; then \
+        cp -a /app/xiaomusic/webui/static/. /tmp/webui-static/; \
+      fi; \
+      rm -rf /app/xiaomusic/webui; \
+      mkdir -p /app/xiaomusic/webui/static; \
+      cp -a /tmp/webui-static/. /app/xiaomusic/webui/static/ || true; \
+      rm -rf /tmp/webui-static; \
+    fi
 
 # 创建FFmpeg软链接目录（兼容不同系统的ffmpeg路径）
 RUN mkdir -p /app/ffmpeg/bin \
