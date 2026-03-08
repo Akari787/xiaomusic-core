@@ -77,23 +77,7 @@ describe("HomePage play button regression", () => {
       return {};
     });
 
-    mockedApi.apiPost.mockImplementation(async (path: string, payload: Record<string, unknown>) => {
-      if (path === "/api/v1/play") {
-        return {
-          code: 0,
-          message: "ok",
-          data: {
-            status: "playing",
-            device_id: String(payload.device_id || ""),
-            source_plugin: "site_media",
-            transport: "mina",
-            sid: "rid-auto-ok",
-          },
-          request_id: "rid-play-ok",
-        };
-      }
-      return { ret: "OK" };
-    });
+    mockedApi.apiPost.mockResolvedValue({ ret: "OK" });
 
     await act(async () => {
       root.render(<HomePage />);
@@ -107,7 +91,7 @@ describe("HomePage play button regression", () => {
     container.remove();
   });
 
-  it("clicking play resolves song url then calls /api/v1/play with v1 payload", async () => {
+  it("clicking play sends playlist+song commands for auto-next playback", async () => {
     const playTooltip = Array.from(container.querySelectorAll(".control-button .tooltip")).find(
       (el) => (el.textContent || "").trim() === "播放",
     );
@@ -121,17 +105,15 @@ describe("HomePage play button regression", () => {
     const infoCalls = mockedApi.apiGet.mock.calls.filter((args) => String(args[0]).startsWith("/musicinfo?name="));
     expect(infoCalls).toHaveLength(1);
 
-    const playCalls = mockedApi.apiPost.mock.calls.filter((args) => args[0] === "/api/v1/play");
-    expect(playCalls).toHaveLength(1);
+    const cmdCalls = mockedApi.apiPost.mock.calls.filter((args) => args[0] === "/cmd");
+    expect(cmdCalls).toHaveLength(2);
 
-    const payload = playCalls[0][1] as Record<string, unknown>;
-    expect(payload).toMatchObject({
-      device_id: "981257654",
-      query: "http://127.0.0.1:58090/static/media/song-a.mp3",
-      source_hint: "auto",
-    });
+    const switchPlaylist = cmdCalls[0][1] as Record<string, unknown>;
+    const playSong = cmdCalls[1][1] as Record<string, unknown>;
+    expect(switchPlaylist).toMatchObject({ did: "981257654", cmd: "播放列表所有歌曲" });
+    expect(playSong).toMatchObject({ did: "981257654", cmd: "播放本地歌曲Song A" });
 
     const announcer = container.querySelector("#sr-announcer");
-    expect((announcer?.textContent || "").trim()).toContain("开始播放");
+    expect((announcer?.textContent || "").trim()).toContain("自动切歌");
   });
 });
