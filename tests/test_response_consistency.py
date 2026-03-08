@@ -7,11 +7,12 @@ from xiaomusic.api.routers import v1
 
 
 def test_api_v1_routes_whitelist_only():
-    routes = {
-        (method, route.path)
-        for route in v1.router.routes
-        for method in (route.methods or set())
-    }
+    routes = set()
+    for route in v1.router.routes:
+        path = getattr(route, "path", "")
+        methods = getattr(route, "methods", set()) or set()
+        for method in methods:
+            routes.add((method, path))
     expected = {
         ("POST", "/api/v1/play"),
         ("POST", "/api/v1/resolve"),
@@ -72,5 +73,5 @@ async def test_v1_response_has_unified_top_level_fields(monkeypatch):
     assert set(stop_out.keys()) == {"code", "message", "data", "request_id"}
     assert set(state_out.keys()) == {"code", "message", "data", "request_id"}
     assert "speaker_id" not in play_out
-    assert "sid" not in play_out
+    assert play_out["data"]["sid"]
     assert "state" not in play_out

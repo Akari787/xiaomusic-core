@@ -4,7 +4,7 @@ import logging
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from xiaomusic import __version__
 from xiaomusic.api.api_error import ApiError
@@ -273,7 +273,7 @@ async def api_v1_system_status():
 
 
 @router.get("/api/v1/player/state")
-async def api_v1_player_state(device_id: str = "", request_id: str | None = None):
+async def api_v1_player_state(device_id: str = Query(..., min_length=1), request_id: str | None = None):
     rid = _next_request_id(request_id)
     try:
         out = await _get_facade().player_state(device_id=device_id, request_id=rid)
