@@ -63,7 +63,10 @@ async def getplayerstatus(did: str = ""):
     if not xiaomusic.did_exist(did):
         return api_response.ok({"status": 0, "volume": 0}, contract="raw")
 
-    out = await _get_facade().status({"speaker_id": did})
+    log.warning(
+        "deprecated_endpoint endpoint=/getplayerstatus replacement=/api/v1/player/state caller_should_migrate=true"
+    )
+    out = await _get_facade().status(did)
     return out["raw"]
 
 
@@ -75,9 +78,12 @@ async def setvolume(data: DidVolume):
     if not xiaomusic.did_exist(did):
         return api_response.ok(contract="ret", ret="Did not exist")
 
+    log.warning(
+        "deprecated_endpoint endpoint=/setvolume replacement=/api/v1/control/volume caller_should_migrate=true"
+    )
     log.info(f"set_volume {did} {volume}")
     out = await _get_facade().set_volume(did, int(volume))
-    if not out.get("ok"):
+    if out.get("status") != "ok":
         return api_response.ok(contract="ret", ret="Did not exist")
     return api_response.ok({"volume": volume}, contract="ret")
 
@@ -134,9 +140,12 @@ async def playtts(did: str, text: str):
     if not xiaomusic.did_exist(did):
         return api_response.ok(contract="ret", ret="Did not exist")
 
+    log.warning(
+        "deprecated_endpoint endpoint=/playtts replacement=/api/v1/control/tts caller_should_migrate=true"
+    )
     log.info(f"tts {did} {text}")
     out = await _get_facade().tts(did, text)
-    if not out.get("ok"):
+    if out.get("status") != "ok":
         return api_response.ok(contract="ret", ret="Did not exist")
     return api_response.ok(contract="ret")
 
@@ -149,6 +158,9 @@ async def stop(data: Did):
     if not xiaomusic.did_exist(did):
         return api_response.ok(contract="ret", ret="Did not exist")
 
+    log.warning(
+        "deprecated_endpoint endpoint=/device/stop replacement=/api/v1/control/stop caller_should_migrate=true"
+    )
     try:
         await _get_facade().stop_legacy({"speaker_id": did})
     except Exception as e:

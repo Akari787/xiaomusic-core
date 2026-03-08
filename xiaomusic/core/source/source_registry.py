@@ -5,6 +5,15 @@ from urllib.parse import urlparse
 
 from xiaomusic.core.errors.source_errors import SourceResolveError
 from xiaomusic.core.models.media import MediaRequest
+from xiaomusic.core.models.payload_keys import (
+    OPT_SOURCE_PAYLOAD,
+    PAYLOAD_MUSIC_NAME,
+    PAYLOAD_NAME,
+    PAYLOAD_PATH,
+    PAYLOAD_SOURCE,
+    PAYLOAD_TRACK_ID,
+    PAYLOAD_URL,
+)
 from xiaomusic.core.source.source_plugin import SourcePlugin
 
 
@@ -46,19 +55,19 @@ class SourceRegistry:
         raise SourceResolveError(f"no source plugin found for query: {request.query}")
 
     def _infer_hint(self, request: MediaRequest) -> str | None:
-        payload = request.context.get("source_payload") if isinstance(request.context, dict) else None
+        payload = request.context.get(OPT_SOURCE_PAYLOAD) if isinstance(request.context, dict) else None
         if isinstance(payload, dict):
-            source = str(payload.get("source") or "").strip().lower()
+            source = str(payload.get(PAYLOAD_SOURCE) or "").strip().lower()
             source = self._normalize_hint(source)
             if source in self._plugins:
                 return source
 
             legacy_query = str(
-                payload.get("url")
-                or payload.get("music_name")
-                or payload.get("track_id")
-                or payload.get("path")
-                or payload.get("name")
+                payload.get(PAYLOAD_URL)
+                or payload.get(PAYLOAD_MUSIC_NAME)
+                or payload.get(PAYLOAD_TRACK_ID)
+                or payload.get(PAYLOAD_PATH)
+                or payload.get(PAYLOAD_NAME)
                 or ""
             )
             if legacy_query and self._looks_like_local(legacy_query):

@@ -13,7 +13,8 @@ from xiaomusic.core.coordinator import PlaybackCoordinator
 from xiaomusic.core.delivery import DeliveryAdapter
 from xiaomusic.core.device import DeviceRegistry
 from xiaomusic.core.errors import DeviceNotFoundError, InvalidRequestError
-from xiaomusic.core.models import MediaRequest
+from xiaomusic.core.models import MediaRequest, PlayOptions
+from xiaomusic.core.models.payload_keys import KEY_SPEAKER_ID
 from xiaomusic.core.source import SourceRegistry
 from xiaomusic.core.transport import TransportPolicy, TransportRouter
 
@@ -79,57 +80,26 @@ class PlaybackFacade:
             raise InvalidRequestError("query is required")
         return q
 
-    @staticmethod
-    def _build_context(query: str, hint: str | None, options: dict[str, Any], *, include_prefer_proxy: bool) -> dict[str, Any]:
-        default_resolve_timeout = 15 if hint == "site_media" else 8
-        context: dict[str, Any] = {
-            "resolve_timeout_seconds": float(options.get("resolve_timeout_seconds", default_resolve_timeout)),
-            "no_cache": bool(options.get("no_cache", False)),
-        }
-        if include_prefer_proxy:
-            context["prefer_proxy"] = bool(options.get("prefer_proxy", False))
-            context["confirm_start"] = bool(options.get("confirm_start", True))
-            context["confirm_start_delay_ms"] = int(options.get("confirm_start_delay_ms", 1200))
-            context["confirm_start_retries"] = int(options.get("confirm_start_retries", 2))
-            context["confirm_start_interval_ms"] = int(options.get("confirm_start_interval_ms", 600))
-
-        if hint == "jellyfin":
-            payload = options.get("source_payload")
-            if not isinstance(payload, dict):
-                payload = {
-                    "source": "jellyfin",
-                    "url": query,
-                    "id": str(options.get("media_id") or options.get("id") or ""),
-                    "title": str(options.get("title") or ""),
-                }
-            context["source_payload"] = payload
-            if payload.get("title"):
-                context["title"] = str(payload.get("title"))
-
-        if hint == "local_library" and options.get("title"):
-            context["title"] = str(options.get("title"))
-
-        return context
-
     async def play(
         self,
         *,
         device_id: str,
         query: str,
         source_hint: str = "auto",
-        options: dict[str, Any] | None = None,
+        options: PlayOptions | dict[str, Any] | None = None,
         request_id: str | None = None,
     ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         q = self._validate_query(query)
-        opts = options or {}
+        opts = options if isinstance(options, PlayOptions) else PlayOptions.from_payload(options)
         normalized_hint = self._normalize_hint(source_hint)
-        req = MediaRequest(
+        req = MediaRequest.from_payload(
             request_id=str(request_id or uuid4().hex[:16]),
             source_hint=normalized_hint,
             query=q,
             device_id=did,
-            context=self._build_context(q, normalized_hint, opts, include_prefer_proxy=True),
+            options=opts,
+            include_prefer_proxy=True,
         )
         result = await self._core().play(req, device_id=did)
         prepared = result["prepared_stream"]
@@ -159,18 +129,19 @@ class PlaybackFacade:
         *,
         query: str,
         source_hint: str = "auto",
-        options: dict[str, Any] | None = None,
+        options: PlayOptions | dict[str, Any] | None = None,
         request_id: str | None = None,
     ) -> dict[str, Any]:
         q = self._validate_query(query)
-        opts = options or {}
+        opts = options if isinstance(options, PlayOptions) else PlayOptions.from_payload(options)
         normalized_hint = self._normalize_hint(source_hint)
-        req = MediaRequest(
+        req = MediaRequest.from_payload(
             request_id=str(request_id or uuid4().hex[:16]),
             source_hint=normalized_hint,
             query=q,
             device_id=None,
-            context=self._build_context(q, normalized_hint, opts, include_prefer_proxy=False),
+            options=opts,
+            include_prefer_proxy=False,
         )
         result = await self._core().resolve(req)
         resolved = result["resolved_media"]
@@ -275,10 +246,10 @@ class PlaybackFacade:
             },
         }
 
-    async def status(self, target: dict[str, Any]) -> dict[str, Any]:
-        speaker_id = str(target.get("speaker_id") or "").strip()
+    async def status(self, device_id: str) -> dict[str, Any]:
+        speaker_id = str(device_id or "").strip()
         if not speaker_id:
-            raise InvalidRequestError("speaker_id is required")
+            raise InvalidRequestError("device_id is required")
         raw = await self.xiaomusic.get_player_status(did=speaker_id)
         return {
             "sid": "",
@@ -351,7 +322,9 @@ class PlaybackFacade:
         }
 
     async def stop_legacy(self, target: dict[str, Any]) -> dict[str, Any]:
-        speaker_id = str(target.get("speaker_id") or "").strip()
+        # compatibility_layer: legacy facade method retained for deprecated router wrappers.
+        # removal_condition: remove after device router legacy endpoints are dropped.
+        speaker_id = str(target.get(KEY_SPEAKER_ID) or "").strip()
         out = await self.stop(speaker_id)
         return {
             "sid": "",
@@ -369,6 +342,8 @@ class PlaybackFacade:
         }
 
     async def pause_legacy(self, speaker_id: str) -> dict[str, Any]:
+        # compatibility_layer: legacy facade method retained for deprecated router wrappers.
+        # removal_condition: remove after device router legacy endpoints are dropped.
         out = await self.pause(speaker_id)
         return {
             "speaker_id": speaker_id,
@@ -382,6 +357,8 @@ class PlaybackFacade:
         }
 
     async def tts_legacy(self, speaker_id: str, text: str) -> dict[str, Any]:
+        # compatibility_layer: legacy facade method retained for deprecated router wrappers.
+        # removal_condition: remove after device router legacy endpoints are dropped.
         out = await self.tts(speaker_id, text)
         return {
             "speaker_id": speaker_id,
@@ -395,6 +372,8 @@ class PlaybackFacade:
         }
 
     async def set_volume_legacy(self, speaker_id: str, volume: int) -> dict[str, Any]:
+        # compatibility_layer: legacy facade method retained for deprecated router wrappers.
+        # removal_condition: remove after device router legacy endpoints are dropped.
         out = await self.set_volume(speaker_id, volume)
         return {
             "speaker_id": speaker_id,

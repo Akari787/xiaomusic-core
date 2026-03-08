@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+from xiaomusic.core.models.media import MediaRequest, PlayOptions
+from xiaomusic.core.models.payload_keys import (
+    OPT_CONFIRM_START,
+    OPT_CONFIRM_START_DELAY_MS,
+    OPT_CONFIRM_START_INTERVAL_MS,
+    OPT_CONFIRM_START_RETRIES,
+    OPT_NO_CACHE,
+    OPT_PREFER_PROXY,
+    OPT_RESOLVE_TIMEOUT_SECONDS,
+    OPT_SOURCE_PAYLOAD,
+    OPT_TITLE,
+    PAYLOAD_ID,
+    PAYLOAD_SOURCE,
+    PAYLOAD_TITLE,
+    PAYLOAD_URL,
+)
+
+
+def test_play_options_defaults_from_empty_payload() -> None:
+    opts = PlayOptions.from_payload(None)
+    assert opts.no_cache is False
+    assert opts.prefer_proxy is False
+    assert opts.confirm_start is True
+    assert opts.confirm_start_delay_ms == 1200
+    assert opts.confirm_start_retries == 2
+    assert opts.confirm_start_interval_ms == 600
+    assert opts.resolve_timeout_seconds is None
+
+
+def test_play_options_from_legacy_payload_normalizes_values() -> None:
+    opts = PlayOptions.from_payload(
+        {
+            "no_cache": "true",
+            "prefer_proxy": "1",
+            "confirm_start": "false",
+            "confirm_start_delay_ms": "0",
+            "confirm_start_retries": "-3",
+            "confirm_start_interval_ms": "50",
+            "resolve_timeout_seconds": "15",
+            "id": "legacy-id",
+            "title": "Legacy Title",
+        }
+    )
+    assert opts.no_cache is True
+    assert opts.prefer_proxy is True
+    assert opts.confirm_start is False
+    assert opts.confirm_start_delay_ms == 0
+    assert opts.confirm_start_retries == 0
+    assert opts.confirm_start_interval_ms == 100
+    assert opts.resolve_timeout_seconds == 15
+    assert opts.media_id == "legacy-id"
+    assert opts.title == "Legacy Title"
+
+
+def test_media_request_from_payload_builds_jellyfin_context() -> None:
+    opts = PlayOptions.from_payload({"title": "My Song", "id": "jf-1"})
+    req = MediaRequest.from_payload(
+        request_id="rid-1",
+        query="http://example.com/stream.mp3",
+        source_hint="jellyfin",
+        device_id="did-1",
+        options=opts,
+        include_prefer_proxy=True,
+    )
+    assert req.context[OPT_RESOLVE_TIMEOUT_SECONDS] == 8
+    assert req.context[OPT_NO_CACHE] is False
+    assert req.context[OPT_PREFER_PROXY] is False
+    assert req.context[OPT_CONFIRM_START] is True
+    assert req.context[OPT_CONFIRM_START_DELAY_MS] == 1200
+    assert req.context[OPT_CONFIRM_START_RETRIES] == 2
+    assert req.context[OPT_CONFIRM_START_INTERVAL_MS] == 600
+    payload = req.context[OPT_SOURCE_PAYLOAD]
+    assert payload[PAYLOAD_SOURCE] == "jellyfin"
+    assert payload[PAYLOAD_URL] == "http://example.com/stream.mp3"
+    assert payload[PAYLOAD_ID] == "jf-1"
+    assert payload[PAYLOAD_TITLE] == "My Song"
+    assert req.context[OPT_TITLE] == "My Song"
