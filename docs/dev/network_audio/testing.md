@@ -1,5 +1,7 @@
 # Network Audio Test Layers
 
+> 术语说明：本文件中的 `Network Audio` 主要指历史测试工具与目录命名；来源语义请使用 `Site Media` / `Direct URL`。
+
 网络音频链路使用三层测试：
 
 - `tests/unit` for deterministic logic (`UT-*`)

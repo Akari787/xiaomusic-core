@@ -59,7 +59,7 @@
   - `url_prepare_result=ok ... source=http_url`
   - `selected_transport=mina`
 
-## 7. network_audio 实机播放结果
+## 7. Site Media 实机播放结果（原 network_audio，deprecated）
 
 ### 验收步骤
 
@@ -72,8 +72,8 @@
 - 返回 `stream_url` 为可播放的解析后音频直链（googlevideo）。
 - 音箱实际开始播放。
 - 关键日志证明链路：
-  - `source_hint=network_audio source_plugin=network_audio`
-  - `url_prepare_result=ok ... source=network_audio`
+  - `source_hint=network_audio (deprecated) source_plugin=site_media`
+  - `url_prepare_result=ok ... source=site_media`
   - `transport_action action=play_url success=true`
 
 ## 8. stop / pause / tts / set_volume / probe 验收结果
@@ -97,16 +97,16 @@
 
 ## 9. LegacyPayloadSourcePlugin 剩余职责
 
-- 仅用于旧 API payload 的兼容入口（非 Jellyfin / 非 network_audio 主路径）。
+- 仅用于旧 API payload 的兼容入口（非 Jellyfin / 非 Site Media 主路径）。
 - 已明确禁止承载新业务来源。
 - Jellyfin 主路径已迁移至 `JellyfinSourcePlugin`。
-- network_audio 主路径已迁移至 `NetworkAudioSourcePlugin`。
+- Site Media 主路径已迁移至 `SiteMediaSourcePlugin`（历史实现名中仍可能出现 `network_audio`）。
 
 ## 10. 新增自动化测试情况
 
 新增测试：
 
-- `tests/unit/test_network_audio_source_plugin.py`
+- `tests/unit/test_network_audio_source_plugin.py`（文件名保留历史命名）
 - `tests/test_api_unified_chain_entry.py`
 
 扩展与覆盖：
@@ -120,7 +120,7 @@
 
 执行命令：
 
-- `python -m pytest tests/unit/test_core_source_plugins_and_registry.py tests/unit/test_network_audio_source_plugin.py tests/unit/test_core_transport_router.py tests/unit/test_core_delivery_adapter.py tests/unit/test_core_device_registry.py tests/unit/test_core_playback_coordinator.py tests/unit/test_miio_play_strategy.py tests/test_api_v1_play_url_response_shape.py tests/test_response_consistency.py`
+- `python -m pytest tests/unit/test_core_source_plugins_and_registry.py tests/unit/test_network_audio_source_plugin.py tests/unit/test_core_transport_router.py tests/unit/test_core_delivery_adapter.py tests/unit/test_core_device_registry.py tests/unit/test_core_playback_coordinator.py tests/unit/test_miio_play_strategy.py tests/test_api_v1_play_url_response_shape.py tests/test_response_consistency.py`（命令中的 `network_audio` 为历史文件名）
 - 结果：`14 passed, 2 skipped`
 
 ## 11. 已知限制
@@ -131,6 +131,6 @@
 
 ## 12. 下一阶段建议
 
-1. 将 network_audio 的解析超时、站点失败分类为更细错误码（便于告警路由）。
+1. 将 Site Media 的解析超时、站点失败分类为更细错误码（便于告警路由）。
 2. 继续收缩 `legacy_direct_fallback`，推动所有入口标准化为可解析 URL/payload。
 3. 增加 `/api/v1/play_url` 真实 HTTP 集成测试（带请求 ID 断言与日志字段断言）。

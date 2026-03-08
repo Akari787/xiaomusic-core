@@ -114,7 +114,7 @@
 - `LegacyPayloadSourcePlugin`：
   - 仅保留给非 Jellyfin 的历史 payload 来源。
   - 原因：仍有旧入口依赖通用 payload 结构，需渐进迁移。
-- `PlaybackFacade` 中 `network_audio` 分支：
+- `PlaybackFacade` 中 `network_audio (deprecated)` 分支：
   - 仅作为 YouTube/Bilibili 等站点的解析/转发兼容 fallback。
   - 原因：此类 URL 需要 resolver 链路，暂未插件化到 Source 层。
 - `PlaybackFacade` 中 `legacy_direct_fallback`：
@@ -148,11 +148,11 @@
 
 ## 12. 已知限制
 
-- YouTube/Bilibili 仍通过 `network_audio` compatibility fallback 播放，不属于当前 Source 插件体系。
+- YouTube/Bilibili 仍通过 `network_audio (deprecated)` compatibility fallback 播放；其来源语义应归入 `Site Media`。
 - `LegacyPayloadSourcePlugin` 仍需保留一段时间承接未迁移旧 payload 来源。
 
 ## 13. 下一阶段建议
 
-1. 将网络站点（YouTube/Bilibili）抽象为独立 SourcePlugin，逐步收敛 `network_audio` fallback。
+1. 将网络站点（YouTube/Bilibili）抽象为独立 SourcePlugin，逐步收敛 `network_audio (deprecated)` fallback。
 2. 继续收缩 legacy payload 入口，把非 Jellyfin 来源按类型拆分为显式插件。
 3. 增加核心链路结构化指标（source/plugin/transport/action）并接入长期回归看板。

@@ -92,7 +92,7 @@
   - 标记：`compatibility_layer`
   - 原因：承接历史 payload 调用
   - 预计移除：下一大版本，旧 API caller 迁移完成后
-- `PlaybackFacade` 中 `network_audio_cast` / `network_audio_link`
+- `PlaybackFacade` 中 `network_audio_cast` / `network_audio_link`（`network_audio` 为 deprecated 历史术语）
   - 标记：`compatibility_layer`
   - 原因：兼容历史 runtime 调用
   - 预计移除：v2 API 冻结后
@@ -107,12 +107,12 @@ Final Phase 新增 / 完善：
 
 - `tests/test_api_v1_control_flow.py`
 - `tests/test_api_unified_chain_entry.py`
-- `tests/unit/test_network_audio_source_plugin.py`
+- `tests/unit/test_network_audio_source_plugin.py`（文件名保留历史命名）
 - `tests/unit/test_core_source_plugins_and_registry.py`（补全 resolve -> delivery）
 
 执行命令：
 
-- `python -m pytest tests/test_api_v1_play_url_response_shape.py tests/test_response_consistency.py tests/test_api_v1_control_flow.py tests/unit/test_core_source_plugins_and_registry.py tests/unit/test_network_audio_source_plugin.py tests/unit/test_core_transport_router.py tests/unit/test_core_playback_coordinator.py tests/unit/test_core_delivery_adapter.py tests/unit/test_miio_play_strategy.py`
+- `python -m pytest tests/test_api_v1_play_url_response_shape.py tests/test_response_consistency.py tests/test_api_v1_control_flow.py tests/unit/test_core_source_plugins_and_registry.py tests/unit/test_network_audio_source_plugin.py tests/unit/test_core_transport_router.py tests/unit/test_core_playback_coordinator.py tests/unit/test_core_delivery_adapter.py tests/unit/test_miio_play_strategy.py`（命令中的 `network_audio` 为历史文件名）
 - 结果：`12 passed, 3 skipped`
 
 > 说明：`aiofiles` 缺失环境下，部分 API 集成测试按设计 skip。

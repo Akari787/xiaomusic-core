@@ -12,7 +12,7 @@ Current official plugins:
 Legacy source-hint compatibility (centralized in `SourceRegistry.LEGACY_HINT_MAP`):
 
 - `http_url -> direct_url`
-- `network_audio -> site_media`
+- `network_audio (deprecated) -> site_media`（旧术语已拆分为 `site_media` / `direct_url`）
 - `local_music -> local_library`
 
 Compatibility plugin:

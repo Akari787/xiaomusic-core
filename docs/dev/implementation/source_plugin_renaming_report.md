@@ -25,7 +25,7 @@
 旧 source-hint 兼容映射已集中在 `SourceRegistry.LEGACY_HINT_MAP`：
 
 - `http_url -> direct_url`
-- `network_audio -> site_media`
+- `network_audio (deprecated) -> site_media`
 - `local_music -> local_library`
 
 ## 4. 实机播放验收（新命名）
@@ -67,10 +67,10 @@
 使用兼容入口 `POST /api/device/pushUrl` 验证：
 
 - `source=http_url` -> 响应 `source=direct_url`
-- `source=network_audio` -> 响应 `source=site_media`
+- `source=network_audio (deprecated)` -> 响应 `source=site_media`
 - `source=local_music` -> 响应 `source=local_library`
 
-说明：旧命名仅作为兼容输入，主链路输出已全部收敛为新语义命名。
+说明：旧命名仅作为兼容输入，主链路输出已全部收敛为新语义命名（`network_audio` 已拆分为 `site_media` / `direct_url`）。
 
 ## 6. WebUI 同步说明
 

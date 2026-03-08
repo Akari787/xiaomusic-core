@@ -1,5 +1,7 @@
 # Network Audio Unified Contracts
 
+> 术语说明：本文标题中的 `Network Audio` 为历史模块名；来源语义请使用 `Site Media` / `Direct URL`。
+
 This document defines the only data structures allowed between network audio modules.
 
 Note: runtime package path has been standardized to `xiaomusic/network_audio`.

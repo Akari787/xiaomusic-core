@@ -111,7 +111,9 @@ PlaybackCoordinator
 - `SiteMediaSourcePlugin`
 - `LocalLibrarySourcePlugin`
 
-旧 source-hint 兼容映射：`http_url -> direct_url`、`network_audio -> site_media`、`local_music -> local_library`。
+旧 source-hint 兼容映射：`http_url -> direct_url`、`network_audio (deprecated) -> site_media`、`local_music -> local_library`。
+
+说明：`network_audio` 旧术语在来源语义上已拆分为 `site_media` 或 `direct_url`。
 
 职责：
 

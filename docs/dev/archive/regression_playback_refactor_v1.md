@@ -120,6 +120,6 @@ Environment:
 ## 7. 2026-02-25 Additional Fix Note
 
 - Symptom: `/api/v1/play_url` occasionally returned `state=streaming`, but runtime emitted `OSError: [Errno 98] Address in use` when reading `/network_audio/stream/{sid}`.
-- Root cause: `v1` router and `network_audio` router each owned an independent `NetworkAudioRuntime`, both trying to bind the same local stream port.
-- Fix: make `xiaomusic/api/routers/v1.py` reuse `network_audio._get_runtime` so both routers share one runtime instance.
+- Root cause: `v1` router and `network_audio (deprecated)` router each owned an independent runtime instance, both trying to bind the same local stream port.
+- Fix: make `xiaomusic/api/routers/v1.py` reuse `network_audio (deprecated)` router runtime singleton so both routers share one runtime instance.
 - Verification on `<TEST_SERVER_HOST>`: repeated play/stop no longer hit `Errno 98`; A/B/C/D smoke via `/api/v1/*` all pass.
