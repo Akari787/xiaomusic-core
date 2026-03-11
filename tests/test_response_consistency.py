@@ -25,6 +25,7 @@ def test_api_v1_routes_whitelist_only():
         ("GET", "/api/v1/devices"),
         ("GET", "/api/v1/system/status"),
         ("GET", "/api/v1/debug/auth_state"),
+        ("GET", "/api/v1/debug/auth_recovery_state"),
         ("GET", "/api/v1/player/state"),
     }
     assert routes == expected

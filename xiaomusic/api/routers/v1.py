@@ -297,6 +297,25 @@ async def api_v1_debug_auth_state():
         return _map_api_exception(exc, request_id)
 
 
+@router.get("/api/v1/debug/auth_recovery_state")
+async def api_v1_debug_auth_recovery_state():
+    request_id = _next_request_id(None)
+    try:
+        am = getattr(_get_xiaomusic(), "auth_manager", None)
+        if am is not None and hasattr(am, "auth_recovery_debug_state"):
+            data = am.auth_recovery_debug_state()
+        else:
+            data = {
+                "last_clear_short_session": {},
+                "last_login_exchange": {},
+                "last_runtime_rebind": {},
+                "last_playback_capability_verify": {},
+            }
+        return _api_ok(data, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
 @router.get("/api/v1/player/state")
 async def api_v1_player_state(device_id: str = Query(..., min_length=1), request_id: str | None = None):
     rid = _next_request_id(request_id)

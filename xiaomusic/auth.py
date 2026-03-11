@@ -15,6 +15,7 @@ import hashlib
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from aiohttp import ClientSession
 from miservice import MiAccount, MiIOService, MiNAService
@@ -191,6 +192,14 @@ class AuthManager:
         self._auth_estimated_ttl = True
         self._last_refresh_trigger = ""
         self._last_auth_error = ""
+        self._auth_recovery_chain_id = ""
+        self._auth_recovery_active_until_ts = 0.0
+        self._auth_recovery_state: dict[str, dict[str, Any]] = {
+            "last_clear_short_session": {},
+            "last_login_exchange": {},
+            "last_runtime_rebind": {},
+            "last_playback_capability_verify": {},
+        }
 
         self._high_freq_methods = {
             "device_list",
@@ -348,6 +357,113 @@ class AuthManager:
         self.log.info(json.dumps(event, ensure_ascii=False, separators=(",", ":")))
 
     @staticmethod
+    def _short_reason(reason: str) -> str:
+        text = str(reason or "").lower()
+        if "70016" in text:
+            return "70016"
+        if "401" in text or "unauthorized" in text:
+            return "401"
+        if "runtime" in text and "verify" in text:
+            return "runtime_verify_failed"
+        if "refresh" in text and "fail" in text:
+            return "refresh_failed"
+        return "other"
+
+    def _auth_presence_snapshot(self, data: dict[str, Any] | None = None) -> dict[str, bool]:
+        payload = data if isinstance(data, dict) else self._get_oauth2_auth_data()
+        return {
+            "has_passToken": bool(payload.get("passToken")),
+            "has_serviceToken": bool(payload.get("serviceToken")),
+            "has_yetAnotherServiceToken": bool(payload.get("yetAnotherServiceToken")),
+            "has_ssecurity": bool(payload.get("ssecurity")),
+            "has_deviceId": bool(payload.get("deviceId")),
+        }
+
+    def _short_session_fingerprint(self, data: dict[str, Any] | None = None) -> str:
+        payload = data if isinstance(data, dict) else self._get_oauth2_auth_data()
+        st = str(payload.get("yetAnotherServiceToken") or payload.get("serviceToken") or "")
+        ss = str(payload.get("ssecurity") or "")
+        if not st and not ss:
+            return "none"
+        return hashlib.sha1(f"{st}|{ss}".encode("utf-8")).hexdigest()[:8]
+
+    def _recovery_is_active(self) -> bool:
+        return time.time() <= float(self._auth_recovery_active_until_ts or 0)
+
+    def _mark_recovery_active(self, reason: str) -> str:
+        self._auth_recovery_chain_id = str(uuid4().hex[:12])
+        self._auth_recovery_active_until_ts = time.time() + 900
+        return self._auth_recovery_chain_id
+
+    def _emit_recovery_stage(
+        self,
+        *,
+        stage: str,
+        result: str,
+        reason: str = "",
+        auth_mode_before: str | None = None,
+        auth_mode_after: str | None = None,
+        error_code: str = "",
+        error_message: str = "",
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "event": "auth_recovery_stage",
+            "stage": stage,
+            "result": result,
+            "auth_session_id": self._auth_session_id(),
+            "auth_mode_before": auth_mode_before or self._auth_mode,
+            "auth_mode_after": auth_mode_after or self._auth_mode,
+            "reason": reason or "",
+            "recovery_chain_id": self._auth_recovery_chain_id or "",
+        }
+        if error_code:
+            payload["error_code"] = str(error_code)
+        if error_message:
+            payload["error_message"] = str(error_message).replace("\n", " ")[:200]
+        if extra:
+            payload.update(extra)
+        self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+
+        key = {
+            "clear_short_session": "last_clear_short_session",
+            "login_exchange": "last_login_exchange",
+            "runtime_rebind": "last_runtime_rebind",
+            "playback_capability_verify": "last_playback_capability_verify",
+        }.get(stage)
+        if key:
+            snapshot = dict(payload)
+            self._auth_recovery_state[key] = snapshot
+
+    def auth_recovery_debug_state(self) -> dict[str, Any]:
+        return deepcopy(self._auth_recovery_state)
+
+    def record_playback_capability_verify(
+        self,
+        *,
+        result: str,
+        verify_method: str,
+        playback_capability_level: str,
+        transport: str,
+        error_code: str = "",
+        error_message: str = "",
+    ) -> None:
+        if not self._recovery_is_active():
+            return
+        self._emit_recovery_stage(
+            stage="playback_capability_verify",
+            result=result,
+            reason="post_recovery_playback_check",
+            error_code=error_code,
+            error_message=error_message,
+            extra={
+                "verify_method": verify_method,
+                "playback_capability_level": playback_capability_level,
+                "transport": transport or "unknown",
+            },
+        )
+
+    @staticmethod
     def _is_short_session_failure_signal(reason: str = "", err: Exception | str | None = None) -> bool:
         text = f"{reason or ''} {err or ''}".lower()
         if "70016" in text:
@@ -364,6 +480,7 @@ class AuthManager:
 
     def _clear_short_lived_session(self, clear_reason: str, err: Exception | str | None = None) -> bool:
         mode_before = self._auth_mode
+        summarized_reason = self._short_reason(f"{clear_reason} {err or ''}")
         if not self._is_short_session_failure_signal(clear_reason, err):
             self._emit_auth_state(
                 auth_step="clear_short_session",
@@ -372,9 +489,23 @@ class AuthManager:
                 auth_mode_after=self._auth_mode,
                 clear_reason=clear_reason,
             )
+            self._emit_recovery_stage(
+                stage="clear_short_session",
+                result="skipped",
+                reason=summarized_reason,
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                extra={
+                    "cleared_fields": [],
+                    **self._auth_presence_snapshot(),
+                    "auth_json_writeback": "no",
+                },
+            )
             return False
 
+        self._mark_recovery_active(summarized_reason)
         removed_keys: list[str] = []
+        wrote_back = False
         try:
             # Clear runtime in-memory short-lived injection first.
             for svc in (self.mina_service, self.miio_service):
@@ -397,9 +528,11 @@ class AuthManager:
                 if self.token_store is not None:
                     self.token_store.update(data, reason=f"clear_short_session:{clear_reason}")
                     self.token_store.flush()
+                    wrote_back = True
                 else:
                     with open(self.oauth2_token_path, "w", encoding="utf-8") as f:
                         json.dump(data, f, indent=2, ensure_ascii=False)
+                    wrote_back = True
 
             self.cookie_jar = None
             self._auth_log(
@@ -414,6 +547,18 @@ class AuthManager:
                 auth_mode_before=mode_before,
                 auth_mode_after=self._auth_mode,
                 clear_reason=clear_reason,
+            )
+            self._emit_recovery_stage(
+                stage="clear_short_session",
+                result="ok",
+                reason=summarized_reason,
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                extra={
+                    "cleared_fields": sorted(set(removed_keys)),
+                    **self._auth_presence_snapshot(),
+                    "auth_json_writeback": "yes" if wrote_back else "no",
+                },
             )
             return True
         except Exception as clear_err:
@@ -430,6 +575,20 @@ class AuthManager:
                 auth_mode_after=self._auth_mode,
                 clear_reason=clear_reason,
                 err=str(clear_err),
+            )
+            self._emit_recovery_stage(
+                stage="clear_short_session",
+                result="failed",
+                reason=summarized_reason,
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                error_code=type(clear_err).__name__,
+                error_message=str(clear_err),
+                extra={
+                    "cleared_fields": sorted(set(removed_keys)),
+                    **self._auth_presence_snapshot(),
+                    "auth_json_writeback": "yes" if wrote_back else "no",
+                },
             )
             return False
 
@@ -692,12 +851,41 @@ class AuthManager:
 
     async def rebuild_services(self, reason: str, allow_login_fallback: bool = False) -> bool:
         mode_before = self._auth_mode
+        before_session = self._auth_session_id()
+        before_mina_id = id(self.mina_service) if self.mina_service is not None else 0
+        before_short_fp = self._short_session_fingerprint()
         self.mark_session_invalid(reason or "rebuild")
-        await self.login_miboy(
-            allow_login_fallback=allow_login_fallback,
-            reason=reason,
-        )
+        try:
+            await self.login_miboy(
+                allow_login_fallback=allow_login_fallback,
+                reason=reason,
+            )
+        except Exception as e:
+            if self._recovery_is_active():
+                self._emit_recovery_stage(
+                    stage="runtime_rebind",
+                    result="failed",
+                    reason=self._short_reason(f"{reason} {e}"),
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    error_code=self._classify_auth_result(e),
+                    error_message=str(e),
+                    extra={
+                        "auth_session_id_before": before_session,
+                        "auth_session_id_after": self._auth_session_id(),
+                        "runtime_instance_rebuilt": False,
+                        "mina_service_rebound": False,
+                        "token_source": "unknown",
+                    },
+                )
+            raise
         ready = await self._verify_runtime_auth_ready()
+        after_session = self._auth_session_id()
+        after_mina_id = id(self.mina_service) if self.mina_service is not None else 0
+        after_short_fp = self._short_session_fingerprint()
+        token_source = "unknown"
+        if after_short_fp != "none":
+            token_source = "new" if before_short_fp != after_short_fp else "old"
         self._auth_log(
             reason=reason,
             action="rebuild",
@@ -712,6 +900,23 @@ class AuthManager:
             auth_mode_after=self._auth_mode,
             err="" if ready else "runtime verify failed",
         )
+        if self._recovery_is_active():
+            self._emit_recovery_stage(
+                stage="runtime_rebind",
+                result="ok" if ready else "failed",
+                reason=self._short_reason(reason),
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                error_code="" if ready else "runtime_verify_failed",
+                error_message="" if ready else "runtime verify failed",
+                extra={
+                    "auth_session_id_before": before_session,
+                    "auth_session_id_after": after_session,
+                    "runtime_instance_rebuilt": bool(before_mina_id != after_mina_id and after_mina_id != 0),
+                    "mina_service_rebound": bool(after_mina_id != 0),
+                    "token_source": token_source,
+                },
+            )
         return ready
 
     async def refresh_oauth2_token_if_needed(self, reason: str, force: bool = False) -> dict[str, Any]:
@@ -1115,6 +1320,11 @@ class AuthManager:
         mode_before = self._auth_mode
         try:
             auth_data = self._get_oauth2_auth_data()
+            before_session_id = self._auth_session_id()
+            before_short_fp = self._short_session_fingerprint(auth_data)
+            before_service = str(auth_data.get("serviceToken") or "")
+            before_yast = str(auth_data.get("yetAnotherServiceToken") or "")
+            before_ssecurity = str(auth_data.get("ssecurity") or "")
             account_name = auth_data.get("userId", "")
             if not account_name:
                 raise RuntimeError("oauth2 token missing userId")
@@ -1149,10 +1359,28 @@ class AuthManager:
             self.miio_service = MiIOService(mi_account)
 
             runtime_verified = False
+            login_exchange_called = False
             if has_service_token:
                 try:
                     await self.mina_service.device_list()
                     runtime_verified = True
+                    if self._recovery_is_active():
+                        self._emit_recovery_stage(
+                            stage="login_exchange",
+                            result="skipped",
+                            reason="existing_short_session_verified",
+                            auth_mode_before=mode_before,
+                            auth_mode_after=self._auth_mode,
+                            extra={
+                                "provider": "micoapi",
+                                "login_http_status": "",
+                                "login_error_code": "",
+                                "login_error_message": "",
+                                "token_changed_serviceToken": False,
+                                "token_changed_yetAnotherServiceToken": False,
+                                "token_changed_ssecurity": False,
+                            },
+                        )
                 except Exception as verify_err:
                     self._auth_log(
                         reason=reason or "login_verify",
@@ -1171,6 +1399,7 @@ class AuthManager:
                         action="login_fallback",
                         result="start",
                     )
+                    login_exchange_called = True
                     await mi_account.login("micoapi")
                     self.mina_service = MiNAService(mi_account)
                     self.miio_service = MiIOService(mi_account)
@@ -1182,9 +1411,32 @@ class AuthManager:
                     action="login_fallback",
                     result="start",
                 )
+                login_exchange_called = True
                 await mi_account.login("micoapi")
                 self.mina_service = MiNAService(mi_account)
                 self.miio_service = MiIOService(mi_account)
+
+            if login_exchange_called and self._recovery_is_active():
+                after_data_for_exchange = self._get_oauth2_auth_data()
+                after_service = str(after_data_for_exchange.get("serviceToken") or "")
+                after_yast = str(after_data_for_exchange.get("yetAnotherServiceToken") or "")
+                after_ssecurity = str(after_data_for_exchange.get("ssecurity") or "")
+                self._emit_recovery_stage(
+                    stage="login_exchange",
+                    result="ok",
+                    reason=self._short_reason(reason or "login_exchange"),
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    extra={
+                        "provider": "micoapi",
+                        "login_http_status": "",
+                        "login_error_code": "",
+                        "login_error_message": "",
+                        "token_changed_serviceToken": bool(after_service and after_service != before_service),
+                        "token_changed_yetAnotherServiceToken": bool(after_yast and after_yast != before_yast),
+                        "token_changed_ssecurity": bool(after_ssecurity and after_ssecurity != before_ssecurity),
+                    },
+                )
 
             if not runtime_verified:
                 try:
@@ -1210,6 +1462,7 @@ class AuthManager:
             self.login_acount = account_name
             self._persist_oauth2_token(auth_data=auth_data, mi_account=mi_account, reason="login")
             self._sync_auth_ttl(login_at_ts=time.time())
+            after_short_fp = self._short_session_fingerprint(self._get_oauth2_auth_data())
             # token 落盘后再计算签名，避免 mtime 变化导致运行时一直被判定为 need_login。
             self.login_signature = self._get_login_signature()
             # Clear relogin backoff immediately after a successful login/reinit.
@@ -1229,6 +1482,40 @@ class AuthManager:
                 auth_mode_before=mode_before,
                 auth_mode_after=self._auth_mode,
             )
+            if self._recovery_is_active():
+                token_source = "new" if after_short_fp != before_short_fp and after_short_fp != "none" else "old"
+                self._emit_recovery_stage(
+                    stage="runtime_rebind",
+                    result="ok",
+                    reason=self._short_reason(reason),
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    extra={
+                        "auth_session_id_before": before_session_id,
+                        "auth_session_id_after": self._auth_session_id(),
+                        "runtime_instance_rebuilt": True,
+                        "mina_service_rebound": bool(self.mina_service is not None),
+                        "token_source": token_source,
+                    },
+                )
+            if self._recovery_is_active() and not login_exchange_called:
+                # Keep runtime-rebind token source inference available for verify-only path.
+                self._emit_recovery_stage(
+                    stage="login_exchange",
+                    result="skipped",
+                    reason="service_token_reused",
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    extra={
+                        "provider": "micoapi",
+                        "login_http_status": "",
+                        "login_error_code": "",
+                        "login_error_message": "",
+                        "token_changed_serviceToken": bool(after_short_fp != before_short_fp),
+                        "token_changed_yetAnotherServiceToken": False,
+                        "token_changed_ssecurity": False,
+                    },
+                )
         except Exception as e:
             self.mina_service = None
             self.miio_service = None
@@ -1248,6 +1535,41 @@ class AuthManager:
                 auth_mode_after=self._auth_mode,
                 err=str(e),
             )
+            if self._recovery_is_active():
+                self._emit_recovery_stage(
+                    stage="login_exchange",
+                    result="failed",
+                    reason=self._short_reason(f"{reason} {e}"),
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    error_code=self._classify_auth_result(e),
+                    error_message=str(e),
+                    extra={
+                        "provider": "micoapi",
+                        "login_http_status": "",
+                        "login_error_code": self._classify_auth_result(e),
+                        "login_error_message": str(e)[:120],
+                        "token_changed_serviceToken": False,
+                        "token_changed_yetAnotherServiceToken": False,
+                        "token_changed_ssecurity": False,
+                    },
+                )
+                self._emit_recovery_stage(
+                    stage="runtime_rebind",
+                    result="failed",
+                    reason=self._short_reason(f"{reason} {e}"),
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    error_code=self._classify_auth_result(e),
+                    error_message=str(e),
+                    extra={
+                        "auth_session_id_before": self._auth_session_id(),
+                        "auth_session_id_after": self._auth_session_id(),
+                        "runtime_instance_rebuilt": False,
+                        "mina_service_rebound": False,
+                        "token_source": "unknown",
+                    },
+                )
             raise
 
     async def try_update_device_id(self):

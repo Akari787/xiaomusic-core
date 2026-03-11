@@ -102,10 +102,33 @@ class PlaybackFacade:
             options=opts,
             include_prefer_proxy=True,
         )
-        result = await self._core().play(req, device_id=did)
+        try:
+            result = await self._core().play(req, device_id=did)
+        except Exception as exc:
+            self._record_playback_capability_verify(
+                result="failed",
+                verify_method="playback_dispatch",
+                playback_capability_level="actual_playback_path",
+                transport="mina",
+                error_code=exc.__class__.__name__,
+                error_message=str(exc),
+            )
+            raise
         prepared = result["prepared_stream"]
         resolved = result["resolved_media"]
         dispatch = result["dispatch"]
+        outcome = result.get("outcome")
+        accepted = bool(getattr(outcome, "accepted", False)) if outcome is not None else False
+        started = bool(getattr(outcome, "started", False)) if outcome is not None else False
+        verify_result = "ok" if started else "failed"
+        self._record_playback_capability_verify(
+            result=verify_result,
+            verify_method="playback_dispatch",
+            playback_capability_level="actual_playback_path",
+            transport=dispatch.transport,
+            error_code="" if started else "dispatch_not_started",
+            error_message=f"accepted={accepted} started={started}",
+        )
         return {
             "status": "playing",
             DEVICE_ID: did,
@@ -124,6 +147,28 @@ class PlaybackFacade:
                 "playback_outcome": self._serialize(result.get("outcome")),
             },
         }
+
+    def _record_playback_capability_verify(
+        self,
+        *,
+        result: str,
+        verify_method: str,
+        playback_capability_level: str,
+        transport: str,
+        error_code: str = "",
+        error_message: str = "",
+    ) -> None:
+        auth_manager = getattr(self.xiaomusic, "auth_manager", None)
+        recorder = getattr(auth_manager, "record_playback_capability_verify", None) if auth_manager else None
+        if callable(recorder):
+            recorder(
+                result=result,
+                verify_method=verify_method,
+                playback_capability_level=playback_capability_level,
+                transport=transport,
+                error_code=error_code,
+                error_message=error_message,
+            )
 
     async def resolve(
         self,

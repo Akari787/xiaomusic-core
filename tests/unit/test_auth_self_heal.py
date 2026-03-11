@@ -600,3 +600,132 @@ def test_emit_auth_state_json_contains_required_fields(auth_manager):
     assert '"auth_result":"ok"' in line
     assert '"auth_mode_before":"healthy"' in line
     assert '"auth_mode_after":"healthy"' in line
+
+
+def test_clear_short_session_records_recovery_stage(auth_manager):
+    changed = auth_manager._clear_short_lived_session(
+        clear_reason="mina:player_get_status",
+        err="401 unauthorized",
+    )
+    assert changed is True
+    state = auth_manager.auth_recovery_debug_state()
+    clear_stage = state["last_clear_short_session"]
+    assert clear_stage["event"] == "auth_recovery_stage"
+    assert clear_stage["stage"] == "clear_short_session"
+    assert clear_stage["result"] == "ok"
+    assert "cleared_fields" in clear_stage
+    assert "has_passToken" in clear_stage
+    assert "has_serviceToken" in clear_stage
+    assert "has_yetAnotherServiceToken" in clear_stage
+    assert "auth_json_writeback" in clear_stage
+
+
+@pytest.mark.asyncio
+async def test_login_exchange_stage_success_after_clear(auth_manager):
+    token_path = Path(auth_manager.oauth2_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    auth_manager._clear_short_lived_session(
+        clear_reason="mina:player_get_status",
+        err="401 unauthorized",
+    )
+    await auth_manager.login_miboy(allow_login_fallback=True, reason="mina:player_get_status")
+    state = auth_manager.auth_recovery_debug_state()
+    login_stage = state["last_login_exchange"]
+    assert login_stage["stage"] == "login_exchange"
+    assert login_stage["result"] in {"ok", "skipped"}
+    assert login_stage["provider"] == "micoapi"
+
+
+@pytest.mark.asyncio
+async def test_login_exchange_stage_failed_records_reason(auth_manager, monkeypatch):
+    from xiaomusic import auth as auth_module
+
+    class _FailAccount(auth_module.MiAccount):
+        async def login(self, *args, **kwargs):  # noqa: ARG002
+            raise RuntimeError("70016 登录验证失败")
+
+    monkeypatch.setattr(auth_module, "MiAccount", _FailAccount)
+    token_path = Path(auth_manager.oauth2_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    auth_manager._clear_short_lived_session(
+        clear_reason="mina:player_get_status",
+        err="401 unauthorized",
+    )
+    with pytest.raises(RuntimeError):
+        await auth_manager.login_miboy(allow_login_fallback=True, reason="mina:player_get_status")
+    state = auth_manager.auth_recovery_debug_state()
+    login_stage = state["last_login_exchange"]
+    assert login_stage["stage"] == "login_exchange"
+    assert login_stage["result"] == "failed"
+    assert login_stage["error_code"] in {"70016", "refresh_failed"}
+
+
+@pytest.mark.asyncio
+async def test_runtime_rebind_stage_records_rebind_flags(auth_manager, monkeypatch):
+    auth_manager._clear_short_lived_session(
+        clear_reason="mina:player_get_status",
+        err="401 unauthorized",
+    )
+
+    async def _fake_login(*args, **kwargs):  # noqa: ARG002
+        auth_manager.mina_service = object()
+        auth_manager.miio_service = object()
+        return None
+
+    async def _fake_verify():
+        return True
+
+    monkeypatch.setattr(auth_manager, "login_miboy", _fake_login)
+    monkeypatch.setattr(auth_manager, "_verify_runtime_auth_ready", _fake_verify)
+
+    out = await auth_manager.rebuild_services(reason="mina:player_get_status", allow_login_fallback=True)
+    assert out is True
+    stage = auth_manager.auth_recovery_debug_state()["last_runtime_rebind"]
+    assert stage["stage"] == "runtime_rebind"
+    assert stage["result"] == "ok"
+    assert "runtime_instance_rebuilt" in stage
+    assert "mina_service_rebound" in stage
+    assert "token_source" in stage
+
+
+def test_playback_capability_stage_no_secret_and_not_in_normal_path(auth_manager):
+    state_before = auth_manager.auth_recovery_debug_state()
+    assert state_before["last_playback_capability_verify"] == {}
+
+    auth_manager.record_playback_capability_verify(
+        result="failed",
+        verify_method="playback_dispatch",
+        playback_capability_level="actual_playback_path",
+        transport="mina",
+        error_code="E_TEST",
+        error_message="no recovery active",
+    )
+    state_mid = auth_manager.auth_recovery_debug_state()
+    assert state_mid["last_playback_capability_verify"] == {}
+
+    auth_manager._clear_short_lived_session(
+        clear_reason="mina:player_get_status",
+        err="401 unauthorized",
+    )
+    auth_manager.record_playback_capability_verify(
+        result="failed",
+        verify_method="playback_dispatch",
+        playback_capability_level="actual_playback_path",
+        transport="mina",
+        error_code="E_TEST",
+        error_message="dispatch failed",
+    )
+    stage = auth_manager.auth_recovery_debug_state()["last_playback_capability_verify"]
+    assert stage["stage"] == "playback_capability_verify"
+    assert stage["verify_method"] == "playback_dispatch"
+    assert stage["playback_capability_level"] == "actual_playback_path"
+    assert "serviceToken" not in json.dumps(stage, ensure_ascii=False)
+    assert "passToken" not in json.dumps(stage, ensure_ascii=False)
