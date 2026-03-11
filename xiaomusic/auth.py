@@ -11,7 +11,9 @@ import json
 import os
 import time
 import asyncio
+import hashlib
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
 from aiohttp import ClientSession
@@ -53,6 +55,8 @@ NETWORK_ERROR_KEYWORDS = (
     "503",
     "504",
 )
+
+SHORT_SESSION_KEYS = ("serviceToken", "yetAnotherServiceToken")
 
 AUTH_REFRESH_RELOGIN_KEYWORDS = (
     "refresh token failed",
@@ -182,6 +186,11 @@ class AuthManager:
         self._auth_mode = "healthy"
         self._auth_locked_until_ts = 0.0
         self._auth_lock_reason = ""
+        self._auth_login_at_ts = 0.0
+        self._auth_expires_at_ts = 0.0
+        self._auth_estimated_ttl = True
+        self._last_refresh_trigger = ""
+        self._last_auth_error = ""
 
         self._high_freq_methods = {
             "device_list",
@@ -207,6 +216,234 @@ class AuthManager:
             err_text,
         )
 
+    @staticmethod
+    def _iso_utc(ts: float | int | None) -> str | None:
+        if not ts:
+            return None
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _parse_num(raw: Any) -> float | None:
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _refresh_trigger_from_reason(reason: str) -> str:
+        text = str(reason or "").lower()
+        if "scheduled" in text:
+            return "scheduled"
+        if "manual" in text:
+            return "manual"
+        if "keepalive" in text or "recover" in text:
+            return "keepalive_recover"
+        return "force_relogin"
+
+    @staticmethod
+    def _classify_auth_result(err: Any = None) -> str:
+        text = str(err or "").lower()
+        if "70016" in text:
+            return "70016"
+        if "401" in text or "unauthorized" in text:
+            return "401"
+        if "locked" in text:
+            return "locked"
+        if any(x in text for x in NETWORK_ERROR_KEYWORDS):
+            return "network_error"
+        if "refresh" in text and "fail" in text:
+            return "refresh_failed"
+        return "refresh_failed"
+
+    def _auth_session_id(self) -> str:
+        data = self._get_oauth2_auth_data()
+        seed = str(
+            data.get("passToken")
+            or data.get("yetAnotherServiceToken")
+            or data.get("serviceToken")
+            or data.get("userId")
+            or ""
+        )
+        if not seed:
+            return "none"
+        return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:8]
+
+    def _sync_auth_ttl(self, auth_data: dict[str, Any] | None = None, login_at_ts: float | None = None) -> None:
+        data = auth_data if isinstance(auth_data, dict) else self._get_oauth2_auth_data()
+        save_ms = int((data or {}).get("saveTime") or 0)
+        if login_at_ts is not None:
+            base_login = float(login_at_ts)
+        elif self._auth_login_at_ts > 0:
+            base_login = float(self._auth_login_at_ts)
+        elif save_ms > 0:
+            base_login = save_ms / 1000.0
+        else:
+            base_login = time.time()
+        self._auth_login_at_ts = base_login
+
+        expires_at_ts: float | None = None
+        estimated_ttl = True
+        expires_in = self._parse_num((data or {}).get("expires_in"))
+        if expires_in and expires_in > 0:
+            expires_at_ts = base_login + float(expires_in)
+            estimated_ttl = False
+        if expires_at_ts is None:
+            for key in ("expire", "expiry"):
+                raw = self._parse_num((data or {}).get(key))
+                if raw is None or raw <= 0:
+                    continue
+                if raw > 1_000_000_000_000:
+                    expires_at_ts = raw / 1000.0
+                    estimated_ttl = False
+                elif raw > 1_000_000_000:
+                    expires_at_ts = raw
+                    estimated_ttl = False
+                else:
+                    expires_at_ts = base_login + raw
+                    estimated_ttl = False
+                break
+
+        if expires_at_ts is None:
+            expires_at_ts = base_login + 86400
+            estimated_ttl = True
+
+        self._auth_expires_at_ts = float(expires_at_ts)
+        self._auth_estimated_ttl = bool(estimated_ttl)
+
+    def _ttl_remaining_seconds(self) -> int | None:
+        if self._auth_expires_at_ts <= 0:
+            return None
+        return int(self._auth_expires_at_ts - time.time())
+
+    def _emit_auth_state(
+        self,
+        *,
+        auth_step: str,
+        auth_result: str,
+        refresh_trigger: str | None = None,
+        auth_mode_before: str | None = None,
+        auth_mode_after: str | None = None,
+        clear_reason: str | None = None,
+        err: str = "",
+    ) -> None:
+        if err:
+            self._last_auth_error = str(err)[:300]
+        event = {
+            "event": "auth_state",
+            "auth_session_id": self._auth_session_id(),
+            "login_at": self._iso_utc(self._auth_login_at_ts),
+            "expires_at": self._iso_utc(self._auth_expires_at_ts),
+            "ttl_remaining_seconds": self._ttl_remaining_seconds(),
+            "estimated_ttl": bool(self._auth_estimated_ttl),
+            "refresh_trigger": refresh_trigger or self._last_refresh_trigger or None,
+            "auth_step": auth_step,
+            "auth_result": auth_result,
+            "auth_mode_before": auth_mode_before or self._auth_mode,
+            "auth_mode_after": auth_mode_after or self._auth_mode,
+        }
+        if clear_reason:
+            event["clear_reason"] = clear_reason
+        self.log.info(json.dumps(event, ensure_ascii=False, separators=(",", ":")))
+
+    @staticmethod
+    def _is_short_session_failure_signal(reason: str = "", err: Exception | str | None = None) -> bool:
+        text = f"{reason or ''} {err or ''}".lower()
+        if "70016" in text:
+            return True
+        if "401" in text or "unauthorized" in text:
+            return True
+        if "runtime verify after login failed" in text:
+            return True
+        if "refresh failed" in text or "刷新token失败" in text:
+            return True
+        if "login failed" in text and "mina" in text:
+            return True
+        return False
+
+    def _clear_short_lived_session(self, clear_reason: str, err: Exception | str | None = None) -> bool:
+        mode_before = self._auth_mode
+        if not self._is_short_session_failure_signal(clear_reason, err):
+            self._emit_auth_state(
+                auth_step="clear_short_session",
+                auth_result="skipped",
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                clear_reason=clear_reason,
+            )
+            return False
+
+        removed_keys: list[str] = []
+        try:
+            # Clear runtime in-memory short-lived injection first.
+            for svc in (self.mina_service, self.miio_service):
+                if svc is None:
+                    continue
+                account = getattr(svc, "account", None)
+                token = getattr(account, "token", None) if account is not None else None
+                if isinstance(token, dict) and "micoapi" in token:
+                    token.pop("micoapi", None)
+                    removed_keys.append("runtime.micoapi")
+
+            # Clear persisted short-lived fields only, keep long-lived fields.
+            data = deepcopy(self._get_oauth2_auth_data())
+            if isinstance(data, dict):
+                for key in SHORT_SESSION_KEYS:
+                    if key in data:
+                        data.pop(key, None)
+                        removed_keys.append(key)
+
+                if self.token_store is not None:
+                    self.token_store.update(data, reason=f"clear_short_session:{clear_reason}")
+                    self.token_store.flush()
+                else:
+                    with open(self.oauth2_token_path, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2, ensure_ascii=False)
+
+            self.cookie_jar = None
+            self._auth_log(
+                reason=clear_reason,
+                action="clear_short_session",
+                result="success",
+                err=",".join(sorted(set(removed_keys))) if removed_keys else "no_short_fields_present",
+            )
+            self._emit_auth_state(
+                auth_step="clear_short_session",
+                auth_result="ok",
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                clear_reason=clear_reason,
+            )
+            return True
+        except Exception as clear_err:
+            self._auth_log(
+                reason=clear_reason,
+                action="clear_short_session",
+                result="fail",
+                err=f"{type(clear_err).__name__}:{clear_err}",
+            )
+            self._emit_auth_state(
+                auth_step="clear_short_session",
+                auth_result="failed",
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                clear_reason=clear_reason,
+                err=str(clear_err),
+            )
+            return False
+
+    def auth_debug_state(self) -> dict[str, Any]:
+        self._sync_auth_ttl()
+        return {
+            "auth_mode": self._auth_mode,
+            "login_at": self._iso_utc(self._auth_login_at_ts),
+            "expires_at": self._iso_utc(self._auth_expires_at_ts),
+            "ttl_remaining_seconds": self._ttl_remaining_seconds(),
+            "last_refresh_trigger": self._last_refresh_trigger,
+            "last_auth_error": self._last_auth_error,
+        }
+
     def _set_auth_mode(self, mode: str, reason: str = "") -> None:
         if self._auth_mode == mode:
             return
@@ -225,6 +462,7 @@ class AuthManager:
         return max(300, int(getattr(self.config, "auth_lock_seconds", 1800)))
 
     def _enter_auth_lock(self, reason: str = "") -> None:
+        mode_before = self._auth_mode
         self._auth_locked_until_ts = time.time() + self._auth_lock_sec
         self._auth_lock_reason = (reason or "auth failed")[:200]
         self._set_auth_mode("locked", reason=reason or "auth_lock")
@@ -233,6 +471,14 @@ class AuthManager:
             action="lock",
             result="fail",
             err=f"until={int(self._auth_locked_until_ts)} reason={self._auth_lock_reason}",
+        )
+        self._emit_auth_state(
+            auth_step="verify_session",
+            auth_result="locked",
+            refresh_trigger=self._last_refresh_trigger,
+            auth_mode_before=mode_before,
+            auth_mode_after="locked",
+            err=reason or "auth_lock",
         )
 
     def clear_auth_lock(self, reason: str = "", mode: str = "degraded") -> None:
@@ -414,16 +660,38 @@ class AuthManager:
         return f"uid={uid_tail}|pt={len(pt)}|st={len(st)}|save={save}"
 
     async def _verify_runtime_auth_ready(self) -> bool:
+        mode_before = self._auth_mode
         try:
             if self.mina_service is None:
+                self._emit_auth_state(
+                    auth_step="verify_session",
+                    auth_result="refresh_failed",
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    err="mina_service unavailable",
+                )
                 return False
             await self.mina_service.device_list()
             self._last_ok_ts = time.time()
+            self._emit_auth_state(
+                auth_step="verify_session",
+                auth_result="ok",
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+            )
             return True
-        except Exception:
+        except Exception as e:
+            self._emit_auth_state(
+                auth_step="verify_session",
+                auth_result=self._classify_auth_result(e),
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                err=str(e),
+            )
             return False
 
     async def rebuild_services(self, reason: str, allow_login_fallback: bool = False) -> bool:
+        mode_before = self._auth_mode
         self.mark_session_invalid(reason or "rebuild")
         await self.login_miboy(
             allow_login_fallback=allow_login_fallback,
@@ -436,11 +704,30 @@ class AuthManager:
             result="success" if ready else "fail",
             err="",
         )
+        self._emit_auth_state(
+            auth_step="rebuild_runtime",
+            auth_result="ok" if ready else "refresh_failed",
+            refresh_trigger=self._refresh_trigger_from_reason(reason),
+            auth_mode_before=mode_before,
+            auth_mode_after=self._auth_mode,
+            err="" if ready else "runtime verify failed",
+        )
         return ready
 
     async def refresh_oauth2_token_if_needed(self, reason: str, force: bool = False) -> dict[str, Any]:
+        mode_before = self._auth_mode
+        trigger = self._refresh_trigger_from_reason(reason)
+        self._last_refresh_trigger = trigger
         now = time.time()
         if not force and self._last_refresh_ts and (now - self._last_refresh_ts) < self._refresh_min_interval_sec:
+            self._emit_auth_state(
+                auth_step="refresh",
+                auth_result="refresh_failed",
+                refresh_trigger=trigger,
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                err="refresh skipped by min interval",
+            )
             return {
                 "refreshed": False,
                 "token_saved": False,
@@ -479,9 +766,11 @@ class AuthManager:
                 and after_save_ms >= before_save_ms
             )
             refresh_rotated = bool(before_pass and after_pass and before_pass != after_pass)
+            self._sync_auth_ttl(after)
 
             self._last_refresh_ts = time.time()
             self._last_refresh_error = ""
+            self._last_auth_error = ""
             self._auth_log(
                 reason=reason,
                 action="refresh",
@@ -491,6 +780,13 @@ class AuthManager:
                     f"before={self._token_fp(before)} after={self._token_fp(after)}"
                 ),
             )
+            self._emit_auth_state(
+                auth_step="refresh",
+                auth_result="ok",
+                refresh_trigger=trigger,
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+            )
             return {
                 "refreshed": True,
                 "token_saved": token_saved,
@@ -499,12 +795,21 @@ class AuthManager:
             }
         except Exception as e:
             self._last_refresh_error = str(e)
+            self._last_auth_error = str(e)
             fallback_allowed = self._refresh_failed_requires_relogin(e)
             self._auth_log(
                 reason=reason,
                 action="refresh",
                 result="fail",
                 err=f"{type(e).__name__}:{e}",
+            )
+            self._emit_auth_state(
+                auth_step="refresh",
+                auth_result=self._classify_auth_result(e),
+                refresh_trigger=trigger,
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                err=str(e),
             )
             return {
                 "refreshed": False,
@@ -593,6 +898,10 @@ class AuthManager:
                         if not ready:
                             raise RuntimeError("rebuild after refresh failed")
                     elif refreshed.get("fallback_allowed"):
+                        self._clear_short_lived_session(
+                            clear_reason=f"refresh_failed:{reason or 'auth_error'}",
+                            err=refreshed.get("last_error") or "refresh_failed",
+                        )
                         ready = await self.rebuild_services(
                             reason=reason or "login_fallback",
                             allow_login_fallback=True,
@@ -657,6 +966,10 @@ class AuthManager:
                 result="fail",
                 err=f"{type(e).__name__}:{e}",
             )
+            self._clear_short_lived_session(
+                clear_reason=ctx or "auth_error",
+                err=e,
+            )
             await self.ensure_logged_in(
                 force=True,
                 reason=ctx or str(e),
@@ -667,6 +980,8 @@ class AuthManager:
             return await fn()
 
     async def mina_call(self, method_name: str, *args, retry=1, ctx="", **kwargs):
+        step = "keepalive" if "keepalive" in str(ctx or "").lower() else "mina_call"
+        mode_before = self._auth_mode
         if self._is_high_freq_request(method_name, ctx):
             skip, skip_reason = self._should_skip_high_freq(method_name)
             if skip:
@@ -674,6 +989,13 @@ class AuthManager:
                     reason=f"mina:{method_name}:{ctx}",
                     action=skip_reason,
                     result="degraded",
+                )
+                self._emit_auth_state(
+                    auth_step=step,
+                    auth_result="network_error" if skip_reason == "rate_limited" else "locked",
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    err=skip_reason,
                 )
                 return self._degraded_high_freq_result(method_name)
 
@@ -687,8 +1009,21 @@ class AuthManager:
             ret = await self.auth_call(_call, retry=retry, ctx=f"mina:{method_name}:{ctx}")
             if self._is_high_freq_request(method_name, ctx):
                 self._record_high_freq_success(method_name)
+            self._emit_auth_state(
+                auth_step=step,
+                auth_result="ok",
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+            )
             return ret
         except Exception as e:
+            self._emit_auth_state(
+                auth_step=step,
+                auth_result=self._classify_auth_result(e),
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                err=str(e),
+            )
             if self._is_high_freq_request(method_name, ctx) and is_auth_error_strict(exc=e):
                 self._record_high_freq_auth_failure(method_name)
                 return self._degraded_high_freq_result(method_name)
@@ -777,6 +1112,7 @@ class AuthManager:
 
         使用 OAuth2 token 登录小米账号，并初始化相关服务。
         """
+        mode_before = self._auth_mode
         try:
             auth_data = self._get_oauth2_auth_data()
             account_name = auth_data.get("userId", "")
@@ -826,6 +1162,10 @@ class AuthManager:
                     )
                     if not allow_login_fallback:
                         raise RuntimeError("service token verify failed and login fallback disabled")
+                    self._clear_short_lived_session(
+                        clear_reason=f"verify_service_token_failed:{reason or 'login_verify'}",
+                        err=verify_err,
+                    )
                     self._auth_log(
                         reason=reason or "auth_error",
                         action="login_fallback",
@@ -861,10 +1201,15 @@ class AuthManager:
                         result="fail",
                         err=f"{type(verify_err).__name__}:{verify_err}",
                     )
+                    self._clear_short_lived_session(
+                        clear_reason=f"runtime_verify_failed:{reason or 'login_verify'}",
+                        err=verify_err,
+                    )
                     raise RuntimeError(f"runtime verify after login failed: {verify_err}")
 
             self.login_acount = account_name
             self._persist_oauth2_token(auth_data=auth_data, mi_account=mi_account, reason="login")
+            self._sync_auth_ttl(login_at_ts=time.time())
             # token 落盘后再计算签名，避免 mtime 变化导致运行时一直被判定为 need_login。
             self.login_signature = self._get_login_signature()
             # Clear relogin backoff immediately after a successful login/reinit.
@@ -877,15 +1222,31 @@ class AuthManager:
                 action="login",
                 result="success",
             )
+            self._emit_auth_state(
+                auth_step="login",
+                auth_result="ok",
+                refresh_trigger=self._refresh_trigger_from_reason(reason),
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+            )
         except Exception as e:
             self.mina_service = None
             self.miio_service = None
             self.log.warning(f"可能登录失败. {e}")
+            self._last_auth_error = str(e)
             self._auth_log(
                 reason=reason or "login",
                 action="login",
                 result="fail",
                 err=f"{type(e).__name__}:{e}",
+            )
+            self._emit_auth_state(
+                auth_step="login",
+                auth_result=self._classify_auth_result(e),
+                refresh_trigger=self._refresh_trigger_from_reason(reason),
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                err=str(e),
             )
             raise
 

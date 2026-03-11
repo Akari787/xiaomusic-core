@@ -284,6 +284,139 @@ async def test_auth_call_network_error_does_not_trigger_relogin(auth_manager):
     assert calls["ensure"] == 0
 
 
+def test_clear_short_session_removes_only_short_fields(auth_manager):
+    token_path = Path(auth_manager.oauth2_token_path)
+    token_path.write_text(
+        json.dumps(
+            {
+                "passToken": "keep-pass",
+                "psecurity": "keep-psec",
+                "ssecurity": "keep-ssec",
+                "userId": "keep-user",
+                "cUserId": "keep-cuser",
+                "deviceId": "keep-device",
+                "serviceToken": "drop-st",
+                "yetAnotherServiceToken": "drop-yast",
+            }
+        ),
+        encoding="utf-8",
+    )
+    changed = auth_manager._clear_short_lived_session(
+        clear_reason="mina:player_get_status",
+        err="401 unauthorized",
+    )
+    assert changed is True
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    assert "serviceToken" not in data
+    assert "yetAnotherServiceToken" not in data
+    assert data["passToken"] == "keep-pass"
+    assert data["psecurity"] == "keep-psec"
+    assert data["ssecurity"] == "keep-ssec"
+    assert data["userId"] == "keep-user"
+    assert data["cUserId"] == "keep-cuser"
+    assert data["deviceId"] == "keep-device"
+
+
+def test_clear_short_session_skipped_when_no_auth_failure_signal(auth_manager):
+    token_path = Path(auth_manager.oauth2_token_path)
+    before = json.loads(token_path.read_text(encoding="utf-8"))
+    changed = auth_manager._clear_short_lived_session(
+        clear_reason="keepalive",
+        err="network timeout",
+    )
+    assert changed is False
+    after = json.loads(token_path.read_text(encoding="utf-8"))
+    assert after == before
+
+
+@pytest.mark.asyncio
+async def test_auth_call_triggers_short_session_clear_before_relogin(auth_manager, monkeypatch):
+    called = {"clear": 0, "ensure": 0}
+
+    def _clear(clear_reason: str, err=None):  # noqa: ARG001
+        called["clear"] += 1
+        return True
+
+    async def _ensure(force=False, reason="", prefer_refresh=False):  # noqa: ARG001
+        called["ensure"] += 1
+        return True
+
+    monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
+    auth_manager.ensure_logged_in = _ensure
+
+    state = {"n": 0}
+
+    async def _fn():
+        if state["n"] == 0:
+            state["n"] += 1
+            raise RuntimeError("401 unauthorized")
+        return "ok"
+
+    out = await auth_manager.auth_call(_fn, retry=1, ctx="mina:player_get_status")
+    assert out == "ok"
+    assert called["clear"] == 1
+    assert called["ensure"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_logged_in_refresh_failed_path_clears_short_session(auth_manager, monkeypatch):
+    events = []
+
+    async def _need_login():
+        return True
+
+    async def _refresh(reason, force=False):  # noqa: ARG001
+        events.append("refresh")
+        return {
+            "refreshed": False,
+            "token_saved": False,
+            "last_error": "refresh failed",
+            "fallback_allowed": True,
+        }
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        events.append(f"rebuild:{allow_login_fallback}")
+        return True
+
+    def _clear(clear_reason: str, err=None):  # noqa: ARG001
+        events.append("clear")
+        return True
+
+    auth_manager.need_login = _need_login
+    auth_manager.refresh_oauth2_token_if_needed = _refresh
+    auth_manager.rebuild_services = _rebuild
+    monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
+
+    out = await auth_manager.ensure_logged_in(force=True, reason="ut-refresh-failed", prefer_refresh=True)
+    assert out is True
+    assert events == ["refresh", "clear", "rebuild:True"]
+
+
+def test_persist_rebuild_writes_short_tokens_again(auth_manager):
+    from xiaomusic.security.token_store import TokenStore
+
+    auth_manager.token_store = TokenStore(auth_manager.config, _DummyLog())
+    auth_manager.token_store.reload_from_disk()
+    auth_data = auth_manager._get_oauth2_auth_data()
+    auth_data.pop("serviceToken", None)
+    auth_data.pop("yetAnotherServiceToken", None)
+    auth_manager.token_store.update(auth_data, reason="ut-strip")
+    auth_manager.token_store.flush()
+
+    class _Account:
+        token = {
+            "passToken": "x",
+            "userId": "u",
+            "deviceId": "d1",
+            "micoapi": ("ss", "new-short-token"),
+        }
+
+    auth_manager._persist_oauth2_token(auth_manager._get_oauth2_auth_data(), _Account(), reason="ut-rebuild")
+    data = auth_manager._get_oauth2_auth_data()
+    assert data.get("serviceToken") == "new-short-token"
+    assert data.get("yetAnotherServiceToken") == "new-short-token"
+
+
 @pytest.mark.asyncio
 async def test_ensure_logged_in_prefers_refresh_then_rebuild(auth_manager):
     events = []
@@ -399,3 +532,71 @@ async def test_scheduled_refresh_trigger(auth_manager):
 
     await auth_manager._maybe_scheduled_refresh()
     assert calls == {"refresh": 1, "rebuild": 1}
+
+
+def test_auth_debug_state_has_required_fields(auth_manager):
+    now = time.time()
+    auth_manager._sync_auth_ttl(
+        {
+            "passToken": "x",
+            "userId": "u",
+            "serviceToken": "st",
+            "saveTime": int(now * 1000),
+            "expires_in": 3600,
+        },
+        login_at_ts=now,
+    )
+    auth_manager._last_refresh_trigger = "scheduled"
+    auth_manager._last_auth_error = ""
+    state = auth_manager.auth_debug_state()
+    assert set(state.keys()) == {
+        "auth_mode",
+        "login_at",
+        "expires_at",
+        "ttl_remaining_seconds",
+        "last_refresh_trigger",
+        "last_auth_error",
+    }
+    assert state["last_refresh_trigger"] == "scheduled"
+
+
+def test_emit_auth_state_json_contains_required_fields(auth_manager):
+    records = []
+
+    class _Log:
+        @staticmethod
+        def info(msg, *args, **kwargs):  # noqa: ARG004
+            records.append(str(msg))
+
+        @staticmethod
+        def warning(*args, **kwargs):  # noqa: ARG004
+            return None
+
+    auth_manager.log = _Log()
+    auth_manager._sync_auth_ttl(
+        {
+            "passToken": "x",
+            "userId": "u",
+            "serviceToken": "st",
+            "saveTime": int(time.time() * 1000),
+            "expires_in": 3600,
+        }
+    )
+    auth_manager._emit_auth_state(
+        auth_step="refresh",
+        auth_result="ok",
+        refresh_trigger="scheduled",
+        auth_mode_before="healthy",
+        auth_mode_after="healthy",
+    )
+    line = next((x for x in records if '"event":"auth_state"' in x), "")
+    assert '"auth_session_id":' in line
+    assert '"login_at":' in line
+    assert '"expires_at":' in line
+    assert '"ttl_remaining_seconds":' in line
+    assert '"estimated_ttl":' in line
+    assert '"refresh_trigger":"scheduled"' in line
+    assert '"auth_step":"refresh"' in line
+    assert '"auth_result":"ok"' in line
+    assert '"auth_mode_before":"healthy"' in line
+    assert '"auth_mode_after":"healthy"' in line
