@@ -12,6 +12,7 @@ import os
 import time
 import asyncio
 import hashlib
+import re
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -199,6 +200,13 @@ class AuthManager:
             "last_login_exchange": {},
             "last_runtime_rebind": {},
             "last_playback_capability_verify": {},
+        }
+        self._mi_login_trace_state: dict[str, dict[str, Any]] = {
+            "login_input_snapshot": {},
+            "login_http_exchange": {},
+            "login_response_parse": {},
+            "token_writeback": {},
+            "post_login_runtime_seed": {},
         }
 
         self._high_freq_methods = {
@@ -437,6 +445,89 @@ class AuthManager:
 
     def auth_recovery_debug_state(self) -> dict[str, Any]:
         return deepcopy(self._auth_recovery_state)
+
+    def miaccount_login_trace_debug_state(self) -> dict[str, Any]:
+        return deepcopy(self._mi_login_trace_state)
+
+    @staticmethod
+    def _masked_len(value: Any) -> int:
+        return len(str(value or ""))
+
+    @staticmethod
+    def _parse_login_error(err: Exception | str | None) -> dict[str, str]:
+        text = str(err or "")
+        code_match = re.search(r"code\s*[:=]\s*['\"]?(\d{3,6})", text, flags=re.IGNORECASE)
+        desc_match = re.search(r"description\s*[:=]\s*['\"]([^'\"\n\r]+)", text, flags=re.IGNORECASE)
+        status_match = re.search(r"status\s*(\d{3})", text, flags=re.IGNORECASE)
+        url_match = re.search(r"https?://([^/\s]+)(/[^\s:]+)?", text)
+        return {
+            "login_http_status": status_match.group(1) if status_match else "",
+            "resp_code": code_match.group(1) if code_match else "",
+            "resp_desc": (desc_match.group(1) if desc_match else text[:120]).replace("\n", " "),
+            "callback_host": url_match.group(1) if url_match else "",
+            "request_path": url_match.group(2) if url_match and url_match.group(2) else "",
+        }
+
+    def _mi_login_input_snapshot(self, account: Any) -> dict[str, Any]:
+        token = getattr(account, "token", None)
+        top_keys = sorted(list(token.keys())) if isinstance(token, dict) else []
+        service_token = ""
+        yet_another = ""
+        if isinstance(token, dict):
+            service_token = str(token.get("serviceToken") or "")
+            yet_another = str(token.get("yetAnotherServiceToken") or "")
+            mico = token.get("micoapi")
+            if isinstance(mico, (tuple, list)) and len(mico) >= 2:
+                service_token = str(service_token or mico[1] or "")
+                yet_another = str(yet_another or mico[1] or "")
+        return {
+            "has_passToken": bool(isinstance(token, dict) and token.get("passToken")),
+            "has_psecurity": bool(isinstance(token, dict) and token.get("psecurity")),
+            "has_ssecurity": bool(isinstance(token, dict) and token.get("ssecurity")),
+            "has_userId": bool(isinstance(token, dict) and token.get("userId")),
+            "has_cUserId": bool(isinstance(token, dict) and token.get("cUserId")),
+            "has_deviceId": bool(isinstance(token, dict) and token.get("deviceId")),
+            "has_serviceToken": bool(service_token),
+            "has_yetAnotherServiceToken": bool(yet_another),
+            "passToken_len": self._masked_len(token.get("passToken") if isinstance(token, dict) else ""),
+            "serviceToken_len": self._masked_len(service_token),
+            "yetAnotherServiceToken_len": self._masked_len(yet_another),
+            "token_dict_is_none": token is None,
+            "top_level_keys": top_keys,
+        }
+
+    @staticmethod
+    def _micoapi_tokens(acct: dict[str, Any]) -> tuple[str, str]:
+        mico = acct.get("micoapi")
+        if isinstance(mico, (tuple, list)) and len(mico) >= 2:
+            return str(mico[0] or ""), str(mico[1] or "")
+        return "", ""
+
+    def _emit_mi_login_trace(
+        self,
+        *,
+        stage: str,
+        result: str,
+        sid: str = "micoapi",
+        reason: str = "",
+        auth_mode_before: str | None = None,
+        auth_mode_after: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "event": "miaccount_login_trace",
+            "stage": stage,
+            "sid": sid,
+            "result": result,
+            "auth_session_id": self._auth_session_id(),
+            "auth_mode_before": auth_mode_before or self._auth_mode,
+            "auth_mode_after": auth_mode_after or self._auth_mode,
+            "reason": reason or "",
+        }
+        if extra:
+            payload.update(extra)
+        self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        self._mi_login_trace_state[stage] = dict(payload)
 
     def record_playback_capability_verify(
         self,
@@ -1400,7 +1491,61 @@ class AuthManager:
                         result="start",
                     )
                     login_exchange_called = True
-                    await mi_account.login("micoapi")
+                    self._emit_mi_login_trace(
+                        stage="login_input_snapshot",
+                        sid="micoapi",
+                        result="ok",
+                        reason=reason or "login_fallback",
+                        auth_mode_before=mode_before,
+                        auth_mode_after=self._auth_mode,
+                        extra=self._mi_login_input_snapshot(mi_account),
+                    )
+                    try:
+                        await mi_account.login("micoapi")
+                        acct = getattr(mi_account, "token", {}) or {}
+                        mico_ssec, mico_st = self._micoapi_tokens(acct)
+                        has_cookie = bool(acct.get("serviceToken") or acct.get("yetAnotherServiceToken") or mico_st)
+                        self._emit_mi_login_trace(
+                            stage="login_http_exchange",
+                            sid="micoapi",
+                            result="ok",
+                            reason=reason or "login_fallback",
+                            auth_mode_before=mode_before,
+                            auth_mode_after=self._auth_mode,
+                            extra={
+                                "request_step": "unknown",
+                                "http_status": "",
+                                "resp_code": "",
+                                "resp_desc": "",
+                                "callback_host": "",
+                                "has_location": False,
+                                "has_set_cookie": has_cookie,
+                                "has_service_token_cookie": bool(acct.get("serviceToken") or mico_st),
+                                "has_yet_another_service_token_cookie": bool(acct.get("yetAnotherServiceToken") or mico_st),
+                            },
+                        )
+                    except Exception as login_exc:
+                        parsed = self._parse_login_error(login_exc)
+                        self._emit_mi_login_trace(
+                            stage="login_http_exchange",
+                            sid="micoapi",
+                            result="failed",
+                            reason=reason or "login_fallback",
+                            auth_mode_before=mode_before,
+                            auth_mode_after=self._auth_mode,
+                            extra={
+                                "request_step": "unknown",
+                                "http_status": parsed.get("login_http_status", ""),
+                                "resp_code": parsed.get("resp_code", ""),
+                                "resp_desc": parsed.get("resp_desc", ""),
+                                "callback_host": parsed.get("callback_host", ""),
+                                "has_location": False,
+                                "has_set_cookie": False,
+                                "has_service_token_cookie": False,
+                                "has_yet_another_service_token_cookie": False,
+                            },
+                        )
+                        raise
                     self.mina_service = MiNAService(mi_account)
                     self.miio_service = MiIOService(mi_account)
             else:
@@ -1412,7 +1557,61 @@ class AuthManager:
                     result="start",
                 )
                 login_exchange_called = True
-                await mi_account.login("micoapi")
+                self._emit_mi_login_trace(
+                    stage="login_input_snapshot",
+                    sid="micoapi",
+                    result="ok",
+                    reason=reason or "login_fallback",
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    extra=self._mi_login_input_snapshot(mi_account),
+                )
+                try:
+                    await mi_account.login("micoapi")
+                    acct = getattr(mi_account, "token", {}) or {}
+                    mico_ssec, mico_st = self._micoapi_tokens(acct)
+                    has_cookie = bool(acct.get("serviceToken") or acct.get("yetAnotherServiceToken") or mico_st)
+                    self._emit_mi_login_trace(
+                        stage="login_http_exchange",
+                        sid="micoapi",
+                        result="ok",
+                        reason=reason or "login_fallback",
+                        auth_mode_before=mode_before,
+                        auth_mode_after=self._auth_mode,
+                        extra={
+                            "request_step": "unknown",
+                            "http_status": "",
+                            "resp_code": "",
+                            "resp_desc": "",
+                            "callback_host": "",
+                            "has_location": False,
+                            "has_set_cookie": has_cookie,
+                            "has_service_token_cookie": bool(acct.get("serviceToken") or mico_st),
+                            "has_yet_another_service_token_cookie": bool(acct.get("yetAnotherServiceToken") or mico_st),
+                        },
+                    )
+                except Exception as login_exc:
+                    parsed = self._parse_login_error(login_exc)
+                    self._emit_mi_login_trace(
+                        stage="login_http_exchange",
+                        sid="micoapi",
+                        result="failed",
+                        reason=reason or "login_fallback",
+                        auth_mode_before=mode_before,
+                        auth_mode_after=self._auth_mode,
+                        extra={
+                            "request_step": "unknown",
+                            "http_status": parsed.get("login_http_status", ""),
+                            "resp_code": parsed.get("resp_code", ""),
+                            "resp_desc": parsed.get("resp_desc", ""),
+                            "callback_host": parsed.get("callback_host", ""),
+                            "has_location": False,
+                            "has_set_cookie": False,
+                            "has_service_token_cookie": False,
+                            "has_yet_another_service_token_cookie": False,
+                        },
+                    )
+                    raise
                 self.mina_service = MiNAService(mi_account)
                 self.miio_service = MiIOService(mi_account)
 
@@ -1435,6 +1634,56 @@ class AuthManager:
                         "token_changed_serviceToken": bool(after_service and after_service != before_service),
                         "token_changed_yetAnotherServiceToken": bool(after_yast and after_yast != before_yast),
                         "token_changed_ssecurity": bool(after_ssecurity and after_ssecurity != before_ssecurity),
+                    },
+                )
+
+            if login_exchange_called:
+                acct = getattr(mi_account, "token", {}) or {}
+                mico = acct.get("micoapi") if isinstance(acct, dict) else None
+                parsed_service = bool(
+                    (isinstance(mico, (tuple, list)) and len(mico) >= 2 and mico[1])
+                    or acct.get("serviceToken")
+                )
+                parsed_yast = bool(
+                    (isinstance(mico, (tuple, list)) and len(mico) >= 2 and mico[1])
+                    or acct.get("yetAnotherServiceToken")
+                )
+                parsed_ssec = bool(
+                    (isinstance(mico, (tuple, list)) and len(mico) >= 1 and mico[0])
+                    or acct.get("ssecurity")
+                )
+                parse_result = "ok" if (parsed_service or parsed_yast) else "failed"
+                self._emit_mi_login_trace(
+                    stage="login_response_parse",
+                    sid="micoapi",
+                    result=parse_result,
+                    reason=reason or "login_exchange",
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    extra={
+                        "parsed_serviceToken": parsed_service,
+                        "parsed_yetAnotherServiceToken": parsed_yast,
+                        "parsed_ssecurity": parsed_ssec,
+                        "parsed_from": "unknown",
+                        "parse_error_type": "" if parse_result == "ok" else "missing_short_tokens",
+                        "parse_error_message": "" if parse_result == "ok" else "no short token parsed from account token",
+                    },
+                )
+            else:
+                self._emit_mi_login_trace(
+                    stage="login_response_parse",
+                    sid="micoapi",
+                    result="skipped",
+                    reason="service_token_reused",
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    extra={
+                        "parsed_serviceToken": bool(oauth_service_token),
+                        "parsed_yetAnotherServiceToken": bool(oauth_service_token),
+                        "parsed_ssecurity": bool(oauth_ssecurity),
+                        "parsed_from": "auth_json",
+                        "parse_error_type": "",
+                        "parse_error_message": "",
                     },
                 )
 
@@ -1516,6 +1765,23 @@ class AuthManager:
                         "token_changed_ssecurity": False,
                     },
                 )
+
+            acct_after = getattr(mi_account, "token", {}) or {}
+            mico_ssec_after, mico_st_after = self._micoapi_tokens(acct_after)
+            self._emit_mi_login_trace(
+                stage="post_login_runtime_seed",
+                sid="micoapi",
+                result="ok",
+                reason=reason or "login",
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                extra={
+                    "runtime_seed_has_serviceToken": bool(acct_after.get("serviceToken") or mico_st_after),
+                    "runtime_seed_has_yetAnotherServiceToken": bool(acct_after.get("yetAnotherServiceToken") or mico_st_after),
+                    "runtime_seed_has_ssecurity": bool(acct_after.get("ssecurity") or mico_ssec_after),
+                    "runtime_seed_source": "mi_account.token",
+                },
+            )
         except Exception as e:
             self.mina_service = None
             self.miio_service = None
@@ -1536,6 +1802,38 @@ class AuthManager:
                 err=str(e),
             )
             if self._recovery_is_active():
+                self._emit_mi_login_trace(
+                    stage="login_response_parse",
+                    sid="micoapi",
+                    result="failed",
+                    reason=reason or "login",
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    extra={
+                        "parsed_serviceToken": False,
+                        "parsed_yetAnotherServiceToken": False,
+                        "parsed_ssecurity": False,
+                        "parsed_from": "unknown",
+                        "parse_error_type": self._classify_auth_result(e),
+                        "parse_error_message": str(e)[:120],
+                    },
+                )
+                self._emit_mi_login_trace(
+                    stage="token_writeback",
+                    sid="micoapi",
+                    result="skipped",
+                    reason=reason or "login",
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    extra={
+                        "wrote_serviceToken": False,
+                        "wrote_yetAnotherServiceToken": False,
+                        "wrote_target": "none",
+                        "token_store_flush": "no",
+                        "auth_json_has_serviceToken_after": False,
+                        "auth_json_has_yetAnotherServiceToken_after": False,
+                    },
+                )
                 self._emit_recovery_stage(
                     stage="login_exchange",
                     result="failed",
@@ -1570,6 +1868,20 @@ class AuthManager:
                         "token_source": "unknown",
                     },
                 )
+            self._emit_mi_login_trace(
+                stage="post_login_runtime_seed",
+                sid="micoapi",
+                result="failed",
+                reason=reason or "login",
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                extra={
+                    "runtime_seed_has_serviceToken": False,
+                    "runtime_seed_has_yetAnotherServiceToken": False,
+                    "runtime_seed_has_ssecurity": False,
+                    "runtime_seed_source": "unknown",
+                },
+            )
             raise
 
     async def try_update_device_id(self):
@@ -1632,9 +1944,25 @@ class AuthManager:
 
     def _persist_oauth2_token(self, auth_data: dict, mi_account, reason: str = "") -> None:
         if self.token_store is None:
+            self._emit_mi_login_trace(
+                stage="token_writeback",
+                sid="micoapi",
+                result="skipped",
+                reason=reason or "login",
+                extra={
+                    "wrote_serviceToken": False,
+                    "wrote_yetAnotherServiceToken": False,
+                    "wrote_target": "none",
+                    "token_store_flush": "no",
+                    "auth_json_has_serviceToken_after": False,
+                    "auth_json_has_yetAnotherServiceToken_after": False,
+                },
+            )
             return
         merged = deepcopy(auth_data or {})
         merged["saveTime"] = int(time.time() * 1000)
+        wrote_service = False
+        wrote_yast = False
         try:
             acct = getattr(mi_account, "token", {}) or {}
             for key in ("passToken", "userId", "deviceId", "cUserId"):
@@ -1647,11 +1975,34 @@ class AuthManager:
                 if mico[1]:
                     merged["serviceToken"] = mico[1]
                     merged.setdefault("yetAnotherServiceToken", mico[1])
+                    wrote_service = True
+                    wrote_yast = True
+            if acct.get("serviceToken"):
+                merged["serviceToken"] = acct.get("serviceToken")
+                wrote_service = True
+            if acct.get("yetAnotherServiceToken"):
+                merged["yetAnotherServiceToken"] = acct.get("yetAnotherServiceToken")
+                wrote_yast = True
         except Exception as e:
             self.log.warning("persist token merge failed: %s", e)
 
         self.token_store.update(merged, reason=reason or "login")
         self.token_store.flush()
+        after_data = self._get_oauth2_auth_data()
+        self._emit_mi_login_trace(
+            stage="token_writeback",
+            sid="micoapi",
+            result="ok" if (wrote_service or wrote_yast) else "skipped",
+            reason=reason or "login",
+            extra={
+                "wrote_serviceToken": wrote_service,
+                "wrote_yetAnotherServiceToken": wrote_yast,
+                "wrote_target": "both",
+                "token_store_flush": "yes",
+                "auth_json_has_serviceToken_after": bool(after_data.get("serviceToken")),
+                "auth_json_has_yetAnotherServiceToken_after": bool(after_data.get("yetAnotherServiceToken")),
+            },
+        )
 
     def _get_oauth2_auth_data(self):
         if self.token_store is not None:

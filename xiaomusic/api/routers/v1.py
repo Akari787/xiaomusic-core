@@ -316,6 +316,26 @@ async def api_v1_debug_auth_recovery_state():
         return _map_api_exception(exc, request_id)
 
 
+@router.get("/api/v1/debug/miaccount_login_trace")
+async def api_v1_debug_miaccount_login_trace():
+    request_id = _next_request_id(None)
+    try:
+        am = getattr(_get_xiaomusic(), "auth_manager", None)
+        if am is not None and hasattr(am, "miaccount_login_trace_debug_state"):
+            data = am.miaccount_login_trace_debug_state()
+        else:
+            data = {
+                "login_input_snapshot": {},
+                "login_http_exchange": {},
+                "login_response_parse": {},
+                "token_writeback": {},
+                "post_login_runtime_seed": {},
+            }
+        return _api_ok(data, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
 @router.get("/api/v1/player/state")
 async def api_v1_player_state(device_id: str = Query(..., min_length=1), request_id: str | None = None):
     rid = _next_request_id(request_id)

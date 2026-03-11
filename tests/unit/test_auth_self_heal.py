@@ -729,3 +729,94 @@ def test_playback_capability_stage_no_secret_and_not_in_normal_path(auth_manager
     assert stage["playback_capability_level"] == "actual_playback_path"
     assert "serviceToken" not in json.dumps(stage, ensure_ascii=False)
     assert "passToken" not in json.dumps(stage, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_mi_login_input_snapshot_is_masked(auth_manager):
+    token_path = Path(auth_manager.oauth2_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    await auth_manager.login_miboy(allow_login_fallback=True, reason="ut-mi-trace")
+    trace = auth_manager.miaccount_login_trace_debug_state()["login_input_snapshot"]
+    assert trace["event"] == "miaccount_login_trace"
+    assert trace["stage"] == "login_input_snapshot"
+    assert trace["sid"] == "micoapi"
+    assert trace["token_dict_is_none"] is False
+    assert "keep-pass" not in json.dumps(trace, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_mi_login_70016_records_http_exchange_and_parse_failed(auth_manager, monkeypatch):
+    from xiaomusic import auth as auth_module
+
+    class _FailAccount(auth_module.MiAccount):
+        async def login(self, *args, **kwargs):  # noqa: ARG002
+            raise RuntimeError("code: 70016, description: 登录验证失败")
+
+    monkeypatch.setattr(auth_module, "MiAccount", _FailAccount)
+
+    token_path = Path(auth_manager.oauth2_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(RuntimeError):
+        await auth_manager.login_miboy(allow_login_fallback=True, reason="ut-mi-70016")
+    trace = auth_manager.miaccount_login_trace_debug_state()
+    assert trace["login_http_exchange"]["result"] == "failed"
+    assert trace["login_http_exchange"]["resp_code"] == "70016"
+    assert trace["post_login_runtime_seed"]["result"] == "failed"
+
+
+def test_token_writeback_records_targets(auth_manager):
+    from xiaomusic.security.token_store import TokenStore
+
+    auth_manager.token_store = TokenStore(auth_manager.config, _DummyLog())
+    auth_manager.token_store.reload_from_disk()
+
+    class _Account:
+        token = {
+            "passToken": "x",
+            "userId": "u",
+            "deviceId": "d1",
+            "micoapi": ("ss", "new-short-token"),
+        }
+
+    auth_manager._persist_oauth2_token(auth_manager._get_oauth2_auth_data(), _Account(), reason="ut-writeback")
+    stage = auth_manager.miaccount_login_trace_debug_state()["token_writeback"]
+    assert stage["result"] == "ok"
+    assert stage["wrote_serviceToken"] is True
+    assert stage["wrote_target"] == "both"
+
+
+@pytest.mark.asyncio
+async def test_post_login_runtime_seed_source_recorded(auth_manager):
+    token_path = Path(auth_manager.oauth2_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    await auth_manager.login_miboy(allow_login_fallback=True, reason="ut-runtime-seed")
+    stage = auth_manager.miaccount_login_trace_debug_state()["post_login_runtime_seed"]
+    assert stage["result"] == "ok"
+    assert stage["runtime_seed_source"] == "mi_account.token"
+
+
+def test_non_login_paths_do_not_emit_mi_login_trace(auth_manager):
+    state = auth_manager.miaccount_login_trace_debug_state()
+    assert state["login_input_snapshot"] == {}
+    auth_manager.record_playback_capability_verify(
+        result="failed",
+        verify_method="playback_dispatch",
+        playback_capability_level="actual_playback_path",
+        transport="mina",
+        error_code="E_TEST",
+        error_message="x",
+    )
+    state_after = auth_manager.miaccount_login_trace_debug_state()
+    assert state_after["login_input_snapshot"] == {}
