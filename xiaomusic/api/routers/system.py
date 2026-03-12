@@ -369,21 +369,30 @@ async def oauth2_logout():
 
 @router.post("/api/oauth2/refresh")
 async def oauth2_refresh():
-    """手动触发 OAuth2 refresh 与运行时会话重建。"""
+    """手动触发运行时重载（从磁盘重新装载 auth.json 并重建会话）。"""
     am = getattr(xiaomusic, "auth_manager", None)
     if am is None:
         raise HTTPException(status_code=503, detail="auth manager unavailable")
     try:
-        ret = await am.manual_refresh(reason="manual_refresh")
+        if hasattr(am, "manual_reload_runtime"):
+            ret = await am.manual_reload_runtime(reason="manual_refresh_runtime")
+        else:
+            ret = await am.manual_refresh(reason="manual_refresh_runtime")
         return api_response.ok(ret, contract="raw")
     except Exception as e:
-        log.exception("oauth2 refresh failed: %s", e)
+        log.exception("oauth2 refresh runtime failed: %s", e)
         return api_response.ok(
             {
                 "refreshed": False,
                 "runtime_auth_ready": False,
                 "token_saved": False,
+                "token_loaded": False,
+                "token_store_reloaded": False,
+                "runtime_rebound": False,
+                "device_map_refreshed": False,
+                "verify_result": "failed",
                 "last_error": str(e),
+                "error_code": type(e).__name__,
                 "timestamps": {
                     "saveTime": None,
                     "last_ok_ts": None,
@@ -392,6 +401,12 @@ async def oauth2_refresh():
             },
             contract="raw",
         )
+
+
+@router.post("/api/oauth2/refresh_runtime")
+async def oauth2_refresh_runtime():
+    """显式运行时重载入口，行为与 /api/oauth2/refresh 一致。"""
+    return await oauth2_refresh()
 
 
 @router.post("/api/jellyfin/sync")

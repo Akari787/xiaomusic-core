@@ -28,6 +28,7 @@ def test_api_v1_routes_whitelist_only():
         ("GET", "/api/v1/debug/auth_recovery_state"),
         ("GET", "/api/v1/debug/miaccount_login_trace"),
         ("GET", "/api/v1/debug/auth_rebuild_state"),
+        ("GET", "/api/v1/debug/oauth_runtime_reload_state"),
         ("GET", "/api/v1/player/state"),
     }
     assert routes == expected

@@ -84,6 +84,7 @@ async def auth_manager(tmp_path):
                 "passToken": "x",
                 "userId": "u",
                 "cUserId": "cu",
+                "psecurity": "ps",
                 "serviceToken": "st",
                 "ssecurity": "ss",
                 "deviceId": "d1",
@@ -875,3 +876,84 @@ async def test_rebuild_short_session_records_missing_long_auth_fields(auth_manag
     stage = auth_manager.auth_rebuild_debug_state()["last_rebuild_short_session"]
     assert stage["result"] == "failed"
     assert "long_auth_missing:cUserId" in stage["reason"]
+
+
+@pytest.mark.asyncio
+async def test_manual_reload_runtime_uses_disk_path_without_refresh_api(auth_manager):
+    calls = {"refresh": 0, "rebuild": 0, "device_update": 0}
+
+    async def _refresh(reason, force=False):  # noqa: ARG001
+        calls["refresh"] += 1
+        raise AssertionError("manual runtime reload should not call refresh_oauth2_token_if_needed")
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        calls["rebuild"] += 1
+        auth_manager.mina_service = object()
+        auth_manager.miio_service = object()
+        return True
+
+    async def _update_device_info(auth):  # noqa: ARG001
+        calls["device_update"] += 1
+
+    auth_manager._set_auth_mode("degraded", reason="ut-pre")
+    auth_manager.refresh_oauth2_token_if_needed = _refresh
+    auth_manager.rebuild_services = _rebuild
+    auth_manager.device_manager.update_device_info = _update_device_info
+
+    out = await auth_manager.manual_reload_runtime(reason="ut-runtime-reload")
+    assert out["runtime_auth_ready"] is True
+    assert out["runtime_rebound"] is True
+    assert out["device_map_refreshed"] is True
+    assert calls == {"refresh": 0, "rebuild": 1, "device_update": 1}
+    assert auth_manager.auth_debug_state()["auth_mode"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_manual_reload_runtime_reloads_token_store_before_rebuild(auth_manager):
+    from xiaomusic.security.token_store import TokenStore
+
+    token_store = TokenStore(auth_manager.config, _DummyLog())
+    auth_manager.token_store = token_store
+    token_store.reload_from_disk()
+
+    token_path = Path(auth_manager.oauth2_token_path)
+    payload = json.loads(token_path.read_text(encoding="utf-8"))
+    payload["serviceToken"] = "disk-new-st"
+    payload["yetAnotherServiceToken"] = "disk-new-yast"
+    token_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    seen = {"serviceToken": "", "yetAnotherServiceToken": ""}
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        data = auth_manager._get_oauth2_auth_data()
+        seen["serviceToken"] = str(data.get("serviceToken") or "")
+        seen["yetAnotherServiceToken"] = str(data.get("yetAnotherServiceToken") or "")
+        auth_manager.mina_service = object()
+        auth_manager.miio_service = object()
+        return True
+
+    async def _update_device_info(auth):  # noqa: ARG001
+        return None
+
+    auth_manager.rebuild_services = _rebuild
+    auth_manager.device_manager.update_device_info = _update_device_info
+
+    out = await auth_manager.manual_reload_runtime(reason="ut-token-reload")
+    assert out["runtime_auth_ready"] is True
+    assert out["token_store_reloaded"] is True
+    assert seen["serviceToken"] == "disk-new-st"
+    assert seen["yetAnotherServiceToken"] == "disk-new-yast"
+
+
+@pytest.mark.asyncio
+async def test_manual_reload_runtime_fails_with_missing_short_tokens(auth_manager):
+    token_path = Path(auth_manager.oauth2_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    out = await auth_manager.manual_reload_runtime(reason="ut-missing-short")
+    assert out["runtime_auth_ready"] is False
+    assert out["error_code"] == "missing_runtime_token_fields"
+    assert "serviceToken|yetAnotherServiceToken" in str(out["last_error"])

@@ -1445,10 +1445,10 @@ export function HomePage() {
 
   async function refreshOAuthRuntime() {
     const out = (await apiPost<Record<string, unknown>>("/api/oauth2/refresh", {})) as Record<string, unknown>;
-    if (out.refreshed) {
-      setQrcodeStatus("刷新成功，正在更新设备列表");
+    if (out.runtime_auth_ready) {
+      setQrcodeStatus("运行时刷新成功，正在更新设备列表");
     } else {
-      setQrcodeStatus(String(out.last_error || "刷新失败"));
+      setQrcodeStatus(String(out.last_error || "运行时刷新失败"));
     }
     await loadOAuthStatus();
     await loadSettingData();

@@ -214,6 +214,9 @@ class AuthManager:
             "last_runtime_rebind": {},
             "last_verify": {},
         }
+        self._oauth_runtime_reload_state: dict[str, dict[str, Any]] = {
+            "last_reload_runtime": {},
+        }
 
         self._high_freq_methods = {
             "device_list",
@@ -458,6 +461,9 @@ class AuthManager:
     def auth_rebuild_debug_state(self) -> dict[str, Any]:
         return deepcopy(self._auth_rebuild_state)
 
+    def oauth_runtime_reload_debug_state(self) -> dict[str, Any]:
+        return deepcopy(self._oauth_runtime_reload_state)
+
     def _emit_auth_short_session_rebuild(
         self,
         *,
@@ -500,6 +506,52 @@ class AuthManager:
     @classmethod
     def _has_long_auth_fields(cls, data: dict[str, Any]) -> bool:
         return len(cls._missing_long_auth_fields(data)) == 0
+
+    @staticmethod
+    def _missing_runtime_reload_fields(data: dict[str, Any]) -> list[str]:
+        required = ("passToken", "psecurity", "ssecurity", "userId", "cUserId", "deviceId")
+        missing = [k for k in required if not str(data.get(k) or "").strip()]
+        if not (str(data.get("serviceToken") or "").strip() or str(data.get("yetAnotherServiceToken") or "").strip()):
+            missing.append("serviceToken|yetAnotherServiceToken")
+        return missing
+
+    def _emit_oauth_runtime_reload(
+        self,
+        *,
+        result: str,
+        reason: str,
+        token_store_reloaded: bool,
+        disk_has_service_token: bool,
+        disk_has_yast: bool,
+        runtime_seed_has_service_token: bool,
+        mina_service_rebuilt: bool,
+        miio_service_rebuilt: bool,
+        device_map_refreshed: bool,
+        verify_result: str,
+        error_code: str = "",
+        error_message: str = "",
+        refresh_token_path_invoked: bool = False,
+    ) -> None:
+        payload = {
+            "event": "oauth_runtime_reload",
+            "stage": "reload_runtime",
+            "result": result,
+            "reason": reason,
+            "auth_session_id": self._auth_session_id(),
+            "token_store_reloaded": bool(token_store_reloaded),
+            "disk_has_serviceToken": bool(disk_has_service_token),
+            "disk_has_yetAnotherServiceToken": bool(disk_has_yast),
+            "runtime_seed_has_serviceToken": bool(runtime_seed_has_service_token),
+            "mina_service_rebuilt": bool(mina_service_rebuilt),
+            "miio_service_rebuilt": bool(miio_service_rebuilt),
+            "device_map_refreshed": bool(device_map_refreshed),
+            "verify_result": verify_result,
+            "error_code": error_code,
+            "error_message": (error_message or "")[:200],
+            "refresh_token_path_invoked": bool(refresh_token_path_invoked),
+        }
+        self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        self._oauth_runtime_reload_state["last_reload_runtime"] = dict(payload)
 
     async def _rebuild_short_session_from_long_auth(self, reason: str) -> bool:
         mode_before = self._auth_mode
@@ -1236,26 +1288,133 @@ class AuthManager:
                 "fallback_allowed": fallback_allowed,
             }
 
-    async def manual_refresh(self, reason: str = "manual_refresh") -> dict[str, Any]:
+    async def manual_reload_runtime(self, reason: str = "manual_refresh_runtime") -> dict[str, Any]:
         async with self._relogin_lock:
-            ref = await self.refresh_oauth2_token_if_needed(reason=reason, force=True)
-            runtime_ready = False
-            if ref.get("refreshed"):
-                runtime_ready = await self.rebuild_services(
+            token_store_reloaded = False
+            disk_has_service = False
+            disk_has_yast = False
+            runtime_seed_has_service = False
+            mina_rebuilt = False
+            miio_rebuilt = False
+            device_map_refreshed = False
+            verify_result = "failed"
+            runtime_auth_ready = False
+            token_loaded = False
+            error_code = ""
+            last_error = ""
+
+            try:
+                if self.token_store is not None:
+                    self.token_store.reload_from_disk()
+                    token_store_reloaded = True
+
+                auth_data = self._get_oauth2_auth_data()
+                token_loaded = bool(auth_data)
+                disk_has_service = bool(auth_data.get("serviceToken"))
+                disk_has_yast = bool(auth_data.get("yetAnotherServiceToken"))
+                missing = self._missing_runtime_reload_fields(auth_data)
+                if missing:
+                    error_code = "missing_runtime_token_fields"
+                    last_error = f"missing runtime token fields: {','.join(missing)}"
+                    self._set_auth_mode("degraded", reason=reason)
+                    self._last_auth_error = last_error
+                    self._emit_oauth_runtime_reload(
+                        result="failed",
+                        reason=reason,
+                        token_store_reloaded=token_store_reloaded,
+                        disk_has_service_token=disk_has_service,
+                        disk_has_yast=disk_has_yast,
+                        runtime_seed_has_service_token=False,
+                        mina_service_rebuilt=False,
+                        miio_service_rebuilt=False,
+                        device_map_refreshed=False,
+                        verify_result="failed",
+                        error_code=error_code,
+                        error_message=last_error,
+                        refresh_token_path_invoked=False,
+                    )
+                    return {
+                        "refreshed": False,
+                        "runtime_auth_ready": False,
+                        "token_saved": False,
+                        "token_loaded": token_loaded,
+                        "token_store_reloaded": token_store_reloaded,
+                        "runtime_rebound": False,
+                        "device_map_refreshed": False,
+                        "verify_result": "failed",
+                        "last_error": last_error,
+                        "error_code": error_code,
+                        "timestamps": {
+                            "saveTime": int(self._token_save_ts() * 1000) if self._token_save_ts() else None,
+                            "last_ok_ts": int(self._last_ok_ts * 1000) if self._last_ok_ts else None,
+                            "last_refresh_ts": int(self._last_refresh_ts * 1000) if self._last_refresh_ts else None,
+                        },
+                    }
+
+                runtime_auth_ready = await self.rebuild_services(
                     reason=reason,
                     allow_login_fallback=False,
                 )
+                mina_rebuilt = self.mina_service is not None
+                miio_rebuilt = self.miio_service is not None
+                runtime_seed_has_service = bool(self._short_session_fingerprint() != "none")
+
+                if runtime_auth_ready:
+                    await self.device_manager.update_device_info(self)
+                    device_map_refreshed = True
+                    self._last_auth_error = ""
+                    self._set_auth_mode("healthy", reason=reason)
+                    verify_result = "ok"
+                else:
+                    error_code = "runtime_verify_failed"
+                    last_error = "runtime verify failed"
+                    self._last_auth_error = last_error
+                    self._set_auth_mode("degraded", reason=reason)
+
+            except Exception as e:
+                last_error = str(e)
+                error_code = type(e).__name__
+                self._last_auth_error = last_error
+                self._set_auth_mode("degraded", reason=reason)
+                runtime_auth_ready = False
+
+            self._emit_oauth_runtime_reload(
+                result="ok" if runtime_auth_ready else "failed",
+                reason=reason,
+                token_store_reloaded=token_store_reloaded,
+                disk_has_service_token=disk_has_service,
+                disk_has_yast=disk_has_yast,
+                runtime_seed_has_service_token=runtime_seed_has_service,
+                mina_service_rebuilt=mina_rebuilt,
+                miio_service_rebuilt=miio_rebuilt,
+                device_map_refreshed=device_map_refreshed,
+                verify_result=verify_result,
+                error_code=error_code,
+                error_message=last_error,
+                refresh_token_path_invoked=False,
+            )
+
             return {
-                "refreshed": bool(ref.get("refreshed")),
-                "runtime_auth_ready": bool(runtime_ready),
-                "token_saved": bool(ref.get("token_saved")),
-                "last_error": ref.get("last_error"),
+                "refreshed": bool(runtime_auth_ready),
+                "runtime_auth_ready": bool(runtime_auth_ready),
+                "token_saved": False,
+                "token_loaded": token_loaded,
+                "token_store_reloaded": token_store_reloaded,
+                "runtime_rebound": bool(mina_rebuilt and miio_rebuilt),
+                "device_map_refreshed": bool(device_map_refreshed),
+                "verify_result": verify_result,
+                "last_error": last_error or None,
+                "error_code": error_code,
                 "timestamps": {
                     "saveTime": int(self._token_save_ts() * 1000) if self._token_save_ts() else None,
                     "last_ok_ts": int(self._last_ok_ts * 1000) if self._last_ok_ts else None,
                     "last_refresh_ts": int(self._last_refresh_ts * 1000) if self._last_refresh_ts else None,
                 },
             }
+
+    async def manual_refresh(self, reason: str = "manual_refresh") -> dict[str, Any]:
+        # Backward-compatible entrypoint used by existing WebUI button.
+        return await self.manual_reload_runtime(reason=reason)
 
     async def _maybe_scheduled_refresh(self) -> None:
         now = time.time()

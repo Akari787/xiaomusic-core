@@ -19,9 +19,12 @@ export async function fetchOAuthStatus(): Promise<OAuthStatus> {
   return await apiGet<OAuthStatus>("/api/oauth2/status");
 }
 
-export async function refreshOAuthToken(): Promise<Record<string, unknown>> {
+export async function refreshOAuthRuntime(): Promise<Record<string, unknown>> {
   return await apiPost<Record<string, unknown>>("/api/oauth2/refresh", {});
 }
+
+// Backward-compatible alias.
+export const refreshOAuthToken = refreshOAuthRuntime;
 
 export async function logoutOAuth(): Promise<Record<string, unknown>> {
   return await apiPost<Record<string, unknown>>("/api/oauth2/logout", {});

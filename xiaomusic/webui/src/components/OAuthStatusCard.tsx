@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import {
   fetchOAuthStatus,
   logoutOAuth,
-  refreshOAuthToken,
+  refreshOAuthRuntime,
   type OAuthStatus,
 } from "../services/auth";
 
@@ -47,17 +47,17 @@ export function OAuthStatusCard() {
     };
   }, []);
 
-  async function onRefreshToken() {
+  async function onRefreshRuntime() {
     setRefreshing(true);
     setActionMessage("");
     try {
-      const ret = await refreshOAuthToken();
-      const refreshed = Boolean(ret?.refreshed);
+      const ret = await refreshOAuthRuntime();
+      const refreshed = Boolean(ret?.runtime_auth_ready);
       const lastError = String((ret?.last_error as string | undefined) || "");
-      setActionMessage(refreshed ? "Token 刷新成功" : `Token 刷新失败${lastError ? `: ${lastError}` : ""}`);
+      setActionMessage(refreshed ? "运行时刷新成功" : `运行时刷新失败${lastError ? `: ${lastError}` : ""}`);
       await loadStatus();
     } catch (e) {
-      setActionMessage(`Token 刷新失败: ${e instanceof Error ? e.message : "unknown error"}`);
+      setActionMessage(`运行时刷新失败: ${e instanceof Error ? e.message : "unknown error"}`);
       await loadStatus();
     } finally {
       setRefreshing(false);
@@ -109,8 +109,8 @@ export function OAuthStatusCard() {
         <p className="oauth-loading">加载中...</p>
       )}
       <div style={{ display: "flex", gap: 8 }}>
-        <button type="button" onClick={onRefreshToken} disabled={refreshing || loggingOut}>
-          {refreshing ? "刷新中..." : "刷新 Token"}
+        <button type="button" onClick={onRefreshRuntime} disabled={refreshing || loggingOut}>
+          {refreshing ? "刷新中..." : "刷新运行时"}
         </button>
         <button type="button" onClick={onLogout} disabled={loggingOut || refreshing}>
           {loggingOut ? "退出中..." : "退出登录"}
