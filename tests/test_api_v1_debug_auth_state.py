@@ -104,3 +104,54 @@ async def test_api_v1_debug_miaccount_login_trace_success(monkeypatch):
     out = await v1.api_v1_debug_miaccount_login_trace()
     assert out["code"] == 0
     assert out["data"]["login_http_exchange"]["result"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_api_v1_debug_auth_rebuild_state_success(monkeypatch):
+    class _Auth:
+        @staticmethod
+        def auth_debug_state():
+            return {
+                "auth_mode": "healthy",
+                "login_at": None,
+                "expires_at": None,
+                "ttl_remaining_seconds": None,
+                "last_refresh_trigger": "",
+                "last_auth_error": "",
+            }
+
+        @staticmethod
+        def auth_recovery_debug_state():
+            return {
+                "last_clear_short_session": {},
+                "last_login_exchange": {},
+                "last_runtime_rebind": {},
+                "last_playback_capability_verify": {},
+            }
+
+        @staticmethod
+        def miaccount_login_trace_debug_state():
+            return {
+                "login_input_snapshot": {},
+                "login_http_exchange": {},
+                "login_response_parse": {},
+                "token_writeback": {},
+                "post_login_runtime_seed": {},
+            }
+
+        @staticmethod
+        def auth_rebuild_debug_state():
+            return {
+                "last_clear_short_session": {"result": "ok"},
+                "last_rebuild_short_session": {"result": "ok"},
+                "last_runtime_rebind": {"result": "ok"},
+                "last_verify": {"result": "ok"},
+            }
+
+    class _XM:
+        auth_manager = _Auth()
+
+    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    out = await v1.api_v1_debug_auth_rebuild_state()
+    assert out["code"] == 0
+    assert out["data"]["last_rebuild_short_session"]["result"] == "ok"

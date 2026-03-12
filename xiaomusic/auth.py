@@ -208,6 +208,12 @@ class AuthManager:
             "token_writeback": {},
             "post_login_runtime_seed": {},
         }
+        self._auth_rebuild_state: dict[str, dict[str, Any]] = {
+            "last_clear_short_session": {},
+            "last_rebuild_short_session": {},
+            "last_runtime_rebind": {},
+            "last_verify": {},
+        }
 
         self._high_freq_methods = {
             "device_list",
@@ -449,6 +455,97 @@ class AuthManager:
     def miaccount_login_trace_debug_state(self) -> dict[str, Any]:
         return deepcopy(self._mi_login_trace_state)
 
+    def auth_rebuild_debug_state(self) -> dict[str, Any]:
+        return deepcopy(self._auth_rebuild_state)
+
+    def _emit_auth_short_session_rebuild(
+        self,
+        *,
+        result: str,
+        reason: str,
+        auth_mode_before: str,
+        auth_mode_after: str,
+        has_pass_token: bool,
+        has_service_before: bool,
+        has_service_after: bool,
+        has_yast_before: bool,
+        has_yast_after: bool,
+        writeback_target: str,
+        runtime_rebind_result: str,
+    ) -> None:
+        payload = {
+            "event": "auth_short_session_rebuild",
+            "stage": "rebuild_short_session",
+            "result": result,
+            "auth_session_id": self._auth_session_id(),
+            "auth_mode_before": auth_mode_before,
+            "auth_mode_after": auth_mode_after,
+            "reason": reason,
+            "has_passToken": has_pass_token,
+            "has_serviceToken_before": has_service_before,
+            "has_serviceToken_after": has_service_after,
+            "has_yetAnotherServiceToken_before": has_yast_before,
+            "has_yetAnotherServiceToken_after": has_yast_after,
+            "writeback_target": writeback_target,
+            "runtime_rebind_result": runtime_rebind_result,
+        }
+        self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        self._auth_rebuild_state["last_rebuild_short_session"] = dict(payload)
+
+    @staticmethod
+    def _missing_long_auth_fields(data: dict[str, Any]) -> list[str]:
+        required = ("passToken", "userId", "cUserId", "ssecurity", "deviceId")
+        return [k for k in required if not str(data.get(k) or "").strip()]
+
+    @classmethod
+    def _has_long_auth_fields(cls, data: dict[str, Any]) -> bool:
+        return len(cls._missing_long_auth_fields(data)) == 0
+
+    async def _rebuild_short_session_from_long_auth(self, reason: str) -> bool:
+        mode_before = self._auth_mode
+        before = self._get_oauth2_auth_data()
+        has_service_before = bool(before.get("serviceToken"))
+        has_yast_before = bool(before.get("yetAnotherServiceToken"))
+        has_pass = bool(before.get("passToken"))
+        missing_long_auth = self._missing_long_auth_fields(before)
+        if missing_long_auth:
+            self._emit_auth_short_session_rebuild(
+                result="failed",
+                reason=f"long_auth_missing:{','.join(missing_long_auth)}",
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                has_pass_token=has_pass,
+                has_service_before=has_service_before,
+                has_service_after=False,
+                has_yast_before=has_yast_before,
+                has_yast_after=False,
+                writeback_target="none",
+                runtime_rebind_result="skipped",
+            )
+            return False
+        refreshed = await self.refresh_oauth2_token_if_needed(
+            reason=f"short_session_rebuild:{reason or 'auth_error'}",
+            force=True,
+        )
+        after = self._get_oauth2_auth_data()
+        has_service_after = bool(after.get("serviceToken"))
+        has_yast_after = bool(after.get("yetAnotherServiceToken"))
+        ok = bool(refreshed.get("refreshed") and (has_service_after or has_yast_after))
+        self._emit_auth_short_session_rebuild(
+            result="ok" if ok else "failed",
+            reason=reason or "auth_error",
+            auth_mode_before=mode_before,
+            auth_mode_after=self._auth_mode,
+            has_pass_token=has_pass,
+            has_service_before=has_service_before,
+            has_service_after=has_service_after,
+            has_yast_before=has_yast_before,
+            has_yast_after=has_yast_after,
+            writeback_target="auth_json" if (has_service_after or has_yast_after) else "none",
+            runtime_rebind_result="pending" if ok else "skipped",
+        )
+        return ok
+
     @staticmethod
     def _masked_len(value: Any) -> int:
         return len(str(value or ""))
@@ -651,6 +748,14 @@ class AuthManager:
                     "auth_json_writeback": "yes" if wrote_back else "no",
                 },
             )
+            self._auth_rebuild_state["last_clear_short_session"] = {
+                "event": "auth_rebuild_stage",
+                "stage": "clear_short_session",
+                "result": "ok",
+                "reason": summarized_reason,
+                "auth_session_id": self._auth_session_id(),
+                "cleared_fields": sorted(set(removed_keys)),
+            }
             return True
         except Exception as clear_err:
             self._auth_log(
@@ -809,7 +914,10 @@ class AuthManager:
             if now - self._last_login_ts >= self._login_cooldown_sec:
                 self.log.info("try login")
                 self._last_login_ts = now
-                await self.login_miboy()
+                auth_data = self._get_oauth2_auth_data()
+                if not auth_data.get("serviceToken") and not auth_data.get("yetAnotherServiceToken"):
+                    await self._rebuild_short_session_from_long_auth("init_all_data")
+                await self.login_miboy(allow_login_fallback=False, reason="init_all_data")
             else:
                 self.log.info("skip login due cooldown")
         else:
@@ -942,6 +1050,20 @@ class AuthManager:
 
     async def rebuild_services(self, reason: str, allow_login_fallback: bool = False) -> bool:
         mode_before = self._auth_mode
+        if allow_login_fallback:
+            self._emit_mi_login_trace(
+                stage="login_http_exchange",
+                sid="micoapi",
+                result="skipped",
+                reason=reason or "rebuild",
+                auth_mode_before=mode_before,
+                auth_mode_after=self._auth_mode,
+                extra={
+                    "request_step": "disabled",
+                    "disabled_by_policy": True,
+                    "resp_desc": "auto login fallback disabled by policy",
+                },
+            )
         before_session = self._auth_session_id()
         before_mina_id = id(self.mina_service) if self.mina_service is not None else 0
         before_short_fp = self._short_session_fingerprint()
@@ -1182,35 +1304,38 @@ class AuthManager:
 
             try:
                 if prefer_refresh:
-                    refreshed = await self.refresh_oauth2_token_if_needed(
-                        reason=reason or "auth_error",
-                        force=True,
+                    self._clear_short_lived_session(
+                        clear_reason=f"auth_recovery:{reason or 'auth_error'}",
+                        err=reason or "auth_error",
                     )
-                    if refreshed.get("refreshed"):
-                        ready = await self.rebuild_services(
-                            reason=reason or "auth_error",
-                            allow_login_fallback=False,
-                        )
-                        if not ready:
-                            raise RuntimeError("rebuild after refresh failed")
-                    elif refreshed.get("fallback_allowed"):
-                        self._clear_short_lived_session(
-                            clear_reason=f"refresh_failed:{reason or 'auth_error'}",
-                            err=refreshed.get("last_error") or "refresh_failed",
-                        )
-                        ready = await self.rebuild_services(
-                            reason=reason or "login_fallback",
-                            allow_login_fallback=True,
-                        )
-                        if not ready:
-                            raise RuntimeError("fallback login rebuild failed")
-                    else:
-                        raise RuntimeError(refreshed.get("last_error") or "refresh failed")
+                    rebuilt = await self._rebuild_short_session_from_long_auth(reason or "auth_error")
+                    if not rebuilt:
+                        raise RuntimeError("short session rebuild failed")
+                    ready = await self.rebuild_services(
+                        reason=reason or "auth_error",
+                        allow_login_fallback=False,
+                    )
+                    self._auth_rebuild_state["last_runtime_rebind"] = {
+                        "event": "auth_rebuild_stage",
+                        "stage": "runtime_rebind",
+                        "result": "ok" if ready else "failed",
+                        "reason": reason or "auth_error",
+                        "auth_session_id": self._auth_session_id(),
+                    }
+                    if not ready:
+                        raise RuntimeError("rebuild after short session rebuild failed")
                 else:
                     self.mark_session_invalid(reason or "ensure_logged_in")
                     await self.init_all_data()
                     if await self.need_login():
                         raise RuntimeError("relogin completed but service still unavailable")
+                self._auth_rebuild_state["last_verify"] = {
+                    "event": "auth_rebuild_stage",
+                    "stage": "verify",
+                    "result": "ok",
+                    "reason": reason or "ensure_logged_in",
+                    "auth_session_id": self._auth_session_id(),
+                }
                 self._last_ok_ts = time.time()
                 self._relogin_fail_streak = 0
                 self._next_relogin_allowed_ts = 0.0
@@ -1225,10 +1350,11 @@ class AuthManager:
                 self._next_relogin_allowed_ts = time.time() + delay
                 self._set_auth_mode("degraded", reason=reason or "ensure_logged_in")
                 err_text = str(e).lower()
+                long_auth_ok = self._has_long_auth_fields(self._get_oauth2_auth_data())
                 if (
-                    self._refresh_failed_requires_relogin(e)
+                    not long_auth_ok
+                    or self._refresh_failed_requires_relogin(e)
                     or "runtime verify after login failed" in err_text
-                    or "login failed" in err_text
                 ):
                     self._enter_auth_lock(reason=reason or str(e))
                 self.log.warning(
@@ -1403,7 +1529,7 @@ class AuthManager:
             oauth2_mtime = int(os.path.getmtime(token_path))
         return (oauth2_mtime, self.config.mi_did)
 
-    async def login_miboy(self, allow_login_fallback: bool = True, reason: str = ""):
+    async def login_miboy(self, allow_login_fallback: bool = False, reason: str = ""):
         """登录小米账号
 
         使用 OAuth2 token 登录小米账号，并初始化相关服务。
@@ -1488,7 +1614,7 @@ class AuthManager:
                     self._auth_log(
                         reason=reason or "auth_error",
                         action="login_fallback",
-                        result="start",
+                        result="skipped",
                     )
                     login_exchange_called = True
                     self._emit_mi_login_trace(
@@ -1500,61 +1626,32 @@ class AuthManager:
                         auth_mode_after=self._auth_mode,
                         extra=self._mi_login_input_snapshot(mi_account),
                     )
-                    try:
-                        await mi_account.login("micoapi")
-                        acct = getattr(mi_account, "token", {}) or {}
-                        mico_ssec, mico_st = self._micoapi_tokens(acct)
-                        has_cookie = bool(acct.get("serviceToken") or acct.get("yetAnotherServiceToken") or mico_st)
-                        self._emit_mi_login_trace(
-                            stage="login_http_exchange",
-                            sid="micoapi",
-                            result="ok",
-                            reason=reason or "login_fallback",
-                            auth_mode_before=mode_before,
-                            auth_mode_after=self._auth_mode,
-                            extra={
-                                "request_step": "unknown",
-                                "http_status": "",
-                                "resp_code": "",
-                                "resp_desc": "",
-                                "callback_host": "",
-                                "has_location": False,
-                                "has_set_cookie": has_cookie,
-                                "has_service_token_cookie": bool(acct.get("serviceToken") or mico_st),
-                                "has_yet_another_service_token_cookie": bool(acct.get("yetAnotherServiceToken") or mico_st),
-                            },
-                        )
-                    except Exception as login_exc:
-                        parsed = self._parse_login_error(login_exc)
-                        self._emit_mi_login_trace(
-                            stage="login_http_exchange",
-                            sid="micoapi",
-                            result="failed",
-                            reason=reason or "login_fallback",
-                            auth_mode_before=mode_before,
-                            auth_mode_after=self._auth_mode,
-                            extra={
-                                "request_step": "unknown",
-                                "http_status": parsed.get("login_http_status", ""),
-                                "resp_code": parsed.get("resp_code", ""),
-                                "resp_desc": parsed.get("resp_desc", ""),
-                                "callback_host": parsed.get("callback_host", ""),
-                                "has_location": False,
-                                "has_set_cookie": False,
-                                "has_service_token_cookie": False,
-                                "has_yet_another_service_token_cookie": False,
-                            },
-                        )
-                        raise
-                    self.mina_service = MiNAService(mi_account)
-                    self.miio_service = MiIOService(mi_account)
+                    self._emit_mi_login_trace(
+                        stage="login_http_exchange",
+                        sid="micoapi",
+                        result="skipped",
+                        reason=reason or "login_fallback",
+                        auth_mode_before=mode_before,
+                        auth_mode_after=self._auth_mode,
+                        extra={
+                            "request_step": "disabled",
+                            "http_status": "",
+                            "resp_code": "",
+                            "resp_desc": "auto login fallback disabled by policy",
+                            "callback_host": "",
+                            "has_location": False,
+                            "has_set_cookie": False,
+                            "has_service_token_cookie": False,
+                            "has_yet_another_service_token_cookie": False,
+                            "disabled_by_policy": True,
+                        },
+                    )
+                    raise RuntimeError("service token verify failed and auto login fallback disabled")
             else:
-                if not allow_login_fallback:
-                    raise RuntimeError("missing service token and login fallback disabled")
                 self._auth_log(
                     reason=reason or "auth_error",
                     action="login_fallback",
-                    result="start",
+                    result="skipped",
                 )
                 login_exchange_called = True
                 self._emit_mi_login_trace(
@@ -1566,54 +1663,27 @@ class AuthManager:
                     auth_mode_after=self._auth_mode,
                     extra=self._mi_login_input_snapshot(mi_account),
                 )
-                try:
-                    await mi_account.login("micoapi")
-                    acct = getattr(mi_account, "token", {}) or {}
-                    mico_ssec, mico_st = self._micoapi_tokens(acct)
-                    has_cookie = bool(acct.get("serviceToken") or acct.get("yetAnotherServiceToken") or mico_st)
-                    self._emit_mi_login_trace(
-                        stage="login_http_exchange",
-                        sid="micoapi",
-                        result="ok",
-                        reason=reason or "login_fallback",
-                        auth_mode_before=mode_before,
-                        auth_mode_after=self._auth_mode,
-                        extra={
-                            "request_step": "unknown",
-                            "http_status": "",
-                            "resp_code": "",
-                            "resp_desc": "",
-                            "callback_host": "",
-                            "has_location": False,
-                            "has_set_cookie": has_cookie,
-                            "has_service_token_cookie": bool(acct.get("serviceToken") or mico_st),
-                            "has_yet_another_service_token_cookie": bool(acct.get("yetAnotherServiceToken") or mico_st),
-                        },
-                    )
-                except Exception as login_exc:
-                    parsed = self._parse_login_error(login_exc)
-                    self._emit_mi_login_trace(
-                        stage="login_http_exchange",
-                        sid="micoapi",
-                        result="failed",
-                        reason=reason or "login_fallback",
-                        auth_mode_before=mode_before,
-                        auth_mode_after=self._auth_mode,
-                        extra={
-                            "request_step": "unknown",
-                            "http_status": parsed.get("login_http_status", ""),
-                            "resp_code": parsed.get("resp_code", ""),
-                            "resp_desc": parsed.get("resp_desc", ""),
-                            "callback_host": parsed.get("callback_host", ""),
-                            "has_location": False,
-                            "has_set_cookie": False,
-                            "has_service_token_cookie": False,
-                            "has_yet_another_service_token_cookie": False,
-                        },
-                    )
-                    raise
-                self.mina_service = MiNAService(mi_account)
-                self.miio_service = MiIOService(mi_account)
+                self._emit_mi_login_trace(
+                    stage="login_http_exchange",
+                    sid="micoapi",
+                    result="skipped",
+                    reason=reason or "login_fallback",
+                    auth_mode_before=mode_before,
+                    auth_mode_after=self._auth_mode,
+                    extra={
+                        "request_step": "disabled",
+                        "http_status": "",
+                        "resp_code": "",
+                        "resp_desc": "auto login fallback disabled by policy",
+                        "callback_host": "",
+                        "has_location": False,
+                        "has_set_cookie": False,
+                        "has_service_token_cookie": False,
+                        "has_yet_another_service_token_cookie": False,
+                        "disabled_by_policy": True,
+                    },
+                )
+                raise RuntimeError("missing short session token; rebuild from long auth required")
 
             if login_exchange_called and self._recovery_is_active():
                 after_data_for_exchange = self._get_oauth2_auth_data()
