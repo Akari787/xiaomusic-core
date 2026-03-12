@@ -1,3 +1,29 @@
+## v1.0.7 (2026-03-12)
+
+### OAuth2 / Runtime 稳定收口
+
+- 永久禁用自动 `mi_account.login("micoapi")` 作为运行时恢复路径，避免 `70016` 风控失败放大故障。
+- 固化短会话恢复链：`clear_short_session -> rebuild_short_session_from_long_auth -> runtime_rebind -> verify`。
+- 将 `POST /api/oauth2/refresh` 固化为“刷新运行时”（从磁盘重载 token 并重建运行态），不再依赖 refresh token 成功。
+- 新增兼容别名 `POST /api/oauth2/refresh_runtime`，语义与 `/api/oauth2/refresh` 完全一致。
+- 新增 debug 观察面：`GET /api/v1/debug/oauth_runtime_reload_state`。
+
+### WebUI 与文案对齐
+
+- OAuth2 卡片与首页按钮文案统一为“刷新运行时”。
+- OAuth2 状态区新增收口态文案：`运行时已恢复` / `已登录待恢复` / `需要重新扫码登录`。
+
+### 测试与验收
+
+- 新增 runtime reload 相关单元与路由回归测试：
+  - runtime reload 不依赖 refresh token
+  - token_store 重载后进程可接管新 token
+  - debug/state 路由一致性
+
+### 本版本边界
+
+- 本版本不扩展播放 API 面；playlist/queue/library/object API 统一延期到下个版本。
+
 ## v1.0.6 (2026-03-08)
 
 ### API v1 收敛

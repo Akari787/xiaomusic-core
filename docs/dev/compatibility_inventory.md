@@ -95,3 +95,21 @@
 1. 对 `/cmd` 系列历史入口单独建迁移计划，避免继续承载新交互。  
 2. 为 deprecated router wrapper 增加统一迁移窗口说明（版本+下线时间）。  
 3. 等外部调用方迁移后，再清理 facade legacy bridge 与 hint alias。  
+
+---
+
+## 6. Stable Login 收口说明（2026-03）
+
+本轮稳定版只收口 OAuth2/runtime 恢复链，不扩展播放控制 API 面。
+
+- `POST /api/oauth2/refresh` 与 `POST /api/oauth2/refresh_runtime` 语义统一为 runtime reload from disk。
+- 自动恢复链禁用 `mi_account.login("micoapi")`，仅保留策略级 `disabled_by_policy` 可观测标记。
+- 恢复链固定为：`clear_short_session -> rebuild_short_session_from_long_auth -> runtime_rebind -> verify`。
+- locked 仅在长期态缺失等终态场景触发，不因短期会话问题直接锁死。
+
+延期到下版本（明确不在本轮）：
+
+- playlist API
+- queue API
+- library/object API
+- 其他 API 扩展项

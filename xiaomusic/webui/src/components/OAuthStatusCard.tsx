@@ -81,6 +81,13 @@ export function OAuthStatusCard() {
   }
 
   const authLocked = Boolean(status?.auth_locked);
+  const runtimeReady = Boolean(status?.runtime_auth_ready);
+  const tokenPresent = Boolean(status?.token_valid || status?.token_exists);
+  const authStateText = runtimeReady
+    ? "运行时已恢复"
+    : tokenPresent
+      ? "已登录待恢复（请点击刷新运行时）"
+      : "需要重新扫码登录";
 
   return (
     <section className="oauth-card">
@@ -94,6 +101,7 @@ export function OAuthStatusCard() {
       ) : null}
       {status ? (
         <ul>
+          <li>auth_state: {authStateText}</li>
           <li>auth_mode: {String(status.auth_mode || "")}</li>
           <li>auth_locked: {String(status.auth_locked)}</li>
           <li>runtime_auth_ready: {String(status.runtime_auth_ready)}</li>
