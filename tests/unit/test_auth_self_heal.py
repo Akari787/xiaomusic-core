@@ -827,7 +827,7 @@ async def test_rebuild_short_session_from_long_auth_success(auth_manager, monkey
         def __init__(self, auth_data_path=None, token_store=None):  # noqa: ARG002
             self.token_store = token_store
 
-        def _refresh_token(self, force=False):  # noqa: ARG002
+        def rebuild_service_cookies_from_long_auth(self, sid="micoapi"):  # noqa: ARG002
             payload = json.loads(token_path.read_text(encoding="utf-8"))
             payload["serviceToken"] = "rebuilt-st"
             payload["yetAnotherServiceToken"] = "rebuilt-yast"
@@ -836,7 +836,12 @@ async def test_rebuild_short_session_from_long_auth_success(auth_manager, monkey
                 self.token_store.flush()
             else:
                 token_path.write_text(json.dumps(payload), encoding="utf-8")
-            return payload
+            return {
+                "ok": True,
+                "sid": sid,
+                "http_stage": "redirect",
+                "writeback_target": "auth_json",
+            }
 
     fake_module = types.ModuleType("xiaomusic.qrcode_login")
     fake_module.MiJiaAPI = _FakeMiJiaAPI
@@ -902,7 +907,7 @@ async def test_rebuild_short_session_does_not_call_login_on_long_missing(auth_ma
         def __init__(self, auth_data_path=None, token_store=None):  # noqa: ARG002
             return None
 
-        def _refresh_token(self, force=False):  # noqa: ARG002
+        def rebuild_service_cookies_from_long_auth(self, sid="micoapi"):  # noqa: ARG002
             calls["refresh"] += 1
             raise AssertionError("should not refresh when long auth is missing")
 
@@ -912,6 +917,140 @@ async def test_rebuild_short_session_does_not_call_login_on_long_missing(auth_ma
     ok = await auth_manager._rebuild_short_session_from_long_auth("ut-no-long-auth")
     assert ok is False
     assert calls["refresh"] == 0
+
+
+@pytest.mark.asyncio
+async def test_rebuild_short_session_primary_failed_then_refresh_fallback_success(auth_manager, monkeypatch):
+    token_path = Path(auth_manager.oauth2_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    data["psecurity"] = "pp"
+    data["cUserId"] = "cu"
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    calls = {"primary": 0, "fallback": 0}
+
+    class _FakeMiJiaAPI:
+        def __init__(self, auth_data_path=None, token_store=None):  # noqa: ARG002
+            self.token_store = token_store
+
+        def rebuild_service_cookies_from_long_auth(self, sid="micoapi"):  # noqa: ARG002
+            calls["primary"] += 1
+            return {
+                "ok": False,
+                "error_code": "long_auth_login_failed",
+                "failed_reason": "service_login_not_authorized",
+                "sid": sid,
+                "http_stage": "serviceLogin",
+                "writeback_target": "none",
+            }
+
+        def _refresh_token(self, force=False):  # noqa: ARG002
+            calls["fallback"] += 1
+            payload = json.loads(token_path.read_text(encoding="utf-8"))
+            payload["serviceToken"] = "fallback-st"
+            payload["yetAnotherServiceToken"] = "fallback-yast"
+            if self.token_store is not None:
+                self.token_store.update(payload, reason="ut-refresh-fallback")
+                self.token_store.flush()
+            else:
+                token_path.write_text(json.dumps(payload), encoding="utf-8")
+            return payload
+
+    fake_module = types.ModuleType("xiaomusic.qrcode_login")
+    fake_module.MiJiaAPI = _FakeMiJiaAPI
+    monkeypatch.setitem(sys.modules, "xiaomusic.qrcode_login", fake_module)
+
+    ok = await auth_manager._rebuild_short_session_from_long_auth("ut-fallback")
+    assert ok is True
+    assert calls == {"primary": 1, "fallback": 1}
+    data_after = auth_manager._get_oauth2_auth_data()
+    assert data_after.get("serviceToken") == "fallback-st"
+    stage = auth_manager.auth_short_session_rebuild_debug_state()["last_auth_recovery_flow"]
+    # recovery flow is emitted by ensure_logged_in; direct helper call should keep it empty.
+    assert isinstance(stage, dict)
+
+
+@pytest.mark.asyncio
+async def test_ensure_logged_in_short_rebuild_failed_without_lock_when_long_auth_exists(auth_manager, monkeypatch):
+    token_path = Path(auth_manager.oauth2_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data["psecurity"] = "pp"
+    data["cUserId"] = "cu"
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    async def _need_login():
+        return True
+
+    async def _primary(reason, sid="micoapi"):  # noqa: ARG001
+        return {
+            "ok": False,
+            "error_code": "long_auth_login_failed",
+            "failed_reason": "service_login_not_authorized",
+            "used_path": "relogin_with_long_auth",
+            "sid": sid,
+        }
+
+    async def _fallback(reason):  # noqa: ARG001
+        return {
+            "ok": False,
+            "error_code": "short_session_refresh_failed",
+            "failed_reason": "refresh_failed",
+            "used_path": "refresh_token_fallback",
+        }
+
+    auth_manager.need_login = _need_login
+    auth_manager._rebuild_service_cookies_from_long_auth = _primary
+    auth_manager._rebuild_short_session_tokens_via_refresh_fallback = _fallback
+
+    with pytest.raises(RuntimeError):
+        await auth_manager.ensure_logged_in(force=True, reason="ut-no-lock", prefer_refresh=True)
+    assert auth_manager.is_auth_locked() is False
+    flow = auth_manager.auth_short_session_rebuild_debug_state()["last_auth_recovery_flow"]
+    assert flow["result"] == "failed"
+    assert flow["used_rebuild_strategy"] == "refresh_token_fallback"
+    assert flow["used_refresh_fallback"] is True
+
+
+@pytest.mark.asyncio
+async def test_init_all_data_rebuilds_when_existing_short_verify_failed(auth_manager):
+    calls = {"login": 0, "rebuild": 0, "clear": 0, "device_update": 0}
+
+    async def _need_login():
+        return True
+
+    async def _can_login():
+        return True
+
+    async def _login(allow_login_fallback=False, reason=""):  # noqa: ARG001
+        calls["login"] += 1
+        if calls["login"] == 1:
+            raise RuntimeError("service token verify failed and login fallback disabled")
+        return None
+
+    async def _rebuild(reason):  # noqa: ARG001
+        calls["rebuild"] += 1
+        return True
+
+    def _clear(clear_reason: str, err=None):  # noqa: ARG001
+        calls["clear"] += 1
+        return True
+
+    async def _update(auth):  # noqa: ARG001
+        calls["device_update"] += 1
+
+    auth_manager.need_login = _need_login
+    auth_manager.can_login = _can_login
+    auth_manager.login_miboy = _login
+    auth_manager._rebuild_short_session_from_long_auth = _rebuild
+    auth_manager._clear_short_lived_session = _clear
+    auth_manager.device_manager.update_device_info = _update
+    auth_manager._last_login_ts = 0
+    auth_manager._login_cooldown_sec = 0
+
+    await auth_manager.init_all_data()
+    assert calls == {"login": 2, "rebuild": 1, "clear": 1, "device_update": 1}
 
 
 @pytest.mark.asyncio

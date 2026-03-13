@@ -188,12 +188,20 @@ async def test_api_v1_debug_auth_short_session_rebuild_state_success(monkeypatch
                     "result": "ok",
                     "rebuild_source": "long_auth",
                 },
+                "last_long_auth_relogin": {
+                    "result": "ok",
+                    "used_path": "relogin_with_long_auth",
+                },
                 "last_runtime_rebind": {
                     "result": "ok",
                 },
                 "last_verify": {
                     "result": "ok",
                 },
+                "last_auth_recovery_flow": {
+                    "result": "ok",
+                },
+                "last_locked_transition": {},
             }
 
     class _XM:
@@ -203,3 +211,4 @@ async def test_api_v1_debug_auth_short_session_rebuild_state_success(monkeypatch
     out = await v1.api_v1_debug_auth_short_session_rebuild_state()
     assert out["code"] == 0
     assert out["data"]["last_short_session_rebuild"]["result"] == "ok"
+    assert out["data"]["last_long_auth_relogin"]["used_path"] == "relogin_with_long_auth"

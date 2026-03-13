@@ -110,6 +110,7 @@ class MiJiaAPI:
             "XIAOMUSIC_MIJIA_SERVICE_LOGIN_URL",
             "https://account.xiaomi.com/pass/serviceLogin",
         )
+        self.service_base_url = service_base
         self.service_login_url = f"{service_base}?_json=true&sid=micoapi&_locale={self.locale}"
         self.request_timeout = float(os.getenv("XIAOMUSIC_MIJIA_TIMEOUT_SECONDS", "15"))
         self.request_retries = int(os.getenv("XIAOMUSIC_MIJIA_RETRY_COUNT", "3"))
@@ -315,6 +316,111 @@ class MiJiaAPI:
             return self.auth_data
         else:
             raise ValueError("刷新Token失败，请重新登录")
+
+    def rebuild_service_cookies_from_long_auth(self, sid: str = "micoapi") -> dict:
+        """Use long-lived auth fields to relogin and rebuild service cookies.
+
+        This method only refreshes short-lived service cookies/tokens and writes
+        back auth data. It does not rebind runtime services.
+        """
+        required = ["passToken", "psecurity", "ssecurity", "userId", "cUserId", "deviceId"]
+        missing = [k for k in required if not str(self.auth_data.get(k) or "").strip()]
+        if missing:
+            return {
+                "ok": False,
+                "error_code": "missing_long_auth_fields",
+                "failed_reason": f"missing_long_auth_fields:{','.join(missing)}",
+                "http_stage": "serviceLogin",
+                "sid": sid,
+                "writeback_target": "none",
+            }
+
+        headers = {
+            "User-Agent": self.user_agent,
+            "Connection": "keep-alive",
+            "Accept-Encoding": "gzip",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Cookie": f"deviceId={self.device_id};"
+                      f"pass_o={self.pass_o};"
+                      f"passToken={self.auth_data.get('passToken', '')};"
+                      f"userId={self.auth_data.get('userId', '')};"
+                      f"cUserId={self.auth_data.get('cUserId', '')};"
+                      f"uLocale={self.locale};",
+        }
+        service_login_url = f"{self.service_base_url}?_json=true&sid={sid}&_locale={self.locale}"
+
+        try:
+            service_ret = self._http_request("get", service_login_url, headers=headers)
+            service_data = self._handle_ret(service_ret, verify_code=False)
+        except Exception as e:
+            return {
+                "ok": False,
+                "error_code": "long_auth_login_failed",
+                "failed_reason": "service_login_request_failed",
+                "error_message": str(e),
+                "http_stage": "serviceLogin",
+                "sid": sid,
+                "writeback_target": "none",
+            }
+
+        location = str(service_data.get("location") or "")
+        if int(service_data.get("code", -1)) != 0 or not location:
+            return {
+                "ok": False,
+                "error_code": "long_auth_login_failed",
+                "failed_reason": "service_login_not_authorized",
+                "error_message": str(service_data.get("desc") or service_data.get("message") or "serviceLogin failed"),
+                "http_stage": "serviceLogin",
+                "sid": sid,
+                "writeback_target": "none",
+            }
+
+        try:
+            ret = self._http_request("get", location, session=self.session, headers=headers)
+            if ret.status_code != 200:
+                return {
+                    "ok": False,
+                    "error_code": "redirect_failed",
+                    "failed_reason": "redirect_http_status",
+                    "error_message": f"redirect status={ret.status_code}",
+                    "http_stage": "redirect",
+                    "sid": sid,
+                    "writeback_target": "none",
+                }
+            cookies = self.session.cookies.get_dict() or {}
+            self.auth_data.update(cookies)
+            if service_data.get("ssecurity"):
+                self.auth_data["ssecurity"] = service_data.get("ssecurity")
+            st = self.auth_data.get("serviceToken") or self.auth_data.get("yetAnotherServiceToken")
+            if st:
+                self.auth_data["serviceToken"] = st
+                self.auth_data.setdefault("yetAnotherServiceToken", st)
+                self._save_auth_data()
+                self._init_session()
+                return {
+                    "ok": True,
+                    "http_stage": "redirect",
+                    "sid": sid,
+                    "writeback_target": "auth_json",
+                }
+            return {
+                "ok": False,
+                "error_code": "service_token_not_written",
+                "failed_reason": "service_token_missing_after_redirect",
+                "http_stage": "redirect",
+                "sid": sid,
+                "writeback_target": "none",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error_code": "redirect_failed",
+                "failed_reason": "redirect_request_failed",
+                "error_message": str(e),
+                "http_stage": "redirect",
+                "sid": sid,
+                "writeback_target": "none",
+            }
 
     def get_qrcode(self):
         # Step 1: 从 serviceLogin 获取登录链接参数
