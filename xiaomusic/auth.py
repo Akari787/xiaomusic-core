@@ -461,6 +461,13 @@ class AuthManager:
     def auth_rebuild_debug_state(self) -> dict[str, Any]:
         return deepcopy(self._auth_rebuild_state)
 
+    def auth_short_session_rebuild_debug_state(self) -> dict[str, Any]:
+        return {
+            "last_short_session_rebuild": deepcopy(self._auth_rebuild_state.get("last_rebuild_short_session", {})),
+            "last_runtime_rebind": deepcopy(self._auth_rebuild_state.get("last_runtime_rebind", {})),
+            "last_verify": deepcopy(self._auth_rebuild_state.get("last_verify", {})),
+        }
+
     def oauth_runtime_reload_debug_state(self) -> dict[str, Any]:
         return deepcopy(self._oauth_runtime_reload_state)
 
@@ -472,12 +479,21 @@ class AuthManager:
         auth_mode_before: str,
         auth_mode_after: str,
         has_pass_token: bool,
+        has_psecurity: bool,
+        has_ssecurity: bool,
+        has_user_id: bool,
+        has_c_user_id: bool,
+        has_device_id: bool,
         has_service_before: bool,
         has_service_after: bool,
         has_yast_before: bool,
         has_yast_after: bool,
         writeback_target: str,
         runtime_rebind_result: str,
+        rebuild_source: str,
+        error_code: str = "",
+        error_message: str = "",
+        failed_reason: str = "",
     ) -> None:
         payload = {
             "event": "auth_short_session_rebuild",
@@ -488,19 +504,31 @@ class AuthManager:
             "auth_mode_after": auth_mode_after,
             "reason": reason,
             "has_passToken": has_pass_token,
+            "has_psecurity": has_psecurity,
+            "has_ssecurity": has_ssecurity,
+            "has_userId": has_user_id,
+            "has_cUserId": has_c_user_id,
+            "has_deviceId": has_device_id,
             "has_serviceToken_before": has_service_before,
             "has_serviceToken_after": has_service_after,
             "has_yetAnotherServiceToken_before": has_yast_before,
             "has_yetAnotherServiceToken_after": has_yast_after,
             "writeback_target": writeback_target,
             "runtime_rebind_result": runtime_rebind_result,
+            "rebuild_source": rebuild_source,
         }
+        if error_code:
+            payload["error_code"] = error_code
+        if error_message:
+            payload["error_message"] = str(error_message).replace("\n", " ")[:200]
+        if failed_reason:
+            payload["failed_reason"] = failed_reason
         self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
         self._auth_rebuild_state["last_rebuild_short_session"] = dict(payload)
 
     @staticmethod
     def _missing_long_auth_fields(data: dict[str, Any]) -> list[str]:
-        required = ("passToken", "userId", "cUserId", "ssecurity", "deviceId")
+        required = ("passToken", "psecurity", "ssecurity", "userId", "cUserId", "deviceId")
         return [k for k in required if not str(data.get(k) or "").strip()]
 
     @classmethod
@@ -553,50 +581,109 @@ class AuthManager:
         self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
         self._oauth_runtime_reload_state["last_reload_runtime"] = dict(payload)
 
-    async def _rebuild_short_session_from_long_auth(self, reason: str) -> bool:
+    async def _rebuild_short_session_tokens_from_long_auth(self, reason: str) -> dict[str, Any]:
         mode_before = self._auth_mode
+        if self.token_store is not None:
+            self.token_store.reload_from_disk()
         before = self._get_oauth2_auth_data()
         has_service_before = bool(before.get("serviceToken"))
         has_yast_before = bool(before.get("yetAnotherServiceToken"))
-        has_pass = bool(before.get("passToken"))
         missing_long_auth = self._missing_long_auth_fields(before)
+
+        has_pass = bool(before.get("passToken"))
+        has_psecurity = bool(before.get("psecurity"))
+        has_ssecurity = bool(before.get("ssecurity"))
+        has_user_id = bool(before.get("userId"))
+        has_c_user_id = bool(before.get("cUserId"))
+        has_device_id = bool(before.get("deviceId"))
+
         if missing_long_auth:
+            failed_reason = f"missing_long_auth_fields:{','.join(missing_long_auth)}"
             self._emit_auth_short_session_rebuild(
                 result="failed",
-                reason=f"long_auth_missing:{','.join(missing_long_auth)}",
+                reason=reason or "auth_error",
                 auth_mode_before=mode_before,
                 auth_mode_after=self._auth_mode,
                 has_pass_token=has_pass,
+                has_psecurity=has_psecurity,
+                has_ssecurity=has_ssecurity,
+                has_user_id=has_user_id,
+                has_c_user_id=has_c_user_id,
+                has_device_id=has_device_id,
                 has_service_before=has_service_before,
                 has_service_after=False,
                 has_yast_before=has_yast_before,
                 has_yast_after=False,
                 writeback_target="none",
                 runtime_rebind_result="skipped",
+                rebuild_source="unavailable",
+                error_code="missing_long_auth_fields",
+                error_message=failed_reason,
+                failed_reason=failed_reason,
             )
-            return False
-        refreshed = await self.refresh_oauth2_token_if_needed(
-            reason=f"short_session_rebuild:{reason or 'auth_error'}",
-            force=True,
-        )
+            return {
+                "ok": False,
+                "error_code": "missing_long_auth_fields",
+                "error_message": failed_reason,
+                "failed_reason": failed_reason,
+            }
+
+        from xiaomusic.qrcode_login import MiJiaAPI
+
+        token_path = self.oauth2_token_path
+        auth_dir = os.path.dirname(token_path) if token_path else None
+        error_code = ""
+        error_message = ""
+        try:
+            api = MiJiaAPI(auth_data_path=auth_dir, token_store=self.token_store)
+            refresh_fn = getattr(api, "_refresh_token", None)
+            if not callable(refresh_fn):
+                raise RuntimeError(
+                    f"short session rebuild unavailable: {type(api).__name__}._refresh_token missing"
+                )
+            await asyncio.to_thread(refresh_fn, True)
+            if self.token_store is not None:
+                self.token_store.reload_from_disk()
+        except Exception as e:
+            error_code = "short_session_refresh_failed"
+            error_message = str(e)
+
         after = self._get_oauth2_auth_data()
         has_service_after = bool(after.get("serviceToken"))
         has_yast_after = bool(after.get("yetAnotherServiceToken"))
-        ok = bool(refreshed.get("refreshed") and (has_service_after or has_yast_after))
+        ok = bool((has_service_after or has_yast_after) and not error_code)
         self._emit_auth_short_session_rebuild(
             result="ok" if ok else "failed",
             reason=reason or "auth_error",
             auth_mode_before=mode_before,
             auth_mode_after=self._auth_mode,
             has_pass_token=has_pass,
+            has_psecurity=has_psecurity,
+            has_ssecurity=has_ssecurity,
+            has_user_id=has_user_id,
+            has_c_user_id=has_c_user_id,
+            has_device_id=has_device_id,
             has_service_before=has_service_before,
             has_service_after=has_service_after,
             has_yast_before=has_yast_before,
             has_yast_after=has_yast_after,
             writeback_target="auth_json" if (has_service_after or has_yast_after) else "none",
             runtime_rebind_result="pending" if ok else "skipped",
+            rebuild_source="long_auth",
+            error_code=error_code,
+            error_message=error_message,
+            failed_reason="" if ok else ("refresh_failed" if error_code else "short_token_not_written"),
         )
-        return ok
+        return {
+            "ok": ok,
+            "error_code": error_code,
+            "error_message": error_message,
+            "failed_reason": "" if ok else ("refresh_failed" if error_code else "short_token_not_written"),
+        }
+
+    async def _rebuild_short_session_from_long_auth(self, reason: str) -> bool:
+        ret = await self._rebuild_short_session_tokens_from_long_auth(reason)
+        return bool(ret.get("ok"))
 
     @staticmethod
     def _masked_len(value: Any) -> int:
@@ -1508,13 +1595,8 @@ class AuthManager:
                 delay = min(30 * (2 ** max(self._relogin_fail_streak - 1, 0)), 300)
                 self._next_relogin_allowed_ts = time.time() + delay
                 self._set_auth_mode("degraded", reason=reason or "ensure_logged_in")
-                err_text = str(e).lower()
                 long_auth_ok = self._has_long_auth_fields(self._get_oauth2_auth_data())
-                if (
-                    not long_auth_ok
-                    or self._refresh_failed_requires_relogin(e)
-                    or "runtime verify after login failed" in err_text
-                ):
+                if not long_auth_ok:
                     self._enter_auth_lock(reason=reason or str(e))
                 self.log.warning(
                     "ensure_logged_in failed. streak=%d next_retry_after=%ss",
@@ -2163,11 +2245,19 @@ class AuthManager:
         user_data = self._get_oauth2_auth_data()
         if user_data:
             self.device_id = user_data.get("deviceId", self.device_id)
-            account.token = {
+            token_payload = {
                 "passToken": user_data["passToken"],
                 "userId": user_data["userId"],
                 "deviceId": self.device_id,
             }
+            for key in ("psecurity", "ssecurity", "cUserId"):
+                if user_data.get(key):
+                    token_payload[key] = user_data.get(key)
+            if user_data.get("serviceToken"):
+                token_payload["serviceToken"] = user_data.get("serviceToken")
+            if user_data.get("yetAnotherServiceToken"):
+                token_payload["yetAnotherServiceToken"] = user_data.get("yetAnotherServiceToken")
+            account.token = token_payload
         else:
             return
 

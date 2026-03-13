@@ -814,7 +814,7 @@ def test_non_login_paths_do_not_emit_mi_login_trace(auth_manager):
 
 
 @pytest.mark.asyncio
-async def test_rebuild_short_session_from_long_auth_success(auth_manager):
+async def test_rebuild_short_session_from_long_auth_success(auth_manager, monkeypatch):
     token_path = Path(auth_manager.oauth2_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
@@ -823,24 +823,32 @@ async def test_rebuild_short_session_from_long_auth_success(auth_manager):
     data["cUserId"] = "cu"
     token_path.write_text(json.dumps(data), encoding="utf-8")
 
-    async def _refresh(reason, force=False):  # noqa: ARG001
-        payload = json.loads(token_path.read_text(encoding="utf-8"))
-        payload["serviceToken"] = "rebuilt-st"
-        payload["yetAnotherServiceToken"] = "rebuilt-yast"
-        token_path.write_text(json.dumps(payload), encoding="utf-8")
-        return {
-            "refreshed": True,
-            "token_saved": True,
-            "last_error": None,
-            "fallback_allowed": False,
-        }
+    class _FakeMiJiaAPI:
+        def __init__(self, auth_data_path=None, token_store=None):  # noqa: ARG002
+            self.token_store = token_store
 
-    auth_manager.refresh_oauth2_token_if_needed = _refresh
+        def _refresh_token(self, force=False):  # noqa: ARG002
+            payload = json.loads(token_path.read_text(encoding="utf-8"))
+            payload["serviceToken"] = "rebuilt-st"
+            payload["yetAnotherServiceToken"] = "rebuilt-yast"
+            if self.token_store is not None:
+                self.token_store.update(payload, reason="ut-short-rebuild")
+                self.token_store.flush()
+            else:
+                token_path.write_text(json.dumps(payload), encoding="utf-8")
+            return payload
+
+    fake_module = types.ModuleType("xiaomusic.qrcode_login")
+    fake_module.MiJiaAPI = _FakeMiJiaAPI
+    monkeypatch.setitem(sys.modules, "xiaomusic.qrcode_login", fake_module)
     ok = await auth_manager._rebuild_short_session_from_long_auth("ut-short-rebuild")
     assert ok is True
     after = json.loads(token_path.read_text(encoding="utf-8"))
     assert after.get("serviceToken") == "rebuilt-st"
     assert after.get("yetAnotherServiceToken") == "rebuilt-yast"
+    runtime_view = auth_manager._get_oauth2_auth_data()
+    assert runtime_view.get("serviceToken") == "rebuilt-st"
+    assert runtime_view.get("yetAnotherServiceToken") == "rebuilt-yast"
 
 
 @pytest.mark.asyncio
@@ -875,7 +883,35 @@ async def test_rebuild_short_session_records_missing_long_auth_fields(auth_manag
     assert ok is False
     stage = auth_manager.auth_rebuild_debug_state()["last_rebuild_short_session"]
     assert stage["result"] == "failed"
-    assert "long_auth_missing:cUserId" in stage["reason"]
+    assert stage["error_code"] == "missing_long_auth_fields"
+    assert "missing_long_auth_fields:cUserId" in stage["failed_reason"]
+
+
+@pytest.mark.asyncio
+async def test_rebuild_short_session_does_not_call_login_on_long_missing(auth_manager, monkeypatch):
+    token_path = Path(auth_manager.oauth2_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("passToken", None)
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    calls = {"refresh": 0}
+
+    class _FailMiJiaAPI:
+        def __init__(self, auth_data_path=None, token_store=None):  # noqa: ARG002
+            return None
+
+        def _refresh_token(self, force=False):  # noqa: ARG002
+            calls["refresh"] += 1
+            raise AssertionError("should not refresh when long auth is missing")
+
+    fake_module = types.ModuleType("xiaomusic.qrcode_login")
+    fake_module.MiJiaAPI = _FailMiJiaAPI
+    monkeypatch.setitem(sys.modules, "xiaomusic.qrcode_login", fake_module)
+    ok = await auth_manager._rebuild_short_session_from_long_auth("ut-no-long-auth")
+    assert ok is False
+    assert calls["refresh"] == 0
 
 
 @pytest.mark.asyncio

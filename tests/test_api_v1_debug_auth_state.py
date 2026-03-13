@@ -176,3 +176,30 @@ async def test_api_v1_debug_oauth_runtime_reload_state_success(monkeypatch):
     out = await v1.api_v1_debug_oauth_runtime_reload_state()
     assert out["code"] == 0
     assert out["data"]["last_reload_runtime"]["result"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_api_v1_debug_auth_short_session_rebuild_state_success(monkeypatch):
+    class _Auth:
+        @staticmethod
+        def auth_short_session_rebuild_debug_state():
+            return {
+                "last_short_session_rebuild": {
+                    "result": "ok",
+                    "rebuild_source": "long_auth",
+                },
+                "last_runtime_rebind": {
+                    "result": "ok",
+                },
+                "last_verify": {
+                    "result": "ok",
+                },
+            }
+
+    class _XM:
+        auth_manager = _Auth()
+
+    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    out = await v1.api_v1_debug_auth_short_session_rebuild_state()
+    assert out["code"] == 0
+    assert out["data"]["last_short_session_rebuild"]["result"] == "ok"
