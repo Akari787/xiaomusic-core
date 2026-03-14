@@ -609,6 +609,11 @@ class AuthManager:
             "failed_reason": failed_reason,
         }
         self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        # New canonical event for long-auth relogin observability.
+        relogin_payload = dict(payload)
+        relogin_payload["event"] = "auth_long_auth_relogin"
+        relogin_payload["stage"] = "rebuild_short_session_via_long_auth_login"
+        self.log.info(json.dumps(relogin_payload, ensure_ascii=False, separators=(",", ":")))
         self._auth_cookie_rebuild_state["last_long_auth_relogin"] = dict(payload)
 
     def _emit_auth_recovery_flow(
@@ -652,6 +657,14 @@ class AuthManager:
         updated["runtime_rebind_result"] = runtime_rebind_result
         updated["verify_result"] = verify_result
         self._auth_cookie_rebuild_state["last_long_auth_relogin"] = updated
+
+    @staticmethod
+    def _is_long_auth_login_strategy(used_rebuild_strategy: str) -> bool:
+        return str(used_rebuild_strategy or "") in {
+            "relogin_with_long_auth",
+            "miaccount_long_auth_login",
+            "mijia_long_auth_login",
+        }
 
     @staticmethod
     def _missing_runtime_reload_fields(data: dict[str, Any]) -> list[str]:
@@ -767,36 +780,132 @@ class AuthManager:
                 "sid": sid,
             }
 
-        from xiaomusic.qrcode_login import MiJiaAPI
-
         token_path = self.oauth2_token_path
         auth_dir = os.path.dirname(token_path) if token_path else None
         ret: Any
-        try:
-            api = MiJiaAPI(auth_data_path=auth_dir, token_store=self.token_store)
-            relogin_fn = getattr(api, "rebuild_service_cookies_from_long_auth", None)
-            if not callable(relogin_fn):
-                ret = {
+
+        async def _try_miaccount_long_auth_relogin() -> dict[str, Any]:
+            account_name = str(before.get("userId") or "")
+            if not account_name:
+                return {
                     "ok": False,
-                    "error_code": "long_auth_login_unavailable",
-                    "failed_reason": "missing_long_auth_relogin_method",
-                    "error_message": "MiJiaAPI.rebuild_service_cookies_from_long_auth unavailable",
+                    "error_code": "missing_long_auth_fields",
+                    "failed_reason": "missing_long_auth_fields:userId",
+                    "error_message": "userId missing",
                     "http_stage": "serviceLogin",
                     "writeback_target": "none",
                     "sid": sid,
+                    "used_path": "miaccount_long_auth_login",
                 }
+
+            mi_account = MiAccount(
+                self.mi_session,
+                account_name,
+                "",
+                str(self.mi_token_home),
+            )
+            self.set_token(mi_account)
+            try:
+                resp = await mi_account._serviceLogin(f"serviceLogin?sid={sid}&_json=true")
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "error_code": "long_auth_login_failed",
+                    "failed_reason": "service_login_request_failed",
+                    "error_message": str(e),
+                    "http_stage": "serviceLogin",
+                    "writeback_target": "none",
+                    "sid": sid,
+                    "used_path": "miaccount_long_auth_login",
+                }
+
+            if not isinstance(resp, dict) or int(resp.get("code", -1)) != 0:
+                return {
+                    "ok": False,
+                    "error_code": "long_auth_expired",
+                    "failed_reason": "service_login_not_authorized",
+                    "error_message": str((resp or {}).get("desc") or (resp or {}).get("message") or "serviceLogin failed"),
+                    "http_stage": "serviceLogin",
+                    "writeback_target": "none",
+                    "sid": sid,
+                    "used_path": "miaccount_long_auth_login",
+                }
+
+            location = str(resp.get("location") or "")
+            nonce = resp.get("nonce")
+            ssecurity = str(resp.get("ssecurity") or before.get("ssecurity") or "")
+            if not location:
+                return {
+                    "ok": False,
+                    "error_code": "redirect_missing",
+                    "failed_reason": "location_missing",
+                    "error_message": "serviceLogin response missing location",
+                    "http_stage": "serviceLogin",
+                    "writeback_target": "none",
+                    "sid": sid,
+                    "used_path": "miaccount_long_auth_login",
+                }
+            try:
+                service_token = await mi_account._securityTokenService(location, nonce, ssecurity)
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "error_code": "long_auth_login_failed",
+                    "failed_reason": "security_token_service_failed",
+                    "error_message": str(e),
+                    "http_stage": "redirect",
+                    "writeback_target": "none",
+                    "sid": sid,
+                    "used_path": "miaccount_long_auth_login",
+                }
+
+            if not service_token:
+                return {
+                    "ok": False,
+                    "error_code": "service_token_not_written",
+                    "failed_reason": "service_token_empty",
+                    "error_message": "security token service returned empty token",
+                    "http_stage": "redirect",
+                    "writeback_target": "none",
+                    "sid": sid,
+                    "used_path": "miaccount_long_auth_login",
+                }
+
+            merged = deepcopy(before)
+            merged["serviceToken"] = service_token
+            merged["yetAnotherServiceToken"] = merged.get("yetAnotherServiceToken") or service_token
+            if ssecurity:
+                merged["ssecurity"] = ssecurity
+            merged["saveTime"] = int(time.time() * 1000)
+            if self.token_store is not None:
+                self.token_store.update(merged, reason=reason or "long_auth_login")
+                self.token_store.flush()
             else:
-                ret = await asyncio.to_thread(relogin_fn, sid)
-                if not isinstance(ret, dict):
-                    ret = {
-                        "ok": False,
-                        "error_code": "long_auth_login_failed",
-                        "failed_reason": "invalid_relogin_response",
-                        "error_message": f"unexpected relogin response type: {type(ret).__name__}",
-                        "http_stage": "serviceLogin",
-                        "writeback_target": "none",
-                        "sid": sid,
-                    }
+                with open(self.oauth2_token_path, "w", encoding="utf-8") as f:
+                    json.dump(merged, f, ensure_ascii=False, indent=2)
+            return {
+                "ok": True,
+                "http_stage": "redirect",
+                "sid": sid,
+                "writeback_target": "auth_json",
+                "used_path": "miaccount_long_auth_login",
+            }
+
+        try:
+            ret = await _try_miaccount_long_auth_relogin()
+            if (not ret.get("ok")) and str(ret.get("error_code") or "") not in {
+                "missing_long_auth_fields",
+                "long_auth_expired",
+            }:
+                from xiaomusic.qrcode_login import MiJiaAPI
+
+                api = MiJiaAPI(auth_data_path=auth_dir, token_store=self.token_store)
+                relogin_fn = getattr(api, "rebuild_service_cookies_from_long_auth", None)
+                if callable(relogin_fn):
+                    relogin_ret = await asyncio.to_thread(relogin_fn, sid)
+                    if isinstance(relogin_ret, dict):
+                        ret = dict(relogin_ret)
+                        ret.setdefault("used_path", "mijia_long_auth_login")
             if self.token_store is not None:
                 self.token_store.reload_from_disk()
         except Exception as e:
@@ -848,7 +957,7 @@ class AuthManager:
             auth_mode_before=mode_before,
             auth_mode_after=self._auth_mode,
             rebuild_source="long_auth_login",
-            used_path="relogin_with_long_auth",
+            used_path=str(ret.get("used_path") or "relogin_with_long_auth"),
             sid=str(ret.get("sid") or sid),
             http_stage=str(ret.get("http_stage") or "serviceLogin"),
             has_service_before=has_service_before,
@@ -868,7 +977,7 @@ class AuthManager:
             "error_code": str(ret.get("error_code") or ""),
             "error_message": str(ret.get("error_message") or ""),
             "failed_reason": str(ret.get("failed_reason") or ("" if ok else "service_token_not_written")),
-            "used_path": "relogin_with_long_auth",
+            "used_path": str(ret.get("used_path") or "relogin_with_long_auth"),
             "sid": str(ret.get("sid") or sid),
             "http_stage": str(ret.get("http_stage") or "serviceLogin"),
             "writeback_target": str(ret.get("writeback_target") or ("auth_json" if ok else "none")),
@@ -1921,7 +2030,7 @@ class AuthManager:
                         "auth_session_id": self._auth_session_id(),
                     }
                     if not ready:
-                        if used_rebuild_strategy == "relogin_with_long_auth":
+                        if self._is_long_auth_login_strategy(used_rebuild_strategy):
                             self._update_last_cookie_rebuild_outcome(
                                 runtime_rebind_result="failed",
                                 verify_result="failed",
@@ -1952,7 +2061,7 @@ class AuthManager:
                         entered_locked=False,
                         final_auth_mode=self._auth_mode,
                     )
-                    if used_rebuild_strategy == "relogin_with_long_auth":
+                    if self._is_long_auth_login_strategy(used_rebuild_strategy):
                         self._update_last_cookie_rebuild_outcome(
                             runtime_rebind_result="ok",
                             verify_result="ok",

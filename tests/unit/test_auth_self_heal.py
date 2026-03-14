@@ -1054,6 +1054,100 @@ async def test_init_all_data_rebuilds_when_existing_short_verify_failed(auth_man
 
 
 @pytest.mark.asyncio
+async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_miaccount_strategy(auth_manager):
+    calls = {"update": 0}
+
+    async def _need_login():
+        return True
+
+    async def _short_rebuild(reason):  # noqa: ARG001
+        auth_manager._last_short_session_rebuild_detail = {
+            "ok": True,
+            "used_path": "miaccount_long_auth_login",
+        }
+        return True
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        return True
+
+    def _update_outcome(runtime_rebind_result: str, verify_result: str):
+        calls["update"] += 1
+        assert runtime_rebind_result == "ok"
+        assert verify_result == "ok"
+
+    auth_manager.need_login = _need_login
+    auth_manager._rebuild_short_session_from_long_auth = _short_rebuild
+    auth_manager.rebuild_services = _rebuild
+    auth_manager._update_last_cookie_rebuild_outcome = _update_outcome
+
+    out = await auth_manager.ensure_logged_in(force=True, reason="ut-miaccount-strategy", prefer_refresh=True)
+    assert out is True
+    assert calls["update"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_mijia_strategy(auth_manager):
+    calls = {"update": 0}
+
+    async def _need_login():
+        return True
+
+    async def _short_rebuild(reason):  # noqa: ARG001
+        auth_manager._last_short_session_rebuild_detail = {
+            "ok": True,
+            "used_path": "mijia_long_auth_login",
+        }
+        return True
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        return True
+
+    def _update_outcome(runtime_rebind_result: str, verify_result: str):
+        calls["update"] += 1
+        assert runtime_rebind_result == "ok"
+        assert verify_result == "ok"
+
+    auth_manager.need_login = _need_login
+    auth_manager._rebuild_short_session_from_long_auth = _short_rebuild
+    auth_manager.rebuild_services = _rebuild
+    auth_manager._update_last_cookie_rebuild_outcome = _update_outcome
+
+    out = await auth_manager.ensure_logged_in(force=True, reason="ut-mijia-strategy", prefer_refresh=True)
+    assert out is True
+    assert calls["update"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_logged_in_does_not_update_cookie_outcome_for_refresh_fallback(auth_manager):
+    calls = {"update": 0}
+
+    async def _need_login():
+        return True
+
+    async def _short_rebuild(reason):  # noqa: ARG001
+        auth_manager._last_short_session_rebuild_detail = {
+            "ok": True,
+            "used_path": "refresh_token_fallback",
+        }
+        return True
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        return True
+
+    def _update_outcome(runtime_rebind_result: str, verify_result: str):  # noqa: ARG001
+        calls["update"] += 1
+
+    auth_manager.need_login = _need_login
+    auth_manager._rebuild_short_session_from_long_auth = _short_rebuild
+    auth_manager.rebuild_services = _rebuild
+    auth_manager._update_last_cookie_rebuild_outcome = _update_outcome
+
+    out = await auth_manager.ensure_logged_in(force=True, reason="ut-refresh-strategy", prefer_refresh=True)
+    assert out is True
+    assert calls["update"] == 0
+
+
+@pytest.mark.asyncio
 async def test_manual_reload_runtime_uses_disk_path_without_refresh_api(auth_manager):
     calls = {"refresh": 0, "rebuild": 0, "device_update": 0}
 
