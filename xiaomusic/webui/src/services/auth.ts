@@ -15,17 +15,23 @@ export interface OAuthStatus {
   auth_lock_reason?: string;
 }
 
-export async function fetchOAuthStatus(): Promise<OAuthStatus> {
-  return await apiGet<OAuthStatus>("/api/oauth2/status");
+export interface AuthStatus extends OAuthStatus {}
+
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+  return await apiGet<AuthStatus>("/api/auth/status");
 }
 
-export async function refreshOAuthRuntime(): Promise<Record<string, unknown>> {
-  return await apiPost<Record<string, unknown>>("/api/oauth2/refresh", {});
+export async function refreshAuthRuntime(): Promise<Record<string, unknown>> {
+  return await apiPost<Record<string, unknown>>("/api/auth/refresh", {});
 }
 
-// Backward-compatible alias.
-export const refreshOAuthToken = refreshOAuthRuntime;
+// Backward-compatible aliases.
+export const fetchOAuthStatus = fetchAuthStatus;
+export const refreshOAuthRuntime = refreshAuthRuntime;
+export const refreshOAuthToken = refreshAuthRuntime;
 
-export async function logoutOAuth(): Promise<Record<string, unknown>> {
-  return await apiPost<Record<string, unknown>>("/api/oauth2/logout", {});
+export async function logoutAuth(): Promise<Record<string, unknown>> {
+  return await apiPost<Record<string, unknown>>("/api/auth/logout", {});
 }
+
+export const logoutOAuth = logoutAuth;

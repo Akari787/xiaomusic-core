@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  LOCAL_IMAGE: xiaomusic
+  LOCAL_IMAGE: xiaomusic-core
   # NOTE: Some GitHub setups reject using the `secrets` context inside `if:`.
   # Mirror secrets into env, and only use env.* in conditions.
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -65,7 +65,7 @@ jobs:
 
       - name: Save ${{ matrix.platform }} image to tar.gz
         run: |
-          OUT="xiaomusic-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz"
+          OUT="xiaomusic-core-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz"
           docker save ${{ env.LOCAL_IMAGE }}:${{ github.ref_name }}-${{ matrix.platform }} | gzip -1 > "${OUT}"
 
       - name: Upload Docker images as artifacts
@@ -73,7 +73,7 @@ jobs:
         with:
           name: docker-images-${{ matrix.platform }}
           path: |
-            xiaomusic-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz
+            xiaomusic-core-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz
           retention-days: 1
 
   # 推送多架构 Docker 镜像到 Docker Hub
@@ -102,7 +102,7 @@ jobs:
         if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
         run: echo "repo=${DOCKERHUB_REPOSITORY}" >> "$GITHUB_OUTPUT"
         env:
-          DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY || format('{0}/xiaomusic-oauth2', secrets.DOCKERHUB_USERNAME) }}
+          DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY || format('{0}/xiaomusic-core', secrets.DOCKERHUB_USERNAME) }}
 
       - name: Publish to Docker Hub (default branch tag)
         if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
@@ -178,7 +178,7 @@ jobs:
         run: |
           RELEASE_NAME=${{ github.ref_name }}
 
-          FILES=$(find . -type f -name "xiaomusic-*.tar.gz")
+          FILES=$(find . -type f -name "xiaomusic-core-*.tar.gz")
           for FILE in ${FILES}; do
             echo "type upload ${FILE}"
             gh release upload "${RELEASE_NAME}" "${FILE}" --clobber

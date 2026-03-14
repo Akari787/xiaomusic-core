@@ -3,9 +3,9 @@
 layout: home
 
 hero:
-  name: "xiaomusic-oauth2"
-  text: "OAuth2 + Jellyfin"
-  tagline: 独立维护分支，专注稳定播放与自托管体验
+  name: "xiaomusic-core"
+  text: "Auth + Jellyfin"
+  tagline: 独立维护核心分支，专注稳定播放、自托管与认证恢复体验
   actions:
     - theme: brand
       text: 使用指南
@@ -21,13 +21,13 @@ hero:
       link: /issues/99
     - theme: alt
       text: GitHub
-      link: https://github.com/Akari787/xiaomusic-oauth2
+      link: https://github.com/Akari787/xiaomusic-core
 
 features:
   - title: MIT 开源
     details: 完全开源，自主可控
-  - title: OAuth2-only
-    details: 仅保留 OAuth2 扫码登录，登录链路更聚焦
+  - title: 认证恢复
+    details: 使用米家扫码登录、token 持久化与运行时恢复机制
   - title: Jellyfin 联动
     details: 支持 Jellyfin 搜索与歌单同步
 ---

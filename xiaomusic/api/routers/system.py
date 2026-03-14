@@ -1,15 +1,14 @@
 """系统管理路由"""
+
 import asyncio
+import base64
+import io
 import json
 import os
-import io
-import base64
 import shutil
 import tempfile
 import time
-from dataclasses import (
-    asdict,
-)
+from dataclasses import asdict
 from qrcode.main import QRCode
 from fastapi import (
     APIRouter,
@@ -48,8 +47,8 @@ from xiaomusic.utils.system_utils import (
     restart_xiaomusic,
     update_version,
 )
-from dataclasses import asdict
 from xiaomusic.qrcode_login import MiJiaAPI
+
 router = APIRouter(dependencies=[Depends(verification)])
 
 
@@ -70,7 +69,7 @@ async def diagnostics():
 
 def _get_mijia_api():
     # auth_data_path should be a directory
-    token_path = config.oauth2_token_path if config.oauth2_token_path else ""
+    token_path = config.auth_token_path if config.auth_token_path else ""
     auth_dir = os.path.dirname(token_path) if token_path else None
     if not auth_dir:
         auth_dir = None
@@ -220,7 +219,7 @@ async def getsetting(need_device_list: bool = False):
         st = j.get("serviceToken") or j.get("yetAnotherServiceToken")
         return bool(j.get("userId") and j.get("passToken") and j.get("ssecurity") and st)
 
-    # oauth2 token may come from env or file; prefer token_store when available
+    # auth token may come from env or file; prefer token_store when available
     token_available = False
     try:
         ts = getattr(xiaomusic, "token_store", None)
@@ -232,6 +231,8 @@ async def getsetting(need_device_list: bool = False):
     except Exception:
         token_available = False
     runtime_ready = await _runtime_auth_ready()
+    data["auth_token_available"] = token_available
+    data["auth_runtime_ready"] = runtime_ready
     data["oauth2_token_available"] = token_available
     data["oauth2_runtime_ready"] = runtime_ready
     if need_device_list:
@@ -241,12 +242,13 @@ async def getsetting(need_device_list: bool = False):
     return api_response.ok(data, contract="raw")
 
 
+@router.get("/api/auth/status")
 @router.get("/api/oauth2/status")
-async def oauth2_status():
+async def auth_status():
     global qrcode_login_task
     global qrcode_login_started_at
     global qrcode_login_error
-    token_path = config.oauth2_token_path
+    token_path = config.auth_token_path
     token_exists = bool(token_path and os.path.isfile(token_path))
     token_valid = False
     try:
@@ -281,6 +283,7 @@ async def oauth2_status():
     return api_response.ok(
         {
             "token_file": token_path,
+            "auth_token_file": token_path,
             "token_exists": token_exists,
             "token_valid": token_valid,
             "cloud_available": token_valid,
@@ -296,16 +299,20 @@ async def oauth2_status():
     )
 
 
+oauth2_status = auth_status
+
+
+@router.post("/api/auth/logout")
 @router.post("/api/oauth2/logout")
-async def oauth2_logout():
-    """退出 OAuth2 登录并删除本地 token 文件。
+async def auth_logout():
+    """退出认证登录并删除本地 token 文件。
 
     仅删除 token 文件，不修改其它配置；删除后会触发 reinit 让服务重新读取认证状态。
     """
     global qrcode_login_task
     global qrcode_login_started_at
     global qrcode_login_error
-    token_path = config.oauth2_token_path
+    token_path = config.auth_token_path
 
     # 如果正在轮询扫码登录，先取消
     if qrcode_login_task and not qrcode_login_task.done():
@@ -322,7 +329,7 @@ async def oauth2_logout():
         if ts is not None:
             removed, removed_paths = ts.clear_and_remove()
     except Exception:
-        log.exception("remove oauth2 token file failed")
+        log.exception("remove auth token file failed")
         raise HTTPException(status_code=500, detail="remove token failed")
 
     # Clear in-memory auth/session state so it stops being treated as logged-in.
@@ -354,22 +361,27 @@ async def oauth2_logout():
         # Reinit to apply new auth state
         await xiaomusic.reinit()
     except Exception as e:
-        log.exception("cleanup after oauth2 logout failed: %s", e)
+        log.exception("cleanup after auth logout failed: %s", e)
         raise HTTPException(status_code=500, detail=f"logout cleanup failed: {e}")
 
     return api_response.ok(
         {
             "removed": removed,
             "token_file": token_path,
+            "auth_token_file": token_path,
             "removed_paths": removed_paths,
         },
         contract="success_error",
     )
 
 
+oauth2_logout = auth_logout
+
+
+@router.post("/api/auth/refresh")
 @router.post("/api/oauth2/refresh")
-async def oauth2_refresh():
-    """手动触发运行时重载（从磁盘重新装载 auth.json 并重建会话）。"""
+async def auth_refresh():
+    """手动触发认证运行时重载（从磁盘重新装载 auth.json 并重建会话）。"""
     am = getattr(xiaomusic, "auth_manager", None)
     if am is None:
         raise HTTPException(status_code=503, detail="auth manager unavailable")
@@ -380,7 +392,7 @@ async def oauth2_refresh():
             ret = await am.manual_refresh(reason="manual_refresh_runtime")
         return api_response.ok(ret, contract="raw")
     except Exception as e:
-        log.exception("oauth2 refresh runtime failed: %s", e)
+        log.exception("auth refresh runtime failed: %s", e)
         return api_response.ok(
             {
                 "refreshed": False,
@@ -400,13 +412,20 @@ async def oauth2_refresh():
                 },
             },
             contract="raw",
-        )
+    )
 
 
+oauth2_refresh = auth_refresh
+
+
+@router.post("/api/auth/refresh_runtime")
 @router.post("/api/oauth2/refresh_runtime")
-async def oauth2_refresh_runtime():
-    """显式运行时重载入口，行为与 /api/oauth2/refresh 一致。"""
-    return await oauth2_refresh()
+async def auth_refresh_runtime():
+    """显式认证运行时重载入口，行为与 /api/auth/refresh 一致。"""
+    return await auth_refresh()
+
+
+oauth2_refresh_runtime = auth_refresh_runtime
 
 
 @router.post("/api/jellyfin/sync")

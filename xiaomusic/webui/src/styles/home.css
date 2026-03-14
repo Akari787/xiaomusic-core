@@ -37,8 +37,8 @@ html[data-theme="dark"] .component {
   border-color: var(--xm-border) !important;
 }
 
-html[data-theme="dark"] .oauth-label,
-html[data-theme="dark"] .oauth-hint,
+html[data-theme="dark"] .auth-label,
+html[data-theme="dark"] .auth-hint,
 html[data-theme="dark"] label,
 html[data-theme="dark"] h1,
 html[data-theme="dark"] h2,
@@ -188,7 +188,7 @@ html[data-theme="dark"] input,
 html[data-theme="dark"] textarea,
 html[data-theme="dark"] select,
 html[data-theme="dark"] .status-pill,
-html[data-theme="dark"] .oauth-status-item {
+html[data-theme="dark"] .auth-status-item {
   background: var(--xm-panel) !important;
   color: var(--xm-text) !important;
   border-color: var(--xm-border) !important;
@@ -209,7 +209,7 @@ html[data-theme="dark"] .component .title {
   color: var(--xm-text) !important;
 }
 
-html[data-theme="dark"] .oauth-hint {
+html[data-theme="dark"] .auth-hint {
   background: #1f2a3d !important;
   border-color: #3c4f72 !important;
   color: #d5e1f6 !important;
@@ -358,13 +358,13 @@ body.index_page.webui-refactor-mode .player {
   opacity: 0.6;
 }
 
-.oauth-status-grid {
+.auth-status-grid {
   display: grid;
   gap: 8px;
   margin: 10px 0;
 }
 
-.oauth-status-item {
+.auth-status-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -374,11 +374,11 @@ body.index_page.webui-refactor-mode .player {
   background: #f8faff;
 }
 
-.oauth-status-item.single {
+.auth-status-item.single {
   margin: 10px 0;
 }
 
-.oauth-label {
+.auth-label {
   font-size: 13px;
   color: #334;
 }
@@ -405,7 +405,7 @@ body.index_page.webui-refactor-mode .player {
   color: #8a5b11;
 }
 
-.oauth-hint {
+.auth-hint {
   margin: 8px 0;
   padding: 8px 10px;
   border: 1px dashed #c8d0e0;

@@ -4,7 +4,7 @@
 
 版本：Draft v0.1
 状态：草案（Draft）
-适用范围：xiaomusic-oauth2 项目 Runtime 核心架构
+适用范围：xiaomusic-core 项目 Runtime 核心架构
 
 ---
 

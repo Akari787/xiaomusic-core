@@ -1,8 +1,8 @@
 services:
-  xiaomusic:
+  xiaomusic-core:
     build: .
-    image: xiaomusic:oauth2-only
-    container_name: xiaomusic-oauth2
+    image: xiaomusic-core:latest
+    container_name: xiaomusic-core
     restart: unless-stopped
     ports:
       - "58090:8090"

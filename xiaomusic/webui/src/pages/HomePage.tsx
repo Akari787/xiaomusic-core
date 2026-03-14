@@ -40,7 +40,7 @@ type OnlineSearchItem = {
   artist?: string;
 };
 
-type OAuthStatus = {
+type AuthStatus = {
   token_valid?: boolean;
   runtime_auth_ready?: boolean;
   login_in_progress?: boolean;
@@ -435,7 +435,7 @@ export function HomePage() {
   const [searchResults, setSearchResults] = useState<OnlineSearchItem[]>([]);
   const [selectedSearchIndex, setSelectedSearchIndex] = useState<number>(-1);
 
-  const [oauthStatus, setOauthStatus] = useState<OAuthStatus>({});
+  const [authStatus, setAuthStatus] = useState<AuthStatus>({});
   const [qrcodeUrl, setQrcodeUrl] = useState<string>("");
   const [qrcodeStatus, setQrcodeStatus] = useState<string>("点击上方按钮获取登录二维码");
   const [settingData, setSettingData] = useState<Record<string, unknown>>({});
@@ -483,11 +483,11 @@ export function HomePage() {
     }
     return songs.filter((name) => name.toLowerCase().includes(key));
   }, [songs, soundscapeFilter]);
-  const oauthLoggedIn = Boolean(oauthStatus.token_valid);
-  const oauthReady = Boolean(oauthStatus.runtime_auth_ready);
-  const oauthInProgress = Boolean(oauthStatus.login_in_progress);
-  const oauthStatusLabel = oauthReady ? "已登录" : oauthLoggedIn ? "登录待恢复" : "未登录";
-  const oauthStatusClass = oauthReady ? "ok" : "warn";
+  const authLoggedIn = Boolean(authStatus.token_valid);
+  const authReady = Boolean(authStatus.runtime_auth_ready);
+  const authInProgress = Boolean(authStatus.login_in_progress);
+  const authStatusLabel = authReady ? "已登录" : authLoggedIn ? "登录待恢复" : "未登录";
+  const authStatusClass = authReady ? "ok" : "warn";
   const autoDetectedBaseUrl = useMemo(() => browserOriginBaseUrl(), []);
   const effectivePublicBaseUrl = useMemo(() => {
     const manual = normalizeBaseUrlInput(settingData.public_base_url);
@@ -602,7 +602,7 @@ export function HomePage() {
       return;
     }
     const timer = window.setInterval(() => {
-      void loadOAuthStatus();
+      void loadAuthStatus();
     }, 2500);
     return () => window.clearInterval(timer);
   }, [showSettings]);
@@ -627,8 +627,8 @@ export function HomePage() {
   }, [qrcodeExpireAt]);
 
   useEffect(() => {
-    const loggedIn = Boolean(oauthStatus.runtime_auth_ready);
-    const inProgress = Boolean(oauthStatus.login_in_progress);
+    const loggedIn = Boolean(authStatus.runtime_auth_ready);
+    const inProgress = Boolean(authStatus.login_in_progress);
     if (loggedIn && !inProgress) {
       if (qrcodeUrl) {
         setQrcodeUrl("");
@@ -640,7 +640,7 @@ export function HomePage() {
       setQrcodeStatus("已登录，可获取设备列表");
       void loadDevices();
     }
-  }, [oauthStatus.runtime_auth_ready, oauthStatus.login_in_progress]);
+  }, [authStatus.runtime_auth_ready, authStatus.login_in_progress]);
 
   async function tryResolveDid(device: Device): Promise<string> {
     const candidates = deviceCandidates(device);
@@ -658,9 +658,9 @@ export function HomePage() {
     setVersion(out.version || "");
   }
 
-  async function loadOAuthStatus() {
-    const out = (await apiGet<OAuthStatus>("/api/oauth2/status")) as OAuthStatus;
-    setOauthStatus(out);
+  async function loadAuthStatus() {
+    const out = (await apiGet<AuthStatus>("/api/auth/status")) as AuthStatus;
+    setAuthStatus(out);
   }
 
   function withPublicBaseCompat(data: Record<string, unknown>, baseUrl: string): Record<string, unknown> {
@@ -760,7 +760,7 @@ export function HomePage() {
     }
     setDevices(rows);
     if (!rows.length) {
-      setMessage("未获取到设备，请在设置页完成 OAuth2 登录。");
+      setMessage("未获取到设备，请在设置页完成认证登录。");
       return;
     }
     const fallbackDid = deviceCandidates(rows[0])[0] || "";
@@ -987,7 +987,7 @@ export function HomePage() {
 
   useEffect(() => {
     void (async () => {
-      await Promise.allSettled([loadVersion(), loadOAuthStatus(), loadSettingData(), loadPlaylists()]);
+      await Promise.allSettled([loadVersion(), loadAuthStatus(), loadSettingData(), loadPlaylists()]);
       void loadDevices();
     })();
   }, []);
@@ -1430,7 +1430,7 @@ export function HomePage() {
       setQrcodeUrl("");
       setQrcodeExpireAt(0);
       setQrcodeStatus(out.message || "已登录，无需扫码");
-      await loadOAuthStatus();
+      await loadAuthStatus();
       await loadSettingData();
       await loadDevices();
       return;
@@ -1440,28 +1440,28 @@ export function HomePage() {
     setQrcodeExpireAt(Date.now() + expireSeconds * 1000);
     setQrcodeRemain(expireSeconds);
     setQrcodeStatus(`请使用米家 App 扫码（约 ${expireSeconds}s）`);
-    await loadOAuthStatus();
+    await loadAuthStatus();
   }
 
-  async function refreshOAuthRuntime() {
-    const out = (await apiPost<Record<string, unknown>>("/api/oauth2/refresh", {})) as Record<string, unknown>;
+  async function refreshAuthRuntime() {
+    const out = (await apiPost<Record<string, unknown>>("/api/auth/refresh", {})) as Record<string, unknown>;
     if (out.runtime_auth_ready) {
       setQrcodeStatus("运行时刷新成功，正在更新设备列表");
     } else {
       setQrcodeStatus(String(out.last_error || "运行时刷新失败"));
     }
-    await loadOAuthStatus();
+    await loadAuthStatus();
     await loadSettingData();
     await loadDevices();
   }
 
-  async function logoutOAuth() {
-    await apiPost("/api/oauth2/logout", {});
+  async function logoutAuth() {
+    await apiPost("/api/auth/logout", {});
     setQrcodeUrl("");
     setQrcodeExpireAt(0);
     setQrcodeRemain(0);
     setQrcodeStatus("已退出登录");
-    await loadOAuthStatus();
+    await loadAuthStatus();
     await loadSettingData();
     await loadDevices();
   }
@@ -1846,7 +1846,7 @@ export function HomePage() {
           <h1>
             XiaoMusic 播放器
             <a
-              href="https://github.com/Akari787/xiaomusic-oauth2"
+              href="https://github.com/Akari787/xiaomusic-core"
               target="_blank"
               rel="noopener noreferrer"
               className="version-link"
@@ -2103,7 +2103,7 @@ export function HomePage() {
 
       <div className={`component ${showTimer ? "show" : ""}`} id="timer-component" style={{ display: showTimer ? "block" : "none" }}>
         <h2>定时关机</h2>
-        <p className="oauth-hint">兼容口令入口：当前通过设备语音命令链路执行。</p>
+        <p className="auth-hint">兼容口令入口：当前通过设备语音命令链路执行。</p>
         <button onClick={() => void timedShutdown("10分钟后关机")}>10分钟后关机</button>
         <button onClick={() => void timedShutdown("30分钟后关机")}>30分钟后关机</button>
         <button onClick={() => void timedShutdown("60分钟后关机")}>60分钟后关机</button>
@@ -2229,30 +2229,30 @@ export function HomePage() {
                   );
                 })
               ) : (
-                <div className="login-tips">未发现可用设备，请先完成 OAuth2 扫码登录。</div>
+                <div className="login-tips">未发现可用设备，请先完成扫码认证登录。</div>
               )}
             </div>
           </div>
         </div>
 
         <div className="setting-card setting-panel">
-          <h3 className="card-title">OAuth2 登录</h3>
+          <h3 className="card-title">认证登录</h3>
           <div className="card-content">
             <div className="component-button-group">
-              {!oauthLoggedIn || oauthInProgress ? (
-                <button onClick={() => void getQrcode()}>{oauthInProgress ? "重新获取二维码" : "获取二维码"}</button>
+              {!authLoggedIn || authInProgress ? (
+                <button onClick={() => void getQrcode()}>{authInProgress ? "重新获取二维码" : "获取二维码"}</button>
               ) : null}
-              {oauthLoggedIn && !oauthReady ? (
-                <button onClick={() => void refreshOAuthRuntime()}>刷新运行时</button>
+              {authLoggedIn && !authReady ? (
+                <button onClick={() => void refreshAuthRuntime()}>刷新运行时</button>
               ) : null}
-              {oauthLoggedIn ? <button onClick={() => void logoutOAuth()}>退出登录</button> : null}
+              {authLoggedIn ? <button onClick={() => void logoutAuth()}>退出登录</button> : null}
             </div>
-            <div className="oauth-status-item single">
-              <span className="oauth-label">登录状态</span>
-              <span className={`status-pill ${oauthStatusClass}`}>{oauthStatusLabel}</span>
+            <div className="auth-status-item single">
+              <span className="auth-label">登录状态</span>
+              <span className={`status-pill ${authStatusClass}`}>{authStatusLabel}</span>
             </div>
-            {!oauthLoggedIn || oauthInProgress ? (
-              <p className="oauth-hint">{qrcodeExpireAt ? `请使用米家 App 扫码（约 ${qrcodeRemain}s）` : qrcodeStatus}</p>
+            {!authLoggedIn || authInProgress ? (
+              <p className="auth-hint">{qrcodeExpireAt ? `请使用米家 App 扫码（约 ${qrcodeRemain}s）` : qrcodeStatus}</p>
             ) : null}
             {qrcodeUrl ? <img src={qrcodeUrl} alt="二维码" style={{ width: 220, maxWidth: "100%" }} /> : null}
           </div>
@@ -2322,7 +2322,7 @@ export function HomePage() {
                 e.currentTarget.value = "";
               }}
             />
-            {validationError ? <p className="oauth-hint">{validationError}</p> : null}
+            {validationError ? <p className="auth-hint">{validationError}</p> : null}
           </div>
         </div>
 
@@ -2376,7 +2376,7 @@ export function HomePage() {
                         <div className="setting-card setting-panel" style={{ marginTop: 12 }}>
                           <h3 className="card-title">公共访问地址（高级）</h3>
                           <div className="card-content">
-                            <p className="oauth-hint">通常无需修改。仅当分享链接/设备无法访问时，才手动覆盖。</p>
+                            <p className="auth-hint">通常无需修改。仅当分享链接/设备无法访问时，才手动覆盖。</p>
                             <label htmlFor="public-base-url-auto">自动检测:</label>
                             <input id="public-base-url-auto" type="text" value={autoDetectedBaseUrl} readOnly />
                             <label htmlFor="public-base-url-effective">当前生效地址:</label>
@@ -2401,7 +2401,7 @@ export function HomePage() {
                                 value={String(settingData.public_base_url || "")}
                                 onChange={(e) => updateSettingField("public_base_url", e.target.value)}
                               />
-                              <p className="oauth-hint">留空表示使用自动检测地址（当前访问地址）。</p>
+                              <p className="auth-hint">留空表示使用自动检测地址（当前访问地址）。</p>
                               <details>
                                 <summary>旧版兼容（host + port）</summary>
                                 <label htmlFor="hostname">旧版 hostname:</label>

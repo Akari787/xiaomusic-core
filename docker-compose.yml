@@ -1,8 +1,8 @@
 services:
-  xiaomusic-production:
+  xiaomusic-core-production:
     profiles: ["production"]
-    image: akari787/xiaomusic-oauth2:latest
-    container_name: xiaomusic-oauth2
+    image: akari787/xiaomusic-core:latest
+    container_name: xiaomusic-core
     restart: unless-stopped
     ports:
       - "58090:8090"
@@ -18,10 +18,10 @@ services:
       - ./music:/app/music
       - ./xiaomusic/webui/static:/app/xiaomusic/webui/static:ro
 
-  xiaomusic-test:
+  xiaomusic-core-test:
     profiles: ["test"]
-    image: akari787/xiaomusic-oauth2:latest
-    container_name: xiaomusic-oauth2-test
+    image: akari787/xiaomusic-core:latest
+    container_name: xiaomusic-core-test
     restart: unless-stopped
     ports:
       - "58091:8090"

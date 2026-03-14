@@ -1,10 +1,10 @@
-# OAuth Runtime Recovery Spec (Stable Login)
+# Auth Runtime Recovery Spec (Stable Login)
 
 > Last updated: 2026-03-12
 
 ## 1. Background
 
-`xiaomusic-oauth2` historically mixed two different actions in one path:
+`xiaomusic-core` historically mixed two different actions in one path:
 
 - refresh token from Xiaomi cloud
 - reload runtime from local `auth.json`
@@ -45,7 +45,7 @@ No implicit alternative branch is allowed.
 
 When user completes QR login and new short tokens are persisted to disk:
 
-1. call `POST /api/oauth2/refresh` (or `POST /api/oauth2/refresh_runtime`)
+1. call `POST /api/auth/refresh` (or `POST /api/auth/refresh_runtime`)
 2. runtime reload from disk
 3. runtime rebind
 4. device map refresh
@@ -60,8 +60,9 @@ Container restart is not required.
 
 In stable login release:
 
-- `POST /api/oauth2/refresh` means refresh runtime (kept for compatibility)
-- `POST /api/oauth2/refresh_runtime` is explicit alias with same behavior
+- `POST /api/auth/refresh` means refresh runtime (recommended path)
+- `POST /api/auth/refresh_runtime` is explicit alias with same behavior
+- `POST /api/oauth2/refresh` and `POST /api/oauth2/refresh_runtime` remain compatibility aliases
 
 ## 6. Locked policy
 
@@ -75,7 +76,7 @@ Do not lock only because of:
 
 ## 7. Observability
 
-Runtime reload emits structured event `oauth_runtime_reload` with at least:
+Runtime reload emits structured event `auth_runtime_reload` with at least:
 
 - `stage=reload_runtime`
 - `result`
@@ -96,7 +97,8 @@ Debug endpoints:
 - `GET /api/v1/debug/auth_state`
 - `GET /api/v1/debug/auth_recovery_state`
 - `GET /api/v1/debug/miaccount_login_trace`
-- `GET /api/v1/debug/oauth_runtime_reload_state`
+- `GET /api/v1/debug/auth_runtime_reload_state`
+- `GET /api/v1/debug/oauth_runtime_reload_state` (compatibility alias)
 
 ## 8. Ops guidance
 

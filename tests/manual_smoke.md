@@ -104,7 +104,7 @@ find /app -maxdepth 2 -name pwn.txt || true
 ## 6) 如何定位 outbound 失败原因（不含敏感信息）
 
 ```bash
-docker logs --tail 300 xiaomusic-oauth2 | grep -i -E "SECURITY:|outbound|blocked" || true
+docker logs --tail 300 xiaomusic-core | grep -i -E "SECURITY:|outbound|blocked" || true
 ```
 
 期望：能看到被拦截原因（domain not allowlisted / ip literal not allowed / resolved to private 等），且日志会脱敏。

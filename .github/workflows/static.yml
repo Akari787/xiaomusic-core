@@ -2,7 +2,7 @@ name: Deploy docs to GitHub Pages
 
 on:
   push:
-    branches: ["oauth2-only"]
+    branches: ["main", "core-main", "oauth2-only"]
     paths:
       - "docs/**"
       - "README.md"

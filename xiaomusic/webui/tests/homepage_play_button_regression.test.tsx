@@ -77,7 +77,7 @@ describe("HomePage play button regression", () => {
       if (path === "/getversion") {
         return { version: "1.0.0" };
       }
-      if (path === "/api/oauth2/status") {
+      if (path === "/api/auth/status") {
         return { token_valid: true, runtime_auth_ready: true, login_in_progress: false };
       }
       if (path === "/getsetting?need_device_list=true") {

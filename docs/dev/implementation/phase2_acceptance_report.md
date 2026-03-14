@@ -8,15 +8,15 @@
 ## 2. Test Server Environment
 
 - Server: `root@192.168.7.178` (hostname: `test`)
-- Deploy path: `/root/xiaomusic_oauth2_smoke`
+- Deploy path: `/root/xiaomusic_core_smoke` (historical path: `/root/xiaomusic_oauth2_smoke`)
 - Runtime: Docker Compose (`docker-compose.hardened.yml`)
-- Container: `xiaomusic-oauth2`
-- Image: `xiaomusic:oauth2-only`
+- Container: `xiaomusic-core` (historical container: `xiaomusic-oauth2`)
+- Image: `xiaomusic-core:latest` (historical image: `xiaomusic:oauth2-only`)
 - Service port: `58090 -> 8090`
 
 ## 3. Deployment Branch / Commit
 
-- Branch: `oauth2-only`
+- Branch: `core-main` (historical working branch: `oauth2-only`)
 - Base commit: `c3375bfd897a68854e9b651ac17539b8cb4815c5`
 - Note: Phase 2 changes were deployed from current workspace updates on top of the base commit.
 

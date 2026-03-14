@@ -164,7 +164,8 @@ class AuthManager:
         self.config = config
         self.log = log
         self.mi_token_home = os.path.join(self.config.conf_path, ".mi.token")
-        self.oauth2_token_path = self.config.oauth2_token_path
+        self.auth_token_path = getattr(self.config, "auth_token_path", getattr(self.config, "oauth2_token_path", ""))
+        self.oauth2_token_path = self.auth_token_path
         self.token_store = token_store
 
         # 认证状态
@@ -219,7 +220,7 @@ class AuthManager:
             "last_auth_recovery_flow": {},
             "last_locked_transition": {},
         }
-        self._oauth_runtime_reload_state: dict[str, dict[str, Any]] = {
+        self._auth_runtime_reload_state: dict[str, dict[str, Any]] = {
             "last_reload_runtime": {},
         }
         self._last_short_session_rebuild_detail: dict[str, Any] = {}
@@ -477,8 +478,11 @@ class AuthManager:
             "last_locked_transition": deepcopy(self._auth_cookie_rebuild_state.get("last_locked_transition", {})),
         }
 
+    def auth_runtime_reload_debug_state(self) -> dict[str, Any]:
+        return deepcopy(self._auth_runtime_reload_state)
+
     def oauth_runtime_reload_debug_state(self) -> dict[str, Any]:
-        return deepcopy(self._oauth_runtime_reload_state)
+        return self.auth_runtime_reload_debug_state()
 
     def _emit_auth_short_session_rebuild(
         self,
@@ -674,7 +678,7 @@ class AuthManager:
             missing.append("serviceToken|yetAnotherServiceToken")
         return missing
 
-    def _emit_oauth_runtime_reload(
+    def _emit_auth_runtime_reload(
         self,
         *,
         result: str,
@@ -692,7 +696,7 @@ class AuthManager:
         refresh_token_path_invoked: bool = False,
     ) -> None:
         payload = {
-            "event": "oauth_runtime_reload",
+            "event": "auth_runtime_reload",
             "stage": "reload_runtime",
             "result": result,
             "reason": reason,
@@ -710,7 +714,40 @@ class AuthManager:
             "refresh_token_path_invoked": bool(refresh_token_path_invoked),
         }
         self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-        self._oauth_runtime_reload_state["last_reload_runtime"] = dict(payload)
+        self._auth_runtime_reload_state["last_reload_runtime"] = dict(payload)
+
+    def _emit_oauth_runtime_reload(
+        self,
+        *,
+        result: str,
+        reason: str,
+        token_store_reloaded: bool,
+        disk_has_service_token: bool,
+        disk_has_yast: bool,
+        runtime_seed_has_service_token: bool,
+        mina_service_rebuilt: bool,
+        miio_service_rebuilt: bool,
+        device_map_refreshed: bool,
+        verify_result: str,
+        error_code: str = "",
+        error_message: str = "",
+        refresh_token_path_invoked: bool = False,
+    ) -> None:
+        self._emit_auth_runtime_reload(
+            result=result,
+            reason=reason,
+            token_store_reloaded=token_store_reloaded,
+            disk_has_service_token=disk_has_service_token,
+            disk_has_yast=disk_has_yast,
+            runtime_seed_has_service_token=runtime_seed_has_service_token,
+            mina_service_rebuilt=mina_service_rebuilt,
+            miio_service_rebuilt=miio_service_rebuilt,
+            device_map_refreshed=device_map_refreshed,
+            verify_result=verify_result,
+            error_code=error_code,
+            error_message=error_message,
+            refresh_token_path_invoked=refresh_token_path_invoked,
+        )
 
     async def _rebuild_service_cookies_from_long_auth(self, reason: str, sid: str = "micoapi") -> dict[str, Any]:
         """Rebuild short-lived service cookies from long-lived auth fields.
@@ -1424,7 +1461,8 @@ class AuthManager:
 
         """
         self.mi_token_home = os.path.join(self.config.conf_path, ".mi.token")
-        self.oauth2_token_path = self.config.oauth2_token_path
+        self.auth_token_path = getattr(self.config, "auth_token_path", getattr(self.config, "oauth2_token_path", ""))
+        self.oauth2_token_path = self.auth_token_path
 
         # 先注入 OAuth2 cookie，避免后续健康检查触发不必要的账号登录流程
         cookie_jar = self.get_cookie()

@@ -40,6 +40,14 @@ def default_key_word_dict():
     }
 
 
+def default_auth_token_file() -> str:
+    return os.getenv("XIAOMUSIC_AUTH_TOKEN_FILE", os.getenv("XIAOMUSIC_OAUTH2_TOKEN_FILE", "auth.json"))
+
+
+def default_oauth2_token_file() -> str:
+    return os.getenv("XIAOMUSIC_OAUTH2_TOKEN_FILE", "")
+
+
 def default_user_key_word_dict():
     # Unsafe features (exec#) are disabled by default; keep this empty.
     return {}
@@ -87,7 +95,8 @@ class Device:
 
 @dataclass
 class Config:
-    oauth2_token_file: str = os.getenv("XIAOMUSIC_OAUTH2_TOKEN_FILE", "auth.json")
+    auth_token_file: str = field(default_factory=default_auth_token_file)
+    oauth2_token_file: str = field(default_factory=default_oauth2_token_file)
     mi_did: str = os.getenv("MI_DID", "")  # 逗号分割支持多设备
     verbose: bool = os.getenv("XIAOMUSIC_VERBOSE", "").lower() == "true"
     music_path: str = os.getenv("XIAOMUSIC_MUSIC_PATH", "music")
@@ -347,6 +356,11 @@ class Config:
                 self.key_match_order.append(k)
 
     def init(self):
+        if not self.auth_token_file:
+            self.auth_token_file = self.oauth2_token_file or "auth.json"
+        if not self.oauth2_token_file:
+            self.oauth2_token_file = self.auth_token_file
+
         self.key_match_order = default_key_match_order()
         self.key_word_dict = default_key_word_dict()
         self.append_keyword(self.keywords_playlocal, "playlocal")
@@ -451,6 +465,8 @@ class Config:
         for key, value in vars(options).items():
             if value is not None and key in cls.__dataclass_fields__:
                 config[key] = value
+        if not config.get("auth_token_file") and config.get("oauth2_token_file"):
+            config["auth_token_file"] = config["oauth2_token_file"]
         return cls(**config)
 
     @classmethod
@@ -524,7 +540,11 @@ class Config:
 
     @property
     def oauth2_token_path(self):
-        token_file = self.oauth2_token_file or "auth.json"
+        return self.auth_token_path
+
+    @property
+    def auth_token_path(self):
+        token_file = self.auth_token_file or self.oauth2_token_file or "auth.json"
         if os.path.isabs(token_file):
             return token_file
         conf_path = self.conf_path or "conf"

@@ -17,7 +17,7 @@ class TokenStoreResult:
 
 
 class TokenStore:
-    """Thread-safe OAuth2 token store with in-memory mirror and atomic flush.
+    """Thread-safe auth token store with in-memory mirror and atomic flush.
 
     Notes:
     - This store serializes writes inside a single process.
@@ -32,10 +32,14 @@ class TokenStore:
         else:
             self.config = path_or_config
             try:
-                token_path = path_or_config.oauth2_token_path
+                token_path = path_or_config.auth_token_path
             except Exception:
                 conf_path = getattr(path_or_config, "conf_path", "conf") or "conf"
-                token_file = getattr(path_or_config, "oauth2_token_file", "auth.json") or "auth.json"
+                token_file = (
+                    getattr(path_or_config, "auth_token_file", "")
+                    or getattr(path_or_config, "oauth2_token_file", "auth.json")
+                    or "auth.json"
+                )
                 if os.path.isabs(token_file):
                     token_path = token_file
                 else:
@@ -69,7 +73,7 @@ class TokenStore:
             if mode & (stat.S_IRWXG | stat.S_IRWXO):
                 self._log(
                     "warning",
-                    "OAuth2 token file permissions are too open; recommend chmod 600."
+                    "Auth token file permissions are too open; recommend chmod 600."
                 )
         except Exception:
             return

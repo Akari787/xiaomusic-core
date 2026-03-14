@@ -1,17 +1,17 @@
 ## v1.0.7 (2026-03-12)
 
-### OAuth2 / Runtime 稳定收口
+### Auth / Runtime 稳定收口
 
 - 永久禁用自动 `mi_account.login("micoapi")` 作为运行时恢复路径，避免 `70016` 风控失败放大故障。
 - 固化短会话恢复链：`clear_short_session -> rebuild_short_session_from_long_auth -> runtime_rebind -> verify`。
-- 将 `POST /api/oauth2/refresh` 固化为“刷新运行时”（从磁盘重载 token 并重建运行态），不再依赖 refresh token 成功。
-- 新增兼容别名 `POST /api/oauth2/refresh_runtime`，语义与 `/api/oauth2/refresh` 完全一致。
-- 新增 debug 观察面：`GET /api/v1/debug/oauth_runtime_reload_state`。
+- 将 `POST /api/auth/refresh` 固化为“刷新运行时”（从磁盘重载 token 并重建运行态），不再依赖 refresh token 成功。
+- 新增兼容别名 `POST /api/auth/refresh_runtime`；`/api/oauth2/*` 保持兼容且语义一致。
+- 新增 debug 观察面：`GET /api/v1/debug/auth_runtime_reload_state`（旧路径继续兼容）。
 
 ### WebUI 与文案对齐
 
-- OAuth2 卡片与首页按钮文案统一为“刷新运行时”。
-- OAuth2 状态区新增收口态文案：`运行时已恢复` / `已登录待恢复` / `需要重新扫码登录`。
+- 认证卡片与首页按钮文案统一为“刷新运行时”。
+- 认证状态区新增收口态文案：`运行时已恢复` / `已登录待恢复` / `需要重新扫码登录`。
 
 ### 测试与验收
 

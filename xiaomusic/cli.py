@@ -114,9 +114,14 @@ def main():
         help="小爱音箱型号",
     )
     parser.add_argument(
+        "--auth_token_file",
+        dest="auth_token_file",
+        help="Auth token file path, relative to conf path by default",
+    )
+    parser.add_argument(
         "--oauth2_token_file",
         dest="oauth2_token_file",
-        help="OAuth2 token file path, relative to conf path by default",
+        help="Deprecated alias of --auth_token_file",
     )
     parser.add_argument(
         "--verbose",

@@ -45,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ inputs.tag }}"
-          NAME="xiaomusic-oauth2"
+          NAME="xiaomusic-core"
           VERSION="${TAG#v}"
           IMAGE_LOCAL="${NAME}:${VERSION}-${{ matrix.arch }}"
           OUT_DIR="dist"

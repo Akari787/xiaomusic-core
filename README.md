@@ -1,14 +1,14 @@
-# xiaomusic-oauth2
+# xiaomusic-core
 
-`xiaomusic-oauth2` 是基于 `xiaomusic` 二次开发的独立维护分支，目标是提供更稳定的 OAuth2 登录体验与 Jellyfin 联动能力。
+`xiaomusic-core` 是基于原版 `xiaomusic` 的独立维护分支，当前聚焦稳定播放、自托管体验与认证运行时恢复能力，不再以 OAuth2 作为项目身份定义。
 
 原项目: <https://github.com/hanxi/xiaomusic>
 
-当前仓库: <https://github.com/Akari787/xiaomusic-oauth2>
+当前仓库: <https://github.com/Akari787/xiaomusic-core>
 
-项目文档: <https://github.com/Akari787/xiaomusic-oauth2/tree/main/docs>
+项目文档: <https://github.com/Akari787/xiaomusic-core/tree/main/docs>
 
-FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
+FAQ: <https://github.com/Akari787/xiaomusic-core/blob/main/docs/issues/99.md>
 
 ## 🙏 致谢
 
@@ -17,8 +17,15 @@ FAQ: <https://github.com/Akari787/xiaomusic-oauth2/blob/main/docs/issues/99.md>
 
 ## 🚀 分支定位
 
-- OAuth2-only：仅保留 OAuth2 扫码登录，不再维护账号密码/cookie 登录路径。
+- 当前认证：使用米家扫码登录 + token 持久化 + 运行时恢复机制，不再维护账号密码/cookie 登录路径。
 - Jellyfin 联动：支持在线搜索与歌单同步，适配家庭媒体库场景。
+
+## 名称迁移说明
+
+- 项目名：`xiaomusic-oauth2` -> `xiaomusic-core`
+- 认证接口：`/api/oauth2/*` -> `/api/auth/*`（旧路径继续兼容）
+- token 配置：`oauth2_token_file` -> `auth_token_file`（旧字段继续兼容）
+- 当前推荐使用新命名；旧命名仅作为兼容别名保留。
 
 ## 📦 安装
 
@@ -51,9 +58,9 @@ docker compose -f docker-compose.hardened.yml up -d --build
 
 ## ✨ 主要改动
 
-### OAuth2 登录改造
+### 认证登录改造
 
-- 登录方式统一为 OAuth2 Token 流程。
+- 登录方式统一为米家扫码认证 token 流程。
 - Token 默认保存到 `conf/auth.json`。
 - 登录状态可在设置页直接查看，便于排障。
 
@@ -98,7 +105,7 @@ curl "http://<HOST>:<PORT>/api/v1/system/status"
 
 ## 🐳 Docker 使用说明
 
-本仓库已发布 Docker Hub 镜像：`akari787/xiaomusic-oauth2`（多架构：`linux/amd64`、`linux/arm64`、`linux/arm/v7`）。
+本仓库已发布 Docker Hub 镜像：`akari787/xiaomusic-core`（多架构：`linux/amd64`、`linux/arm64`、`linux/arm/v7`）。
 
 推荐标签：
 
@@ -109,13 +116,13 @@ curl "http://<HOST>:<PORT>/api/v1/system/status"
 快速启动（示例）：
 
 ```bash
-docker pull akari787/xiaomusic-oauth2:stable
+docker pull akari787/xiaomusic-core:stable
 
-docker run -d --name xiaomusic-oauth2 \
+docker run -d --name xiaomusic-core \
   -p 58090:8090 \
   -v /root/xiaomusic_conf:/app/conf \
   -v /root/xiaomusic_music:/app/music \
-  akari787/xiaomusic-oauth2:stable
+  akari787/xiaomusic-core:stable
 ```
 
 容器路径与端口约定：
@@ -123,7 +130,12 @@ docker run -d --name xiaomusic-oauth2 \
 - 音乐目录：`/app/music`
 - 配置目录：`/app/conf`
 - 服务端口：容器内 `8090`（示例映射到宿主 `58090`）
-- OAuth2 Token：默认 `conf/auth.json`
+- 认证 Token：默认 `conf/auth.json`
+
+旧命名迁移：
+
+- 旧镜像名 `akari787/xiaomusic-oauth2` 对应新镜像名 `akari787/xiaomusic-core`
+- 旧容器名 `xiaomusic-oauth2` 对应新容器名 `xiaomusic-core`
 
 可选：如需设置时区，可添加例如 `-e TZ=Asia/Tokyo`。
 
@@ -158,9 +170,9 @@ docker compose --profile test up -d
 
 ```yaml
 services:
-  xiaomusic:
-    image: akari787/xiaomusic-oauth2:v1.0.6
-    container_name: xiaomusic-oauth2
+  xiaomusic-core:
+    image: akari787/xiaomusic-core:v1.0.6
+    container_name: xiaomusic-core
     restart: unless-stopped
     ports:
       - "58090:8090"
@@ -183,7 +195,7 @@ docker compose up -d
 curl -fsS http://127.0.0.1:58090/getversion
 
 # 查看日志
-docker logs --tail 200 xiaomusic-oauth2
+docker logs --tail 200 xiaomusic-core
 
 # 更新到新版本镜像（示例 v1.0.6）
 docker compose pull
@@ -265,7 +277,7 @@ npm run build
 - 旧版 `key/code` 链接鉴权模式已移除。
 - 若你此前依赖链接参数访问资源，请迁移到以下方式：
   1. HTTP Basic + `HTTP_AUTH_HASH`
-  2. OAuth2 登录态
+  2. 认证登录态
 - 生成哈希口令：
 
 ```bash
@@ -301,7 +313,7 @@ XIAOMUSIC_ENABLE_ANALYTICS=false
 - Token 优先级变更为“环境变量 > `conf/auth.json`”：支持 `OAUTH2_ACCESS_TOKEN` / `OAUTH2_REFRESH_TOKEN`；若这些变量存在，删除 token 文件不会让其失效。
 - 如不希望落盘 token：设置 `persist_token=false`，扫码/刷新只会保存到内存（重启后需重新登录）。
 - 掉线自愈策略：自动恢复链禁用 `mi_account.login("micoapi")`；仅允许“清短期态 -> 基于长期态重建短期态 -> runtime rebind -> verify”。
-- 手动“刷新运行时”接口：`POST /api/oauth2/refresh`（兼容旧路径）与 `POST /api/oauth2/refresh_runtime`（清晰别名），二者均为**运行时重载**，不等同于 refresh token。
+- 手动“刷新运行时”接口：`POST /api/auth/refresh` 与 `POST /api/auth/refresh_runtime` 为当前推荐路径；`/api/oauth2/*` 继续兼容。它们的语义均为**认证运行时重载**，不等同于标准 OAuth2 refresh token。
 - 新增可调参数：
   - `OAUTH2_REFRESH_INTERVAL_HOURS`（默认 `12`）
   - `OAUTH2_REFRESH_MIN_INTERVAL_MINUTES`（默认 `30`）
@@ -311,12 +323,12 @@ XIAOMUSIC_ENABLE_ANALYTICS=false
 
 ## 🤝 贡献与反馈
 
-- Bug 反馈: <https://github.com/Akari787/xiaomusic-oauth2/issues>
+- Bug 反馈: <https://github.com/Akari787/xiaomusic-core/issues>
 - 文档与功能建议: 欢迎提交 issue / pull request
 
 ## 🛠️ 常见问题与日志排查
 
-- 查看容器日志：`docker logs --tail 200 xiaomusic-oauth2`
+- 查看容器日志：`docker logs --tail 200 xiaomusic-core`
 - 查看应用日志文件：`conf/xiaomusic.log.txt`
 - 关键结构化日志字段：
   - Coordinator：`request_id`、`device_id`、`source_plugin`、`transport`

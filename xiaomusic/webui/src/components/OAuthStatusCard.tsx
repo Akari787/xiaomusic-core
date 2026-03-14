@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 
 import {
-  fetchOAuthStatus,
-  logoutOAuth,
-  refreshOAuthRuntime,
-  type OAuthStatus,
+  fetchAuthStatus,
+  logoutAuth,
+  refreshAuthRuntime,
+  type AuthStatus,
 } from "../services/auth";
 
-export function OAuthStatusCard() {
-  const [status, setStatus] = useState<OAuthStatus | null>(null);
+export function AuthStatusCard() {
+  const [status, setStatus] = useState<AuthStatus | null>(null);
   const [error, setError] = useState<string>("");
   const [actionMessage, setActionMessage] = useState<string>("");
   const [refreshing, setRefreshing] = useState(false);
@@ -16,7 +16,7 @@ export function OAuthStatusCard() {
 
   async function loadStatus() {
     try {
-      const data = await fetchOAuthStatus();
+      const data = await fetchAuthStatus();
       setStatus(data);
       setError("");
     } catch (e) {
@@ -29,7 +29,7 @@ export function OAuthStatusCard() {
 
     async function load() {
       try {
-        const data = await fetchOAuthStatus();
+        const data = await fetchAuthStatus();
         if (!cancelled) {
           setStatus(data);
           setError("");
@@ -51,7 +51,7 @@ export function OAuthStatusCard() {
     setRefreshing(true);
     setActionMessage("");
     try {
-      const ret = await refreshOAuthRuntime();
+      const ret = await refreshAuthRuntime();
       const refreshed = Boolean(ret?.runtime_auth_ready);
       const lastError = String((ret?.last_error as string | undefined) || "");
       setActionMessage(refreshed ? "运行时刷新成功" : `运行时刷新失败${lastError ? `: ${lastError}` : ""}`);
@@ -68,7 +68,7 @@ export function OAuthStatusCard() {
     setLoggingOut(true);
     setActionMessage("");
     try {
-      const ret = await logoutOAuth();
+      const ret = await logoutAuth();
       const removed = Boolean(ret?.removed);
       setActionMessage(removed ? "已退出登录" : "退出完成（未检测到 token 文件）");
       await loadStatus();
@@ -91,7 +91,7 @@ export function OAuthStatusCard() {
 
   return (
     <section className="oauth-card">
-      <h2>OAuth2 状态</h2>
+      <h2>认证状态</h2>
       {error ? <p className="oauth-error">请求失败：{error}</p> : null}
       {actionMessage ? <p>{actionMessage}</p> : null}
       {authLocked ? (
@@ -127,3 +127,5 @@ export function OAuthStatusCard() {
     </section>
   );
 }
+
+export const OAuthStatusCard = AuthStatusCard;

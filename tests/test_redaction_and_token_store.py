@@ -15,6 +15,10 @@ class DummyConfig:
         self.persist_token = persist_token
 
     @property
+    def auth_token_path(self):
+        return self._token_path
+
+    @property
     def oauth2_token_path(self):
         return self._token_path
 
