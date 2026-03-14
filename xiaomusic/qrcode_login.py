@@ -295,8 +295,29 @@ class MiJiaAPI:
             ret = self._http_request("get", location, session=self.session)
             if ret.status_code == 200 and ret.text == "ok":
                 cookies = self.session.cookies.get_dict()
+                _pt_before = self.auth_data.get("passToken", "")
                 self.auth_data.update(cookies)
                 self.auth_data["ssecurity"] = service_data["ssecurity"]
+                _pt_after = self.auth_data.get("passToken", "")
+                if _pt_before and _pt_after:
+                    if _pt_before != _pt_after:
+                        self.log.info(
+                            "passtoken_rotation event=rotated "
+                            "before_len=%d after_len=%d",
+                            len(_pt_before), len(_pt_after),
+                        )
+                    else:
+                        self.log.info(
+                            "passtoken_rotation event=unchanged len=%d",
+                            len(_pt_after),
+                        )
+                elif _pt_after and not _pt_before:
+                    self.log.info(
+                        "passtoken_rotation event=appeared len=%d",
+                        len(_pt_after),
+                    )
+                else:
+                    self.log.info("passtoken_rotation event=not_in_response")
                 return {"code": 0, "message": "刷新Token成功"}
         location_data = parse.parse_qs(parse.urlparse(location).query)
         return {k: v[0] for k, v in location_data.items()}
