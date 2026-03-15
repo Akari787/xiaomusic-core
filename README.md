@@ -280,7 +280,7 @@ npm run build
 - `API_SECRET` 仅在 `enable_analytics=true` 时需要；缺失会在 analytics 初始化阶段明确失败。
 - Self-update 默认关闭：`enable_self_update=false`。
 
-### 升级注意事项（v1.0.7 起）
+### 升级注意事项（v1.0.6 起）
 
 - 旧版 `key/code` 链接鉴权模式已移除。
 - 若你此前依赖链接参数访问资源，请迁移到以下方式：
