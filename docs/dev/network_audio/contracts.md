@@ -1,21 +1,22 @@
 # Network Audio Unified Contracts
 
 > 术语说明：本文标题中的 `Network Audio` 为历史模块名；来源语义请使用 `Site Media` / `Direct URL`。
+> 本文属于开发期契约说明，面向历史模块与测试工具，不作为当前正式 API 文档。
 
-This document defines the only data structures allowed between network audio modules.
+本文定义历史 `network_audio` 模块之间允许传递的数据结构。
 
-Note: runtime package path has been standardized to `xiaomusic/network_audio`.
+说明：runtime 包路径仍使用 `xiaomusic/network_audio`，这里只描述模块边界，不改变代码目录结构。
 
-## Models
+## 数据模型
 
-- `UrlInfo`: classified and normalized input URL.
-- `ResolveResult`: resolver output after `yt-dlp` stage.
-- `Session`: stream session lifecycle state.
-- `Event`: observable runtime event.
+- `UrlInfo`：输入 URL 的分类与规范化结果
+- `ResolveResult`：`yt-dlp` 等解析阶段输出
+- `Session`：流会话生命周期状态
+- `Event`：可观测运行时事件
 
-Canonical examples are stored in `docs/dev/network_audio/contracts.examples.json` and are validated by unit tests.
+标准示例位于 `docs/dev/network_audio/contracts.examples.json`，并由单元测试校验。
 
-## Error Codes
+## 错误码
 
 - `E_URL_UNSUPPORTED`
 - `E_RESOLVE_TIMEOUT`

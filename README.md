@@ -47,6 +47,7 @@ python scripts/generate_password_hash.py
 - Docker 环境变量：参考 `.env.example`
 - 应用配置模板：参考 `config.example.yaml`
 - 核心插件链路：`DirectUrlSourcePlugin` / `SiteMediaSourcePlugin` / `JellyfinSourcePlugin` / `LocalLibrarySourcePlugin`
+- 认证系统架构：参考 `docs/authentication_architecture.md`
 
 ## ▶️ 启动
 
@@ -57,6 +58,13 @@ docker compose -f docker-compose.hardened.yml up -d --build
 服务启动后默认访问：`http://<HOST>:58090/`
 
 ## ✨ 主要改动
+
+### v1.0.7 重点更新
+
+- 认证恢复链正式收口为：`clear_short_session -> rebuild_short_session_from_persistent_auth -> runtime_rebind -> verify`。
+- 项目主线彻底统一到 `auth` 语义：主接口使用 `/api/auth/*`，配置使用 `auth_token_file`，WebUI 与文档不再以 OAuth2 作为主命名。
+- 新增认证架构文档与恢复规范文档，便于维护者理解“为什么扫码一次后可以长期运行”。
+- 调整 CI / Pages / hardened compose，使 `main`、`.env` 与当前部署方式保持一致。
 
 ### 认证登录改造
 
@@ -111,7 +119,7 @@ curl "http://<HOST>:<PORT>/api/v1/system/status"
 
 - `stable`：稳定版（推荐）
 - `latest`：最新构建
-- `v1.0.6`：指定版本
+- `v1.0.7`：指定版本
 
 快速启动（示例）：
 
@@ -171,7 +179,7 @@ docker compose --profile test up -d
 ```yaml
 services:
   xiaomusic-core:
-    image: akari787/xiaomusic-core:v1.0.6
+    image: akari787/xiaomusic-core:v1.0.7
     container_name: xiaomusic-core
     restart: unless-stopped
     ports:
@@ -197,7 +205,7 @@ curl -fsS http://127.0.0.1:58090/getversion
 # 查看日志
 docker logs --tail 200 xiaomusic-core
 
-# 更新到新版本镜像（示例 v1.0.6）
+# 更新到新版本镜像（示例 v1.0.7）
 docker compose pull
 docker compose up -d --force-recreate
 ```
@@ -272,9 +280,13 @@ npm run build
 - `API_SECRET` 仅在 `enable_analytics=true` 时需要；缺失会在 analytics 初始化阶段明确失败。
 - Self-update 默认关闭：`enable_self_update=false`。
 
-### 升级注意事项（v1.0.6 起）
+### 升级注意事项（v1.0.7 起）
 
 - 旧版 `key/code` 链接鉴权模式已移除。
+- 旧的 OAuth2 风格命名已从主线移除：
+  1. 接口统一使用 `/api/auth/*`
+  2. token 配置统一使用 `auth_token_file`
+  3. 调试路径统一使用 `auth_runtime_reload_state`
 - 若你此前依赖链接参数访问资源，请迁移到以下方式：
   1. HTTP Basic + `HTTP_AUTH_HASH`
   2. 认证登录态
@@ -338,7 +350,7 @@ XIAOMUSIC_ENABLE_ANALYTICS=false
 
 ## 版本
 
-当前维护版本: `1.0.6`
+当前维护版本: `1.0.7`
 
 更新记录: [CHANGELOG.md](CHANGELOG.md)
 

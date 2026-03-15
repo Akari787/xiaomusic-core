@@ -1,28 +1,32 @@
-## v1.0.7 (2026-03-12)
+## v1.0.7 (2026-03-15)
 
-### Auth / Runtime 稳定收口
+### 认证恢复链稳定化
 
-- 永久禁用自动 `mi_account.login("micoapi")` 作为运行时恢复路径，避免 `70016` 风控失败放大故障。
-- 固化短会话恢复链：`clear_short_session -> rebuild_short_session_from_long_auth -> runtime_rebind -> verify`。
-- 将 `POST /api/auth/refresh` 固化为“刷新运行时”（从磁盘重载 token 并重建运行态），不再依赖 refresh token 成功。
-- 新增兼容别名 `POST /api/auth/refresh_runtime`；`/api/auth/*` 保持兼容且语义一致。
-- 新增 debug 观察面：`GET /api/v1/debug/auth_runtime_reload_state`（旧路径继续兼容）。
+- 固化认证恢复主链：`clear_short_session -> rebuild_short_session_from_persistent_auth -> runtime_rebind -> verify`，将短会话恢复行为收敛为单一路径。
+- 禁用自动 `mi_account.login("micoapi")` 作为恢复主路径，避免 Xiaomi `70016` 风控导致的恢复放大故障。
+- 将 `POST /api/auth/refresh` 与 `POST /api/auth/refresh_runtime` 固化为“从磁盘重载认证状态并重建运行时”的语义，不再把云端 refresh 作为主恢复机制。
+- 新增/完善分阶段观测：`miaccount_login_trace`、`auth_runtime_reload`、短会话重建状态与 passToken 轮换日志，便于定位认证恢复问题。
 
-### WebUI 与文案对齐
+### 命名与接口收口
 
-- 认证卡片与首页按钮文案统一为“刷新运行时”。
-- 认证状态区新增收口态文案：`运行时已恢复` / `已登录待恢复` / `需要重新扫码登录`。
+- 项目对外名称统一为 `xiaomusic-core`，README、Docker、GitHub workflow、WebUI 与部署文档同步收口到新名称。
+- 配置、CLI、接口与前端语义统一到 `auth`：`auth_token_file`、`/api/auth/*`、`AuthStatus` 等成为唯一主线命名。
+- 移除主线中的 OAuth2 旧命名与兼容别名，WebUI 默认只使用 `/api/auth/*`。
+
+### 文档与发布准备
+
+- 新增 `docs/authentication_architecture.md`，系统性说明长期态 / 短期态、自动恢复链、runtime rebind 与调试接口设计。
+- 重写 `docs/spec/auth_runtime_recovery.md` 并清理主线文档中的旧接口 / 旧术语表述，使文档口径与当前实现一致。
+- 调整 CI / Pages / hardened compose：主线改为 `main` 触发，hardened 部署读取 `.env`，发布链路与当前仓库命名保持一致。
 
 ### 测试与验收
 
-- 新增 runtime reload 相关单元与路由回归测试：
-  - runtime reload 不依赖 refresh token
-  - token_store 重载后进程可接管新 token
-  - debug/state 路由一致性
+- 补充认证配置、刷新运行时、debug 路由与文档命名检查的 focused 测试。
+- 测试服务器完成 `xiaomusic-core` 实机验收：`/api/auth/status`、`/api/auth/refresh_runtime`、`/api/v1/play`、`/api/v1/player/state`、`/api/v1/control/volume` 与 WebUI 入口均验证通过。
 
 ### 本版本边界
 
-- 本版本不扩展播放 API 面；playlist/queue/library/object API 统一延期到下个版本。
+- 本版本不扩展播放 API 面；playlist / queue / library / object API 继续延期。
 
 ## v1.0.6 (2026-03-08)
 

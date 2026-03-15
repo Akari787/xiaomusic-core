@@ -1,103 +1,106 @@
-# Phase 2 Acceptance Report
+# Phase 2 验收报告
 
-## 1. Test Time
+> 历史阶段文档，仅用于回溯 2026-03-07 的 Phase 2 状态。
+> 本文包含当时的接口与兼容实现快照，不代表当前正式 API。
+> 当前正式契约请以 `docs/api/api_v1_spec.md` 为准。
 
-- Date: 2026-03-07
-- Time window (UTC+8): 12:00 - 12:15
+## 1. 验收时间
 
-## 2. Test Server Environment
+- 日期：2026-03-07
+- 时间窗口（UTC+8）：12:00 - 12:15
 
-- Server: `root@192.168.7.178` (hostname: `test`)
-- Deploy path: `/root/xiaomusic_core_smoke` (historical path: `/root/xiaomusic_auth_smoke`)
-- Runtime: Docker Compose (`docker-compose.hardened.yml`)
-- Container: `xiaomusic-core` (historical container: `xiaomusic-auth`)
-- Image: `xiaomusic-core:latest` (historical image: `xiaomusic:auth-only`)
-- Service port: `58090 -> 8090`
+## 2. 测试服务器环境
 
-## 3. Deployment Branch / Commit
+- 服务器：`root@192.168.7.178`（hostname: `test`）
+- 部署目录：`/root/xiaomusic_core_smoke`（历史目录名：`/root/xiaomusic_auth_smoke`）
+- 运行方式：Docker Compose（`docker-compose.hardened.yml`）
+- 容器：`xiaomusic-core`（历史容器名：`xiaomusic-auth`）
+- 镜像：`xiaomusic-core:latest`（历史镜像名：`xiaomusic:auth-only`）
+- 服务端口：`58090 -> 8090`
 
-- Branch: `core-main` (historical working branch: `auth-only`)
-- Base commit: `c3375bfd897a68854e9b651ac17539b8cb4815c5`
-- Note: Phase 2 changes were deployed from current workspace updates on top of the base commit.
+## 3. 部署分支 / Commit
 
-## 4. Acceptance Device
+- 分支：`core-main`（历史工作分支：`auth-only`）
+- 基线 commit：`c3375bfd897a68854e9b651ac17539b8cb4815c5`
+- 说明：Phase 2 验收基于当时工作区改动部署。
 
-- Speaker DID: `981257654`
-- Device name: Xiaomi Smart Speaker Pro
-- Hardware: `OH2P`
+## 4. 验收设备
 
-## 5. Jellyfin Real Device Playback
+- 音箱 DID：`981257654`
+- 设备名称：Xiaomi Smart Speaker Pro
+- 硬件型号：`OH2P`
 
-## 5.1 Test Method
+## 5. Jellyfin 真机播放
 
-- Query online source list: `GET /api/search/online?keyword=love&plugin=all&page=1&limit=20`
-- Picked item with `source=jellyfin`
-- Trigger playback: `POST /api/device/pushUrl`
+### 5.1 验收方法
 
-## 5.2 Result
+- 查询在线来源：`GET /api/search/online?keyword=love&plugin=all&page=1&limit=20`
+- 选择 `source=jellyfin` 的条目
+- 触发播放：`POST /api/device/pushUrl`
 
-- Playback request returned success:
+### 5.2 结果
+
+- 播放请求返回成功：
   - `ok=true`
   - `mode=core_minimal`
   - `source=jellyfin`
   - `transport=mina`
-- Speaker started playback (legacy cast log exists and no playback regression observed).
-- Unified-chain log evidence:
+- 音箱开始播放，当时未观察到回归。
+- 统一链路日志证据：
   - `core_chain action=play ... source_hint=legacy_payload plugin=legacy_payload`
 
-## 6. http_url Real Device Playback
+## 6. `http_url` 真机播放
 
-## 6.1 Test Method
+### 6.1 验收方法
 
-- API: `POST /api/v1/play_url`
-- URL: `http://192.168.7.178:58090/static/silence.mp3`
+- API：`POST /api/v1/play_url`
+- URL：`http://192.168.7.178:58090/static/silence.mp3`
 
-## 6.2 Result
+### 6.2 结果
 
-- API returned:
+- API 返回：
   - `ok=true`
   - `state=streaming`
-- Unified-chain log evidence:
+- 统一链路日志证据：
   - `core_chain action=play ... source_hint=http_url plugin=http_url`
-- Delivery path confirmed:
+- 当时确认的投递路径：
   - `HttpUrlSourcePlugin -> DeliveryAdapter -> TransportRouter -> MinaTransport`
 
-## 7. stop / pause / tts / set_volume / probe Acceptance
+## 7. 停止 / 暂停 / TTS / 音量 / 探测验收
 
-## 7.1 Commands
+### 7.1 执行命令
 
-- `POST /api/v1/set_volume` (`volume=42`)
+- `POST /api/v1/set_volume`（`volume=42`）
 - `POST /api/v1/tts`
 - `POST /api/v1/probe`
 - `POST /api/v1/pause`
 - `POST /api/v1/stop`
 
-## 7.2 Results
+### 7.2 结果
 
-- `set_volume`: success (`ok=true`), device volume reflected to `42`.
-- `tts`: success (`ok=true`), speaker played TTS.
-- `probe`: success (`ok=true`), returned `transport=miio` and reachability snapshot.
-- `pause`: success (`ok=true`).
-- `stop`: success (`ok=true`, state `stopped`).
+- `set_volume`：成功（`ok=true`），设备音量更新到 `42`
+- `tts`：成功（`ok=true`），音箱正常播报
+- `probe`：成功（`ok=true`），返回 `transport=miio` 与 reachability 快照
+- `pause`：成功（`ok=true`）
+- `stop`：成功（`ok=true`，状态 `stopped`）
 
-## 7.3 Probe + DeviceRegistry Verification
+### 7.3 Probe + DeviceRegistry 验证
 
-- Repeated probe calls showed `last_probe_ts` increasing (`1772856414 -> 1772856416`).
-- This confirms probe result is written through `DeviceRegistry.update_reachability()`.
-- Transport adapters only return probe result, they do not write device reachability state.
+- 连续 probe 调用时，`last_probe_ts` 递增（`1772856414 -> 1772856416`）
+- 这说明 probe 结果已写入 `DeviceRegistry.update_reachability()`
+- Transport 适配层仅返回 probe 结果，不直接写设备 reachability 状态
 
-## 8. Unfinished Items and Known Limits
+## 8. 未完成项与已知限制
 
-- `MiioTransport.play_url` is still a compatibility placeholder:
-  - It delegates to legacy `xiaomusic.play_url` path.
-  - It is explicitly marked in adapter code as non-standalone local Miio streaming implementation.
-- Jellyfin source is currently routed via `LegacyPayloadSourcePlugin` compatibility layer.
-  - This is the migration bridge for future `JellyfinSourcePlugin` extraction.
-- Pause status semantics depend on device firmware (`getplayerstatus` observed `status=2` after pause/stop sequence).
+- `MiioTransport.play_url` 当时仍是兼容占位实现：
+  - 它会委托到历史 `xiaomusic.play_url` 路径
+  - 并不是独立的本地 Miio 流媒体实现
+- Jellyfin 来源当时仍通过 `LegacyPayloadSourcePlugin` 兼容层接入
+- 暂停状态语义受设备固件影响（`getplayerstatus` 在 pause/stop 后可能都返回 `status=2`）
 
-## 9. Next Phase Recommendations
+## 9. 后续建议（历史记录）
 
-1. Replace `LegacyPayloadSourcePlugin` by dedicated `JellyfinSourcePlugin` and migrate payload mapping logic out of compatibility resolver.
-2. Implement true local Miio media playback path (or remove Miio play fallback for `play` until fully implemented).
-3. Add core-level action metrics (`action`, `transport`, `success/failure`) for stable regression tracking.
-4. Expand automated integration tests for `/api/v1/pause|tts|set_volume|probe` response shape and fallback behavior.
+1. 用独立 `JellyfinSourcePlugin` 替代 `LegacyPayloadSourcePlugin`
+2. 实现真正的本地 Miio 媒体播放路径，或在完成前移除其 play fallback
+3. 增加 core 层动作指标（`action`、`transport`、`success/failure`）
+4. 扩展 `/api/v1/pause|tts|set_volume|probe` 的自动化集成测试

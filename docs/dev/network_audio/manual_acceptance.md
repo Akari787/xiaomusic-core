@@ -1,5 +1,8 @@
 # Site Media / Direct URL（原 network_audio，deprecated）6.2 真机手动验收记录
 
+> 历史手工验收记录，仅用于回溯旧链路验证方式。
+> 文中的 `/network_audio/*` 观测接口与 `POST /api/v1/play_url` 不代表当前正式主线接口。
+
 ## 验收目标
 
 - 内网场景下，从 B 站/YouTube 页面 URL 出发，最终向小爱设备投放本地流 URL 并出声。

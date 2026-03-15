@@ -1,5 +1,8 @@
 # Source Plugin Renaming Report
 
+> 历史阶段验收记录，仅用于回溯当时的命名迁移过程。
+> 文中提到的旧接口（如 `POST /api/v1/play_url`）与兼容入口不代表当前正式 API，请以 `docs/api/api_v1_spec.md` 为准。
+
 ## 1. 验收时间
 
 - 日期：2026-03-07

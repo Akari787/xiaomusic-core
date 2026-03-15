@@ -1,5 +1,8 @@
 # Source Plugin Finalization Report
 
+> 历史阶段验收记录，仅用于回溯当时的来源插件收口过程。
+> 文中旧接口与兼容调用路径不代表当前正式 API，请以 `docs/api/api_v1_spec.md` 为准。
+
 ## 1. 测试时间
 
 - 日期：2026-03-07

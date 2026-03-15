@@ -14,6 +14,9 @@ hero:
       text: API v1 规范
       link: /api/api_v1_spec
     - theme: alt
+      text: 认证架构
+      link: /authentication_architecture
+    - theme: alt
       text: 开发文档
       link: /dev/index
     - theme: alt

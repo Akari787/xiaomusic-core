@@ -1,86 +1,89 @@
 # Playback Refactor v1 Regression Baseline
 
-## 0. Regression Goal
+> 历史归档文档，仅用于回溯早期播放重构阶段的回归基线。
+> 文中的旧接口、旧术语与旧测试流程不代表当前主线实现。
 
-- Freeze current playable capability as the refactor baseline.
-- Run full A/B/C/D after every playback refactor v1 subtask and record results.
-- If baseline is unstable, fix input samples before continuing refactor.
+## 0. 回归目标
 
-## 1. Environment Constraints (fill once)
+- 将当时的可播放能力冻结为重构基线
+- 每次播放重构子任务后执行完整 A/B/C/D 验收并记录结果
+- 如果基线本身不稳定，优先修复输入样本，再继续重构
 
-- LAN endpoint: `<LAN_IP>:<PORT>`
-- Speaker id: `<SPEAKER_ID>`
-- Runtime mode: Docker / local / other
-- Dependency snapshot: `yt-dlp --version`, `ffmpeg -version`
-- Network profile (optional): home broadband / hotspot
+## 1. 环境约束（首次填写）
 
-## 2. Case Definitions (A/B/C/D)
+- 局域网入口：`<LAN_IP>:<PORT>`
+- 音箱 ID：`<SPEAKER_ID>`
+- 运行模式：Docker / local / other
+- 依赖快照：`yt-dlp --version`、`ffmpeg -version`
+- 网络类型（可选）：家庭宽带 / 热点
 
-All cases must satisfy the requirement section, otherwise sample is invalid.
+## 2. 用例定义（A/B/C/D）
 
-### Case A (YouTube VOD)
+所有用例必须满足要求项，否则样本无效。
 
-- URL placeholder: `<YOUTUBE_VOD_URL>`
-- Requirement: public, no age-gate, 3-10 min, no strong geo lock.
-- Steps:
-  1. Call `play_url(<YOUTUBE_VOD_URL>, <SPEAKER_ID>, options)` (or compatible wrapper).
-  2. Verify speaker starts output within N seconds.
-  3. Call stop.
-  4. Repeat play/stop 3 times.
-- Pass criteria:
-  - N=30s output starts.
-  - stop works.
-  - 3 repeats without crash/hang.
+### Case A（YouTube 点播）
 
-### Case B (YouTube Live)
+- URL 占位：`<YOUTUBE_VOD_URL>`
+- 要求：公开、无年龄限制、时长 3-10 分钟、无强地理限制
+- 步骤：
+  1. 调用 `play_url(<YOUTUBE_VOD_URL>, <SPEAKER_ID>, options)`（或兼容 wrapper）
+  2. 验证音箱是否在 N 秒内开始出声
+  3. 调用 stop
+  4. 重复 play/stop 3 次
+- 通过标准：
+  - N=30 秒内开始播放
+  - stop 可用
+  - 3 次重复无崩溃 / 无卡死
 
-- URL placeholder: `<YOUTUBE_LIVE_URL>`
-- Requirement: currently live, long-running channel, low geo restriction.
-- Steps: same as Case A.
-- Pass criteria:
-  - N=30s output starts.
-  - stop works.
-  - Optional: one auto-recover after short stream interruption (if supported).
+### Case B（YouTube 直播）
 
-### Case C (bilibili Live)
+- URL 占位：`<YOUTUBE_LIVE_URL>`
+- 要求：正在直播、直播时间较长、地理限制较低
+- 步骤：同 Case A
+- 通过标准：
+  - N=30 秒内开始播放
+  - stop 可用
+  - 如实现支持，允许一次短暂中断后的自动恢复
 
-- URL placeholder: `<BILIBILI_LIVE_URL>`
-- Requirement: currently live, no paid-only room, auto quality negotiation available.
-- Steps: same as Case A.
-- Pass criteria: same as Case A.
+### Case C（bilibili 直播）
 
-### Case D (Direct stream URL)
+- URL 占位：`<BILIBILI_LIVE_URL>`
+- 要求：正在直播、非付费直播间、支持自动清晰度协商
+- 步骤：同 Case A
+- 通过标准：同 Case A
 
-- URL placeholder: `<DIRECT_STREAM_URL>`
-- Requirement: m3u8 or mp3 direct URL, stable response, playable for >= 2 minutes.
-- Steps:
-  1. Call play_url.
-  2. Keep playing for 2 minutes.
-  3. Call stop.
-- Pass criteria:
-  - N=15s output starts.
-  - Plays 2 minutes without interruption (or one short reconnect if expected).
-  - stop works.
+### Case D（直链流媒体）
 
-## 3. fail_stage enum
+- URL 占位：`<DIRECT_STREAM_URL>`
+- 要求：m3u8 或 mp3 直链、响应稳定、可连续播放至少 2 分钟
+- 步骤：
+  1. 调用 `play_url`
+  2. 连续播放 2 分钟
+  3. 调用 stop
+- 通过标准：
+  - N=15 秒内开始播放
+  - 可连续播放 2 分钟（或仅允许一次预期内短暂重连）
+  - stop 可用
 
-Use only one of:
+## 3. `fail_stage` 枚举
 
-- `resolve`: URL resolve failed/timeout.
-- `stream`: local stream endpoint failed (`/stream` no output / client connect failed).
-- `ffmpeg`: transcode/extract failed, process crash, cannot spawn.
-- `xiaomi`: push/playback on speaker failed or no audio.
-- `unknown`: cannot classify (must include key logs in notes).
+仅允许以下取值：
 
-## 4. Regression Record Template
+- `resolve`：URL 解析失败 / 超时
+- `stream`：本地流端点失败（如 `/stream` 无输出 / 客户端连接失败）
+- `ffmpeg`：转码或抽流失败，进程崩溃或无法启动
+- `xiaomi`：向音箱投放失败或音箱无声音输出
+- `unknown`：无法分类，必须在备注中附关键日志
 
-Field rule:
+## 4. 回归记录模板
 
-- `date/time`: `YYYY-MM-DD HH:mm:ss`
-- `case`: only `A/B/C/D`
-- `result`: only `pass` or `fail`
-- `fail_stage`: keep empty for pass
-- `notes`: latency, key logs, retry count, external fluctuation
+字段规则：
+
+- `date/time`：`YYYY-MM-DD HH:mm:ss`
+- `case`：仅允许 `A/B/C/D`
+- `result`：仅允许 `pass` 或 `fail`
+- `fail_stage`：通过时留空
+- `notes`：记录时延、关键日志、重试次数、外部波动
 
 | date/time           | commit | case | result | fail_stage | notes |
 | ------------------- | ------ | ---- | ------ | ---------- | ----- |

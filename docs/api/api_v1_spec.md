@@ -149,7 +149,7 @@
   "message": "ok",
   "data": {
     "status": "ok",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "devices_count": 1
   },
   "request_id": "req_123"
