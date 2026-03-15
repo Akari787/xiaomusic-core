@@ -1,6 +1,6 @@
 # xiaomusic-core
 
-`xiaomusic-core` 是基于原版 `xiaomusic` 的独立维护分支，当前聚焦稳定播放、自托管体验与认证运行时恢复能力，不再以 OAuth2 作为项目身份定义。
+`xiaomusic-core` 是基于原版 `xiaomusic` 的独立维护分支，当前聚焦稳定播放、自托管体验与认证运行时恢复能力，不再以特定认证协议作为项目身份定义。
 
 原项目: <https://github.com/hanxi/xiaomusic>
 
@@ -20,12 +20,12 @@ FAQ: <https://github.com/Akari787/xiaomusic-core/blob/main/docs/issues/99.md>
 - 当前认证：使用米家扫码登录 + token 持久化 + 运行时恢复机制，不再维护账号密码/cookie 登录路径。
 - Jellyfin 联动：支持在线搜索与歌单同步，适配家庭媒体库场景。
 
-## 名称迁移说明
+## 命名说明
 
-- 项目名：`xiaomusic-oauth2` -> `xiaomusic-core`
-- 认证接口：`/api/oauth2/*` -> `/api/auth/*`（旧路径继续兼容）
-- token 配置：`oauth2_token_file` -> `auth_token_file`（旧字段继续兼容）
-- 当前推荐使用新命名；旧命名仅作为兼容别名保留。
+- 项目名统一为 `xiaomusic-core`
+- 认证接口统一为 `/api/auth/*`
+- token 配置统一为 `auth_token_file`
+- 项目内关于认证运行时恢复、登录会话恢复、扫码登录的说明均使用 `auth` 语义
 
 ## 📦 安装
 
@@ -134,8 +134,8 @@ docker run -d --name xiaomusic-core \
 
 旧命名迁移：
 
-- 旧镜像名 `akari787/xiaomusic-oauth2` 对应新镜像名 `akari787/xiaomusic-core`
-- 旧容器名 `xiaomusic-oauth2` 对应新容器名 `xiaomusic-core`
+- 镜像名统一为 `akari787/xiaomusic-core`
+- 容器名统一为 `xiaomusic-core`
 
 可选：如需设置时区，可添加例如 `-e TZ=Asia/Tokyo`。
 
@@ -310,13 +310,13 @@ XIAOMUSIC_ENABLE_ANALYTICS=false
 - 如需通过反向代理访问 WebUI：配置 `cors_allow_origins`，否则浏览器可能被 CORS 拦截。
 - Jellyfin API Key 不再在设置页明文显示；`/getsetting` 也会返回脱敏值（`******`）。需要修改时请重新输入。
 - 口令合并模式新增：`keyword_override_mode` 默认 `override`（同名口令冲突时以用户自定义为准）；可改为 `append` 保留默认口令。
-- Token 优先级变更为“环境变量 > `conf/auth.json`”：支持 `OAUTH2_ACCESS_TOKEN` / `OAUTH2_REFRESH_TOKEN`；若这些变量存在，删除 token 文件不会让其失效。
+- Token 优先级变更为“环境变量 > `conf/auth.json`”：支持 `AUTH_ACCESS_TOKEN` / `AUTH_REFRESH_TOKEN`；若这些变量存在，删除 token 文件不会让其失效。
 - 如不希望落盘 token：设置 `persist_token=false`，扫码/刷新只会保存到内存（重启后需重新登录）。
 - 掉线自愈策略：自动恢复链禁用 `mi_account.login("micoapi")`；仅允许“清短期态 -> 基于长期态重建短期态 -> runtime rebind -> verify”。
-- 手动“刷新运行时”接口：`POST /api/auth/refresh` 与 `POST /api/auth/refresh_runtime` 为当前推荐路径；`/api/oauth2/*` 继续兼容。它们的语义均为**认证运行时重载**，不等同于标准 OAuth2 refresh token。
+- 手动“刷新运行时”接口：`POST /api/auth/refresh` 与 `POST /api/auth/refresh_runtime`。它们的语义均为**认证运行时重载**，不等同于云端 token 刷新。
 - 新增可调参数：
-  - `OAUTH2_REFRESH_INTERVAL_HOURS`（默认 `12`）
-  - `OAUTH2_REFRESH_MIN_INTERVAL_MINUTES`（默认 `30`）
+  - `AUTH_REFRESH_INTERVAL_HOURS`（默认 `12`）
+  - `AUTH_REFRESH_MIN_INTERVAL_MINUTES`（默认 `30`）
   - `XIAOMUSIC_MINA_HIGH_FREQ_MIN_INTERVAL_SECONDS`（默认 `8`）
   - `XIAOMUSIC_MINA_AUTH_FAIL_THRESHOLD`（默认 `3`）
   - `XIAOMUSIC_MINA_AUTH_COOLDOWN_SECONDS`（默认 `600`）

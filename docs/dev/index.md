@@ -18,7 +18,7 @@
 ## 正式 API 规范入口
 
 - `docs/api/api_v1_spec.md`
-- OAuth2/runtime 恢复稳定策略：`docs/spec/oauth_runtime_recovery.md`
+- 认证运行时恢复稳定策略：`docs/spec/auth_runtime_recovery.md`
 
 ## v1.1.0 Phase 1 收口文档
 

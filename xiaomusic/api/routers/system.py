@@ -215,7 +215,7 @@ async def getsetting(need_device_list: bool = False):
         data["jellyfin_api_key"] = "******"
 
     def _token_valid(j: dict) -> bool:
-        # oauth2 token must contain serviceToken to be usable
+        # auth token must contain serviceToken to be usable
         st = j.get("serviceToken") or j.get("yetAnotherServiceToken")
         return bool(j.get("userId") and j.get("passToken") and j.get("ssecurity") and st)
 
@@ -233,8 +233,6 @@ async def getsetting(need_device_list: bool = False):
     runtime_ready = await _runtime_auth_ready()
     data["auth_token_available"] = token_available
     data["auth_runtime_ready"] = runtime_ready
-    data["oauth2_token_available"] = token_available
-    data["oauth2_runtime_ready"] = runtime_ready
     if need_device_list:
         device_list = await xiaomusic.getalldevices()
         log.info(f"getsetting device_list: {device_list}")
@@ -243,7 +241,6 @@ async def getsetting(need_device_list: bool = False):
 
 
 @router.get("/api/auth/status")
-@router.get("/api/oauth2/status")
 async def auth_status():
     global qrcode_login_task
     global qrcode_login_started_at
@@ -299,11 +296,7 @@ async def auth_status():
     )
 
 
-oauth2_status = auth_status
-
-
 @router.post("/api/auth/logout")
-@router.post("/api/oauth2/logout")
 async def auth_logout():
     """退出认证登录并删除本地 token 文件。
 
@@ -375,11 +368,7 @@ async def auth_logout():
     )
 
 
-oauth2_logout = auth_logout
-
-
 @router.post("/api/auth/refresh")
-@router.post("/api/oauth2/refresh")
 async def auth_refresh():
     """手动触发认证运行时重载（从磁盘重新装载 auth.json 并重建会话）。"""
     am = getattr(xiaomusic, "auth_manager", None)
@@ -412,20 +401,13 @@ async def auth_refresh():
                 },
             },
             contract="raw",
-    )
-
-
-oauth2_refresh = auth_refresh
+        )
 
 
 @router.post("/api/auth/refresh_runtime")
-@router.post("/api/oauth2/refresh_runtime")
 async def auth_refresh_runtime():
     """显式认证运行时重载入口，行为与 /api/auth/refresh 一致。"""
     return await auth_refresh()
-
-
-oauth2_refresh_runtime = auth_refresh_runtime
 
 
 @router.post("/api/jellyfin/sync")

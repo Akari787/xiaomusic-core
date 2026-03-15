@@ -338,7 +338,7 @@ class MiJiaAPI:
         else:
             raise ValueError("刷新Token失败，请重新登录")
 
-    def rebuild_service_cookies_from_long_auth(self, sid: str = "micoapi") -> dict:
+    def rebuild_service_cookies_from_persistent_auth(self, sid: str = "micoapi") -> dict:
         """Use long-lived auth fields to relogin and rebuild service cookies.
 
         This method only refreshes short-lived service cookies/tokens and writes
@@ -349,8 +349,8 @@ class MiJiaAPI:
         if missing:
             return {
                 "ok": False,
-                "error_code": "missing_long_auth_fields",
-                "failed_reason": f"missing_long_auth_fields:{','.join(missing)}",
+                "error_code": "missing_persistent_auth_fields",
+                "failed_reason": f"missing_persistent_auth_fields:{','.join(missing)}",
                 "http_stage": "serviceLogin",
                 "sid": sid,
                 "writeback_target": "none",
@@ -376,7 +376,7 @@ class MiJiaAPI:
         except Exception as e:
             return {
                 "ok": False,
-                "error_code": "long_auth_login_failed",
+                "error_code": "persistent_auth_login_failed",
                 "failed_reason": "service_login_request_failed",
                 "error_message": str(e),
                 "http_stage": "serviceLogin",
@@ -388,7 +388,7 @@ class MiJiaAPI:
         if int(service_data.get("code", -1)) != 0 or not location:
             return {
                 "ok": False,
-                "error_code": "long_auth_login_failed",
+                "error_code": "persistent_auth_login_failed",
                 "failed_reason": "service_login_not_authorized",
                 "error_message": str(service_data.get("desc") or service_data.get("message") or "serviceLogin failed"),
                 "http_stage": "serviceLogin",

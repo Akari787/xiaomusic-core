@@ -6,7 +6,7 @@ vi.mock("../src/services/apiClient", () => ({
 }));
 
 import { apiGet, apiPost } from "../src/services/apiClient";
-import { fetchAuthStatus, logoutAuth, refreshAuthRuntime } from "../src/services/auth";
+import { fetchAuthStatus, logoutAuth, reloadAuthRuntime } from "../src/services/auth";
 
 const mockedGet = vi.mocked(apiGet);
 const mockedPost = vi.mocked(apiPost);
@@ -21,7 +21,7 @@ describe("auth service", () => {
 
   it("uses canonical /api/auth endpoints", async () => {
     await fetchAuthStatus();
-    await refreshAuthRuntime();
+    await reloadAuthRuntime();
     await logoutAuth();
 
     expect(mockedGet).toHaveBeenCalledWith("/api/auth/status");

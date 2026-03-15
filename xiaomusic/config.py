@@ -41,11 +41,15 @@ def default_key_word_dict():
 
 
 def default_auth_token_file() -> str:
-    return os.getenv("XIAOMUSIC_AUTH_TOKEN_FILE", os.getenv("XIAOMUSIC_OAUTH2_TOKEN_FILE", "auth.json"))
+    return os.getenv("XIAOMUSIC_AUTH_TOKEN_FILE", "auth.json")
 
 
-def default_oauth2_token_file() -> str:
-    return os.getenv("XIAOMUSIC_OAUTH2_TOKEN_FILE", "")
+def default_auth_refresh_interval_hours() -> float:
+    return float(os.getenv("AUTH_REFRESH_INTERVAL_HOURS", "12"))
+
+
+def default_auth_refresh_min_interval_minutes() -> int:
+    return int(os.getenv("AUTH_REFRESH_MIN_INTERVAL_MINUTES", "30"))
 
 
 def default_user_key_word_dict():
@@ -96,7 +100,6 @@ class Device:
 @dataclass
 class Config:
     auth_token_file: str = field(default_factory=default_auth_token_file)
-    oauth2_token_file: str = field(default_factory=default_oauth2_token_file)
     mi_did: str = os.getenv("MI_DID", "")  # 逗号分割支持多设备
     verbose: bool = os.getenv("XIAOMUSIC_VERBOSE", "").lower() == "true"
     music_path: str = os.getenv("XIAOMUSIC_MUSIC_PATH", "music")
@@ -207,7 +210,7 @@ class Config:
     # ---- Security defaults (safe by default) ----
     log_redact: bool = os.getenv("XIAOMUSIC_LOG_REDACT", "true").lower() == "true"
 
-    # Persist OAuth2 token to conf/auth.json (default true for backward compatibility)
+    # Persist auth token data to conf/auth.json.
     persist_token: bool = (
         os.getenv("XIAOMUSIC_PERSIST_TOKEN", "true").lower() == "true"
     )
@@ -309,12 +312,8 @@ class Config:
         os.getenv("XIAOMUSIC_ENABLE_AUTO_CLEAN_TEMP", "true").lower() == "true"
     )
     qrcode_timeout: int = int(os.getenv("QRCODE_TIMEOUT", "120"))
-    oauth2_refresh_interval_hours: float = float(
-        os.getenv("OAUTH2_REFRESH_INTERVAL_HOURS", "12")
-    )
-    oauth2_refresh_min_interval_minutes: int = int(
-        os.getenv("OAUTH2_REFRESH_MIN_INTERVAL_MINUTES", "30")
-    )
+    auth_refresh_interval_hours: float = field(default_factory=default_auth_refresh_interval_hours)
+    auth_refresh_min_interval_minutes: int = field(default_factory=default_auth_refresh_min_interval_minutes)
     mina_high_freq_min_interval_seconds: int = int(
         os.getenv("XIAOMUSIC_MINA_HIGH_FREQ_MIN_INTERVAL_SECONDS", "8")
     )
@@ -357,9 +356,7 @@ class Config:
 
     def init(self):
         if not self.auth_token_file:
-            self.auth_token_file = self.oauth2_token_file or "auth.json"
-        if not self.oauth2_token_file:
-            self.oauth2_token_file = self.auth_token_file
+            self.auth_token_file = "auth.json"
 
         self.key_match_order = default_key_match_order()
         self.key_word_dict = default_key_word_dict()
@@ -465,8 +462,6 @@ class Config:
         for key, value in vars(options).items():
             if value is not None and key in cls.__dataclass_fields__:
                 config[key] = value
-        if not config.get("auth_token_file") and config.get("oauth2_token_file"):
-            config["auth_token_file"] = config["oauth2_token_file"]
         return cls(**config)
 
     @classmethod
@@ -539,12 +534,8 @@ class Config:
         return filename
 
     @property
-    def oauth2_token_path(self):
-        return self.auth_token_path
-
-    @property
     def auth_token_path(self):
-        token_file = self.auth_token_file or self.oauth2_token_file or "auth.json"
+        token_file = self.auth_token_file or "auth.json"
         if os.path.isabs(token_file):
             return token_file
         conf_path = self.conf_path or "conf"

@@ -13,13 +13,13 @@
 
 - 服务器：`192.168.7.178`
 - 登录方式：`ssh -i ~/.ssh/id_ed25519_opencode root@192.168.7.178`
-- 部署目录：`/root/xiaomusic_core_smoke`（历史目录名：`/root/xiaomusic_oauth2_smoke`）
+- 部署目录：`/root/xiaomusic_core_smoke`（历史目录名：`/root/xiaomusic_auth_smoke`）
 - 运行方式：`docker compose -f docker-compose.hardened.yml up -d --build xiaomusic-core`
 - 服务地址：`http://127.0.0.1:58090`
 
 ## 3. 部署 commit / 分支
 
-- 本地分支：`core-main`（历史工作分支：`oauth2-only`）
+- 本地分支：`core-main`（历史工作分支：`auth-only`）
 - 本地基线 commit：`7851d06dd3e46c6f7694e1c994c7ca3997a1a37d`
 - 实机部署内容：基于上述 commit + 本次工作区变更（未额外新建发布分支）
 

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import {
   fetchAuthStatus,
   logoutAuth,
-  refreshAuthRuntime,
+  reloadAuthRuntime,
   type AuthStatus,
 } from "../services/auth";
 
@@ -51,7 +51,7 @@ export function AuthStatusCard() {
     setRefreshing(true);
     setActionMessage("");
     try {
-      const ret = await refreshAuthRuntime();
+      const ret = await reloadAuthRuntime();
       const refreshed = Boolean(ret?.runtime_auth_ready);
       const lastError = String((ret?.last_error as string | undefined) || "");
       setActionMessage(refreshed ? "运行时刷新成功" : `运行时刷新失败${lastError ? `: ${lastError}` : ""}`);
@@ -90,12 +90,12 @@ export function AuthStatusCard() {
       : "需要重新扫码登录";
 
   return (
-    <section className="oauth-card">
+    <section className="auth-card">
       <h2>认证状态</h2>
-      {error ? <p className="oauth-error">请求失败：{error}</p> : null}
+      {error ? <p className="auth-error">请求失败：{error}</p> : null}
       {actionMessage ? <p>{actionMessage}</p> : null}
       {authLocked ? (
-        <p className="oauth-error" style={{ color: "#b00020", fontWeight: 700 }}>
+        <p className="auth-error" style={{ color: "#b00020", fontWeight: 700 }}>
           ⚠️ 认证已锁定：{status?.auth_lock_reason || "unknown"}
         </p>
       ) : null}
@@ -114,7 +114,7 @@ export function AuthStatusCard() {
           <li>last_error: {status.last_error || ""}</li>
         </ul>
       ) : (
-        <p className="oauth-loading">加载中...</p>
+        <p className="auth-loading">加载中...</p>
       )}
       <div style={{ display: "flex", gap: 8 }}>
         <button type="button" onClick={onRefreshRuntime} disabled={refreshing || loggingOut}>
@@ -127,5 +127,3 @@ export function AuthStatusCard() {
     </section>
   );
 }
-
-export const OAuthStatusCard = AuthStatusCard;

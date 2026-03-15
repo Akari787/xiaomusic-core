@@ -5,7 +5,7 @@
 - 永久禁用自动 `mi_account.login("micoapi")` 作为运行时恢复路径，避免 `70016` 风控失败放大故障。
 - 固化短会话恢复链：`clear_short_session -> rebuild_short_session_from_long_auth -> runtime_rebind -> verify`。
 - 将 `POST /api/auth/refresh` 固化为“刷新运行时”（从磁盘重载 token 并重建运行态），不再依赖 refresh token 成功。
-- 新增兼容别名 `POST /api/auth/refresh_runtime`；`/api/oauth2/*` 保持兼容且语义一致。
+- 新增兼容别名 `POST /api/auth/refresh_runtime`；`/api/auth/*` 保持兼容且语义一致。
 - 新增 debug 观察面：`GET /api/v1/debug/auth_runtime_reload_state`（旧路径继续兼容）。
 
 ### WebUI 与文案对齐
@@ -75,7 +75,7 @@
 ### 弃用与移除
 
 - 从 `v1.0.6` 起移除旧版 `key/code` 链接鉴权能力（历史模式）。
-- 迁移方案：使用 HTTP Basic + `HTTP_AUTH_HASH`（bcrypt）或 OAuth2 登录态。
+- 迁移方案：使用 HTTP Basic + `HTTP_AUTH_HASH`（bcrypt）或 认证 登录态。
 
 ## v1.0.4 (2026-02-26)
 
@@ -86,7 +86,7 @@
 
 ### Fix
 
-- 修复 OAuth2 扫码登录闭环稳定性：扫码轮询增加超时兜底，状态接口透出 `last_error`，前端可直接显示失败原因。
+- 修复 认证 扫码登录闭环稳定性：扫码轮询增加超时兜底，状态接口透出 `last_error`，前端可直接显示失败原因。
 - 修复 Base URL 自动检测边界：`localhost/loopback/0.0.0.0` 及容器环境下不再返回 Docker bridge 地址，无法可靠判断时返回 `null`。
 - 修复网络音频 runtime 在不同路由重复实例化导致的端口冲突（`Errno 98: Address in use`）。
 - 修复配置与 token 持久化可靠性：`setting.json`/`auth.json` 改为原子写（`tmp + fsync + os.replace`），降低并发和异常中断导致的半截 JSON 风险。
@@ -150,7 +150,7 @@
 
 ### Feat
 
-- OAuth2-only 登录流程：移除账号密码与 cookie 登录入口
+- 认证-only 登录流程：移除账号密码与 cookie 登录入口
 - 新增 Jellyfin 客户端能力：在线搜索与歌单同步接口
 - Jellyfin 歌单可按原始名称同步到本地播放列表
 

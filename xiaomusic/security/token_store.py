@@ -35,11 +35,7 @@ class TokenStore:
                 token_path = path_or_config.auth_token_path
             except Exception:
                 conf_path = getattr(path_or_config, "conf_path", "conf") or "conf"
-                token_file = (
-                    getattr(path_or_config, "auth_token_file", "")
-                    or getattr(path_or_config, "oauth2_token_file", "auth.json")
-                    or "auth.json"
-                )
+                token_file = getattr(path_or_config, "auth_token_file", "auth.json") or "auth.json"
                 if os.path.isabs(token_file):
                     token_path = token_file
                 else:
@@ -137,11 +133,11 @@ class TokenStore:
             return {}
 
     def _env_override_exists(self) -> bool:
-        return bool(os.getenv("OAUTH2_ACCESS_TOKEN") or os.getenv("OAUTH2_REFRESH_TOKEN"))
+        return bool(os.getenv("AUTH_ACCESS_TOKEN") or os.getenv("AUTH_REFRESH_TOKEN"))
 
     def _apply_env_overrides_unlocked(self, data: dict[str, Any]) -> dict[str, Any]:
-        access = os.getenv("OAUTH2_ACCESS_TOKEN")
-        refresh = os.getenv("OAUTH2_REFRESH_TOKEN")
+        access = os.getenv("AUTH_ACCESS_TOKEN")
+        refresh = os.getenv("AUTH_REFRESH_TOKEN")
         if access:
             data["serviceToken"] = access
             data.setdefault("yetAnotherServiceToken", access)

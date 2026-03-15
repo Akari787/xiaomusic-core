@@ -100,11 +100,11 @@
 
 ## 6. Stable Login 收口说明（2026-03）
 
-本轮稳定版只收口 OAuth2/runtime 恢复链，不扩展播放控制 API 面。
+本轮稳定版只收口认证运行时恢复链，不扩展播放控制 API 面。
 
-- `POST /api/auth/refresh` 与 `POST /api/auth/refresh_runtime` 为当前规范路径；`/api/oauth2/*` 保留兼容且语义同为 runtime reload from disk。
+- `POST /api/auth/refresh` 与 `POST /api/auth/refresh_runtime` 为当前规范路径，语义同为 runtime reload from disk。
 - 自动恢复链禁用 `mi_account.login("micoapi")`，仅保留策略级 `disabled_by_policy` 可观测标记。
-- 恢复链固定为：`clear_short_session -> rebuild_short_session_from_long_auth -> runtime_rebind -> verify`。
+- 恢复链固定为：`clear_short_session -> rebuild_short_session_from_persistent_auth -> runtime_rebind -> verify`。
 - locked 仅在长期态缺失等终态场景触发，不因短期会话问题直接锁死。
 
 延期到下版本（明确不在本轮）：

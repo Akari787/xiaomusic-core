@@ -380,11 +380,11 @@ def safe_redirect(url):
 
 def _legacy_link_auth_removed_response() -> JSONResponse:
     log.warning(
-        "legacy_link_auth_removed: migrate to HTTP Basic + HTTP_AUTH_HASH or OAuth2"
+        "legacy_link_auth_removed: migrate to HTTP Basic + HTTP_AUTH_HASH or auth runtime"
     )
     return api_response.fail(
         "E_LEGACY_LINK_AUTH_REMOVED",
-        "旧版 key/code 鉴权已移除，请使用 HTTP Basic + HTTP_AUTH_HASH 或 OAuth2",
+        "旧版 key/code 鉴权已移除，请使用 HTTP Basic + HTTP_AUTH_HASH 或认证运行时登录",
         http_status=410,
     )
 

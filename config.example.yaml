@@ -1,4 +1,4 @@
-# XiaoMusic OAuth2 example runtime config
+# XiaoMusic auth runtime config example
 
 hostname: 192.168.7.178
 port: 8090
@@ -10,6 +10,9 @@ enable_analytics: false
 enable_self_update: false
 persist_token: true
 log_redact: true
+auth_token_file: auth.json
+auth_refresh_interval_hours: 12
+auth_refresh_min_interval_minutes: 30
 
 # Jellyfin
 jellyfin_enabled: true

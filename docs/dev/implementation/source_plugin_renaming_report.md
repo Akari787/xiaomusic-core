@@ -8,7 +8,7 @@
 ## 2. 验收环境
 
 - 测试服务器：`root@192.168.7.178`（hostname: `test`）
-- 部署目录：`/root/xiaomusic_core_smoke`（历史目录名：`/root/xiaomusic_oauth2_smoke`）
+- 部署目录：`/root/xiaomusic_core_smoke`（历史目录名：`/root/xiaomusic_auth_smoke`）
 - 部署方式：`docker compose -f /root/xiaomusic_core_smoke/docker-compose.hardened.yml up -d --build xiaomusic-core`
 - 服务地址：`http://192.168.7.178:58090`
 - 验收设备：`DID=981257654`（Xiaomi Smart Speaker Pro / `OH2P`）

@@ -1,4 +1,4 @@
-# Auth Runtime Recovery Spec (Stable Login)
+# Auth Runtime Recovery Spec
 
 > Last updated: 2026-03-12
 
@@ -53,16 +53,15 @@ When user completes QR login and new short tokens are persisted to disk:
 
 Container restart is not required.
 
-## 5. Refresh token vs Refresh runtime
+## 5. Refresh vs Reload Runtime
 
-- Refresh token: cloud-side token exchange/refresh action.
-- Refresh runtime: local runtime reload from disk; does not require refresh token path.
+- Refresh: cloud-side session refresh action.
+- Refresh runtime: local runtime reload from disk; does not require cloud-side refresh success.
 
-In stable login release:
+Current release behavior:
 
-- `POST /api/auth/refresh` means refresh runtime (recommended path)
+- `POST /api/auth/refresh` means refresh runtime
 - `POST /api/auth/refresh_runtime` is explicit alias with same behavior
-- `POST /api/oauth2/refresh` and `POST /api/oauth2/refresh_runtime` remain compatibility aliases
 
 ## 6. Locked policy
 
@@ -98,7 +97,6 @@ Debug endpoints:
 - `GET /api/v1/debug/auth_recovery_state`
 - `GET /api/v1/debug/miaccount_login_trace`
 - `GET /api/v1/debug/auth_runtime_reload_state`
-- `GET /api/v1/debug/oauth_runtime_reload_state` (compatibility alias)
 
 ## 8. Ops guidance
 

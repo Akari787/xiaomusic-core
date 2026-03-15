@@ -119,11 +119,6 @@ def main():
         help="Auth token file path, relative to conf path by default",
     )
     parser.add_argument(
-        "--oauth2_token_file",
-        dest="oauth2_token_file",
-        help="Deprecated alias of --auth_token_file",
-    )
-    parser.add_argument(
         "--verbose",
         dest="verbose",
         action="store_true",

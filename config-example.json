@@ -1,5 +1,5 @@
 {
-  "oauth2_token_file": "auth.json",
+  "auth_token_file": "auth.json",
   "jellyfin_enabled": false,
   "jellyfin_base_url": "",
   "jellyfin_api_key": "",
@@ -135,7 +135,7 @@
   "__comment_security_1b": "Dangerous capabilities (exec/http_get/self-update) are disabled by default.",
   "__comment_security_2": "To enable exec# you must set enable_exec_plugin=true AND configure allowed_exec_commands. Outbound network access is denied unless outbound_allowlist_domains is configured.",
   "__comment_security_3a": "Sensitive values are redacted in logs by default (log_redact=true).",
-  "__comment_security_3b": "OAuth2 token persistence defaults to on (persist_token=true).",
+  "__comment_security_3b": "Auth token persistence defaults to on (persist_token=true).",
   "get_ask_by_mina": false,
   "play_type_one_tts_msg": "已经设置为单曲循环",
   "play_type_all_tts_msg": "已经设置为全部循环",
@@ -146,5 +146,7 @@
   "enable_cmd_del_music": false,
   "web_music_proxy": true,
   "edge_tts_voice": "zh-CN-XiaoyiNeural",
-  "enable_auto_clean_temp": true
+  "enable_auto_clean_temp": true,
+  "auth_refresh_interval_hours": 12,
+  "auth_refresh_min_interval_minutes": 30
 }

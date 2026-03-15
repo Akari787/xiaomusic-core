@@ -356,15 +356,12 @@ async def api_v1_debug_auth_rebuild_state():
 
 
 @router.get("/api/v1/debug/auth_runtime_reload_state")
-@router.get("/api/v1/debug/oauth_runtime_reload_state")
 async def api_v1_debug_auth_runtime_reload_state():
     request_id = _next_request_id(None)
     try:
         am = getattr(_get_xiaomusic(), "auth_manager", None)
         if am is not None and hasattr(am, "auth_runtime_reload_debug_state"):
             data = am.auth_runtime_reload_debug_state()
-        elif am is not None and hasattr(am, "oauth_runtime_reload_debug_state"):
-            data = am.oauth_runtime_reload_debug_state()
         else:
             data = {
                 "last_reload_runtime": {},
@@ -372,9 +369,6 @@ async def api_v1_debug_auth_runtime_reload_state():
         return _api_ok(data, request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
-
-
-api_v1_debug_oauth_runtime_reload_state = api_v1_debug_auth_runtime_reload_state
 
 
 @router.get("/api/v1/debug/auth_short_session_rebuild_state")

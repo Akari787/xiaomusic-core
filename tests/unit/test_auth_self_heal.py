@@ -60,11 +60,11 @@ class _DummyDeviceManager:
 class _DummyConfig:
     def __init__(self, base: Path):
         self.conf_path = str(base)
-        self.oauth2_token_path = str(base / "auth.json")
+        self.auth_token_path = str(base / "auth.json")
         self.mi_did = "981257654"
         self.devices = {}
-        self.oauth2_refresh_interval_hours = 12
-        self.oauth2_refresh_min_interval_minutes = 30
+        self.auth_refresh_interval_hours = 12
+        self.auth_refresh_min_interval_minutes = 30
         self.mina_high_freq_min_interval_seconds = 8
         self.mina_auth_fail_threshold = 3
         self.mina_auth_cooldown_seconds = 600
@@ -78,7 +78,7 @@ async def auth_manager(tmp_path):
     from xiaomusic.auth import AuthManager
 
     cfg = _DummyConfig(tmp_path)
-    Path(cfg.oauth2_token_path).write_text(
+    Path(cfg.auth_token_path).write_text(
         json.dumps(
             {
                 "passToken": "x",
@@ -147,7 +147,7 @@ async def test_concurrent_auth_call_only_one_relogin(auth_manager):
         return True
 
     auth_manager.need_login = _need_login
-    auth_manager._rebuild_short_session_from_long_auth = _short_rebuild
+    auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
     auth_manager.rebuild_services = _rebuild
     auth_manager._last_ok_ts = 0
 
@@ -291,7 +291,7 @@ async def test_auth_call_network_error_does_not_trigger_relogin(auth_manager):
 
 
 def test_clear_short_session_removes_only_short_fields(auth_manager):
-    token_path = Path(auth_manager.oauth2_token_path)
+    token_path = Path(auth_manager.auth_token_path)
     token_path.write_text(
         json.dumps(
             {
@@ -324,7 +324,7 @@ def test_clear_short_session_removes_only_short_fields(auth_manager):
 
 
 def test_clear_short_session_skipped_when_no_auth_failure_signal(auth_manager):
-    token_path = Path(auth_manager.oauth2_token_path)
+    token_path = Path(auth_manager.auth_token_path)
     before = json.loads(token_path.read_text(encoding="utf-8"))
     changed = auth_manager._clear_short_lived_session(
         clear_reason="keepalive",
@@ -384,7 +384,7 @@ async def test_ensure_logged_in_rebuild_path_clears_short_session(auth_manager, 
         return True
 
     auth_manager.need_login = _need_login
-    auth_manager._rebuild_short_session_from_long_auth = _short_rebuild
+    auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
     auth_manager.rebuild_services = _rebuild
     monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
 
@@ -398,7 +398,7 @@ def test_persist_rebuild_writes_short_tokens_again(auth_manager):
 
     auth_manager.token_store = TokenStore(auth_manager.config, _DummyLog())
     auth_manager.token_store.reload_from_disk()
-    auth_data = auth_manager._get_oauth2_auth_data()
+    auth_data = auth_manager._get_auth_data()
     auth_data.pop("serviceToken", None)
     auth_data.pop("yetAnotherServiceToken", None)
     auth_manager.token_store.update(auth_data, reason="ut-strip")
@@ -412,8 +412,8 @@ def test_persist_rebuild_writes_short_tokens_again(auth_manager):
             "micoapi": ("ss", "new-short-token"),
         }
 
-    auth_manager._persist_oauth2_token(auth_manager._get_oauth2_auth_data(), _Account(), reason="ut-rebuild")
-    data = auth_manager._get_oauth2_auth_data()
+    auth_manager._persist_auth_data(auth_manager._get_auth_data(), _Account(), reason="ut-rebuild")
+    data = auth_manager._get_auth_data()
     assert data.get("serviceToken") == "new-short-token"
     assert data.get("yetAnotherServiceToken") == "new-short-token"
 
@@ -434,7 +434,7 @@ async def test_ensure_logged_in_prefers_refresh_then_rebuild(auth_manager):
         return True
 
     auth_manager.need_login = _need_login
-    auth_manager._rebuild_short_session_from_long_auth = _short_rebuild
+    auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
     auth_manager.rebuild_services = _rebuild
 
     out = await auth_manager.ensure_logged_in(force=True, reason="ut-auth", prefer_refresh=True)
@@ -458,7 +458,7 @@ async def test_ensure_logged_in_never_uses_login_fallback_in_rebuild(auth_manage
         return True
 
     auth_manager.need_login = _need_login
-    auth_manager._rebuild_short_session_from_long_auth = _short_rebuild
+    auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
     auth_manager.rebuild_services = _rebuild
 
     out = await auth_manager.ensure_logged_in(force=True, reason="ut-fallback", prefer_refresh=True)
@@ -495,8 +495,8 @@ async def test_high_freq_mina_call_rate_limit_and_circuit(auth_manager):
 
 @pytest.mark.asyncio
 async def test_scheduled_refresh_trigger(auth_manager):
-    auth_manager.config.oauth2_refresh_interval_hours = 0.01
-    auth_manager.config.oauth2_refresh_min_interval_minutes = 1
+    auth_manager.config.auth_refresh_interval_hours = 0.01
+    auth_manager.config.auth_refresh_min_interval_minutes = 1
     auth_manager._last_refresh_ts = 0
 
     calls = {"refresh": 0, "rebuild": 0}
@@ -518,7 +518,7 @@ async def test_scheduled_refresh_trigger(auth_manager):
         return True
 
     auth_manager._token_save_ts = _token_save_ts
-    auth_manager.refresh_oauth2_token_if_needed = _refresh
+    auth_manager.refresh_auth_if_needed = _refresh
     auth_manager.rebuild_services = _rebuild
 
     await auth_manager._maybe_scheduled_refresh()
@@ -613,7 +613,7 @@ def test_clear_short_session_records_recovery_stage(auth_manager):
 
 @pytest.mark.asyncio
 async def test_login_exchange_stage_disabled_when_short_missing(auth_manager):
-    token_path = Path(auth_manager.oauth2_token_path)
+    token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
     data.pop("yetAnotherServiceToken", None)
@@ -641,7 +641,7 @@ async def test_login_exchange_stage_failed_records_reason(auth_manager, monkeypa
             raise AssertionError("auto login fallback should not call MiAccount.login")
 
     monkeypatch.setattr(auth_module, "MiAccount", _FailAccount)
-    token_path = Path(auth_manager.oauth2_token_path)
+    token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
     data.pop("yetAnotherServiceToken", None)
@@ -725,7 +725,7 @@ def test_playback_capability_stage_no_secret_and_not_in_normal_path(auth_manager
 
 @pytest.mark.asyncio
 async def test_mi_login_input_snapshot_is_masked(auth_manager):
-    token_path = Path(auth_manager.oauth2_token_path)
+    token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
     data.pop("yetAnotherServiceToken", None)
@@ -754,7 +754,7 @@ async def test_mi_login_fallback_disabled_by_policy(auth_manager, monkeypatch):
 
     monkeypatch.setattr(auth_module, "MiAccount", _FailAccount)
 
-    token_path = Path(auth_manager.oauth2_token_path)
+    token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
     data.pop("yetAnotherServiceToken", None)
@@ -783,7 +783,7 @@ def test_token_writeback_records_targets(auth_manager):
             "micoapi": ("ss", "new-short-token"),
         }
 
-    auth_manager._persist_oauth2_token(auth_manager._get_oauth2_auth_data(), _Account(), reason="ut-writeback")
+    auth_manager._persist_auth_data(auth_manager._get_auth_data(), _Account(), reason="ut-writeback")
     stage = auth_manager.miaccount_login_trace_debug_state()["token_writeback"]
     assert stage["result"] == "ok"
     assert stage["wrote_serviceToken"] is True
@@ -814,8 +814,8 @@ def test_non_login_paths_do_not_emit_mi_login_trace(auth_manager):
 
 
 @pytest.mark.asyncio
-async def test_rebuild_short_session_from_long_auth_success(auth_manager, monkeypatch):
-    token_path = Path(auth_manager.oauth2_token_path)
+async def test_rebuild_short_session_from_persistent_auth_success(auth_manager, monkeypatch):
+    token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
     data.pop("yetAnotherServiceToken", None)
@@ -827,7 +827,7 @@ async def test_rebuild_short_session_from_long_auth_success(auth_manager, monkey
         def __init__(self, auth_data_path=None, token_store=None):  # noqa: ARG002
             self.token_store = token_store
 
-        def rebuild_service_cookies_from_long_auth(self, sid="micoapi"):  # noqa: ARG002
+        def rebuild_service_cookies_from_persistent_auth(self, sid="micoapi"):  # noqa: ARG002
             payload = json.loads(token_path.read_text(encoding="utf-8"))
             payload["serviceToken"] = "rebuilt-st"
             payload["yetAnotherServiceToken"] = "rebuilt-yast"
@@ -846,19 +846,19 @@ async def test_rebuild_short_session_from_long_auth_success(auth_manager, monkey
     fake_module = types.ModuleType("xiaomusic.qrcode_login")
     fake_module.MiJiaAPI = _FakeMiJiaAPI
     monkeypatch.setitem(sys.modules, "xiaomusic.qrcode_login", fake_module)
-    ok = await auth_manager._rebuild_short_session_from_long_auth("ut-short-rebuild")
+    ok = await auth_manager._rebuild_short_session_from_persistent_auth("ut-short-rebuild")
     assert ok is True
     after = json.loads(token_path.read_text(encoding="utf-8"))
     assert after.get("serviceToken") == "rebuilt-st"
     assert after.get("yetAnotherServiceToken") == "rebuilt-yast"
-    runtime_view = auth_manager._get_oauth2_auth_data()
+    runtime_view = auth_manager._get_auth_data()
     assert runtime_view.get("serviceToken") == "rebuilt-st"
     assert runtime_view.get("yetAnotherServiceToken") == "rebuilt-yast"
 
 
 @pytest.mark.asyncio
-async def test_ensure_logged_in_locks_only_when_long_auth_missing(auth_manager):
-    token_path = Path(auth_manager.oauth2_token_path)
+async def test_ensure_logged_in_locks_only_when_persistent_auth_missing(auth_manager):
+    token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("passToken", None)
     data.pop("serviceToken", None)
@@ -876,25 +876,25 @@ async def test_ensure_logged_in_locks_only_when_long_auth_missing(auth_manager):
 
 
 @pytest.mark.asyncio
-async def test_rebuild_short_session_records_missing_long_auth_fields(auth_manager):
-    token_path = Path(auth_manager.oauth2_token_path)
+async def test_rebuild_short_session_records_missing_persistent_auth_fields(auth_manager):
+    token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("cUserId", None)
     data.pop("serviceToken", None)
     data.pop("yetAnotherServiceToken", None)
     token_path.write_text(json.dumps(data), encoding="utf-8")
 
-    ok = await auth_manager._rebuild_short_session_from_long_auth("ut-missing-long-auth")
+    ok = await auth_manager._rebuild_short_session_from_persistent_auth("ut-missing-long-auth")
     assert ok is False
     stage = auth_manager.auth_rebuild_debug_state()["last_rebuild_short_session"]
     assert stage["result"] == "failed"
-    assert stage["error_code"] == "missing_long_auth_fields"
-    assert "missing_long_auth_fields:cUserId" in stage["failed_reason"]
+    assert stage["error_code"] == "missing_persistent_auth_fields"
+    assert "missing_persistent_auth_fields:cUserId" in stage["failed_reason"]
 
 
 @pytest.mark.asyncio
 async def test_rebuild_short_session_does_not_call_login_on_long_missing(auth_manager, monkeypatch):
-    token_path = Path(auth_manager.oauth2_token_path)
+    token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("passToken", None)
     data.pop("serviceToken", None)
@@ -907,21 +907,21 @@ async def test_rebuild_short_session_does_not_call_login_on_long_missing(auth_ma
         def __init__(self, auth_data_path=None, token_store=None):  # noqa: ARG002
             return None
 
-        def rebuild_service_cookies_from_long_auth(self, sid="micoapi"):  # noqa: ARG002
+        def rebuild_service_cookies_from_persistent_auth(self, sid="micoapi"):  # noqa: ARG002
             calls["refresh"] += 1
             raise AssertionError("should not refresh when long auth is missing")
 
     fake_module = types.ModuleType("xiaomusic.qrcode_login")
     fake_module.MiJiaAPI = _FailMiJiaAPI
     monkeypatch.setitem(sys.modules, "xiaomusic.qrcode_login", fake_module)
-    ok = await auth_manager._rebuild_short_session_from_long_auth("ut-no-long-auth")
+    ok = await auth_manager._rebuild_short_session_from_persistent_auth("ut-no-long-auth")
     assert ok is False
     assert calls["refresh"] == 0
 
 
 @pytest.mark.asyncio
 async def test_rebuild_short_session_primary_failed_then_refresh_fallback_success(auth_manager, monkeypatch):
-    token_path = Path(auth_manager.oauth2_token_path)
+    token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
     data.pop("yetAnotherServiceToken", None)
@@ -935,11 +935,11 @@ async def test_rebuild_short_session_primary_failed_then_refresh_fallback_succes
         def __init__(self, auth_data_path=None, token_store=None):  # noqa: ARG002
             self.token_store = token_store
 
-        def rebuild_service_cookies_from_long_auth(self, sid="micoapi"):  # noqa: ARG002
+        def rebuild_service_cookies_from_persistent_auth(self, sid="micoapi"):  # noqa: ARG002
             calls["primary"] += 1
             return {
                 "ok": False,
-                "error_code": "long_auth_login_failed",
+                "error_code": "persistent_auth_login_failed",
                 "failed_reason": "service_login_not_authorized",
                 "sid": sid,
                 "http_stage": "serviceLogin",
@@ -962,10 +962,10 @@ async def test_rebuild_short_session_primary_failed_then_refresh_fallback_succes
     fake_module.MiJiaAPI = _FakeMiJiaAPI
     monkeypatch.setitem(sys.modules, "xiaomusic.qrcode_login", fake_module)
 
-    ok = await auth_manager._rebuild_short_session_from_long_auth("ut-fallback")
+    ok = await auth_manager._rebuild_short_session_from_persistent_auth("ut-fallback")
     assert ok is True
     assert calls == {"primary": 1, "fallback": 1}
-    data_after = auth_manager._get_oauth2_auth_data()
+    data_after = auth_manager._get_auth_data()
     assert data_after.get("serviceToken") == "fallback-st"
     stage = auth_manager.auth_short_session_rebuild_debug_state()["last_auth_recovery_flow"]
     # recovery flow is emitted by ensure_logged_in; direct helper call should keep it empty.
@@ -973,8 +973,8 @@ async def test_rebuild_short_session_primary_failed_then_refresh_fallback_succes
 
 
 @pytest.mark.asyncio
-async def test_ensure_logged_in_short_rebuild_failed_without_lock_when_long_auth_exists(auth_manager, monkeypatch):
-    token_path = Path(auth_manager.oauth2_token_path)
+async def test_ensure_logged_in_short_rebuild_failed_without_lock_when_persistent_auth_exists(auth_manager, monkeypatch):
+    token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data["psecurity"] = "pp"
     data["cUserId"] = "cu"
@@ -986,9 +986,9 @@ async def test_ensure_logged_in_short_rebuild_failed_without_lock_when_long_auth
     async def _primary(reason, sid="micoapi"):  # noqa: ARG001
         return {
             "ok": False,
-            "error_code": "long_auth_login_failed",
+            "error_code": "persistent_auth_login_failed",
             "failed_reason": "service_login_not_authorized",
-            "used_path": "relogin_with_long_auth",
+            "used_path": "relogin_with_persistent_auth",
             "sid": sid,
         }
 
@@ -1001,7 +1001,7 @@ async def test_ensure_logged_in_short_rebuild_failed_without_lock_when_long_auth
         }
 
     auth_manager.need_login = _need_login
-    auth_manager._rebuild_service_cookies_from_long_auth = _primary
+    auth_manager._rebuild_service_cookies_from_persistent_auth = _primary
     auth_manager._rebuild_short_session_tokens_via_refresh_fallback = _fallback
 
     with pytest.raises(RuntimeError):
@@ -1043,7 +1043,7 @@ async def test_init_all_data_rebuilds_when_existing_short_verify_failed(auth_man
     auth_manager.need_login = _need_login
     auth_manager.can_login = _can_login
     auth_manager.login_miboy = _login
-    auth_manager._rebuild_short_session_from_long_auth = _rebuild
+    auth_manager._rebuild_short_session_from_persistent_auth = _rebuild
     auth_manager._clear_short_lived_session = _clear
     auth_manager.device_manager.update_device_info = _update
     auth_manager._last_login_ts = 0
@@ -1063,7 +1063,7 @@ async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_miaccount_str
     async def _short_rebuild(reason):  # noqa: ARG001
         auth_manager._last_short_session_rebuild_detail = {
             "ok": True,
-            "used_path": "miaccount_long_auth_login",
+            "used_path": "miaccount_persistent_auth_login",
         }
         return True
 
@@ -1076,7 +1076,7 @@ async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_miaccount_str
         assert verify_result == "ok"
 
     auth_manager.need_login = _need_login
-    auth_manager._rebuild_short_session_from_long_auth = _short_rebuild
+    auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
     auth_manager.rebuild_services = _rebuild
     auth_manager._update_last_cookie_rebuild_outcome = _update_outcome
 
@@ -1095,7 +1095,7 @@ async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_mijia_strateg
     async def _short_rebuild(reason):  # noqa: ARG001
         auth_manager._last_short_session_rebuild_detail = {
             "ok": True,
-            "used_path": "mijia_long_auth_login",
+            "used_path": "mijia_persistent_auth_login",
         }
         return True
 
@@ -1108,7 +1108,7 @@ async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_mijia_strateg
         assert verify_result == "ok"
 
     auth_manager.need_login = _need_login
-    auth_manager._rebuild_short_session_from_long_auth = _short_rebuild
+    auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
     auth_manager.rebuild_services = _rebuild
     auth_manager._update_last_cookie_rebuild_outcome = _update_outcome
 
@@ -1138,7 +1138,7 @@ async def test_ensure_logged_in_does_not_update_cookie_outcome_for_refresh_fallb
         calls["update"] += 1
 
     auth_manager.need_login = _need_login
-    auth_manager._rebuild_short_session_from_long_auth = _short_rebuild
+    auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
     auth_manager.rebuild_services = _rebuild
     auth_manager._update_last_cookie_rebuild_outcome = _update_outcome
 
@@ -1153,7 +1153,7 @@ async def test_manual_reload_runtime_uses_disk_path_without_refresh_api(auth_man
 
     async def _refresh(reason, force=False):  # noqa: ARG001
         calls["refresh"] += 1
-        raise AssertionError("manual runtime reload should not call refresh_oauth2_token_if_needed")
+        raise AssertionError("manual runtime reload should not call refresh_auth_if_needed")
 
     async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
         calls["rebuild"] += 1
@@ -1165,7 +1165,7 @@ async def test_manual_reload_runtime_uses_disk_path_without_refresh_api(auth_man
         calls["device_update"] += 1
 
     auth_manager._set_auth_mode("degraded", reason="ut-pre")
-    auth_manager.refresh_oauth2_token_if_needed = _refresh
+    auth_manager.refresh_auth_if_needed = _refresh
     auth_manager.rebuild_services = _rebuild
     auth_manager.device_manager.update_device_info = _update_device_info
 
@@ -1185,7 +1185,7 @@ async def test_manual_reload_runtime_reloads_token_store_before_rebuild(auth_man
     auth_manager.token_store = token_store
     token_store.reload_from_disk()
 
-    token_path = Path(auth_manager.oauth2_token_path)
+    token_path = Path(auth_manager.auth_token_path)
     payload = json.loads(token_path.read_text(encoding="utf-8"))
     payload["serviceToken"] = "disk-new-st"
     payload["yetAnotherServiceToken"] = "disk-new-yast"
@@ -1194,7 +1194,7 @@ async def test_manual_reload_runtime_reloads_token_store_before_rebuild(auth_man
     seen = {"serviceToken": "", "yetAnotherServiceToken": ""}
 
     async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
-        data = auth_manager._get_oauth2_auth_data()
+        data = auth_manager._get_auth_data()
         seen["serviceToken"] = str(data.get("serviceToken") or "")
         seen["yetAnotherServiceToken"] = str(data.get("yetAnotherServiceToken") or "")
         auth_manager.mina_service = object()
@@ -1216,7 +1216,7 @@ async def test_manual_reload_runtime_reloads_token_store_before_rebuild(auth_man
 
 @pytest.mark.asyncio
 async def test_manual_reload_runtime_fails_with_missing_short_tokens(auth_manager):
-    token_path = Path(auth_manager.oauth2_token_path)
+    token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
     data.pop("yetAnotherServiceToken", None)

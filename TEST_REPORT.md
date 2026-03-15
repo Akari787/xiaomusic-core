@@ -7,15 +7,15 @@
 
 - 执行日期：2026-02-28
 - 环境：本地测试服务器（地址已脱敏）
-- 镜像版本：`akari787/xiaomusic-oauth2:v1.0.5`
-- 验证范围：旧版 key/code 鉴权移除（弃用清理）+ OAuth2/HTTP Basic 回归
+- 镜像版本：`akari787/xiaomusic-auth:v1.0.5`
+- 验证范围：旧版 key/code 鉴权移除（弃用清理）+ 认证/HTTP Basic 回归
 - 代码提交：`90922d5`、`6e36b7e`、`cd650c6`
 
 ## 二、部署步骤
 
-1. 同步 `oauth2-only` 最新代码到测试部署目录
+1. 同步 `auth-only` 最新代码到测试部署目录
 2. 构建镜像：
-   - `docker build -t akari787/xiaomusic-oauth2:v1.0.5 <部署目录>`
+   - `docker build -t akari787/xiaomusic-auth:v1.0.5 <部署目录>`
 3. 部署服务：
    - `docker compose -f docker-compose.hardened.yml up -d --force-recreate`
 4. 版本确认：
@@ -32,12 +32,12 @@
 
 - 配置 `XIAOMUSIC_ENABLE_ANALYTICS=false`
 - 未提供 `API_SECRET` 仍可正常启动服务
-- 验证点：应用初始化、API 路由、OAuth2 状态接口均正常
+- 验证点：应用初始化、API 路由、认证 状态接口均正常
 
-### 2) OAuth 状态与 token 持久化
+### 2) 认证状态与 token 持久化
 
-- 重启前：`/api/oauth2/status` 显示 `token_valid=true`
-- 重启后：`/api/oauth2/status` 仍为 `token_valid=true`
+- 重启前：`/api/auth/status` 显示 `token_valid=true`
+- 重启后：`/api/auth/status` 仍为 `token_valid=true`
 
 ### 3) 二维码登录链路
 
@@ -53,7 +53,7 @@
 
 - 在测试环境构建 `xiaomusic/webui`：`npm run build`
 - 后端托管构建产物（`/webui/`）可访问
-- 页面可读取 `/api/oauth2/status` 并展示登录状态
+- 页面可读取 `/api/auth/status` 并展示登录状态
 - 主入口仅保留默认主题入口，并新增 `/webui/` 入口
 
 ### 5) HTTP Basic + HTTP_AUTH_HASH 鉴权行为
@@ -68,7 +68,7 @@
 - 访问 `/music/*?key=...` 与 `/picture/*?code=...`：
   - 返回 `410`
   - 响应结构：`ok=false, success=false, error_code=E_LEGACY_LINK_AUTH_REMOVED`
-  - 日志包含迁移提示：`legacy_link_auth_removed: migrate to HTTP Basic + HTTP_AUTH_HASH or OAuth2`
+  - 日志包含迁移提示：`legacy_link_auth_removed: migrate to HTTP Basic + HTTP_AUTH_HASH or 认证`
 
 ### 7) 外部服务不可用降级
 
@@ -146,7 +146,7 @@
   进行重建启动。
 - 核心 API 抽检（契约保持不变）：
   - `GET /getversion` -> `{"version":"1.0.5"}`
-  - `GET /api/oauth2/status` -> 保持 `success/token_valid/runtime_auth_ready/...` 结构
+  - `GET /api/auth/status` -> 保持 `success/token_valid/runtime_auth_ready/...` 结构
   - `POST /api/v1/set_play_mode` -> 保持 `ok/success/error_code/message` 结构
 - WebUI：`GET /webui/` 返回 `200`，页面可打开。
 - 日志安全检查：未发现 `API_SECRET`、`HTTP_AUTH_HASH`、bcrypt 明文片段泄露。
@@ -162,7 +162,7 @@
 ### 验收环境
 
 - 测试服务器：`192.168.7.178:58090`
-- 部署目录：`/root/xiaomusic_oauth2_smoke`
+- 部署目录：`/root/xiaomusic_auth_smoke`
 - WebUI 构建产物：`/assets/index-DcQRMKxG.js`
 
 ### 验收步骤与结果

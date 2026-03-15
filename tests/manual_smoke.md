@@ -7,7 +7,7 @@
 在服务器上：
 
 ```bash
-cd /root/xiaomusic_oauth2
+cd /root/xiaomusic-core
 mkdir -p conf music
 
 docker compose -f docker-compose.hardened.yml up -d --build

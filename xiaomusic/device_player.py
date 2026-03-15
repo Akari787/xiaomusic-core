@@ -555,7 +555,7 @@ class XiaoMusicDevice:
 
         # 设置下一首歌曲的播放定时器
         if sec <= 0.1:
-            # After OAuth2 re-login the first status query may lag behind.
+            # After auth runtime relogin the first status query may lag behind.
             # Probe duration from player status so UI can recover from 00:00.
             self._start_duration_probe(name, sid)
             self.log.info(f"【{name}】不会设置下一首歌的定时器")

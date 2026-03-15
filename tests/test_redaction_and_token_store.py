@@ -18,10 +18,6 @@ class DummyConfig:
     def auth_token_path(self):
         return self._token_path
 
-    @property
-    def oauth2_token_path(self):
-        return self._token_path
-
 
 def test_log_redaction():
     stream = io.StringIO()
@@ -50,8 +46,8 @@ def test_token_precedence_env_over_file(tmp_path, monkeypatch):
     cfg = DummyConfig(str(token_file))
     store = TokenStore(cfg, logging.getLogger("t"))
 
-    monkeypatch.setenv("OAUTH2_ACCESS_TOKEN", "new_access")
-    monkeypatch.setenv("OAUTH2_REFRESH_TOKEN", "new_refresh")
+    monkeypatch.setenv("AUTH_ACCESS_TOKEN", "new_access")
+    monkeypatch.setenv("AUTH_REFRESH_TOKEN", "new_refresh")
 
     data = store.load().data
     assert data["serviceToken"] == "new_access"

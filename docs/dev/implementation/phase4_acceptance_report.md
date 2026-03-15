@@ -8,15 +8,15 @@
 ## 2. 测试服务器环境
 
 - 服务器：`root@192.168.7.178`（hostname: `test`）
-- 部署目录：`/root/xiaomusic_core_smoke`（历史目录名：`/root/xiaomusic_oauth2_smoke`）
+- 部署目录：`/root/xiaomusic_core_smoke`（历史目录名：`/root/xiaomusic_auth_smoke`）
 - 运行方式：Docker Compose（`docker-compose.hardened.yml`）
-- 容器：`xiaomusic-core`（历史容器名：`xiaomusic-oauth2`）
-- 镜像：`xiaomusic-core:latest`（历史镜像名：`xiaomusic:oauth2-only`）
+- 容器：`xiaomusic-core`（历史容器名：`xiaomusic-auth`）
+- 镜像：`xiaomusic-core:latest`（历史镜像名：`xiaomusic:auth-only`）
 - 端口：`58090 -> 8090`
 
 ## 3. 部署 commit
 
-- 分支：`core-main`（历史工作分支：`oauth2-only`）
+- 分支：`core-main`（历史工作分支：`auth-only`）
 - 部署基线 commit：`6dc94a9`（Phase 3）
 - Phase 4 验证代码：在该基线上部署当前工作区变更并完成实机验收。
 
