@@ -578,22 +578,6 @@ export function HomePage() {
   }, [music]);
 
   useEffect(() => {
-    const mainStyleId = "webui-default-main-css";
-    if (!document.getElementById(mainStyleId)) {
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = "/static/default/main.css";
-      link.id = mainStyleId;
-      document.head.appendChild(link);
-    }
-    const settingStyleId = "webui-default-setting-css";
-    if (!document.getElementById(settingStyleId)) {
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = "/static/default/setting.css";
-      link.id = settingStyleId;
-      document.head.appendChild(link);
-    }
     document.body.classList.add("index_page");
     document.body.classList.add("fonts-loaded");
     document.body.classList.add("webui-refactor-mode");
@@ -1375,7 +1359,7 @@ export function HomePage() {
       setMessage("请输入口令");
       return;
     }
-    setMessage(`自定义口令入口已废弃，请改用结构化 /api/v1/* 接口。当前输入：${cmd}`);
+    await callRetApi("/cmd", { did: activeDid, cmd }, "口令已发送");
   }
 
   async function timedShutdown(minutes: number) {

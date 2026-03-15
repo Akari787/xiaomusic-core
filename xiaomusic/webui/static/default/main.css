@@ -634,14 +634,6 @@ progress::-webkit-progress-value {
   padding: var(--spacing-xs) var(--spacing-lg);
   border-radius: var(--radius-sm);
 }
-
-
-
-
-
-
-}
-
 .timer-tooltip {
   bottom: 50%;
 }
