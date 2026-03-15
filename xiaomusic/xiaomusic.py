@@ -377,23 +377,48 @@ class XiaoMusic:
 
     # 口令:单曲循环
     async def set_play_type_one(self, did="", **kwargs):
-        await self.set_play_type(did, PLAY_TYPE_ONE)
+        await self.set_play_type(
+            did,
+            PLAY_TYPE_ONE,
+            dotts=kwargs.get("dotts", True),
+            refresh_playlist=kwargs.get("refresh_playlist", True),
+        )
 
     # 口令:全部循环
     async def set_play_type_all(self, did="", **kwargs):
-        await self.set_play_type(did, PLAY_TYPE_ALL)
+        await self.set_play_type(
+            did,
+            PLAY_TYPE_ALL,
+            dotts=kwargs.get("dotts", True),
+            refresh_playlist=kwargs.get("refresh_playlist", True),
+        )
 
     # 口令:随机播放
     async def set_play_type_rnd(self, did="", **kwargs):
-        await self.set_play_type(did, PLAY_TYPE_RND)
+        await self.set_play_type(
+            did,
+            PLAY_TYPE_RND,
+            dotts=kwargs.get("dotts", True),
+            refresh_playlist=kwargs.get("refresh_playlist", True),
+        )
 
     # 口令:单曲播放
     async def set_play_type_sin(self, did="", **kwargs):
-        await self.set_play_type(did, PLAY_TYPE_SIN)
+        await self.set_play_type(
+            did,
+            PLAY_TYPE_SIN,
+            dotts=kwargs.get("dotts", True),
+            refresh_playlist=kwargs.get("refresh_playlist", True),
+        )
 
     # 口令:顺序播放
     async def set_play_type_seq(self, did="", **kwargs):
-        await self.set_play_type(did, PLAY_TYPE_SEQ)
+        await self.set_play_type(
+            did,
+            PLAY_TYPE_SEQ,
+            dotts=kwargs.get("dotts", True),
+            refresh_playlist=kwargs.get("refresh_playlist", True),
+        )
 
     async def set_play_type(
         self,

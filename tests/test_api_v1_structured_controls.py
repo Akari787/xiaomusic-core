@@ -32,6 +32,12 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
         async def set_play_type_rnd(self, **kwargs):
             calls.append(("set_play_type_rnd", (), kwargs))
 
+        async def set_play_type_one(self, **kwargs):
+            calls.append(("set_play_type_one", (), kwargs))
+
+        async def set_play_type_all(self, **kwargs):
+            calls.append(("set_play_type_all", (), kwargs))
+
         async def stop_after_minute(self, **kwargs):
             calls.append(("stop_after_minute", (), kwargs))
 
@@ -82,6 +88,8 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
     assert calls[4][2]["arg1"] == "song-a"
     assert calls[6][2]["arg1"] == "收藏|song-a"
     assert calls[7][2]["arg1"] == "2个收藏"
+    assert calls[2][2]["dotts"] is False
+    assert calls[2][2]["refresh_playlist"] is False
     for out in (out_prev, out_next, out_mode, out_timer, out_add, out_remove, out_playlist, out_index, out_refresh):
         assert out["code"] == 0
         assert out["message"] == "ok"

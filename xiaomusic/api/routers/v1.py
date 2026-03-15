@@ -445,7 +445,7 @@ async def api_v1_control_play_mode(data: PlayModeRequest):
             )
         xm = _require_device(data.device_id, request_id)
         handler = getattr(xm, _PLAY_MODE_HANDLERS[play_mode])
-        await handler(did=data.device_id)
+        await handler(did=data.device_id, dotts=False, refresh_playlist=False)
         return _api_ok({"status": "ok", DEVICE_ID: data.device_id, "play_mode": play_mode}, request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)

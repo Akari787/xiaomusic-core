@@ -316,7 +316,13 @@ class XiaoMusicDevice:
         await self.add_download_music(name)
         return True
 
-    async def _play_internal(self, name="", search_key="", allow_download=True):
+    async def _play_internal(
+        self,
+        name="",
+        search_key="",
+        allow_download=True,
+        preserve_playlist=False,
+    ):
         """播放歌曲的内部统一实现
 
         Args:
@@ -356,7 +362,7 @@ class XiaoMusicDevice:
             return
 
         name = names[0]
-        if name not in self._play_list:
+        if (not preserve_playlist) and (name not in self._play_list):
             # 根据当前歌曲匹配歌曲列表
             self.device.cur_playlist = self.find_cur_playlist(name)
             self.update_playlist()
@@ -367,24 +373,28 @@ class XiaoMusicDevice:
         # 本地存在歌曲，直接播放
         await self._playmusic(name)
 
-    async def _play(self, name="", search_key=""):
+    async def _play(self, name="", search_key="", preserve_playlist=False):
         """播放歌曲（内部实现）- 支持下载"""
         return await self._play_internal(
             name=name,
             search_key=search_key,
             allow_download=True,
+            preserve_playlist=preserve_playlist,
         )
 
     async def play_next(self):
         """播放下一首（外部接口）"""
-        return await self._play_next()
+        return await self._play_next(manual=True)
 
-    async def _play_next(self):
+    async def _play_next(self, manual: bool = False):
         """播放下一首（内部实现）"""
         self.log.info("开始播放下一首")
         name = self.get_cur_music()
         if (
-            self.device.play_type == PLAY_TYPE_ALL
+            manual
+            or self.device.play_type == PLAY_TYPE_ONE
+            or self.device.play_type == PLAY_TYPE_SIN
+            or self.device.play_type == PLAY_TYPE_ALL
             or self.device.play_type == PLAY_TYPE_RND
             or self.device.play_type == PLAY_TYPE_SEQ
             or name == ""
@@ -398,18 +408,21 @@ class XiaoMusicDevice:
         if name == "":
             self.log.info("本地没有歌曲")
             return
-        await self._play(name)
+        await self._play(name, preserve_playlist=manual)
 
     async def play_prev(self):
         """播放上一首（外部接口）"""
-        return await self._play_prev()
+        return await self._play_prev(manual=True)
 
-    async def _play_prev(self):
+    async def _play_prev(self, manual: bool = False):
         """播放上一首（内部实现）"""
         self.log.info("开始播放上一首")
         name = self.get_cur_music()
         if (
-            self.device.play_type == PLAY_TYPE_ALL
+            manual
+            or self.device.play_type == PLAY_TYPE_ONE
+            or self.device.play_type == PLAY_TYPE_SIN
+            or self.device.play_type == PLAY_TYPE_ALL
             or self.device.play_type == PLAY_TYPE_RND
             or self.device.play_type == PLAY_TYPE_SEQ
             or name == ""
@@ -420,7 +433,7 @@ class XiaoMusicDevice:
         if name == "":
             await self.do_tts("本地没有歌曲")
             return
-        await self._play(name)
+        await self._play(name, preserve_playlist=manual)
 
     async def playlocal(self, name=""):
         """播放本地歌曲 - 不下载"""
@@ -437,6 +450,9 @@ class XiaoMusicDevice:
 
     def _bump_play_session(self, reason: str = "") -> int:
         self._play_session_id += 1
+        if self._duration_probe_task and not self._duration_probe_task.done():
+            self._duration_probe_task.cancel()
+            self._duration_probe_task = None
         self.log.info(
             "play_session_bump(session_id=%s, reason=%s)",
             self._play_session_id,
