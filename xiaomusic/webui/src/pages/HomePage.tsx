@@ -2,15 +2,21 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiGet, apiPost } from "../services/apiClient";
 import {
+  addFavorite as v1AddFavorite,
   apiErrorInfo,
   getDevices as v1GetDevices,
   getPlayerState,
   isApiOk,
+  next as v1Next,
   play as v1Play,
+  previous as v1Previous,
+  setPlayMode as v1SetPlayMode,
+  setShutdownTimer as v1SetShutdownTimer,
   setVolume as v1SetVolume,
   stop as v1Stop,
   tts as v1Tts,
   type ApiEnvelope,
+  type PlayMode,
   type PlayerStateData,
 } from "../services/v1Api";
 import { useTheme } from "../theme/ThemeProvider";
@@ -57,11 +63,11 @@ type QrcodeResp = {
 };
 
 const PLAY_MODES = [
-  { icon: "repeat_one", cmd: "单曲循环" },
-  { icon: "repeat", cmd: "全部循环" },
-  { icon: "shuffle", cmd: "随机播放" },
-  { icon: "filter_1", cmd: "单曲播放" },
-  { icon: "playlist_play", cmd: "顺序播放" },
+  { icon: "repeat_one", label: "单曲循环", value: "one" },
+  { icon: "repeat", label: "全部循环", value: "all" },
+  { icon: "shuffle", label: "随机播放", value: "random" },
+  { icon: "filter_1", label: "单曲播放", value: "single" },
+  { icon: "playlist_play", label: "顺序播放", value: "sequence" },
 ] as const;
 
 type SettingField = {
@@ -1122,7 +1128,7 @@ export function HomePage() {
     await loadStatus(activeDid);
   }
 
-  async function switchTrackByCommand(cmd: string, okText: string) {
+  async function switchTrack(action: "previous" | "next", okText: string) {
     if (!requireDid()) {
       return;
     }
@@ -1151,10 +1157,9 @@ export function HomePage() {
     };
 
     setMessage(`${okText}，正在同步播放信息...`);
-    const out = (await apiPost<{ ret?: string }>("/cmd", { did, cmd })) as { ret?: string };
-    const ok = out.ret === "OK";
-    setMessage(ok ? okText : out.ret || "执行失败");
-    if (ok) {
+    const out = action === "previous" ? await v1Previous(did) : await v1Next(did);
+    if (isApiOk(out)) {
+      setMessage(okText);
       pendingPlayRef.current = null;
       await loadStatus(did);
       for (let i = 0; i < 12; i += 1) {
@@ -1168,6 +1173,8 @@ export function HomePage() {
       }
       return;
     }
+    const err = apiErrorInfo(out);
+    setMessage(err.message || "执行失败");
     await loadStatus(did);
   }
 
@@ -1288,7 +1295,6 @@ export function HomePage() {
     }
     const prev = playModeIndex;
     const next = (playModeIndex + 1) % PLAY_MODES.length;
-    const cmd = PLAY_MODES[next].cmd;
     setPlayModeIndex(next);
     if (!requireDid()) {
       setPlayModeIndex(prev);
@@ -1296,7 +1302,16 @@ export function HomePage() {
     }
     setSwitchingPlayMode(true);
     try {
-      await callRetApi("/cmd", { did: activeDid, cmd }, `已切换为${cmd}`);
+      const nextMode = PLAY_MODES[next].value as PlayMode;
+      const out = await v1SetPlayMode(activeDid, nextMode);
+      if (isApiOk(out)) {
+        setMessage(`已切换为${PLAY_MODES[next].label}`);
+        await loadStatus(activeDid);
+        return;
+      }
+      setPlayModeIndex(prev);
+      const err = apiErrorInfo(out);
+      setMessage(err.message || "切换播放模式失败");
     } finally {
       setSwitchingPlayMode(false);
     }
@@ -1363,6 +1378,37 @@ export function HomePage() {
     await callRetApi("/cmd", { did: activeDid, cmd }, "口令已发送");
   }
 
+  async function timedShutdown(minutes: number) {
+    if (!requireDid()) {
+      return;
+    }
+    const out = await v1SetShutdownTimer(activeDid, minutes);
+    if (isApiOk(out)) {
+      setMessage(`${minutes}分钟后关机已发送`);
+      return;
+    }
+    const err = apiErrorInfo(out);
+    setMessage(err.message || "定时关机设置失败");
+  }
+
+  async function addCurrentToFavorites() {
+    if (!requireDid()) {
+      return;
+    }
+    const musicName = String(status.cur_music || music || "").trim();
+    if (!musicName) {
+      setMessage("当前没有可收藏的歌曲");
+      return;
+    }
+    const out = await v1AddFavorite(activeDid, musicName);
+    if (isApiOk(out)) {
+      setMessage(`已加入收藏：${musicName}`);
+      return;
+    }
+    const err = apiErrorInfo(out);
+    setMessage(err.message || "加入收藏失败");
+  }
+
   async function searchOnline() {
     const kw = searchKeyword.trim();
     if (!kw) {
@@ -1414,10 +1460,6 @@ export function HomePage() {
       const err = apiErrorInfo(out);
       setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`);
     }
-  }
-
-  async function timedShutdown(label: string) {
-    await callRetApi("/cmd", { did: activeDid, cmd: label }, `${label}已发送`);
   }
 
   async function getQrcode() {
@@ -1814,12 +1856,12 @@ export function HomePage() {
                   {PLAY_MODES[playModeIndex]?.icon || "shuffle"}
                 </span>
               </button>
-              <button onClick={() => void switchTrackByCommand("上一首", "已发送上一首")}>
+              <button onClick={() => void switchTrack("previous", "已发送上一首")}>
                 <span className="material-icons" aria-hidden="true">
                   skip_previous
                 </span>
               </button>
-              <button onClick={() => void switchTrackByCommand("下一首", "已发送下一首")}>
+              <button onClick={() => void switchTrack("next", "已发送下一首")}>
                 <span className="material-icons" aria-hidden="true">
                   skip_next
                 </span>
@@ -1942,9 +1984,9 @@ export function HomePage() {
                 <span className="material-icons" aria-hidden="true">
                   {PLAY_MODES[playModeIndex]?.icon || "shuffle"}
                 </span>
-                <span className="tooltip">{PLAY_MODES[playModeIndex]?.cmd || "切换播放模式"}</span>
+                <span className="tooltip">{PLAY_MODES[playModeIndex]?.label || "切换播放模式"}</span>
               </div>
-              <div onClick={() => void switchTrackByCommand("上一首", "已发送上一首")} className="control-button device-enable" role="button" tabIndex={0}>
+              <div onClick={() => void switchTrack("previous", "已发送上一首")} className="control-button device-enable" role="button" tabIndex={0}>
                 <span className="material-icons" aria-hidden="true">
                   skip_previous
                 </span>
@@ -1956,7 +1998,7 @@ export function HomePage() {
                 </span>
                 <span className="tooltip">播放</span>
               </div>
-              <div onClick={() => void switchTrackByCommand("下一首", "已发送下一首")} className="control-button device-enable" role="button" tabIndex={0}>
+              <div onClick={() => void switchTrack("next", "已发送下一首")} className="control-button device-enable" role="button" tabIndex={0}>
                 <span className="material-icons" aria-hidden="true">
                   skip_next
                 </span>
@@ -2009,7 +2051,7 @@ export function HomePage() {
             </div>
 
             <div className="mode-controls button-group">
-              <div onClick={() => void callRetApi("/cmd", { did: activeDid, cmd: "加入收藏" }, "已发送收藏命令")} className="favorite icon-item device-enable" role="button" tabIndex={0}>
+              <div onClick={() => void addCurrentToFavorites()} className="favorite icon-item device-enable" role="button" tabIndex={0}>
                 <span className="material-icons" aria-hidden="true">
                   favorite
                 </span>
@@ -2104,9 +2146,10 @@ export function HomePage() {
       <div className={`component ${showTimer ? "show" : ""}`} id="timer-component" style={{ display: showTimer ? "block" : "none" }}>
         <h2>定时关机</h2>
         <p className="auth-hint">兼容口令入口：当前通过设备语音命令链路执行。</p>
-        <button onClick={() => void timedShutdown("10分钟后关机")}>10分钟后关机</button>
-        <button onClick={() => void timedShutdown("30分钟后关机")}>30分钟后关机</button>
-        <button onClick={() => void timedShutdown("60分钟后关机")}>60分钟后关机</button>
+        <button onClick={() => void timedShutdown(1)}>1分钟后关机</button>
+        <button onClick={() => void timedShutdown(10)}>10分钟后关机</button>
+        <button onClick={() => void timedShutdown(30)}>30分钟后关机</button>
+        <button onClick={() => void timedShutdown(60)}>60分钟后关机</button>
         <div className="component-button-one">
           <button onClick={() => setShowTimer(false)} className="close-button">
             关闭

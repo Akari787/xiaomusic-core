@@ -58,6 +58,8 @@ export interface PlayerStateData {
   duration?: number;
 }
 
+export type PlayMode = "one" | "all" | "random" | "single" | "sequence";
+
 export interface DeviceRow {
   device_id: string;
   name?: string;
@@ -73,6 +75,18 @@ export interface SystemStatusData {
   status?: string;
   version?: string;
   devices_count?: number;
+}
+
+export interface ShutdownTimerData {
+  status?: string;
+  device_id?: string;
+  minutes?: number;
+}
+
+export interface FavoritesData {
+  status?: string;
+  device_id?: string;
+  music_name?: string;
 }
 
 export interface ApiErrorInfo {
@@ -209,6 +223,32 @@ export async function setVolume(deviceId: string, volume: number): Promise<ApiEn
 
 export async function probe(deviceId: string): Promise<ApiEnvelope<ControlData>> {
   return await safePost<ControlData>("/api/v1/control/probe", { device_id: deviceId });
+}
+
+export async function previous(deviceId: string): Promise<ApiEnvelope<ControlData>> {
+  return await safePost<ControlData>("/api/v1/control/previous", { device_id: deviceId });
+}
+
+export async function next(deviceId: string): Promise<ApiEnvelope<ControlData>> {
+  return await safePost<ControlData>("/api/v1/control/next", { device_id: deviceId });
+}
+
+export async function setPlayMode(deviceId: string, playMode: PlayMode): Promise<ApiEnvelope<ControlData & { play_mode?: PlayMode }>> {
+  return await safePost<ControlData & { play_mode?: PlayMode }>("/api/v1/control/play-mode", {
+    device_id: deviceId,
+    play_mode: playMode,
+  });
+}
+
+export async function setShutdownTimer(deviceId: string, minutes: number): Promise<ApiEnvelope<ShutdownTimerData>> {
+  return await safePost<ShutdownTimerData>("/api/v1/control/shutdown-timer", { device_id: deviceId, minutes });
+}
+
+export async function addFavorite(deviceId: string, musicName: string): Promise<ApiEnvelope<FavoritesData>> {
+  return await safePost<FavoritesData>("/api/v1/library/favorites/add", {
+    device_id: deviceId,
+    music_name: musicName,
+  });
 }
 
 export async function getDevices(): Promise<ApiEnvelope<DevicesData>> {

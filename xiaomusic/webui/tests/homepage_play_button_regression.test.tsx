@@ -9,9 +9,14 @@ const mockedApi = vi.hoisted(() => ({
 }));
 
 const mockedV1 = vi.hoisted(() => ({
+  addFavorite: vi.fn(),
+  next: vi.fn(),
   play: vi.fn(),
+  previous: vi.fn(),
   getDevices: vi.fn(),
   getPlayerState: vi.fn(),
+  setPlayMode: vi.fn(),
+  setShutdownTimer: vi.fn(),
   tts: vi.fn(),
   setVolume: vi.fn(),
   stop: vi.fn(),
@@ -30,9 +35,14 @@ vi.mock("../src/services/v1Api", () => ({
     errorCode: "",
     stage: null,
   }),
+  addFavorite: mockedV1.addFavorite,
+  next: mockedV1.next,
   play: mockedV1.play,
+  previous: mockedV1.previous,
   getDevices: mockedV1.getDevices,
   getPlayerState: mockedV1.getPlayerState,
+  setPlayMode: mockedV1.setPlayMode,
+  setShutdownTimer: mockedV1.setShutdownTimer,
   tts: mockedV1.tts,
   setVolume: mockedV1.setVolume,
   stop: mockedV1.stop,
@@ -67,6 +77,11 @@ describe("HomePage play button regression", () => {
     mockedApi.apiGet.mockReset();
     mockedApi.apiPost.mockReset();
     mockedV1.play.mockReset();
+    mockedV1.previous.mockReset();
+    mockedV1.next.mockReset();
+    mockedV1.setPlayMode.mockReset();
+    mockedV1.setShutdownTimer.mockReset();
+    mockedV1.addFavorite.mockReset();
     mockedV1.getDevices.mockReset();
     mockedV1.getPlayerState.mockReset();
     mockedV1.tts.mockReset();
@@ -129,6 +144,11 @@ describe("HomePage play button regression", () => {
     mockedV1.tts.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-tts" });
     mockedV1.setVolume.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-vol" });
     mockedV1.stop.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-stop" });
+    mockedV1.previous.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-prev" });
+    mockedV1.next.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-next" });
+    mockedV1.setPlayMode.mockResolvedValue({ code: 0, message: "ok", data: { play_mode: "sequence" }, request_id: "rid-mode" });
+    mockedV1.setShutdownTimer.mockResolvedValue({ code: 0, message: "ok", data: { minutes: 1 }, request_id: "rid-timer" });
+    mockedV1.addFavorite.mockResolvedValue({ code: 0, message: "ok", data: { music_name: "Song A" }, request_id: "rid-fav" });
 
     await act(async () => {
       root.render(<HomePage />);
@@ -166,5 +186,47 @@ describe("HomePage play button regression", () => {
 
     const announcer = container.querySelector("#sr-announcer");
     expect((announcer?.textContent || "").trim()).not.toContain("/api/v1/play");
+  });
+
+  it("routes next/previous/play-mode/timer/favorite through v1 services instead of /cmd", async () => {
+    const buttons = Array.from(container.querySelectorAll(".control-button .tooltip"));
+    const prev = buttons.find((el) => (el.textContent || "").trim() === "上一首")?.parentElement as HTMLElement;
+    const next = buttons.find((el) => (el.textContent || "").trim() === "下一首")?.parentElement as HTMLElement;
+    const mode = container.querySelector(".player-controls.button-group .control-button") as HTMLElement | null;
+    const favorite = Array.from(container.querySelectorAll(".favorite p")).find((el) => (el.textContent || "").trim() === "收藏")?.parentElement as HTMLElement;
+
+    await act(async () => {
+      prev?.click();
+      next?.click();
+      mode?.click();
+      favorite?.click();
+    });
+
+    const timerEntry = Array.from(container.querySelectorAll(".icon-item p")).find(
+      (el) => (el.textContent || "").trim() === "定时",
+    )?.parentElement as HTMLElement | undefined;
+
+    await act(async () => {
+      timerEntry?.click();
+    });
+
+    const timerButton = Array.from(container.querySelectorAll("button")).find(
+      (el) => (el.textContent || "").trim() === "1分钟后关机",
+    ) as HTMLButtonElement | undefined;
+
+    await act(async () => {
+      timerButton?.click();
+    });
+
+    expect(mockedV1.previous).toHaveBeenCalledWith("981257654");
+    expect(mockedV1.next).toHaveBeenCalledWith("981257654");
+    expect(mockedV1.setPlayMode).toHaveBeenCalledTimes(1);
+    expect(mockedV1.setPlayMode.mock.calls[0][0]).toBe("981257654");
+    expect(["one", "all", "random", "single", "sequence"]).toContain(mockedV1.setPlayMode.mock.calls[0][1]);
+    expect(mockedV1.addFavorite).toHaveBeenCalledWith("981257654", "Song A");
+    expect(mockedV1.setShutdownTimer).toHaveBeenCalledWith("981257654", 1);
+
+    const cmdCalls = mockedApi.apiPost.mock.calls.filter((args) => args[0] === "/cmd");
+    expect(cmdCalls).toHaveLength(0);
   });
 });

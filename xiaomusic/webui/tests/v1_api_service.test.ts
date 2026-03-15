@@ -7,17 +7,22 @@ vi.mock("../src/services/apiClient", () => ({
 
 import { apiGetJson, apiPostJson } from "../src/services/apiClient";
 import {
+  addFavorite,
   apiErrorInfo,
   apiErrorText,
   getDevices,
   getPlayerState,
   getSystemStatus,
   isApiOk,
+  next,
   pause,
   play,
+  previous,
   probe,
   resolve,
   resume,
+  setPlayMode,
+  setShutdownTimer,
   setVolume,
   stop,
   tts,
@@ -48,6 +53,11 @@ describe("v1Api service", () => {
     await tts("did-1", "hello");
     await setVolume("did-1", 25);
     await probe("did-1");
+    await previous("did-1");
+    await next("did-1");
+    await setPlayMode("did-1", "sequence");
+    await setShutdownTimer("did-1", 1);
+    await addFavorite("did-1", "Song A");
 
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/stop", { device_id: "did-1" });
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/pause", { device_id: "did-1" });
@@ -55,6 +65,11 @@ describe("v1Api service", () => {
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/tts", { device_id: "did-1", text: "hello" });
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/volume", { device_id: "did-1", volume: 25 });
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/probe", { device_id: "did-1" });
+    expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/previous", { device_id: "did-1" });
+    expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/next", { device_id: "did-1" });
+    expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/play-mode", { device_id: "did-1", play_mode: "sequence" });
+    expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/shutdown-timer", { device_id: "did-1", minutes: 1 });
+    expect(mockedPost).toHaveBeenCalledWith("/api/v1/library/favorites/add", { device_id: "did-1", music_name: "Song A" });
   });
 
   it("calls official device and system status endpoints", async () => {
