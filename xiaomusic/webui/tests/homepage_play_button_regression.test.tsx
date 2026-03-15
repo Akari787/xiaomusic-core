@@ -70,6 +70,7 @@ describe("HomePage play button regression", () => {
   let root: Root;
 
   beforeEach(async () => {
+    vi.useFakeTimers();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -123,17 +124,33 @@ describe("HomePage play button regression", () => {
     });
 
     mockedApi.apiPost.mockResolvedValue({ ret: "OK" });
-    mockedV1.play.mockResolvedValue({
-      code: 0,
-      message: "ok",
-      data: { status: "playing", device_id: "981257654", source_plugin: "local_library", transport: "mina" },
-      request_id: "rid-play",
+    let currentSong = "";
+    let currentDuration = 0;
+    mockedV1.play.mockImplementation(async () => {
+      currentSong = "Song A";
+      currentDuration = 180;
+      return {
+        code: 0,
+        message: "ok",
+        data: { status: "playing", device_id: "981257654", source_plugin: "local_library", transport: "mina" },
+        request_id: "rid-play",
+      };
     });
-    mockedV1.getPlayerState.mockResolvedValue({
-      code: 0,
-      message: "ok",
-      data: { device_id: "981257654", is_playing: false, cur_music: "", offset: 0, duration: 0 },
-      request_id: "rid-state",
+    mockedV1.getPlayerState.mockImplementation(async () => {
+      if (!currentSong) {
+        return {
+          code: 0,
+          message: "ok",
+          data: { device_id: "981257654", is_playing: false, cur_music: "", offset: 0, duration: 0 },
+          request_id: "rid-state-idle",
+        };
+      }
+      return {
+        code: 0,
+        message: "ok",
+        data: { device_id: "981257654", is_playing: true, cur_music: currentSong, offset: 1, duration: currentDuration || 180 },
+        request_id: `rid-state-${currentSong}`,
+      };
     });
     mockedV1.getDevices.mockResolvedValue({
       code: 0,
@@ -144,8 +161,16 @@ describe("HomePage play button regression", () => {
     mockedV1.tts.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-tts" });
     mockedV1.setVolume.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-vol" });
     mockedV1.stop.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-stop" });
-    mockedV1.previous.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-prev" });
-    mockedV1.next.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-next" });
+    mockedV1.previous.mockImplementation(async () => {
+      currentSong = "Song Prev";
+      currentDuration = 210;
+      return { code: 0, message: "ok", data: {}, request_id: "rid-prev" };
+    });
+    mockedV1.next.mockImplementation(async () => {
+      currentSong = "Song Next";
+      currentDuration = 220;
+      return { code: 0, message: "ok", data: {}, request_id: "rid-next" };
+    });
     mockedV1.setPlayMode.mockResolvedValue({ code: 0, message: "ok", data: { play_mode: "sequence" }, request_id: "rid-mode" });
     mockedV1.setShutdownTimer.mockResolvedValue({ code: 0, message: "ok", data: { minutes: 1 }, request_id: "rid-timer" });
     mockedV1.addFavorite.mockResolvedValue({ code: 0, message: "ok", data: { music_name: "Song A" }, request_id: "rid-fav" });
@@ -159,6 +184,7 @@ describe("HomePage play button regression", () => {
     await act(async () => {
       root.unmount();
     });
+    vi.useRealTimers();
     container.remove();
   });
 
@@ -171,6 +197,7 @@ describe("HomePage play button regression", () => {
 
     await act(async () => {
       playButton?.click();
+      await vi.advanceTimersByTimeAsync(3000);
     });
 
     const infoCalls = mockedApi.apiGet.mock.calls.filter((args) => String(args[0]).startsWith("/musicinfo?name="));
@@ -200,6 +227,7 @@ describe("HomePage play button regression", () => {
       next?.click();
       mode?.click();
       favorite?.click();
+      await vi.advanceTimersByTimeAsync(4000);
     });
 
     const timerEntry = Array.from(container.querySelectorAll(".icon-item p")).find(
@@ -208,6 +236,7 @@ describe("HomePage play button regression", () => {
 
     await act(async () => {
       timerEntry?.click();
+      await vi.advanceTimersByTimeAsync(1000);
     });
 
     const timerButton = Array.from(container.querySelectorAll("button")).find(
@@ -216,6 +245,7 @@ describe("HomePage play button regression", () => {
 
     await act(async () => {
       timerButton?.click();
+      await vi.advanceTimersByTimeAsync(1000);
     });
 
     expect(mockedV1.previous).toHaveBeenCalledWith("981257654");
@@ -228,5 +258,34 @@ describe("HomePage play button regression", () => {
 
     const cmdCalls = mockedApi.apiPost.mock.calls.filter((args) => args[0] === "/cmd");
     expect(cmdCalls).toHaveLength(0);
+  });
+
+  it("removes deprecated custom command entry from play test modal", async () => {
+    const testEntry = Array.from(container.querySelectorAll(".icon-item p")).find(
+      (el) => (el.textContent || "").trim() === "测试",
+    )?.parentElement as HTMLElement | undefined;
+
+    await act(async () => {
+      testEntry?.click();
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(container.textContent || "").not.toContain("自定义口令");
+  });
+
+  it("shows timer copy aligned with v1 formal controls", async () => {
+    const timerEntry = Array.from(container.querySelectorAll(".icon-item p")).find(
+      (el) => (el.textContent || "").trim() === "定时",
+    )?.parentElement as HTMLElement | undefined;
+
+    await act(async () => {
+      timerEntry?.click();
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    const text = container.textContent || "";
+    expect(text).toContain("定时设置会直接通过正式控制接口发送到设备。");
+    expect(text).not.toContain("兼容口令入口");
+    expect(text).not.toContain("语音命令链路");
   });
 });
