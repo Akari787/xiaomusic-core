@@ -6,6 +6,8 @@ services:
     restart: unless-stopped
     ports:
       - "58090:8090"
+    env_file:
+      - .env
     environment:
       TZ: Asia/Shanghai
       XIAOMUSIC_PUBLIC_PORT: 58090
