@@ -37,35 +37,33 @@ export default async ({ mode }) => {
   const siteBaseRaw = process.env.VITE_SITE_BASE || env.VITE_SITE_BASE || '/'
   const siteBase = normalizeBase(siteBaseRaw)
 
-  const siteHostnameRaw = process.env.VITE_SITE_HOSTNAME || env.VITE_SITE_HOSTNAME || 'https://xdocs.hanxi.cc'
-  const siteHostname = normalizeHostname(siteHostnameRaw) || 'https://xdocs.hanxi.cc'
+  const siteHostnameRaw = process.env.VITE_SITE_HOSTNAME || env.VITE_SITE_HOSTNAME || 'https://akari787.github.io'
+  const siteHostname = normalizeHostname(siteHostnameRaw) || 'https://akari787.github.io'
   const issuesToken = process.env.VITE_GITHUB_ISSUES_TOKEN || env.VITE_GITHUB_ISSUES_TOKEN || ''
   return defineConfig({
     // GitHub Pages: for project pages you typically need "/<repo-name>/".
     // Override via VITE_SITE_BASE in CI or locally.
     base: siteBase,
-    title: "XiaoMusic",
-    description: "XiaoMusic doc",
+    title: "xiaomusic-core",
+    description: "xiaomusic-core 文档站",
     themeConfig: {
       // https://vitepress.dev/reference/default-theme-config
       nav: [
         { text: 'Guide', link: '/issues' },
-        { text: 'Admin', link: 'https://x.hanxi.cc' },
+        { text: 'GitHub', link: 'https://github.com/Akari787/xiaomusic-core' },
       ],
 
       socialLinks: [
-        { icon: 'github', link: 'https://github.com/hanxi/xiaomusic' }
+        { icon: 'github', link: 'https://github.com/Akari787/xiaomusic-core' }
       ],
 
       footer: {
         message: '基于 MIT 许可发布',
-        copyright: `版权所有 © 2023-${new Date().getFullYear()} 涵曦`
+        copyright: `版权所有 © 2023-${new Date().getFullYear()} xiaomusic-core contributors`
       },
     },
     sitemap: siteHostname ? { hostname: siteHostname } : undefined,
-    head: [
-      ['script', { defer: true, src: 'https://umami.hanxi.cc/script.js', 'data-website-id': '29cca3f5-e420-432b-adc7-8a1325d31c68' }]
-    ],
+    head: [],
     lastUpdated: true,
     markdown: {
       lineNumbers: false, // 关闭代码块行号显示
@@ -91,15 +89,14 @@ export default async ({ mode }) => {
           titleFromFile: true,
         }),
         GitHubIssuesPlugin({
-          repo: 'hanxi/xiaomusic',
+          repo: 'Akari787/xiaomusic-core',
           token: issuesToken,
           replaceRules: [
             {
-              baseUrl: 'https://github.com/hanxi/xiaomusic/issues',
+              baseUrl: 'https://github.com/Akari787/xiaomusic-core/issues',
               targetUrl: '/issues',
             },
           ],
-          githubProxy: 'https://gproxy.hanxi.cc/proxy',
         }),
       ],
     }

@@ -6,6 +6,7 @@ on:
     paths:
       - "docs/**"
       - "README.md"
+      - "get_release.py"
       - ".github/workflows/static.yml"
   workflow_dispatch:
 

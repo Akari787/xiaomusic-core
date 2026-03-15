@@ -3,9 +3,9 @@ import os
 
 import requests
 
-# 替换为你的 GitHub 仓库信息
-GITHUB_OWNER = "hanxi"
-GITHUB_REPO = "xiaomusic"
+# 当前 GitHub 仓库信息
+GITHUB_OWNER = "Akari787"
+GITHUB_REPO = "xiaomusic-core"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
 
 
