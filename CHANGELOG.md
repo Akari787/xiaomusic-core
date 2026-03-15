@@ -11,7 +11,7 @@
 
 - 项目对外名称统一为 `xiaomusic-core`，README、Docker、GitHub workflow、WebUI 与部署文档同步收口到新名称。
 - 配置、CLI、接口与前端语义统一到 `auth`：`auth_token_file`、`/api/auth/*`、`AuthStatus` 等成为唯一主线命名。
-- 移除主线中的 OAuth2 旧命名与兼容别名，WebUI 默认只使用 `/api/auth/*`。
+- 清理旧认证术语与历史命名残留，WebUI 默认只使用 `/api/auth/*`。
 
 ### 文档与发布准备
 

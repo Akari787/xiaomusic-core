@@ -443,7 +443,7 @@ runtime 丢失
 serviceToken 失效
   -> verify 失败
   -> 尝试 reload disk auth
-  -> 尝试 long_auth_login
+  -> 尝试 persistent_auth_login
   -> 生成新 serviceToken
   -> 写回 auth.json
   -> runtime session 恢复
@@ -484,11 +484,11 @@ serviceToken 失效
 
 ---
 
-## 10. `long_auth_login` / `persistent_auth_login` 原理
+## 10. `persistent_auth_login` 原理
 
 ### 10.1 它本质上在做什么
 
-`miaccount_long_auth_login` 这类路径，本质上不是“重新完整登录一次”，而是：
+`miaccount_persistent_auth_login` 这类路径，本质上不是“重新完整登录一次”，而是：
 
 - 使用长期 cookie / 长期认证材料
 - 重新构造 service cookies

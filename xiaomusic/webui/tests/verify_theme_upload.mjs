@@ -57,7 +57,7 @@ try {
     const soundscapeRoot = document.querySelector(".soundscape-app");
     const soundscapeSidebarItems = document.querySelectorAll(".soundscape-playlist-item").length;
     const soundscapeTable = document.querySelector(".soundscape-table");
-    const validationHint = Array.from(document.querySelectorAll("#settings-component .oauth-hint"))
+    const validationHint = Array.from(document.querySelectorAll("#settings-component .auth-hint"))
       .map((el) => (el.textContent || "").trim())
       .find((txt) => txt.includes("主题") && (txt.includes("失败") || txt.includes("错误") || txt.includes("仅支持") || txt.includes("缺少")));
 

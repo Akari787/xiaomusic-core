@@ -164,8 +164,7 @@ class AuthManager:
         self.config = config
         self.log = log
         self.mi_token_home = os.path.join(self.config.conf_path, ".mi.token")
-        self.auth_token_path = getattr(self.config, "auth_token_path", getattr(self.config, "auth_token_path", ""))
-        self.auth_token_path = self.auth_token_path
+        self.auth_token_path = getattr(self.config, "auth_token_path", "")
         self.token_store = token_store
 
         # 认证状态
@@ -1426,8 +1425,7 @@ class AuthManager:
 
         """
         self.mi_token_home = os.path.join(self.config.conf_path, ".mi.token")
-        self.auth_token_path = getattr(self.config, "auth_token_path", getattr(self.config, "auth_token_path", ""))
-        self.auth_token_path = self.auth_token_path
+        self.auth_token_path = getattr(self.config, "auth_token_path", "")
 
         # 先注入 auth session cookie，避免后续健康检查触发不必要的账号登录流程
         cookie_jar = self.get_cookie()

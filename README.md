@@ -62,7 +62,7 @@ docker compose -f docker-compose.hardened.yml up -d --build
 ### v1.0.7 重点更新
 
 - 认证恢复链正式收口为：`clear_short_session -> rebuild_short_session_from_persistent_auth -> runtime_rebind -> verify`。
-- 项目主线彻底统一到 `auth` 语义：主接口使用 `/api/auth/*`，配置使用 `auth_token_file`，WebUI 与文档不再以 OAuth2 作为主命名。
+- 项目主线彻底统一到 `auth` 语义：主接口使用 `/api/auth/*`，配置使用 `auth_token_file`，WebUI 与文档使用统一认证命名。
 - 新增认证架构文档与恢复规范文档，便于维护者理解“为什么扫码一次后可以长期运行”。
 - 调整 CI / Pages / hardened compose，使 `main`、`.env` 与当前部署方式保持一致。
 
@@ -283,10 +283,6 @@ npm run build
 ### 升级注意事项（v1.0.7 起）
 
 - 旧版 `key/code` 链接鉴权模式已移除。
-- 旧的 OAuth2 风格命名已从主线移除：
-  1. 接口统一使用 `/api/auth/*`
-  2. token 配置统一使用 `auth_token_file`
-  3. 调试路径统一使用 `auth_runtime_reload_state`
 - 若你此前依赖链接参数访问资源，请迁移到以下方式：
   1. HTTP Basic + `HTTP_AUTH_HASH`
   2. 认证登录态

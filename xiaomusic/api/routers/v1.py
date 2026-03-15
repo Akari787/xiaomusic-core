@@ -381,7 +381,7 @@ async def api_v1_debug_auth_short_session_rebuild_state():
         else:
             data = {
                 "last_short_session_rebuild": {},
-                "last_long_auth_relogin": {},
+                "last_persistent_auth_relogin": {},
                 "last_runtime_rebind": {},
                 "last_verify": {},
                 "last_auth_recovery_flow": {},
