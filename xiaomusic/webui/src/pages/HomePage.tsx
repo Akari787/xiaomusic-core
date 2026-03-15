@@ -1375,7 +1375,7 @@ export function HomePage() {
       setMessage("请输入口令");
       return;
     }
-    await callRetApi("/cmd", { did: activeDid, cmd }, "口令已发送");
+    setMessage(`自定义口令入口已废弃，请改用结构化 /api/v1/* 接口。当前输入：${cmd}`);
   }
 
   async function timedShutdown(minutes: number) {

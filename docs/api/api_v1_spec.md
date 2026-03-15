@@ -47,7 +47,7 @@
 
 - `/cmd` 不属于 Runtime API v1 正式白名单。
 - `/cmd`、中文命令字符串、`match_cmd()`、`exec#...` 均不得作为新功能实现依据。
-- 若迁移期仍保留 `/cmd`，它仅可作为兼容层存在，不得承载新能力。
+- `POST /cmd` 当前行为为 **deprecated / 410 Gone**，仅返回迁移提示，不再承载任何正式能力。
 
 ### 2.3 统一 JSON Envelope
 
@@ -153,6 +153,12 @@
 - 任意 `cmd` 文本
 
 这些形式只允许存在于旧兼容层，不得作为 v1 契约的一部分。
+
+`POST /cmd` 当前实际行为：
+
+- 返回 `HTTP 410 Gone`
+- 响应中包含 `deprecated=true`
+- 响应中包含推荐迁移到 `/api/v1/*` 的结构化接口列表
 
 ---
 
@@ -405,7 +411,7 @@
 ```json
 {
   "device_id": "981257654",
-  "playlist_name": "日语"
+  "playlist_name": "<EXISTING_PLAYLIST_NAME>"
 }
 ```
 
@@ -427,8 +433,8 @@
 ```json
 {
   "device_id": "981257654",
-  "playlist_name": "日语",
-  "index": 3
+  "playlist_name": "<EXISTING_PLAYLIST_NAME>",
+  "index": 1
 }
 ```
 
@@ -452,18 +458,18 @@
 ```json
 {
   "device_id": "981257654",
-  "track_name": "夜に駆ける"
+  "music_name": ""
 }
 ```
 
 字段约束：
 
 - `device_id: string`，必填。
-- `track_name: string`，可选。
+- `music_name: string`，可选。
 
 行为约束：
 
-- 当 `track_name` 为空时，默认以当前正在播放的歌曲作为目标。
+- 当 `music_name` 为空时，默认以当前正在播放的歌曲作为目标。
 
 说明：
 
@@ -478,14 +484,14 @@
 ```json
 {
   "device_id": "981257654",
-  "track_name": "夜に駆ける"
+  "music_name": ""
 }
 ```
 
 字段与行为约束：
 
 - 与 `/api/v1/library/favorites/add` 保持一致。
-- 当 `track_name` 为空时，默认以当前正在播放的歌曲作为目标。
+- 当 `music_name` 为空时，默认以当前正在播放的歌曲作为目标。
 
 说明：
 
@@ -499,14 +505,22 @@
 请求示例：
 
 ```json
-{}
+{
+  "request_id": "req_refresh_library"
+}
 ```
 
-可选扩展示例：
+成功响应示例：
 
 ```json
 {
-  "scope": "all"
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "status": "ok",
+    "refreshed": true
+  },
+  "request_id": "req_refresh_library"
 }
 ```
 
@@ -645,21 +659,15 @@ HA 不应通过发送中文命令字符串调用历史 `/cmd`。
 
 ---
 
-## 11. 兼容与迁移策略
+## 11. 废弃接口与非正式能力
 
-### 11.1 迁移原则
+### 11.1 `/cmd` 已废弃
 
-- 非 `/api/v1/*` 历史接口在迁移期可暂时保留。
-- 历史接口不属于正式契约。
-- 新功能必须优先落入 `/api/v1/*`。
+- `/cmd` 已不再承担任何正式能力。
+- 服务器当前返回 `410 Gone`，并在响应中明确要求调用方改用 `/api/v1/*`。
+- WebUI、Home Assistant 与第三方集成都应只以结构化 v1 接口为准。
 
-### 11.2 `/cmd` 的迁移地位
-
-- `/cmd` 仅可作为迁移期兼容层。
-- `/cmd` 不得再承载任何新能力。
-- 当 WebUI 与 HA 所需能力全部迁移完成后，`/cmd` 应可直接下线。
-
-### 11.3 当前需要从 `/cmd` 迁移的核心能力
+### 11.2 已由结构化 v1 接口覆盖的历史 `/cmd` 能力
 
 - `上一首`
 - `下一首`
@@ -671,7 +679,7 @@ HA 不应通过发送中文命令字符串调用历史 `/cmd`。
 - `播放列表第N个xxx`
 - `刷新列表`
 
-### 11.4 不进入正式 v1 的历史能力
+### 11.3 不进入正式 v1 的历史能力
 
 以下能力不进入正式 v1 契约：
 
@@ -696,4 +704,3 @@ HA 不应通过发送中文命令字符串调用历史 `/cmd`。
 
 - `docs/dev/runtime_contracts.md`
 - 相关运行时规范文档
-

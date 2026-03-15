@@ -1,12 +1,6 @@
 """设备控制路由"""
 
-import asyncio
-
-from fastapi import (
-    APIRouter,
-    Depends,
-    HTTPException,
-)
+from fastapi import APIRouter, Depends
 
 from xiaomusic.api import response as api_response
 from xiaomusic.api.dependencies import (
@@ -20,8 +14,6 @@ from xiaomusic.api.models import (
     DidVolume,
 )
 from xiaomusic.playback.facade import PlaybackFacade
-
-from xiaomusic.security.exec_plugin import parse_exec_code
 
 router = APIRouter(dependencies=[Depends(verification)])
 _facade: PlaybackFacade | None = None
@@ -90,39 +82,30 @@ async def setvolume(data: DidVolume):
 
 @router.post("/cmd")
 async def do_cmd(data: DidCmd):
-    """执行命令"""
-    did = data.did
-    cmd = data.cmd
-    log.info(f"docmd. did:{did} cmd:{cmd}")
-    if not xiaomusic.did_exist(did):
-        return api_response.ok(contract="ret", ret="Did not exist")
-
-    if len(cmd) > 0:
-        try:
-            # Block exec# at HTTP layer when disabled/not allowed.
-            device = xiaomusic.device_manager.devices.get(did)
-            if device is not None and xiaomusic.command_handler is not None:
-                opvalue, oparg = xiaomusic.command_handler.match_cmd(
-                    device, cmd, ctrl_panel=True
-                )
-                if opvalue == "exec":
-                    if not xiaomusic.config.enable_exec_plugin:
-                        raise HTTPException(status_code=403, detail="exec plugin disabled")
-                    call = parse_exec_code(str(oparg))
-                    allowed = set(xiaomusic.config.allowed_exec_commands or [])
-                    if call.command not in allowed:
-                        raise HTTPException(status_code=403, detail="exec command not allowed")
-
-            await xiaomusic.cancel_all_tasks()
-            task = asyncio.create_task(xiaomusic.do_check_cmd(did=did, query=cmd))
-            xiaomusic.append_running_task(task)
-        except HTTPException:
-            # Make sure FastAPI returns the intended HTTP error.
-            raise
-        except Exception as e:
-            log.warning(f"Exception {e}")
-        return api_response.ok(contract="ret")
-    return api_response.ok(contract="ret", ret="Unknow cmd")
+    """执行命令（deprecated，已不再作为正式 API）"""
+    log.warning(
+        "deprecated_endpoint endpoint=/cmd replacement=/api/v1/* caller_should_migrate=true did=%s cmd=%s",
+        data.did,
+        data.cmd,
+    )
+    return api_response.fail(
+        "E_CMD_DEPRECATED",
+        "/cmd has been deprecated; use structured /api/v1/* endpoints instead",
+        http_status=410,
+        contract="success_error",
+        deprecated=True,
+        replacement=[
+            "/api/v1/control/previous",
+            "/api/v1/control/next",
+            "/api/v1/control/play-mode",
+            "/api/v1/control/shutdown-timer",
+            "/api/v1/library/favorites/add",
+            "/api/v1/library/favorites/remove",
+            "/api/v1/playlist/play",
+            "/api/v1/playlist/play-index",
+            "/api/v1/library/refresh",
+        ],
+    )
 
 
 @router.get("/cmdstatus")
