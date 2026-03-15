@@ -10,8 +10,8 @@
 
 ## 2. 测试服务器环境
 
-- 服务器：`root@192.168.7.178`（hostname: `test`）
-- 部署目录：`/root/xiaomusic_core_smoke`（历史目录名：`/root/xiaomusic_auth_smoke`）
+- 服务器：`root@<test-server-ip>`（hostname: `test`）
+- 部署目录：`/<deploy-root>/xiaomusic_core_smoke`（历史目录名：`/<deploy-root>/xiaomusic_auth_smoke`）
 - 运行方式：Docker Compose（`docker-compose.hardened.yml`）
 - 容器：`xiaomusic-core`（历史容器名：`xiaomusic-auth`）
 - 镜像：`xiaomusic-core:latest`（历史镜像名：`xiaomusic:auth-only`）
@@ -25,9 +25,9 @@
 
 ## 4. 验收设备
 
-- DID：`981257654`
-- 设备：Xiaomi Smart Speaker Pro
-- 型号：`OH2P`
+- DID：`<device_id>`
+- 设备：<speaker_name>
+- 型号：`<speaker_model>`
 
 ## 5. Jellyfin 播放结果
 
@@ -50,7 +50,7 @@
 ### 验收路径
 
 - `POST /api/v1/play_url`
-- URL：`http://192.168.7.178:58090/static/silence.mp3`
+- URL：`http://<test-server-ip>:58090/static/silence.mp3`
 
 ### 结果
 

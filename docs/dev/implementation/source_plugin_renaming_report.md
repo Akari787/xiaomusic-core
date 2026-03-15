@@ -10,11 +10,11 @@
 
 ## 2. 验收环境
 
-- 测试服务器：`root@192.168.7.178`（hostname: `test`）
-- 部署目录：`/root/xiaomusic_core_smoke`（历史目录名：`/root/xiaomusic_auth_smoke`）
-- 部署方式：`docker compose -f /root/xiaomusic_core_smoke/docker-compose.hardened.yml up -d --build xiaomusic-core`
-- 服务地址：`http://192.168.7.178:58090`
-- 验收设备：`DID=981257654`（Xiaomi Smart Speaker Pro / `OH2P`）
+- 测试服务器：`root@<test-server-ip>`（hostname: `test`）
+- 部署目录：`/<deploy-root>/xiaomusic_core_smoke`（历史目录名：`/<deploy-root>/xiaomusic_auth_smoke`）
+- 部署方式：`docker compose -f /<deploy-root>/xiaomusic_core_smoke/docker-compose.hardened.yml up -d --build xiaomusic-core`
+- 服务地址：`http://<test-server-ip>:58090`
+- 验收设备：`DID=<device_id>`（<speaker_name> / `<speaker_model>`）
 
 ## 3. 命名重构结果
 
@@ -36,7 +36,7 @@
 ### 4.1 DirectUrl
 
 - 接口：`POST /api/v1/play_url`
-- 输入 URL：`http://192.168.7.178:58090/static/silence.mp3`
+- 输入 URL：`http://<test-server-ip>:58090/static/silence.mp3`
 - 返回：`code=0`, `data.state=streaming`, `data.source_plugin=direct_url`, `data.transport=mina`
 - 日志证据：
   - `source_hint=direct_url source_plugin=direct_url`

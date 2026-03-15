@@ -47,7 +47,7 @@
 
 - `/cmd` 不属于 Runtime API v1 正式白名单。
 - `/cmd`、中文命令字符串、`match_cmd()`、`exec#...` 均不得作为新功能实现依据。
-- `POST /cmd` 当前行为为 **deprecated / 410 Gone**，仅返回迁移提示，不再承载任何正式能力。
+- 若迁移期仍保留 `/cmd`，它仅可作为兼容层存在，不得承载新能力。
 
 ### 2.3 统一 JSON Envelope
 
@@ -133,7 +133,7 @@
 凡是对具体设备生效的控制类接口，请求体必须包含：
 
 ```json
-{ "device_id": "981257654" }
+{ "device_id": "<device_id>" }
 ```
 
 字段约束：
@@ -154,12 +154,6 @@
 
 这些形式只允许存在于旧兼容层，不得作为 v1 契约的一部分。
 
-`POST /cmd` 当前实际行为：
-
-- 返回 `HTTP 410 Gone`
-- 响应中包含 `deprecated=true`
-- 响应中包含推荐迁移到 `/api/v1/*` 的结构化接口列表
-
 ---
 
 ## 6. 播放与解析接口
@@ -172,7 +166,7 @@
 
 ```json
 {
-  "device_id": "981257654",
+  "device_id": "<device_id>",
   "query": "https://example.com/song.mp3",
   "source_hint": "auto",
   "options": {}
@@ -202,7 +196,7 @@
   "message": "ok",
   "data": {
     "status": "playing",
-    "device_id": "981257654",
+    "device_id": "<device_id>",
     "source_plugin": "direct_url",
     "transport": "mina"
   },
@@ -240,7 +234,7 @@
 最小请求体：
 
 ```json
-{ "device_id": "981257654" }
+{ "device_id": "<device_id>" }
 ```
 
 ## 7.2 POST /api/v1/control/pause
@@ -250,7 +244,7 @@
 最小请求体：
 
 ```json
-{ "device_id": "981257654" }
+{ "device_id": "<device_id>" }
 ```
 
 ## 7.3 POST /api/v1/control/resume
@@ -260,7 +254,7 @@
 最小请求体：
 
 ```json
-{ "device_id": "981257654" }
+{ "device_id": "<device_id>" }
 ```
 
 ## 7.4 POST /api/v1/control/tts
@@ -271,7 +265,7 @@
 
 ```json
 {
-  "device_id": "981257654",
+  "device_id": "<device_id>",
   "text": "你好，欢迎使用 XiaoMusic"
 }
 ```
@@ -284,7 +278,7 @@
 
 ```json
 {
-  "device_id": "981257654",
+  "device_id": "<device_id>",
   "volume": 35
 }
 ```
@@ -301,7 +295,7 @@
 最小请求体：
 
 ```json
-{ "device_id": "981257654" }
+{ "device_id": "<device_id>" }
 ```
 
 ## 7.7 POST /api/v1/control/previous
@@ -311,7 +305,7 @@
 最小请求体：
 
 ```json
-{ "device_id": "981257654" }
+{ "device_id": "<device_id>" }
 ```
 
 说明：
@@ -326,7 +320,7 @@
 最小请求体：
 
 ```json
-{ "device_id": "981257654" }
+{ "device_id": "<device_id>" }
 ```
 
 说明：
@@ -341,7 +335,7 @@
 
 ```json
 {
-  "device_id": "981257654",
+  "device_id": "<device_id>",
   "play_mode": "random"
 }
 ```
@@ -377,7 +371,7 @@
 
 ```json
 {
-  "device_id": "981257654",
+  "device_id": "<device_id>",
   "minutes": 30
 }
 ```
@@ -410,8 +404,8 @@
 
 ```json
 {
-  "device_id": "981257654",
-  "playlist_name": "<EXISTING_PLAYLIST_NAME>"
+  "device_id": "<device_id>",
+  "playlist_name": "日语"
 }
 ```
 
@@ -432,9 +426,9 @@
 
 ```json
 {
-  "device_id": "981257654",
-  "playlist_name": "<EXISTING_PLAYLIST_NAME>",
-  "index": 1
+  "device_id": "<device_id>",
+  "playlist_name": "日语",
+  "index": 3
 }
 ```
 
@@ -457,19 +451,19 @@
 
 ```json
 {
-  "device_id": "981257654",
-  "music_name": ""
+  "device_id": "<device_id>",
+  "track_name": "夜に駆ける"
 }
 ```
 
 字段约束：
 
 - `device_id: string`，必填。
-- `music_name: string`，可选。
+- `track_name: string`，可选。
 
 行为约束：
 
-- 当 `music_name` 为空时，默认以当前正在播放的歌曲作为目标。
+- 当 `track_name` 为空时，默认以当前正在播放的歌曲作为目标。
 
 说明：
 
@@ -483,15 +477,15 @@
 
 ```json
 {
-  "device_id": "981257654",
-  "music_name": ""
+  "device_id": "<device_id>",
+  "track_name": "夜に駆ける"
 }
 ```
 
 字段与行为约束：
 
 - 与 `/api/v1/library/favorites/add` 保持一致。
-- 当 `music_name` 为空时，默认以当前正在播放的歌曲作为目标。
+- 当 `track_name` 为空时，默认以当前正在播放的歌曲作为目标。
 
 说明：
 
@@ -505,22 +499,14 @@
 请求示例：
 
 ```json
-{
-  "request_id": "req_refresh_library"
-}
+{}
 ```
 
-成功响应示例：
+可选扩展示例：
 
 ```json
 {
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "status": "ok",
-    "refreshed": true
-  },
-  "request_id": "req_refresh_library"
+  "scope": "all"
 }
 ```
 
@@ -546,7 +532,7 @@
   "data": {
     "devices": [
       {
-        "device_id": "981257654",
+        "device_id": "<device_id>",
         "name": "XiaoAi",
         "model": "LX06",
         "online": true
@@ -613,7 +599,7 @@
   "code": 0,
   "message": "ok",
   "data": {
-    "device_id": "981257654",
+    "device_id": "<device_id>",
     "is_playing": true,
     "cur_music": "test.mp3",
     "offset": 12,
@@ -659,15 +645,21 @@ HA 不应通过发送中文命令字符串调用历史 `/cmd`。
 
 ---
 
-## 11. 废弃接口与非正式能力
+## 11. 兼容与迁移策略
 
-### 11.1 `/cmd` 已废弃
+### 11.1 迁移原则
 
-- `/cmd` 已不再承担任何正式能力。
-- 服务器当前返回 `410 Gone`，并在响应中明确要求调用方改用 `/api/v1/*`。
-- WebUI、Home Assistant 与第三方集成都应只以结构化 v1 接口为准。
+- 非 `/api/v1/*` 历史接口在迁移期可暂时保留。
+- 历史接口不属于正式契约。
+- 新功能必须优先落入 `/api/v1/*`。
 
-### 11.2 已由结构化 v1 接口覆盖的历史 `/cmd` 能力
+### 11.2 `/cmd` 的迁移地位
+
+- `/cmd` 仅可作为迁移期兼容层。
+- `/cmd` 不得再承载任何新能力。
+- 当 WebUI 与 HA 所需能力全部迁移完成后，`/cmd` 应可直接下线。
+
+### 11.3 当前需要从 `/cmd` 迁移的核心能力
 
 - `上一首`
 - `下一首`
@@ -679,7 +671,7 @@ HA 不应通过发送中文命令字符串调用历史 `/cmd`。
 - `播放列表第N个xxx`
 - `刷新列表`
 
-### 11.3 不进入正式 v1 的历史能力
+### 11.4 不进入正式 v1 的历史能力
 
 以下能力不进入正式 v1 契约：
 
@@ -704,3 +696,4 @@ HA 不应通过发送中文命令字符串调用历史 `/cmd`。
 
 - `docs/dev/runtime_contracts.md`
 - 相关运行时规范文档
+

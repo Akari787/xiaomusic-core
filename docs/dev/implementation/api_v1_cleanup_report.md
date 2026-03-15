@@ -12,9 +12,9 @@
 
 ## 2. 测试服务器环境
 
-- 服务器：`192.168.7.178`
-- 登录方式：`ssh -i ~/.ssh/id_ed25519_opencode root@192.168.7.178`
-- 部署目录：`/root/xiaomusic_core_smoke`（历史目录名：`/root/xiaomusic_auth_smoke`）
+- 服务器：`<test-server-ip>`
+- 登录方式：`ssh -i ~/.ssh/<redacted-key> root@<test-server-ip>`
+- 部署目录：`/<deploy-root>/xiaomusic_core_smoke`（历史目录名：`/<deploy-root>/xiaomusic_auth_smoke`）
 - 运行方式：`docker compose -f docker-compose.hardened.yml up -d --build xiaomusic-core`
 - 服务地址：`http://127.0.0.1:58090`
 
@@ -105,7 +105,7 @@ PYTHONPATH=. pytest tests/test_api_play.py tests/test_api_resolve.py tests/test_
 
 ## 9. 实机播放结果
 
-设备：`device_id=981257654`。
+设备：`device_id=<device_id>`。
 
 - `direct_url`：`POST /api/v1/play` 返回 `code=0`，`source_plugin=direct_url`
 - `site_media`：`POST /api/v1/play` 返回 `code=0`，`source_plugin=site_media`

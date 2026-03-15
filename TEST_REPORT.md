@@ -138,7 +138,7 @@
   - 以及核心回归集合（system/api/play/session）
 - 结果：`24 passed`
 
-### 测试服务器实机验收（192.168.7.178）
+### 测试服务器实机验收（<test-server-ip>）
 
 - 部署方式：同步本次改动后，使用
   - `API_SECRET=`
@@ -161,19 +161,19 @@
 
 ### 验收环境
 
-- 测试服务器：`192.168.7.178:58090`
-- 部署目录：`/root/xiaomusic_auth_smoke`
+- 测试服务器：`<test-server-ip>:58090`
+- 部署目录：`/<deploy-root>/xiaomusic_auth_smoke`
 - WebUI 构建产物：`/assets/index-DcQRMKxG.js`
 
 ### 验收步骤与结果
 
 1. **默认自动地址（无手动填写）**
-   - 通过 `GET /api/v1/detect_base_url` 获取自动地址：`http://192.168.7.178:58090`
+   - 通过 `GET /api/v1/detect_base_url` 获取自动地址：`http://<test-server-ip>:58090`
    - WebUI 已迁移：原“基础设置”不再显示“NAS 的 IP/域名 + 本地端口”输入；该配置移至“安全访问 -> 公共访问地址（高级）”，且默认折叠。
 
 2. **生成 URL 使用自动值**
    - 开启 `web_music_proxy=true` 后，调用 `GET /musicinfo?name=831143-nero`
-   - 返回 `url` 前缀为：`http://192.168.7.178:58090/proxy/...`（与自动值一致）
+   - 返回 `url` 前缀为：`http://<test-server-ip>:58090/proxy/...`（与自动值一致）
 
 3. **手动覆盖后生效**
    - 设置 `public_base_url=http://manual.example:12345`
@@ -183,7 +183,7 @@
 4. **重置为自动后恢复**
    - 清空 `public_base_url` 并恢复兼容字段 `hostname/public_port` 为自动值
    - 再次调用 `GET /musicinfo?name=831143-nero`
-   - 返回 `url` 前缀恢复为：`http://192.168.7.178:58090/proxy/...`
+   - 返回 `url` 前缀恢复为：`http://<test-server-ip>:58090/proxy/...`
 
 5. **日志安全检查**
    - 检索关键字：`API_SECRET`、`HTTP_AUTH_HASH`、`$2b$`

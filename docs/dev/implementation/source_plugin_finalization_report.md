@@ -10,8 +10,8 @@
 
 ## 2. 测试服务器环境
 
-- 服务器：`root@192.168.7.178`（hostname: `test`）
-- 部署目录：`/root/xiaomusic_core_smoke`（历史目录名：`/root/xiaomusic_auth_smoke`）
+- 服务器：`root@<test-server-ip>`（hostname: `test`）
+- 部署目录：`/<deploy-root>/xiaomusic_core_smoke`（历史目录名：`/<deploy-root>/xiaomusic_auth_smoke`）
 - 运行方式：Docker Compose（`docker-compose.hardened.yml`）
 - 容器：`xiaomusic-core`（历史容器名：`xiaomusic-auth`）
 - 镜像：`xiaomusic-core:latest`（历史镜像名：`xiaomusic:auth-only`）
@@ -46,13 +46,13 @@
 ## 6. direct_url 实机播放结果
 
 - 入口：`POST /api/v1/play_url`
-- URL：`http://192.168.7.178:58090/static/silence.mp3`
+- URL：`http://<test-server-ip>:58090/static/silence.mp3`
 - 结果：`code=0`，`data.state=streaming`
 - 日志：`source_hint=direct_url source_plugin=direct_url`
 
 ## 7. local_library 实机播放结果
 
-- 预置本地测试音频：`/root/xiaomusic_music/local_silence.mp3`
+- 预置本地测试音频：`/<deploy-root>/xiaomusic_music/local_silence.mp3`
 - 刷新库：`POST /api/music/refreshlist`
 - 入口：`POST /api/v1/play_music`，`music_name=local_silence`
 - 结果：`code=0`，`data.state=streaming`，`data.stream_url` 为 `/music/local_silence.mp3`

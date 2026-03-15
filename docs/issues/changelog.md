@@ -480,7 +480,7 @@
 
 ### Feat
 
-- OH2P 型号支持打断说话
+- <speaker_model> 型号支持打断说话
 
 ### Fix
 

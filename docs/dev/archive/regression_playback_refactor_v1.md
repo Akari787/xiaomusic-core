@@ -98,7 +98,7 @@ Environment:
 
 - target: `<TEST_SERVER_HOST>:58090`
 - service: `xiaomusic-core` image `akari787/xiaomusic-core:v1.0.3`
-- speaker_id: `981257654`
+- speaker_id: `<device_id>`
 - note: on this speaker firmware, `getplayerstatus.status=2` is treated as stopped (non-playing)
 
 | date/time           | commit             | case | result | fail_stage | notes |

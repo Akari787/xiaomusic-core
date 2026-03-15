@@ -435,7 +435,6 @@ export function HomePage() {
 
   const [linkUrl, setLinkUrl] = useState<string>("https://www.youtube.com/watch?v=iPnaF8Ngk3Q");
   const [ttsText, setTtsText] = useState<string>("播放文字测试");
-  const [customCmd, setCustomCmd] = useState<string>("");
   const [searchKeyword, setSearchKeyword] = useState<string>("");
   const [soundscapeFilter, setSoundscapeFilter] = useState<string>("");
   const [searchResults, setSearchResults] = useState<OnlineSearchItem[]>([]);
@@ -460,6 +459,7 @@ export function HomePage() {
   const [localPlaybackDuration, setLocalPlaybackDuration] = useState<number>(0);
   const [localPlaybackSong, setLocalPlaybackSong] = useState<string>("");
   const [rememberedPlayingSong, setRememberedPlayingSong] = useState<string>("");
+  const activeDidRef = useRef<string>(activeDid);
   const statusRef = useRef<PlayingInfo>({});
   const localPlaybackStartedAtRef = useRef<number>(0);
   const localPlaybackDurationRef = useRef<number>(0);
@@ -469,6 +469,8 @@ export function HomePage() {
   const lastPositivePlaybackAtRef = useRef<number>(0);
   const stopSuppressUntilRef = useRef<number>(0);
   const lastAutoSyncedPlayingSongRef = useRef<string>("");
+  const statusRequestSeqRef = useRef<number>(0);
+  const activeActionSeqRef = useRef<number>(0);
   const pendingPlayRef = useRef<{ did: string; song: string; expiresAt: number } | null>(null);
   const themeFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -536,7 +538,12 @@ export function HomePage() {
   const isSoundscapeLayout = activeLayout === "soundscape";
   const localSongFresh =
     localPlaybackStartedAt > 0 && Date.now() - Number(localPlaybackStartedAt || 0) < 12000;
-  const currentMusicName = String(status.cur_music || (localSongFresh ? localPlaybackSong : "") || "").trim();
+  const currentMusicName = String(
+    status.cur_music ||
+      (status.is_playing ? rememberedPlayingSong : "") ||
+      (localSongFresh ? localPlaybackSong : "") ||
+      "",
+  ).trim();
   const playbackText = status.is_playing ? `正在播放：${currentMusicName || "未知歌曲"}` : "空闲";
 
   useEffect(() => {
@@ -563,6 +570,10 @@ export function HomePage() {
     if (activeDid) {
       saveLocal("xm_ui_active_did", activeDid);
     }
+  }, [activeDid]);
+
+  useEffect(() => {
+    activeDidRef.current = activeDid;
   }, [activeDid]);
 
   useEffect(() => {
@@ -802,10 +813,59 @@ export function HomePage() {
     }
   }
 
-  async function loadStatus(did: string) {
-    if (!did) {
-      return;
+  function isLatestStatusRequest(seq: number, did: string): boolean {
+    return seq === statusRequestSeqRef.current && activeDidRef.current === did;
+  }
+
+  function beginActionSync(): number {
+    const next = activeActionSeqRef.current + 1;
+    activeActionSeqRef.current = next;
+    return next;
+  }
+
+  function isActionSyncCurrent(seq: number): boolean {
+    return activeActionSeqRef.current === seq;
+  }
+
+  function finishActionSync(seq: number): void {
+    if (activeActionSeqRef.current === seq) {
+      activeActionSeqRef.current = 0;
     }
+  }
+
+  async function waitForPlayerState(
+    did: string,
+    actionSeq: number,
+    matcher: (state: PlayingInfo) => boolean,
+    attempts = 8,
+    delayMs = 500,
+  ): Promise<PlayingInfo | null> {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (!isActionSyncCurrent(actionSeq) || activeDidRef.current !== did) {
+        return null;
+      }
+      const current = await loadStatus(did);
+      if (!isActionSyncCurrent(actionSeq) || activeDidRef.current !== did) {
+        return null;
+      }
+      if (current && matcher(current)) {
+        return current;
+      }
+      if (attempt < attempts - 1) {
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, delayMs);
+        });
+      }
+    }
+    return null;
+  }
+
+  async function loadStatus(did: string): Promise<PlayingInfo | null> {
+    if (!did) {
+      return null;
+    }
+    const requestSeq = statusRequestSeqRef.current + 1;
+    statusRequestSeqRef.current = requestSeq;
     const [stateResp, volumeResp] = await Promise.allSettled([
       getPlayerState(did),
       apiGet<{ volume?: number }>(`/getvolume?did=${encodeURIComponent(did)}`),
@@ -932,47 +992,59 @@ export function HomePage() {
             }),
           );
         }
-        if (pending && pending.did === did) {
-        if (merged.is_playing) {
-          pendingPlayRef.current = null;
-          setStatus((prev) => mergePlayingViewState(prev, merged, pending.song));
-        } else if (Date.now() < pending.expiresAt) {
-          setStatus((prev) => ({ ...mergePlayingViewState(prev, merged, pending.song), is_playing: true }));
-        } else {
-          pendingPlayRef.current = null;
-          if (!merged.is_playing) {
-            setLocalPlaybackStartedAt(0);
-            setLocalPlaybackDuration(0);
-            setLocalPlaybackSong("");
-            localPlaybackStartedAtRef.current = 0;
-            localPlaybackDurationRef.current = 0;
-            localPlaybackSongRef.current = "";
-            removeLocal(playbackSnapshotKey(did));
-          }
-          setStatus(merged);
-        }
-        } else {
-          if (merged.is_playing) {
-            setStatus((prev) => mergePlayingViewState(prev, merged, localPlaybackSongRef.current));
+        if (isLatestStatusRequest(requestSeq, did)) {
+          if (pending && pending.did === did) {
+            if (merged.is_playing) {
+              pendingPlayRef.current = null;
+              setStatus((prev) => mergePlayingViewState(prev, merged, pending.song));
+            } else if (Date.now() < pending.expiresAt) {
+              setStatus((prev) => ({ ...mergePlayingViewState(prev, merged, pending.song), is_playing: true }));
+            } else {
+              pendingPlayRef.current = null;
+              if (!merged.is_playing) {
+                setLocalPlaybackStartedAt(0);
+                setLocalPlaybackDuration(0);
+                setLocalPlaybackSong("");
+                localPlaybackStartedAtRef.current = 0;
+                localPlaybackDurationRef.current = 0;
+                localPlaybackSongRef.current = "";
+                removeLocal(playbackSnapshotKey(did));
+              }
+              setStatus(merged);
+            }
           } else {
-            setLocalPlaybackStartedAt(0);
-            setLocalPlaybackDuration(0);
-            setLocalPlaybackSong("");
-            localPlaybackStartedAtRef.current = 0;
-            localPlaybackDurationRef.current = 0;
-            localPlaybackSongRef.current = "";
-            removeLocal(playbackSnapshotKey(did));
-            setStatus(merged);
+            if (merged.is_playing) {
+              setStatus((prev) => mergePlayingViewState(prev, merged, localPlaybackSongRef.current));
+            } else {
+              setLocalPlaybackStartedAt(0);
+              setLocalPlaybackDuration(0);
+              setLocalPlaybackSong("");
+              localPlaybackStartedAtRef.current = 0;
+              localPlaybackDurationRef.current = 0;
+              localPlaybackSongRef.current = "";
+              removeLocal(playbackSnapshotKey(did));
+              setStatus(merged);
+            }
+          }
+        } else {
+          return merged;
+        }
+        if (volumeResp.status === "fulfilled" && isLatestStatusRequest(requestSeq, did)) {
+          const vol = volumeResp.value as { volume?: number };
+          if (typeof vol.volume === "number") {
+            setVolume(vol.volume);
           }
         }
+        return merged;
       }
     }
-    if (volumeResp.status === "fulfilled") {
+    if (volumeResp.status === "fulfilled" && isLatestStatusRequest(requestSeq, did)) {
       const vol = volumeResp.value as { volume?: number };
       if (typeof vol.volume === "number") {
         setVolume(vol.volume);
       }
     }
+    return null;
   }
 
   useEffect(() => {
@@ -1001,6 +1073,9 @@ export function HomePage() {
     rememberedPlayingSongRef.current = remembered;
     void loadStatus(activeDid);
     const timer = window.setInterval(() => {
+      if (activeActionSeqRef.current) {
+        return;
+      }
       void loadStatus(activeDid);
     }, 4000);
     return () => window.clearInterval(timer);
@@ -1103,19 +1178,11 @@ export function HomePage() {
     return false;
   }
 
-  async function callRetApi(path: string, payload: unknown, okText: string) {
-    if (!requireDid()) {
-      return;
-    }
-    const out = (await apiPost<{ ret?: string }>(path, payload)) as { ret?: string };
-    setMessage(out.ret === "OK" ? okText : out.ret || "执行失败");
-    await loadStatus(activeDid);
-  }
-
   async function switchTrack(action: "previous" | "next", okText: string) {
     if (!requireDid()) {
       return;
     }
+    const actionSeq = beginActionSync();
     const did = activeDid;
     const baselineSong = String(statusRef.current.cur_music || "").trim();
     const baselineOffset = Math.max(0, Number(statusRef.current.offset || 0));
@@ -1141,61 +1208,40 @@ export function HomePage() {
     };
 
     setMessage(`${okText}，正在同步播放信息...`);
-    const out = action === "previous" ? await v1Previous(did) : await v1Next(did);
-    if (isApiOk(out)) {
-      setMessage(okText);
-      pendingPlayRef.current = null;
-      await loadStatus(did);
-      for (let i = 0; i < 12; i += 1) {
-        if (hasTrackSwitched()) {
-          break;
+    try {
+      const out = action === "previous" ? await v1Previous(did) : await v1Next(did);
+      if (isApiOk(out)) {
+        const synced = await waitForPlayerState(did, actionSeq, hasTrackSwitched, 12, 900);
+        if (synced && hasTrackSwitched()) {
+          setMessage(okText);
+        } else {
+          setMessage(`${okText}，设备已执行，页面状态已刷新`);
+          await loadStatus(did);
         }
-        await new Promise<void>((resolve) => {
-          window.setTimeout(() => resolve(), 900);
-        });
-        await loadStatus(did);
+        return;
       }
-      return;
+      const err = apiErrorInfo(out);
+      setMessage(err.message || "执行失败");
+      await loadStatus(did);
+    } finally {
+      finishActionSync(actionSeq);
     }
-    const err = apiErrorInfo(out);
-    setMessage(err.message || "执行失败");
-    await loadStatus(did);
   }
 
   async function playSongByName(songName: string) {
     if (!requireDid()) {
       return;
     }
+    const actionSeq = beginActionSync();
     const deviceId = activeDid;
     const picked = String(songName || "").trim() || String(songs[0] || "").trim();
     if (!picked) {
+      finishActionSync(actionSeq);
       setMessage("当前歌单为空，请先刷新歌单或切换列表");
       return;
     }
-    const optimisticStartedAt = Date.now();
     setMusic(picked);
-    setStatus((prev) => ({
-      ...prev,
-      is_playing: true,
-      cur_music: picked,
-      offset: 0,
-    }));
-    saveRememberedPlayingSong(deviceId, picked);
-    setRememberedPlayingSong(picked);
-    rememberedPlayingSongRef.current = picked;
-    setLocalPlaybackSong(picked);
-    localPlaybackSongRef.current = picked;
-    setLocalPlaybackStartedAt(optimisticStartedAt);
-    localPlaybackStartedAtRef.current = optimisticStartedAt;
-    lastPositivePlaybackAtRef.current = optimisticStartedAt;
-    saveLocal(
-      playbackSnapshotKey(deviceId),
-      JSON.stringify({
-        song: picked,
-        started_at: optimisticStartedAt,
-        duration: 0,
-      }),
-    );
+    setMessage(`正在切换到 ${picked}...`);
     try {
       const info = (await apiGet<{ ret?: string; name?: string; url?: string; tags?: { duration?: number } }>(
         `/musicinfo?name=${encodeURIComponent(picked)}&musictag=true`,
@@ -1213,12 +1259,12 @@ export function HomePage() {
 
       if (isApiOk(playResp)) {
         stopSuppressUntilRef.current = 0;
+        const startedAt = Date.now();
         pendingPlayRef.current = {
           did: deviceId,
           song: picked,
-          expiresAt: Date.now() + 7000,
+          expiresAt: startedAt + 15000,
         };
-        setMusic(picked);
         setStatus((prev) => ({
           ...prev,
           is_playing: true,
@@ -1231,12 +1277,11 @@ export function HomePage() {
         rememberedPlayingSongRef.current = picked;
         setLocalPlaybackSong(picked);
         localPlaybackSongRef.current = picked;
-        const startedAt = Date.now();
         setLocalPlaybackStartedAt(startedAt);
         localPlaybackStartedAtRef.current = startedAt;
         setLocalPlaybackDuration(infoDuration > 0 ? infoDuration : 0);
         localPlaybackDurationRef.current = infoDuration > 0 ? infoDuration : 0;
-        lastPositivePlaybackAtRef.current = Date.now();
+        lastPositivePlaybackAtRef.current = startedAt;
         saveLocal(
           playbackSnapshotKey(deviceId),
           JSON.stringify({
@@ -1245,16 +1290,39 @@ export function HomePage() {
             duration: infoDuration > 0 ? Math.floor(infoDuration) : 0,
           }),
         );
-        setMessage(
-          `开始播放（来源: ${playResp.data?.source_plugin || "unknown"}, 传输: ${playResp.data?.transport || "unknown"}）`,
+        const synced = await waitForPlayerState(
+          deviceId,
+          actionSeq,
+          (state) => {
+            if (!state.is_playing && !pendingPlayRef.current) {
+              return false;
+            }
+            const current = String(state.cur_music || "").trim();
+            return !current || current === picked;
+          },
+          12,
+          700,
         );
-        await loadStatus(deviceId);
-        window.setTimeout(() => {
-          void loadStatus(deviceId);
-        }, 900);
-        window.setTimeout(() => {
-          void loadStatus(deviceId);
-        }, 2200);
+        if (synced) {
+          const syncedStartedAt = Math.max(0, Date.now() - Math.max(0, Math.floor(Number(synced.offset || 0))) * 1000);
+          setLocalPlaybackStartedAt(syncedStartedAt);
+          localPlaybackStartedAtRef.current = syncedStartedAt;
+          setLocalPlaybackDuration(infoDuration > 0 ? infoDuration : Math.max(0, Number(synced.duration || 0)));
+          localPlaybackDurationRef.current = infoDuration > 0 ? infoDuration : Math.max(0, Number(synced.duration || 0));
+          lastPositivePlaybackAtRef.current = Date.now();
+          saveLocal(
+            playbackSnapshotKey(deviceId),
+            JSON.stringify({
+              song: picked,
+              started_at: syncedStartedAt,
+              duration: infoDuration > 0 ? Math.floor(infoDuration) : Math.max(0, Math.floor(Number(synced.duration || 0))),
+            }),
+          );
+          setMessage(`开始播放（来源: ${playResp.data?.source_plugin || "unknown"}, 传输: ${playResp.data?.transport || "unknown"}）`);
+        } else {
+          setMessage(`播放指令已发送，正在等待设备切换到 ${picked}`);
+          await loadStatus(deviceId);
+        }
       } else {
         pendingPlayRef.current = null;
         const err = apiErrorInfo(playResp);
@@ -1266,6 +1334,8 @@ export function HomePage() {
       const reason = err instanceof Error ? err.message : String(err || "未知错误");
       setMessage(`播放失败：${reason}`);
       await loadStatus(deviceId);
+    } finally {
+      finishActionSync(actionSeq);
     }
   }
 
@@ -1290,7 +1360,7 @@ export function HomePage() {
       const out = await v1SetPlayMode(activeDid, nextMode);
       if (isApiOk(out)) {
         setMessage(`已切换为${PLAY_MODES[next].label}`);
-        await loadStatus(activeDid);
+        await Promise.allSettled([loadStatus(activeDid), loadSettingData()]);
         return;
       }
       setPlayModeIndex(prev);
@@ -1351,15 +1421,6 @@ export function HomePage() {
     }
     const err = apiErrorInfo(out);
     setMessage(err.message || err.errorCode || "文字播放失败");
-  }
-
-  async function sendCustomCmd() {
-    const cmd = customCmd.trim();
-    if (!cmd) {
-      setMessage("请输入口令");
-      return;
-    }
-    await callRetApi("/cmd", { did: activeDid, cmd }, "口令已发送");
   }
 
   async function timedShutdown(minutes: number) {
@@ -2129,7 +2190,7 @@ export function HomePage() {
 
       <div className={`component ${showTimer ? "show" : ""}`} id="timer-component" style={{ display: showTimer ? "block" : "none" }}>
         <h2>定时关机</h2>
-        <p className="auth-hint">兼容口令入口：当前通过设备语音命令链路执行。</p>
+        <p className="auth-hint">定时设置会直接通过正式控制接口发送到设备。</p>
         <button onClick={() => void timedShutdown(1)}>1分钟后关机</button>
         <button onClick={() => void timedShutdown(10)}>10分钟后关机</button>
         <button onClick={() => void timedShutdown(30)}>30分钟后关机</button>
@@ -2158,15 +2219,6 @@ export function HomePage() {
           <input type="text" className="search-input" value={ttsText} onChange={(e) => setTtsText(e.target.value)} />
           <div className="component-button-group">
             <button onClick={() => void playTts()}>播放文字</button>
-          </div>
-        </div>
-
-        <div className="card-section">
-          <h3 className="card-title">🎤 自定义口令</h3>
-          <p>兼容入口（deprecated）：仅用于历史语音口令调试，不建议作为新接入方案。</p>
-          <input type="text" className="search-input" value={customCmd} onChange={(e) => setCustomCmd(e.target.value)} placeholder="请输入自定义口令" />
-          <div className="component-button-group">
-            <button onClick={() => void sendCustomCmd()}>发送口令</button>
           </div>
         </div>
 
@@ -2424,7 +2476,7 @@ export function HomePage() {
                               <input
                                 id="public_base_url"
                                 type="text"
-                                placeholder="例如: http://192.168.7.178:58090"
+                                placeholder="例如: http://your-host:58090"
                                 value={String(settingData.public_base_url || "")}
                                 onChange={(e) => updateSettingField("public_base_url", e.target.value)}
                               />
