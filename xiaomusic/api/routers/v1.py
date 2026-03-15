@@ -12,8 +12,14 @@ from xiaomusic.constants.api_fields import DEVICE_ID, OPTIONS, QUERY, REQUEST_ID
 from xiaomusic.api.models import (
     ApiResponse,
     ControlRequest,
+    FavoritesRequest,
+    LibraryRefreshRequest,
+    PlayModeRequest,
     PlayRequest,
+    PlaylistPlayIndexRequest,
+    PlaylistPlayRequest,
     ResolveRequest,
+    ShutdownTimerRequest,
     TtsRequest,
     VolumeRequest,
 )
@@ -31,6 +37,13 @@ from xiaomusic.playback.facade import PlaybackFacade
 router = APIRouter()
 _facade: PlaybackFacade | None = None
 LOG = logging.getLogger("xiaomusic.api.v1")
+_PLAY_MODE_HANDLERS = {
+    "one": "set_play_type_one",
+    "all": "set_play_type_all",
+    "random": "set_play_type_rnd",
+    "single": "set_play_type_sin",
+    "sequence": "set_play_type_seq",
+}
 
 
 def _get_xiaomusic():
@@ -56,6 +69,31 @@ def _api_response(code: int, message: str, data: dict[str, Any], request_id: str
 
 def _api_ok(data: dict[str, Any], request_id: str) -> dict[str, Any]:
     return _api_response(0, "ok", data, request_id)
+
+
+def _bad_request(request_id: str, message: str, *, field: str = "", allowed: list[str] | None = None) -> ApiError:
+    data: dict[str, Any] = {"error_code": "E_INVALID_REQUEST", "stage": "validate"}
+    if field:
+        data["field"] = field
+    if allowed:
+        data["allowed"] = allowed
+    return ApiError(code=40001, message=message, data=data, request_id=request_id)
+
+
+def _require_device(device_id: str, request_id: str):
+    xm = _get_xiaomusic()
+    if not xm.did_exist(device_id):
+        raise ApiError(
+            code=40004,
+            message="device not found",
+            data={"error_code": "E_XIAOMI_PLAY_FAILED", "stage": "xiaomi"},
+            request_id=request_id,
+        )
+    return xm
+
+
+def _playlist_arg(playlist_name: str, music_name: str = "") -> str:
+    return f"{playlist_name}|{music_name}" if music_name else playlist_name
 
 
 def _map_api_exception(exc: Exception, request_id: str) -> dict[str, Any]:
@@ -367,6 +405,143 @@ async def api_v1_debug_auth_runtime_reload_state():
                 "last_reload_runtime": {},
             }
         return _api_ok(data, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/control/previous")
+async def api_v1_control_previous(data: ControlRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        xm = _require_device(data.device_id, request_id)
+        await xm.play_prev(did=data.device_id)
+        return _api_ok({"status": "ok", DEVICE_ID: data.device_id, "action": "previous"}, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/control/next")
+async def api_v1_control_next(data: ControlRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        xm = _require_device(data.device_id, request_id)
+        await xm.play_next(did=data.device_id)
+        return _api_ok({"status": "ok", DEVICE_ID: data.device_id, "action": "next"}, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/control/play-mode")
+async def api_v1_control_play_mode(data: PlayModeRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        play_mode = str(data.play_mode or "").strip().lower()
+        if play_mode not in _PLAY_MODE_HANDLERS:
+            raise _bad_request(
+                request_id,
+                "invalid play_mode",
+                field="play_mode",
+                allowed=sorted(_PLAY_MODE_HANDLERS.keys()),
+            )
+        xm = _require_device(data.device_id, request_id)
+        handler = getattr(xm, _PLAY_MODE_HANDLERS[play_mode])
+        await handler(did=data.device_id)
+        return _api_ok({"status": "ok", DEVICE_ID: data.device_id, "play_mode": play_mode}, request_id=request_id)
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/control/shutdown-timer")
+async def api_v1_control_shutdown_timer(data: ShutdownTimerRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        xm = _require_device(data.device_id, request_id)
+        await xm.stop_after_minute(did=data.device_id, arg1=data.minutes)
+        return _api_ok(
+            {"status": "ok", DEVICE_ID: data.device_id, "minutes": int(data.minutes)},
+            request_id=request_id,
+        )
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/library/favorites/add")
+async def api_v1_library_favorites_add(data: FavoritesRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        xm = _require_device(data.device_id, request_id)
+        await xm.add_to_favorites(did=data.device_id, arg1=data.music_name)
+        return _api_ok(
+            {"status": "ok", DEVICE_ID: data.device_id, "music_name": data.music_name},
+            request_id=request_id,
+        )
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/library/favorites/remove")
+async def api_v1_library_favorites_remove(data: FavoritesRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        xm = _require_device(data.device_id, request_id)
+        await xm.del_from_favorites(did=data.device_id, arg1=data.music_name)
+        return _api_ok(
+            {"status": "ok", DEVICE_ID: data.device_id, "music_name": data.music_name},
+            request_id=request_id,
+        )
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/playlist/play")
+async def api_v1_playlist_play(data: PlaylistPlayRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        if not str(data.playlist_name or "").strip():
+            raise _bad_request(request_id, "playlist_name is required", field="playlist_name")
+        xm = _require_device(data.device_id, request_id)
+        await xm.play_music_list(did=data.device_id, arg1=_playlist_arg(data.playlist_name, data.music_name))
+        return _api_ok(
+            {
+                "status": "ok",
+                DEVICE_ID: data.device_id,
+                "playlist_name": data.playlist_name,
+                "music_name": data.music_name,
+            },
+            request_id=request_id,
+        )
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/playlist/play-index")
+async def api_v1_playlist_play_index(data: PlaylistPlayIndexRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        if not str(data.playlist_name or "").strip():
+            raise _bad_request(request_id, "playlist_name is required", field="playlist_name")
+        xm = _require_device(data.device_id, request_id)
+        await xm.play_music_list_index(did=data.device_id, arg1=f"{int(data.index)}个{data.playlist_name}")
+        return _api_ok(
+            {
+                "status": "ok",
+                DEVICE_ID: data.device_id,
+                "playlist_name": data.playlist_name,
+                "index": int(data.index),
+            },
+            request_id=request_id,
+        )
+    except Exception as exc:
+        return _map_api_exception(exc, request_id)
+
+
+@router.post("/api/v1/library/refresh")
+async def api_v1_library_refresh(data: LibraryRefreshRequest):
+    request_id = _next_request_id(data.request_id)
+    try:
+        xm = _get_xiaomusic()
+        await xm.gen_music_list()
+        return _api_ok({"status": "ok", "refreshed": True}, request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
