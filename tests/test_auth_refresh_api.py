@@ -70,3 +70,56 @@ async def test_auth_refresh_runtime_api_contract(monkeypatch):
     monkeypatch.setattr(system, "xiaomusic", type("_XM", (), {"auth_manager": _AuthManager()})())
     out = cast(dict[str, Any], await system.auth_refresh_runtime())
     assert out["runtime_auth_ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_auth_status_exposes_recovery_distinction(monkeypatch, tmp_path):
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        '{"userId":"u","passToken":"p","psecurity":"ps","ssecurity":"ss","cUserId":"cu","deviceId":"d"}',
+        encoding="utf-8",
+    )
+
+    class _TokenStore:
+        path = auth_file
+
+        @staticmethod
+        def get():
+            return {
+                "userId": "u",
+                "passToken": "p",
+                "psecurity": "ps",
+                "ssecurity": "ss",
+                "cUserId": "cu",
+                "deviceId": "d",
+            }
+
+    class _AuthManager:
+        @staticmethod
+        def auth_status_snapshot():
+            return {"mode": "degraded", "locked": False, "locked_until_ts": None, "lock_reason": ""}
+
+        @staticmethod
+        def auth_debug_state():
+            return {"last_auth_error": "missing short session token; rebuild from long auth required"}
+
+    class _XM:
+        token_store = _TokenStore()
+        auth_manager = _AuthManager()
+
+    async def _runtime_ready():
+        return False
+
+    monkeypatch.setattr(system, "config", type("_C", (), {"auth_token_path": str(auth_file), "qrcode_timeout": 120})())
+    monkeypatch.setattr(system, "xiaomusic", _XM())
+    monkeypatch.setattr(system, "_runtime_auth_ready", _runtime_ready)
+    monkeypatch.setattr(system, "qrcode_login_task", None)
+    monkeypatch.setattr(system, "qrcode_login_started_at", 0.0)
+    monkeypatch.setattr(system, "qrcode_login_error", "")
+
+    out = cast(dict[str, Any], await system.auth_status())
+    assert out["token_valid"] is False
+    assert out["persistent_auth_available"] is True
+    assert out["short_session_available"] is False
+    assert out["status_reason"] == "short_session_missing"
+    assert out["last_error"] == "missing short session token; rebuild from long auth required"

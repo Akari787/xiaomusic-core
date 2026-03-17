@@ -248,6 +248,8 @@ async def auth_status():
     token_path = config.auth_token_path
     token_exists = bool(token_path and os.path.isfile(token_path))
     token_valid = False
+    persistent_auth_available = False
+    short_session_available = False
     try:
         ts = getattr(xiaomusic, "token_store", None)
         if ts is not None:
@@ -256,9 +258,20 @@ async def auth_status():
         else:
             j = {}
         st = j.get("serviceToken") or j.get("yetAnotherServiceToken")
+        persistent_auth_available = bool(
+            j.get("userId")
+            and j.get("passToken")
+            and j.get("psecurity")
+            and j.get("ssecurity")
+            and j.get("cUserId")
+            and j.get("deviceId")
+        )
+        short_session_available = bool(st)
         token_valid = bool(j.get("userId") and j.get("passToken") and j.get("ssecurity") and st)
     except Exception:
         token_valid = False
+        persistent_auth_available = False
+        short_session_available = False
     runtime_ready = await _runtime_auth_ready()
     login_in_progress = bool(qrcode_login_task and not qrcode_login_task.done())
     auth_state = {}
@@ -268,6 +281,13 @@ async def auth_status():
             auth_state = am.auth_status_snapshot()
     except Exception:
         auth_state = {}
+    auth_debug = {}
+    try:
+        am = getattr(xiaomusic, "auth_manager", None)
+        if am is not None and hasattr(am, "auth_debug_state"):
+            auth_debug = am.auth_debug_state()
+    except Exception:
+        auth_debug = {}
     if login_in_progress:
         expire_after = int(getattr(config, "qrcode_timeout", 120)) + 15
         if qrcode_login_started_at > 0 and (time.time() - qrcode_login_started_at) > expire_after:
@@ -277,6 +297,16 @@ async def auth_status():
                 pass
             login_in_progress = False
 
+    status_reason = "healthy"
+    if bool(auth_state.get("locked", False)):
+        status_reason = "manual_login_required"
+    elif persistent_auth_available and not short_session_available:
+        status_reason = "short_session_missing"
+    elif persistent_auth_available and short_session_available and not runtime_ready:
+        status_reason = "runtime_not_ready"
+    elif not persistent_auth_available:
+        status_reason = "persistent_auth_missing"
+
     return api_response.ok(
         {
             "token_file": token_path,
@@ -285,8 +315,11 @@ async def auth_status():
             "token_valid": token_valid,
             "cloud_available": token_valid,
             "runtime_auth_ready": runtime_ready,
+            "persistent_auth_available": persistent_auth_available,
+            "short_session_available": short_session_available,
+            "status_reason": status_reason,
             "login_in_progress": login_in_progress,
-            "last_error": qrcode_login_error,
+            "last_error": qrcode_login_error or auth_debug.get("last_auth_error", ""),
             "auth_mode": auth_state.get("mode", "healthy"),
             "auth_locked": bool(auth_state.get("locked", False)),
             "auth_lock_until": auth_state.get("locked_until_ts"),

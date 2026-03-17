@@ -547,6 +547,8 @@ def test_auth_debug_state_has_required_fields(auth_manager):
         "ttl_remaining_seconds",
         "last_refresh_trigger",
         "last_auth_error",
+        "persistent_auth_available",
+        "short_session_available",
     }
     assert state["last_refresh_trigger"] == "scheduled"
 
@@ -973,6 +975,161 @@ async def test_rebuild_short_session_primary_failed_then_refresh_fallback_succes
 
 
 @pytest.mark.asyncio
+async def test_rebuild_short_session_uses_second_persistent_path_before_refresh_fallback(auth_manager, monkeypatch):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    calls = {"miaccount": 0, "mijia": 0, "fallback": 0}
+
+    async def _miaccount(*, before, reason, sid="micoapi"):  # noqa: ARG001
+        calls["miaccount"] += 1
+        return {
+            "ok": False,
+            "error_code": "redirect_failed",
+            "failed_reason": "redirect_http_status",
+            "used_path": "miaccount_persistent_auth_login",
+            "sid": sid,
+        }
+
+    async def _mijia(*, auth_dir, sid="micoapi"):  # noqa: ARG001
+        calls["mijia"] += 1
+        payload = json.loads(token_path.read_text(encoding="utf-8"))
+        payload["serviceToken"] = "second-path-st"
+        payload["yetAnotherServiceToken"] = "second-path-yast"
+        token_path.write_text(json.dumps(payload), encoding="utf-8")
+        return {
+            "ok": True,
+            "used_path": "mijia_persistent_auth_login",
+            "sid": sid,
+            "writeback_target": "auth_json",
+            "http_stage": "redirect",
+        }
+
+    async def _fallback(reason):  # noqa: ARG001
+        calls["fallback"] += 1
+        return {"ok": False, "used_path": "refresh_token_fallback"}
+
+    auth_manager._try_miaccount_persistent_auth_relogin = _miaccount
+    auth_manager._try_mijia_persistent_auth_relogin = _mijia
+    auth_manager._rebuild_short_session_tokens_via_refresh_fallback = _fallback
+
+    out = await auth_manager._rebuild_short_session_tokens_from_persistent_auth("ut-second-path")
+    assert out["ok"] is True
+    assert out["used_path"] == "mijia_persistent_auth_login"
+    assert calls == {"miaccount": 1, "mijia": 1, "fallback": 0}
+
+
+@pytest.mark.asyncio
+async def test_ensure_logged_in_records_degraded_not_healthy_when_all_recovery_paths_fail(auth_manager):
+    async def _need_login():
+        return True
+
+    async def _short_rebuild(reason):  # noqa: ARG001
+        auth_manager._last_short_session_rebuild_detail = {
+            "ok": False,
+            "used_path": "refresh_token_fallback",
+            "error_code": "short_session_rebuild_failed",
+        }
+        return False
+
+    auth_manager.need_login = _need_login
+    auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
+
+    with pytest.raises(RuntimeError):
+        await auth_manager.ensure_logged_in(force=True, reason="ut-degraded-flow", prefer_refresh=True)
+    flow = auth_manager.auth_short_session_rebuild_debug_state()["last_auth_recovery_flow"]
+    assert flow["result"] == "failed"
+    assert flow["final_auth_mode"] == "degraded"
+    assert flow["runtime_rebind_result"] == "failed"
+    assert flow["verify_result"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_init_all_data_records_recovery_flow_on_success(auth_manager):
+    calls = {"login": 0, "device_update": 0}
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    async def _need_login():
+        return True
+
+    async def _can_login():
+        return True
+
+    async def _login(allow_login_fallback=False, reason=""):  # noqa: ARG001
+        calls["login"] += 1
+        return None
+
+    async def _rebuild(reason):  # noqa: ARG001
+        auth_manager._last_short_session_rebuild_detail = {
+            "ok": True,
+            "used_path": "miaccount_persistent_auth_login",
+        }
+        return True
+
+    async def _update(auth):  # noqa: ARG001
+        calls["device_update"] += 1
+
+    auth_manager.need_login = _need_login
+    auth_manager.can_login = _can_login
+    auth_manager.login_miboy = _login
+    auth_manager._rebuild_short_session_from_persistent_auth = _rebuild
+    auth_manager.device_manager.update_device_info = _update
+    auth_manager._last_login_ts = 0
+    auth_manager._login_cooldown_sec = 0
+
+    await auth_manager.init_all_data()
+    flow = auth_manager.auth_short_session_rebuild_debug_state()["last_auth_recovery_flow"]
+    assert flow["result"] == "ok"
+    assert flow["runtime_rebind_result"] == "ok"
+    assert flow["verify_result"] == "ok"
+    assert auth_manager.auth_short_session_rebuild_debug_state()["last_verify"]["result"] == "ok"
+    assert calls == {"login": 1, "device_update": 1}
+
+
+@pytest.mark.asyncio
+async def test_init_all_data_sets_degraded_when_recovery_fails(auth_manager):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    async def _need_login():
+        return True
+
+    async def _can_login():
+        return True
+
+    async def _login(allow_login_fallback=False, reason=""):  # noqa: ARG001
+        raise RuntimeError("missing short session token; rebuild from long auth required")
+
+    async def _rebuild(reason):  # noqa: ARG001
+        auth_manager._last_short_session_rebuild_detail = {
+            "ok": False,
+            "used_path": "refresh_token_fallback",
+        }
+        return False
+
+    auth_manager.need_login = _need_login
+    auth_manager.can_login = _can_login
+    auth_manager.login_miboy = _login
+    auth_manager._rebuild_short_session_from_persistent_auth = _rebuild
+    auth_manager._last_login_ts = 0
+    auth_manager._login_cooldown_sec = 0
+
+    with pytest.raises(RuntimeError):
+        await auth_manager.init_all_data()
+    assert auth_manager.auth_debug_state()["auth_mode"] == "degraded"
+
+
+@pytest.mark.asyncio
 async def test_ensure_logged_in_short_rebuild_failed_without_lock_when_persistent_auth_exists(auth_manager, monkeypatch):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
@@ -1226,3 +1383,16 @@ async def test_manual_reload_runtime_fails_with_missing_short_tokens(auth_manage
     assert out["runtime_auth_ready"] is False
     assert out["error_code"] == "missing_runtime_token_fields"
     assert "serviceToken|yetAnotherServiceToken" in str(out["last_error"])
+
+
+def test_auth_debug_state_zeroes_ttl_when_short_session_missing(auth_manager):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    state = auth_manager.auth_debug_state()
+    assert state["short_session_available"] is False
+    assert state["persistent_auth_available"] is True
+    assert state["ttl_remaining_seconds"] == 0
