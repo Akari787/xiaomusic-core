@@ -116,13 +116,13 @@ class XiaoMusicDevice:
 
         # Safety net: if timer was lost/cancelled and track is far beyond expected
         # duration, try one guarded auto-next recovery.
-        if (
-            duration > 0.1
-            and offset >= duration + 15.0
-            and self._next_timer is None
-            and self.device.play_type != PLAY_TYPE_SIN
-            and self._last_cmd not in {"stop", "pause"}
-        ):
+        should_check_autonext = False
+        if duration > 0.1 and self.device.play_type != PLAY_TYPE_SIN and self._last_cmd not in {"stop", "pause"}:
+            overdue_without_timer = self._next_timer is None and offset >= duration + 15.0
+            near_end_with_timer = self._next_timer is not None and offset >= max(duration - 1.0, duration * 0.9)
+            should_check_autonext = overdue_without_timer or near_end_with_timer
+
+        if should_check_autonext:
             if self._autonext_guard_task is None or self._autonext_guard_task.done():
                 sid = self._play_session_id
 
@@ -138,7 +138,12 @@ class XiaoMusicDevice:
                     if sid != self._play_session_id:
                         return
                     if self._next_timer is not None:
-                        return
+                        self._next_timer.cancel()
+                        try:
+                            await self._next_timer
+                        except asyncio.CancelledError:
+                            pass
+                        self._next_timer = None
                     self.log.info(
                         "autonext_guard_trigger(session_id=%s, offset=%.3f, duration=%.3f)",
                         sid,

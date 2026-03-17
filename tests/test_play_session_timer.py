@@ -30,6 +30,7 @@ def _build_device_for_timer_tests():
     d._next_timer = None
     d._stop_timer = None
     d._tts_timer = None
+    d._duration_probe_task = None
     d._play_session_id = 1
     d._last_cmd = ""
     d._autonext_guard_task = None
@@ -140,6 +141,33 @@ async def test_overdue_offset_triggers_autonext_guard_when_idle():
     await asyncio.sleep(0)
 
     assert d._next_called == 1
+
+
+@pytest.mark.asyncio
+async def test_near_end_with_stale_timer_triggers_autonext_guard_when_idle():
+    d = _build_device_for_timer_tests()
+    d._duration = 10.0
+    d._start_time = time.time() - 9.5
+    d._paused_time = 0.0
+
+    async def _stale_timer():
+        await asyncio.sleep(999)
+
+    d._next_timer = asyncio.create_task(_stale_timer())
+    d._last_cmd = "play"
+
+    async def _get_if_xiaoai_is_playing():
+        return False
+
+    d.get_if_xiaoai_is_playing = _get_if_xiaoai_is_playing
+
+    d.get_offset_duration()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert d._next_called == 1
+    assert d._next_timer is None
 
 
 @pytest.mark.asyncio
