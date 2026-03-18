@@ -1,3 +1,5 @@
+> ⚠ 本文档基于旧播放模型，仅供历史参考（Historical Only）。
+
 # xiaomusic-core 使用指南
 
 `xiaomusic-core` 是基于 `xiaomusic` 的独立维护分支，默认使用米家扫码认证登录，支持 Jellyfin 联动。

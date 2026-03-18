@@ -1,3 +1,5 @@
+> ⚠ 本文档基于旧播放模型，仅供历史参考（Historical Only）。
+
 # Playback Refactor v1 Regression Baseline
 
 > 历史归档文档，仅用于回溯早期播放重构阶段的回归基线。

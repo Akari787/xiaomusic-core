@@ -697,3 +697,39 @@ HA 不应通过发送中文命令字符串调用历史 `/cmd`。
 - `docs/dev/runtime_contracts.md`
 - 相关运行时规范文档
 
+
+
+## context_hint
+Optional object to guide context selection.
+
+```json
+{
+  "context_type": "...",
+  "context_id": "...",
+  "context_name": "..."
+}
+```
+Rules:
+- If provided, adapters MUST prioritize it
+- Otherwise adapter selects context
+
+
+## Player State (Unified Context)
+```json
+{
+  "source_type": "...",
+  "playback_kind": "single|queue|stream",
+  "current_track_id": "...",
+  "current_track_title": "...",
+  "current_track_duration": 0,
+  "play_mode": "...",
+  "context_type": "...",
+  "context_id": "...",
+  "context_name": "...",
+  "queue_supported": true,
+  "current_index": 0,
+  "queue_length": 0,
+  "has_next": true,
+  "has_previous": true
+}
+```
