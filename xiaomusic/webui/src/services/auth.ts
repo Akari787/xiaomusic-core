@@ -1,5 +1,13 @@
 import { apiGet, apiPost } from "./apiClient";
 
+export type AuthStatusReason =
+  | "healthy"
+  | "persistent_auth_missing"
+  | "short_session_missing"
+  | "short_session_rebuild_failed"
+  | "runtime_not_ready"
+  | "manual_login_required";
+
 export interface AuthStatus {
   success?: boolean;
   token_file?: string;
@@ -8,12 +16,19 @@ export interface AuthStatus {
   token_valid?: boolean;
   cloud_available?: boolean;
   runtime_auth_ready?: boolean;
+  persistent_auth_available?: boolean;
+  short_session_available?: boolean;
   login_in_progress?: boolean;
   last_error?: string;
   auth_mode?: string;
   auth_locked?: boolean;
   auth_lock_until?: number | null;
   auth_lock_reason?: string;
+  status_reason?: AuthStatusReason;
+  status_reason_detail?: string;
+  rebuild_failed?: boolean;
+  rebuild_error_code?: string;
+  rebuild_failed_reason?: string;
 }
 
 export async function fetchAuthStatus(): Promise<AuthStatus> {

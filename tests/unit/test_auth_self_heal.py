@@ -1381,8 +1381,10 @@ async def test_manual_reload_runtime_fails_with_missing_short_tokens(auth_manage
 
     out = await auth_manager.manual_reload_runtime(reason="ut-missing-short")
     assert out["runtime_auth_ready"] is False
-    assert out["error_code"] == "missing_runtime_token_fields"
-    assert "serviceToken|yetAnotherServiceToken" in str(out["last_error"])
+    assert out["error_code"] == "short_session_missing_for_runtime_reload"
+    assert "short session tokens missing" in str(out["last_error"])
+    assert out["missing_long_lived_fields"] == []
+    assert "serviceToken" in out["missing_short_session_fields"][0]
 
 
 def test_auth_debug_state_zeroes_ttl_when_short_session_missing(auth_manager):
@@ -1396,3 +1398,69 @@ def test_auth_debug_state_zeroes_ttl_when_short_session_missing(auth_manager):
     assert state["short_session_available"] is False
     assert state["persistent_auth_available"] is True
     assert state["ttl_remaining_seconds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_rebuild_short_session_produces_diagnostic_fields(auth_manager, monkeypatch):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    calls: list[dict] = []
+
+    class _FakeMiAccount:
+        def __init__(self, *args, **kwargs):
+            self.token = {}
+
+        async def _serviceLogin(self, path):
+            raise Exception("simulated network timeout")
+
+    monkeypatch.setattr(auth_manager, "mi_session", None)
+    monkeypatch.setattr("miservice.MiAccount", _FakeMiAccount)
+
+    auth_manager.mi_token_home = str(token_path.parent / ".mi.token")
+
+    out = await auth_manager._rebuild_service_cookies_from_persistent_auth(
+        reason="test-diag", sid="micoapi"
+    )
+    assert out["ok"] is False
+    assert "path_attempts" in out
+    first_attempt = out["path_attempts"][0]
+    assert first_attempt["diagnostic"] is not None
+    diag = first_attempt["diagnostic"]
+    assert "service_login_code" in diag
+    assert "http_status" in diag
+    assert "has_location" in diag
+    assert "is_network_error" in diag
+
+
+@pytest.mark.asyncio
+async def test_path_attempts_include_diagnostic_in_rebuild_result(auth_manager, monkeypatch):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    class _FakeMiAccount:
+        def __init__(self, *args, **kwargs):
+            self.token = {}
+
+        async def _serviceLogin(self, path):
+            raise Exception("timeout")
+
+    monkeypatch.setattr("miservice.MiAccount", _FakeMiAccount)
+    auth_manager.mi_token_home = str(token_path.parent / ".mi.token")
+
+    out = await auth_manager._rebuild_service_cookies_from_persistent_auth(
+        reason="test-path-attempts", sid="micoapi"
+    )
+    assert out["ok"] is False
+    assert "path_attempts" in out
+    assert len(out["path_attempts"]) >= 1
+    first_attempt = out["path_attempts"][0]
+    assert first_attempt["result"] == "failed"
+    assert first_attempt["error_code"] != ""
+    assert first_attempt["failed_reason"] != ""

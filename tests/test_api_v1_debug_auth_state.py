@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+from typing import Any, cast
 import pytest
+import json
 
 from xiaomusic.api.routers import v1
+
+
+def _parse_response(resp):
+    body = getattr(resp, "body", resp)
+    if isinstance(body, bytes):
+        return json.loads(body.decode())
+    return body
 
 
 @pytest.mark.asyncio
@@ -212,3 +221,245 @@ async def test_api_v1_debug_auth_short_session_rebuild_state_success(monkeypatch
     assert out["code"] == 0
     assert out["data"]["last_short_session_rebuild"]["result"] == "ok"
     assert out["data"]["last_persistent_auth_relogin"]["used_path"] == "relogin_with_persistent_auth"
+
+
+@pytest.mark.asyncio
+async def test_status_reason_short_session_rebuild_failed(monkeypatch):
+    pytest.importorskip("qrcode")
+    from xiaomusic.api.routers import system
+
+    class _Auth:
+        @staticmethod
+        def auth_status_snapshot():
+            return {"mode": "degraded", "locked": False, "lock_reason": ""}
+
+        @staticmethod
+        def auth_debug_state():
+            return {"last_auth_error": ""}
+
+        @staticmethod
+        def auth_short_session_rebuild_debug_state():
+            return {
+                "last_short_session_rebuild": {
+                    "result": "failed",
+                    "error_code": "redirect_http_401",
+                    "failed_reason": "redirect_http_401",
+                    "error_message": "redirect status=401",
+                },
+                "last_auth_recovery_flow": {"result": "failed"},
+            }
+
+    class _XM:
+        auth_manager = _Auth()
+        token_store = None
+
+    async def _fake_runtime_ready():
+        return False
+
+    monkeypatch.setattr(system, "_runtime_auth_ready", _fake_runtime_ready)
+    monkeypatch.setattr(system, "xiaomusic", _XM())
+    monkeypatch.setattr(system, "config", _FakeConfig())
+    monkeypatch.setattr(system, "qrcode_login_task", None)
+    monkeypatch.setattr(system, "qrcode_login_started_at", 0.0)
+    monkeypatch.setattr(system, "qrcode_login_error", "")
+
+    out = await system.auth_status()
+    data = _parse_response(out)
+    assert data["code"] == 0
+    assert data["status_reason"] == "short_session_rebuild_failed"
+    assert data["rebuild_failed"] is True
+    assert "redirect_http_401" in str(data["rebuild_error_code"])
+
+
+@pytest.mark.asyncio
+async def test_status_reason_short_session_missing_no_failure_recorded(monkeypatch):
+    pytest.importorskip("qrcode")
+    from xiaomusic.api.routers import system
+
+    class _Auth:
+        @staticmethod
+        def auth_status_snapshot():
+            return {"mode": "degraded", "locked": False, "lock_reason": ""}
+
+        @staticmethod
+        def auth_debug_state():
+            return {"last_auth_error": ""}
+
+        @staticmethod
+        def auth_short_session_rebuild_debug_state():
+            return {
+                "last_short_session_rebuild": {"result": "ok"},
+                "last_auth_recovery_flow": {},
+            }
+
+    class _XM:
+        auth_manager = _Auth()
+        token_store = None
+
+    async def _fake_runtime_ready():
+        return False
+
+    monkeypatch.setattr(system, "_runtime_auth_ready", _fake_runtime_ready)
+    monkeypatch.setattr(system, "xiaomusic", _XM())
+    monkeypatch.setattr(system, "config", _FakeConfig())
+    monkeypatch.setattr(system, "qrcode_login_task", None)
+    monkeypatch.setattr(system, "qrcode_login_started_at", 0.0)
+    monkeypatch.setattr(system, "qrcode_login_error", "")
+
+    out = await system.auth_status()
+    assert out["code"] == 0
+    assert out["data"]["status_reason"] == "short_session_rebuild_failed"
+    assert out["data"]["rebuild_failed"] is True
+
+
+@pytest.mark.asyncio
+async def test_status_reason_persistent_auth_missing(monkeypatch):
+    pytest.importorskip("qrcode")
+    from xiaomusic.api.routers import system
+
+    class _FakeTokenStore:
+        path = None
+
+        @staticmethod
+        def get():
+            return {}
+
+    class _Auth:
+        @staticmethod
+        def auth_status_snapshot():
+            return {"mode": "degraded", "locked": False, "lock_reason": ""}
+
+        @staticmethod
+        def auth_debug_state():
+            return {"last_auth_error": ""}
+
+        @staticmethod
+        def auth_short_session_rebuild_debug_state():
+            return {
+                "last_short_session_rebuild": {"result": "failed"},
+                "last_auth_recovery_flow": {"result": "failed"},
+            }
+
+    class _XM:
+        auth_manager = _Auth()
+        token_store = _FakeTokenStore()
+
+    async def _fake_runtime_ready():
+        return False
+
+    monkeypatch.setattr(system, "_runtime_auth_ready", _fake_runtime_ready)
+    monkeypatch.setattr(system, "xiaomusic", _XM())
+    monkeypatch.setattr(system, "config", _FakeConfig())
+    monkeypatch.setattr(system, "qrcode_login_task", None)
+    monkeypatch.setattr(system, "qrcode_login_started_at", 0.0)
+    monkeypatch.setattr(system, "qrcode_login_error", "")
+
+    out = await system.auth_status()
+    assert out["code"] == 0
+    assert out["data"]["status_reason"] == "persistent_auth_missing"
+    assert out["data"]["persistent_auth_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_status_reason_manual_login_required(monkeypatch):
+    pytest.importorskip("qrcode")
+    from xiaomusic.api.routers import system
+
+    class _Auth:
+        @staticmethod
+        def auth_status_snapshot():
+            return {"mode": "locked", "locked": True, "lock_reason": "too many failures", "locked_until_ts": 9999999999}
+
+        @staticmethod
+        def auth_debug_state():
+            return {"last_auth_error": "too many failures"}
+
+        @staticmethod
+        def auth_short_session_rebuild_debug_state():
+            return {
+                "last_short_session_rebuild": {"result": "failed"},
+                "last_auth_recovery_flow": {"result": "failed"},
+            }
+
+    class _XM:
+        auth_manager = _Auth()
+        token_store = None
+
+    async def _fake_runtime_ready():
+        return False
+
+    monkeypatch.setattr(system, "_runtime_auth_ready", _fake_runtime_ready)
+    monkeypatch.setattr(system, "xiaomusic", _XM())
+    monkeypatch.setattr(system, "config", _FakeConfig())
+    monkeypatch.setattr(system, "qrcode_login_task", None)
+    monkeypatch.setattr(system, "qrcode_login_started_at", 0.0)
+    monkeypatch.setattr(system, "qrcode_login_error", "")
+
+    out = await system.auth_status()
+    assert out["code"] == 0
+    assert out["data"]["status_reason"] == "manual_login_required"
+    assert out["data"]["auth_locked"] is True
+
+
+@pytest.mark.asyncio
+async def test_status_reason_runtime_not_ready(monkeypatch):
+    pytest.importorskip("qrcode")
+    from xiaomusic.api.routers import system
+
+    class _FakeTokenStore:
+        path = None
+
+        @staticmethod
+        def get():
+            return {
+                "userId": "test",
+                "passToken": "test",
+                "psecurity": "test",
+                "ssecurity": "test",
+                "cUserId": "test",
+                "deviceId": "test",
+                "serviceToken": "test",
+            }
+
+    class _Auth:
+        @staticmethod
+        def auth_status_snapshot():
+            return {"mode": "degraded", "locked": False, "lock_reason": ""}
+
+        @staticmethod
+        def auth_debug_state():
+            return {"last_auth_error": ""}
+
+        @staticmethod
+        def auth_short_session_rebuild_debug_state():
+            return {
+                "last_short_session_rebuild": {"result": "ok"},
+                "last_auth_recovery_flow": {"result": "ok"},
+            }
+
+    class _XM:
+        auth_manager = _Auth()
+        token_store = _FakeTokenStore()
+
+    async def _fake_runtime_ready():
+        return False
+
+    monkeypatch.setattr(system, "_runtime_auth_ready", _fake_runtime_ready)
+    monkeypatch.setattr(system, "xiaomusic", _XM())
+    monkeypatch.setattr(system, "config", _FakeConfig())
+    monkeypatch.setattr(system, "qrcode_login_task", None)
+    monkeypatch.setattr(system, "qrcode_login_started_at", 0.0)
+    monkeypatch.setattr(system, "qrcode_login_error", "")
+
+    out = await system.auth_status()
+    assert out["code"] == 0
+    assert out["data"]["status_reason"] == "runtime_not_ready"
+    assert out["data"]["short_session_available"] is True
+    assert out["data"]["persistent_auth_available"] is True
+    assert out["data"]["runtime_auth_ready"] is False
+    assert out["data"]["rebuild_failed"] is False
+
+
+class _FakeConfig:
+    auth_token_path = "conf/auth.json"
+    qrcode_timeout = 120

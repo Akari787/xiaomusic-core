@@ -83,11 +83,29 @@ export function AuthStatusCard() {
   const authLocked = Boolean(status?.auth_locked);
   const runtimeReady = Boolean(status?.runtime_auth_ready);
   const tokenPresent = Boolean(status?.token_valid || status?.token_exists);
-  const authStateText = runtimeReady
-    ? "运行时已恢复"
-    : tokenPresent
+  const rebuildFailed = Boolean(status?.rebuild_failed);
+  const statusReason = status?.status_reason || "unknown";
+  const statusDetail = status?.status_reason_detail || "";
+
+  let authStateText: string;
+  if (statusReason === "healthy") {
+    authStateText = "运行时已恢复";
+  } else if (statusReason === "persistent_auth_missing") {
+    authStateText = "需要重新扫码登录（长期态缺失）";
+  } else if (statusReason === "manual_login_required") {
+    authStateText = "需要重新扫码登录（认证已锁定）";
+  } else if (statusReason === "short_session_rebuild_failed") {
+    const errCode = status?.rebuild_error_code || "";
+    authStateText = `需要重新扫码登录（自动恢复失败: ${errCode}）`;
+  } else if (statusReason === "short_session_missing") {
+    authStateText = "已登录待恢复（请点击刷新运行时）";
+  } else if (statusReason === "runtime_not_ready") {
+    authStateText = "运行时未就绪，请稍后";
+  } else {
+    authStateText = tokenPresent
       ? "已登录待恢复（请点击刷新运行时）"
       : "需要重新扫码登录";
+  }
 
   return (
     <section className="auth-card">
@@ -108,6 +126,17 @@ export function AuthStatusCard() {
           <li>token_exists: {String(status.token_exists)}</li>
           <li>token_valid: {String(status.token_valid)}</li>
           <li>cloud_available: {String(status.cloud_available)}</li>
+          <li>short_session_available: {String(status.short_session_available ?? "n/a")}</li>
+          <li>persistent_auth_available: {String(status.persistent_auth_available ?? "n/a")}</li>
+          <li>status_reason: {statusReason}</li>
+          <li>status_reason_detail: {statusDetail || "n/a"}</li>
+          <li>rebuild_failed: {String(rebuildFailed)}</li>
+          {rebuildFailed ? (
+            <>
+              <li>rebuild_error_code: {status.rebuild_error_code || "n/a"}</li>
+              <li>rebuild_failed_reason: {status.rebuild_failed_reason || "n/a"}</li>
+            </>
+          ) : null}
           <li>login_in_progress: {String(status.login_in_progress)}</li>
           <li>auth_lock_until: {String(status.auth_lock_until ?? "")}</li>
           <li>auth_lock_reason: {status.auth_lock_reason || ""}</li>

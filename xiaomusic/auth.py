@@ -579,6 +579,7 @@ class AuthManager:
         failed_reason: str = "",
         presence: dict[str, bool] | None = None,
         path_attempts: list[dict[str, Any]] | None = None,
+        diagnostic: dict[str, Any] | None = None,
     ) -> None:
         presence_data = presence or {}
         payload = {
@@ -612,6 +613,8 @@ class AuthManager:
         }
         if path_attempts:
             payload["path_attempts"] = path_attempts
+        if diagnostic:
+            payload["diagnostic"] = diagnostic
         self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
         # New canonical event for long-auth relogin observability.
         relogin_payload = dict(payload)
@@ -728,6 +731,8 @@ class AuthManager:
                 "used_path": "miaccount_persistent_auth_login",
             }
 
+        service_login_url = f"https://account.xiaomi.com/pass/serviceLogin?_json=true&sid={sid}"
+        service_login_host = "account.xiaomi.com"
         mi_account = MiAccount(
             self.mi_session,
             account_name,
@@ -735,35 +740,106 @@ class AuthManager:
             str(self.mi_token_home),
         )
         self.set_token(mi_account)
+
+        service_login_code: int | None = None
+        service_login_desc: str = ""
+        service_login_http_status: int | None = None
+
         try:
             resp = await mi_account._serviceLogin(f"serviceLogin?sid={sid}&_json=true")
         except Exception as e:
+            exc_text = str(e)
+            error_code: str
+            failed_reason: str
+            is_network = any(
+                kw in exc_text.lower()
+                for kw in ("timeout", "connection", "dns", "network", "refused", "reset")
+            )
+            if is_network:
+                error_code = "service_login_network_failed"
+                failed_reason = "service_login_network_error"
+            else:
+                error_code = "service_login_http_failed"
+                failed_reason = "service_login_request_failed"
+            import re as _re
+            http_status_match = _re.search(r"status[=:\s]+([45]\d{2})", exc_text, _re.IGNORECASE)
+            service_login_http_status = int(http_status_match.group(1)) if http_status_match else None
             return {
                 "ok": False,
-                "error_code": "persistent_auth_login_failed",
-                "failed_reason": "service_login_request_failed",
-                "error_message": str(e),
+                "error_code": error_code,
+                "failed_reason": failed_reason,
+                "error_message": exc_text[:200],
                 "http_stage": "serviceLogin",
                 "writeback_target": "none",
                 "sid": sid,
                 "used_path": "miaccount_persistent_auth_login",
+                "diagnostic": {
+                    "target_host": service_login_host,
+                    "http_status": service_login_http_status,
+                    "service_login_code": None,
+                    "service_login_desc": None,
+                    "has_location": None,
+                    "has_nonce": None,
+                    "has_ssecurity": None,
+                    "is_network_error": is_network,
+                },
             }
 
-        if not isinstance(resp, dict) or int(resp.get("code", -1)) != 0:
+        if not isinstance(resp, dict):
             return {
                 "ok": False,
-                "error_code": "persistent_auth_expired",
-                "failed_reason": "service_login_not_authorized",
-                "error_message": str((resp or {}).get("desc") or (resp or {}).get("message") or "serviceLogin failed"),
+                "error_code": "service_login_response_invalid",
+                "failed_reason": "service_login_non_dict_response",
+                "error_message": f"unexpected response type: {type(resp).__name__}",
                 "http_stage": "serviceLogin",
                 "writeback_target": "none",
                 "sid": sid,
                 "used_path": "miaccount_persistent_auth_login",
+                "diagnostic": {
+                    "target_host": service_login_host,
+                    "http_status": None,
+                    "service_login_code": None,
+                    "service_login_desc": None,
+                    "has_location": None,
+                    "has_nonce": None,
+                    "has_ssecurity": None,
+                    "is_network_error": False,
+                },
+            }
+
+        service_login_code = int(resp.get("code", -1))
+        service_login_desc = str(resp.get("desc") or resp.get("message") or "")
+
+        if service_login_code != 0:
+            is_auth_rejection = service_login_code in (70016, -1, 1)
+            return {
+                "ok": False,
+                "error_code": "service_login_not_authorized",
+                "failed_reason": "service_login_code_not_zero",
+                "error_message": service_login_desc[:200] or f"serviceLogin returned code={service_login_code}",
+                "http_stage": "serviceLogin",
+                "writeback_target": "none",
+                "sid": sid,
+                "used_path": "miaccount_persistent_auth_login",
+                "diagnostic": {
+                    "target_host": service_login_host,
+                    "http_status": None,
+                    "service_login_code": service_login_code,
+                    "service_login_desc": service_login_desc[:200],
+                    "has_location": bool(resp.get("location")),
+                    "has_nonce": bool(resp.get("nonce")),
+                    "has_ssecurity": bool(resp.get("ssecurity")),
+                    "is_cloud_auth_rejection": is_auth_rejection,
+                },
             }
 
         location = str(resp.get("location") or "")
         nonce = resp.get("nonce")
         ssecurity = str(resp.get("ssecurity") or before.get("ssecurity") or "")
+        has_location = bool(location)
+        has_nonce = bool(nonce)
+        has_ssecurity = bool(ssecurity)
+
         if not location:
             return {
                 "ok": False,
@@ -774,19 +850,71 @@ class AuthManager:
                 "writeback_target": "none",
                 "sid": sid,
                 "used_path": "miaccount_persistent_auth_login",
+                "diagnostic": {
+                    "target_host": service_login_host,
+                    "http_status": None,
+                    "service_login_code": service_login_code,
+                    "service_login_desc": service_login_desc,
+                    "has_location": has_location,
+                    "has_nonce": has_nonce,
+                    "has_ssecurity": has_ssecurity,
+                    "is_cloud_auth_rejection": False,
+                },
             }
+
+        redirect_host = ""
+        try:
+            from urllib.parse import urlparse as _urlparse
+            parsed = _urlparse(location)
+            redirect_host = parsed.netloc
+        except Exception:
+            pass
+
         try:
             service_token = await mi_account._securityTokenService(location, nonce, ssecurity)
         except Exception as e:
+            exc_text = str(e)
+            error_code = "security_token_service_failed"
+            failed_reason = "security_token_service_exception"
+            is_network = any(
+                kw in exc_text.lower()
+                for kw in ("timeout", "connection", "dns", "network", "refused", "reset")
+            )
+            is_401_403 = any(
+                kw in exc_text.lower()
+                for kw in ("401", "403", "unauthorized", "forbidden")
+            )
+            if is_401_403:
+                error_code = "security_token_service_not_authorized"
+                failed_reason = "security_token_service_401_403"
+            elif is_network:
+                error_code = "security_token_service_network_failed"
+                failed_reason = "security_token_service_network_error"
+            else:
+                error_code = "security_token_service_protocol_failed"
+                failed_reason = "security_token_service_exception"
             return {
                 "ok": False,
-                "error_code": "persistent_auth_login_failed",
-                "failed_reason": "security_token_service_failed",
-                "error_message": str(e),
+                "error_code": error_code,
+                "failed_reason": failed_reason,
+                "error_message": exc_text[:200],
                 "http_stage": "redirect",
                 "writeback_target": "none",
                 "sid": sid,
                 "used_path": "miaccount_persistent_auth_login",
+                "diagnostic": {
+                    "target_host": service_login_host,
+                    "redirect_host": redirect_host,
+                    "http_status": None,
+                    "service_login_code": service_login_code,
+                    "service_login_desc": service_login_desc,
+                    "has_location": has_location,
+                    "has_nonce": has_nonce,
+                    "has_ssecurity": has_ssecurity,
+                    "is_cloud_auth_rejection": is_401_403,
+                    "is_network_error": is_network,
+                    "is_401_403_rejection": is_401_403,
+                },
             }
 
         if not service_token:
@@ -799,6 +927,17 @@ class AuthManager:
                 "writeback_target": "none",
                 "sid": sid,
                 "used_path": "miaccount_persistent_auth_login",
+                "diagnostic": {
+                    "target_host": service_login_host,
+                    "redirect_host": redirect_host,
+                    "http_status": None,
+                    "service_login_code": service_login_code,
+                    "service_login_desc": service_login_desc,
+                    "has_location": has_location,
+                    "has_nonce": has_nonce,
+                    "has_ssecurity": has_ssecurity,
+                    "is_cloud_auth_rejection": False,
+                },
             }
 
         merged = deepcopy(before)
@@ -856,6 +995,12 @@ class AuthManager:
             }
         relogin_ret = dict(relogin_ret)
         relogin_ret.setdefault("used_path", "mijia_persistent_auth_login")
+        if "diagnostic" not in relogin_ret:
+            relogin_ret["diagnostic"] = {
+                "via": "mijia_persistent_auth_login",
+            }
+        else:
+            relogin_ret["diagnostic"]["via"] = "mijia_persistent_auth_login"
         return relogin_ret
 
     @staticmethod
@@ -867,12 +1012,13 @@ class AuthManager:
         }
 
     @staticmethod
-    def _missing_runtime_reload_fields(data: dict[str, Any]) -> list[str]:
-        required = ("passToken", "psecurity", "ssecurity", "userId", "cUserId", "deviceId")
-        missing = [k for k in required if not str(data.get(k) or "").strip()]
+    def _missing_runtime_reload_fields(data: dict[str, Any]) -> tuple[list[str], list[str]]:
+        required_long = ("passToken", "psecurity", "ssecurity", "userId", "cUserId", "deviceId")
+        missing_long = [k for k in required_long if not str(data.get(k) or "").strip()]
+        missing_short: list[str] = []
         if not (str(data.get("serviceToken") or "").strip() or str(data.get("yetAnotherServiceToken") or "").strip()):
-            missing.append("serviceToken|yetAnotherServiceToken")
-        return missing
+            missing_short.append("serviceToken|yetAnotherServiceToken")
+        return missing_long, missing_short
 
     def _emit_auth_runtime_reload(
         self,
@@ -987,12 +1133,18 @@ class AuthManager:
         path_attempts: list[dict[str, Any]] = []
 
         def _attempt_snapshot(name: str, res: dict[str, Any]) -> dict[str, Any]:
-            return {
+            snap = {
                 "used_path": name,
                 "result": "ok" if res.get("ok") else "failed",
                 "error_code": str(res.get("error_code") or ""),
                 "failed_reason": str(res.get("failed_reason") or ""),
+                "error_message": str(res.get("error_message") or "")[:200],
             }
+            if res.get("diagnostic"):
+                snap["diagnostic"] = res["diagnostic"]
+            if res.get("http_stage"):
+                snap["http_stage"] = res["http_stage"]
+            return snap
 
         try:
             ret = await self._try_miaccount_persistent_auth_relogin(before=before, reason=reason, sid=sid)
@@ -1048,6 +1200,7 @@ class AuthManager:
             failed_reason=str(ret.get("failed_reason") or ("" if ok else "service_token_not_written")),
         )
 
+        ret_diagnostic = ret.get("diagnostic") if isinstance(ret, dict) else None
         self._emit_auth_cookie_rebuild(
             result="ok" if ok else "failed",
             reason=reason or "auth_error",
@@ -1069,6 +1222,7 @@ class AuthManager:
             failed_reason=str(ret.get("failed_reason") or ("" if ok else "service_token_not_written")),
             presence=presence,
             path_attempts=path_attempts,
+            diagnostic=ret_diagnostic,
         )
         return {
             "ok": ok,
@@ -1080,6 +1234,7 @@ class AuthManager:
             "http_stage": str(ret.get("http_stage") or "serviceLogin"),
             "writeback_target": str(ret.get("writeback_target") or ("auth_json" if ok else "none")),
             "path_attempts": path_attempts,
+            "diagnostic": ret_diagnostic,
         }
 
     async def _rebuild_short_session_tokens_via_refresh_fallback(self, reason: str) -> dict[str, Any]:
@@ -1990,10 +2145,15 @@ class AuthManager:
                 token_loaded = bool(auth_data)
                 disk_has_service = bool(auth_data.get("serviceToken"))
                 disk_has_yast = bool(auth_data.get("yetAnotherServiceToken"))
-                missing = self._missing_runtime_reload_fields(auth_data)
+                missing_long, missing_short = self._missing_runtime_reload_fields(auth_data)
+                missing = missing_long + missing_short
                 if missing:
-                    error_code = "missing_runtime_token_fields"
-                    last_error = f"missing runtime token fields: {','.join(missing)}"
+                    if missing_long:
+                        error_code = "missing_long_lived_auth_fields"
+                        last_error = f"missing long-lived auth fields: {','.join(missing_long)}"
+                    else:
+                        error_code = "short_session_missing_for_runtime_reload"
+                        last_error = "short session tokens missing; runtime reload cannot proceed without short session"
                     self._set_auth_mode("degraded", reason=reason)
                     self._last_auth_error = last_error
                     self._emit_auth_runtime_reload(
@@ -2022,6 +2182,8 @@ class AuthManager:
                         "verify_result": "failed",
                         "last_error": last_error,
                         "error_code": error_code,
+                        "missing_long_lived_fields": missing_long,
+                        "missing_short_session_fields": missing_short,
                         "timestamps": {
                             "saveTime": int(self._token_save_ts() * 1000) if self._token_save_ts() else None,
                             "last_ok_ts": int(self._last_ok_ts * 1000) if self._last_ok_ts else None,

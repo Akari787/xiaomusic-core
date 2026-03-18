@@ -351,6 +351,7 @@ class MiJiaAPI:
                 "ok": False,
                 "error_code": "missing_persistent_auth_fields",
                 "failed_reason": f"missing_persistent_auth_fields:{','.join(missing)}",
+                "error_message": f"missing fields: {','.join(missing)}",
                 "http_stage": "serviceLogin",
                 "sid": sid,
                 "writeback_target": "none",
@@ -369,79 +370,261 @@ class MiJiaAPI:
                       f"uLocale={self.locale};",
         }
         service_login_url = f"{self.service_base_url}?_json=true&sid={sid}&_locale={self.locale}"
+        service_base_host = "account.xiaomi.com"
+
+        service_login_code: int | None = None
+        service_login_desc: str = ""
 
         try:
             service_ret = self._http_request("get", service_login_url, headers=headers)
+            service_http_status = service_ret.status_code
+        except Exception as e:
+            exc_text = str(e)
+            is_network = any(
+                kw in exc_text.lower()
+                for kw in ("timeout", "connection", "dns", "network", "refused", "reset", "unreachable")
+            )
+            error_code = "service_login_network_failed" if is_network else "service_login_http_failed"
+            failed_reason = "service_login_network_error" if is_network else "service_login_request_failed"
+            return {
+                "ok": False,
+                "error_code": error_code,
+                "failed_reason": failed_reason,
+                "error_message": exc_text[:200],
+                "http_stage": "serviceLogin",
+                "sid": sid,
+                "writeback_target": "none",
+                "diagnostic": {
+                    "target_host": service_base_host,
+                    "target_path": f"/pass/serviceLogin",
+                    "http_status": None,
+                    "service_login_code": None,
+                    "service_login_desc": None,
+                    "has_location": None,
+                    "has_ssecurity": None,
+                    "is_network_error": is_network,
+                    "is_401_403_rejection": False,
+                    "is_5xx_error": False,
+                },
+            }
+
+        if service_http_status != 200:
+            is_401_403 = service_http_status in (401, 403)
+            is_5xx = service_http_status >= 500
+            error_code = (
+                "redirect_http_401" if service_http_status == 401
+                else "redirect_http_403" if service_http_status == 403
+                else "redirect_http_5xx" if is_5xx
+                else "redirect_http_other"
+            )
+            failed_reason = (
+                "redirect_http_401" if is_401_403
+                else "redirect_http_5xx" if is_5xx
+                else "redirect_http_non_200"
+            )
+            return {
+                "ok": False,
+                "error_code": error_code,
+                "failed_reason": failed_reason,
+                "error_message": f"serviceLogin HTTP {service_http_status}",
+                "http_stage": "serviceLogin",
+                "sid": sid,
+                "writeback_target": "none",
+                "diagnostic": {
+                    "target_host": service_base_host,
+                    "target_path": "/pass/serviceLogin",
+                    "http_status": service_http_status,
+                    "service_login_code": None,
+                    "service_login_desc": None,
+                    "has_location": None,
+                    "has_ssecurity": None,
+                    "is_network_error": False,
+                    "is_401_403_rejection": is_401_403,
+                    "is_5xx_error": is_5xx,
+                },
+            }
+
+        try:
             service_data = self._handle_ret(service_ret, verify_code=False)
         except Exception as e:
             return {
                 "ok": False,
-                "error_code": "persistent_auth_login_failed",
-                "failed_reason": "service_login_request_failed",
-                "error_message": str(e),
+                "error_code": "service_login_response_invalid",
+                "failed_reason": "service_login_parse_failed",
+                "error_message": str(e)[:200],
                 "http_stage": "serviceLogin",
                 "sid": sid,
                 "writeback_target": "none",
+                "diagnostic": {
+                    "target_host": service_base_host,
+                    "target_path": "/pass/serviceLogin",
+                    "http_status": service_http_status,
+                    "service_login_code": None,
+                    "service_login_desc": None,
+                    "has_location": None,
+                    "has_ssecurity": None,
+                    "is_network_error": False,
+                    "is_401_403_rejection": False,
+                    "is_5xx_error": False,
+                },
             }
 
+        service_login_code = int(service_data.get("code", -1))
+        service_login_desc = str(service_data.get("desc") or service_data.get("message") or "")
         location = str(service_data.get("location") or "")
-        if int(service_data.get("code", -1)) != 0 or not location:
+        has_location = bool(location)
+        has_ssecurity = bool(service_data.get("ssecurity"))
+
+        if service_login_code != 0 or not location:
+            is_cloud_auth_rejection = service_login_code in (70016, -1, 1)
             return {
                 "ok": False,
-                "error_code": "persistent_auth_login_failed",
-                "failed_reason": "service_login_not_authorized",
-                "error_message": str(service_data.get("desc") or service_data.get("message") or "serviceLogin failed"),
+                "error_code": "service_login_not_authorized",
+                "failed_reason": "service_login_code_not_zero_or_no_location",
+                "error_message": service_login_desc[:200] or f"code={service_login_code}, has_location={has_location}",
                 "http_stage": "serviceLogin",
                 "sid": sid,
                 "writeback_target": "none",
+                "diagnostic": {
+                    "target_host": service_base_host,
+                    "target_path": "/pass/serviceLogin",
+                    "http_status": service_http_status,
+                    "service_login_code": service_login_code,
+                    "service_login_desc": service_login_desc[:200],
+                    "has_location": has_location,
+                    "has_ssecurity": has_ssecurity,
+                    "is_network_error": False,
+                    "is_401_403_rejection": service_login_code in (401, 403),
+                    "is_cloud_auth_rejection": is_cloud_auth_rejection,
+                    "is_5xx_error": False,
+                },
             }
+
+        redirect_host = ""
+        redirect_path = ""
+        try:
+            parsed = parse.urlparse(location)
+            redirect_host = parsed.netloc
+            redirect_path = parsed.path
+        except Exception:
+            pass
 
         try:
             ret = self._http_request("get", location, session=self.session, headers=headers)
-            if ret.status_code != 200:
-                return {
-                    "ok": False,
-                    "error_code": "redirect_failed",
-                    "failed_reason": "redirect_http_status",
-                    "error_message": f"redirect status={ret.status_code}",
-                    "http_stage": "redirect",
-                    "sid": sid,
-                    "writeback_target": "none",
-                }
-            cookies = self.session.cookies.get_dict() or {}
-            self.auth_data.update(cookies)
-            if service_data.get("ssecurity"):
-                self.auth_data["ssecurity"] = service_data.get("ssecurity")
-            st = self.auth_data.get("serviceToken") or self.auth_data.get("yetAnotherServiceToken")
-            if st:
-                self.auth_data["serviceToken"] = st
-                self.auth_data.setdefault("yetAnotherServiceToken", st)
-                self._save_auth_data()
-                self._init_session()
-                return {
-                    "ok": True,
-                    "http_stage": "redirect",
-                    "sid": sid,
-                    "writeback_target": "auth_json",
-                }
-            return {
-                "ok": False,
-                "error_code": "service_token_not_written",
-                "failed_reason": "service_token_missing_after_redirect",
-                "http_stage": "redirect",
-                "sid": sid,
-                "writeback_target": "none",
-            }
+            redirect_http_status = ret.status_code
         except Exception as e:
+            exc_text = str(e)
+            is_network = any(
+                kw in exc_text.lower()
+                for kw in ("timeout", "connection", "dns", "network", "refused", "reset", "unreachable")
+            )
+            error_code = "redirect_network_failed" if is_network else "redirect_request_failed"
+            failed_reason = "redirect_network_error" if is_network else "redirect_request_failed"
             return {
                 "ok": False,
-                "error_code": "redirect_failed",
-                "failed_reason": "redirect_request_failed",
-                "error_message": str(e),
+                "error_code": error_code,
+                "failed_reason": failed_reason,
+                "error_message": exc_text[:200],
                 "http_stage": "redirect",
                 "sid": sid,
                 "writeback_target": "none",
+                "diagnostic": {
+                    "target_host": service_base_host,
+                    "redirect_host": redirect_host,
+                    "redirect_path": redirect_path,
+                    "http_status": service_http_status,
+                    "service_login_code": service_login_code,
+                    "service_login_desc": service_login_desc,
+                    "has_location": has_location,
+                    "has_ssecurity": has_ssecurity,
+                    "is_network_error": is_network,
+                    "is_401_403_rejection": False,
+                    "is_5xx_error": False,
+                },
             }
+
+        if redirect_http_status != 200:
+            is_401_403 = redirect_http_status in (401, 403)
+            is_5xx = redirect_http_status >= 500
+            error_code = (
+                "redirect_http_401" if redirect_http_status == 401
+                else "redirect_http_403" if redirect_http_status == 403
+                else "redirect_http_5xx" if is_5xx
+                else "redirect_http_other"
+            )
+            failed_reason = (
+                "redirect_http_401" if is_401_403
+                else "redirect_http_5xx" if is_5xx
+                else "redirect_http_non_200"
+            )
+            resp_headers_keys = list(ret.headers.keys()) if ret is not None else []
+            has_www_auth = any(k.lower() == "www-authenticate" for k in resp_headers_keys)
+            has_location_header = any(k.lower() == "location" for k in resp_headers_keys)
+            return {
+                "ok": False,
+                "error_code": error_code,
+                "failed_reason": failed_reason,
+                "error_message": f"redirect returned HTTP {redirect_http_status}",
+                "http_stage": "redirect",
+                "sid": sid,
+                "writeback_target": "none",
+                "diagnostic": {
+                    "target_host": service_base_host,
+                    "redirect_host": redirect_host,
+                    "redirect_path": redirect_path,
+                    "http_status": service_http_status,
+                    "redirect_http_status": redirect_http_status,
+                    "service_login_code": service_login_code,
+                    "service_login_desc": service_login_desc,
+                    "has_location": has_location,
+                    "has_ssecurity": has_ssecurity,
+                    "is_network_error": False,
+                    "is_401_403_rejection": is_401_403,
+                    "is_5xx_error": is_5xx,
+                    "has_www_authenticate": has_www_auth,
+                    "has_location_header": has_location_header,
+                },
+            }
+
+        cookies = self.session.cookies.get_dict() or {}
+        self.auth_data.update(cookies)
+        if service_data.get("ssecurity"):
+            self.auth_data["ssecurity"] = service_data.get("ssecurity")
+        st = self.auth_data.get("serviceToken") or self.auth_data.get("yetAnotherServiceToken")
+        if st:
+            self.auth_data["serviceToken"] = st
+            self.auth_data.setdefault("yetAnotherServiceToken", st)
+            self._save_auth_data()
+            self._init_session()
+            return {
+                "ok": True,
+                "http_stage": "redirect",
+                "sid": sid,
+                "writeback_target": "auth_json",
+            }
+        return {
+            "ok": False,
+            "error_code": "service_token_not_written",
+            "failed_reason": "service_token_missing_after_redirect",
+            "error_message": "redirect succeeded but no serviceToken in cookies",
+            "http_stage": "redirect",
+            "sid": sid,
+            "writeback_target": "none",
+            "diagnostic": {
+                "target_host": service_base_host,
+                "redirect_host": redirect_host,
+                "redirect_path": redirect_path,
+                "http_status": service_http_status,
+                "redirect_http_status": redirect_http_status,
+                "service_login_code": service_login_code,
+                "service_login_desc": service_login_desc,
+                "has_location": has_location,
+                "has_ssecurity": has_ssecurity,
+                "is_network_error": False,
+                "is_401_403_rejection": False,
+                "is_5xx_error": False,
+            },
+        }
 
     def get_qrcode(self):
         # Step 1: 从 serviceLogin 获取登录链接参数

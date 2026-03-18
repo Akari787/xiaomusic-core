@@ -288,6 +288,28 @@ async def auth_status():
             auth_debug = am.auth_debug_state()
     except Exception:
         auth_debug = {}
+    rebuild_debug = {}
+    rebuild_failed = False
+    rebuild_error_code = ""
+    rebuild_failed_reason = ""
+    try:
+        am = getattr(xiaomusic, "auth_manager", None)
+        if am is not None and hasattr(am, "auth_short_session_rebuild_debug_state"):
+            rebuild_debug = am.auth_short_session_rebuild_debug_state()
+            last_rebuild = rebuild_debug.get("last_short_session_rebuild", {})
+            last_flow = rebuild_debug.get("last_auth_recovery_flow", {})
+            last_rebuild_result = last_rebuild.get("result", "")
+            last_flow_result = last_flow.get("result", "")
+            rebuild_failed = last_rebuild_result == "failed" or last_flow_result == "failed"
+            rebuild_error_code = str(last_rebuild.get("error_code", "") or last_flow.get("error_code", ""))
+            rebuild_failed_reason = str(
+                last_rebuild.get("failed_reason", "")
+                or last_rebuild.get("error_message", "")
+                or last_flow.get("failed_reason", "")
+                or last_flow.get("error_message", "")
+            )
+    except Exception:
+        rebuild_debug = {}
     if login_in_progress:
         expire_after = int(getattr(config, "qrcode_timeout", 120)) + 15
         if qrcode_login_started_at > 0 and (time.time() - qrcode_login_started_at) > expire_after:
@@ -298,14 +320,23 @@ async def auth_status():
             login_in_progress = False
 
     status_reason = "healthy"
+    status_reason_detail = ""
     if bool(auth_state.get("locked", False)):
         status_reason = "manual_login_required"
-    elif persistent_auth_available and not short_session_available:
-        status_reason = "short_session_missing"
-    elif persistent_auth_available and short_session_available and not runtime_ready:
-        status_reason = "runtime_not_ready"
+        status_reason_detail = str(auth_state.get("lock_reason", "") or "auth locked")
     elif not persistent_auth_available:
         status_reason = "persistent_auth_missing"
+        status_reason_detail = "all long-lived auth fields missing from token"
+    elif persistent_auth_available and not short_session_available:
+        if rebuild_failed:
+            status_reason = "short_session_rebuild_failed"
+            status_reason_detail = f"rebuild failed: {rebuild_error_code}"
+        else:
+            status_reason = "short_session_missing"
+            status_reason_detail = "short-lived session tokens missing"
+    elif persistent_auth_available and short_session_available and not runtime_ready:
+        status_reason = "runtime_not_ready"
+        status_reason_detail = "runtime auth ready but not verified"
 
     return api_response.ok(
         {
@@ -318,6 +349,10 @@ async def auth_status():
             "persistent_auth_available": persistent_auth_available,
             "short_session_available": short_session_available,
             "status_reason": status_reason,
+            "status_reason_detail": status_reason_detail,
+            "rebuild_failed": rebuild_failed,
+            "rebuild_error_code": rebuild_error_code,
+            "rebuild_failed_reason": rebuild_failed_reason[:200] if rebuild_failed_reason else "",
             "login_in_progress": login_in_progress,
             "last_error": qrcode_login_error or auth_debug.get("last_auth_error", ""),
             "auth_mode": auth_state.get("mode", "healthy"),

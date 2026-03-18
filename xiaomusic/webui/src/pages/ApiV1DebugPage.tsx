@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { AuthStatusCard } from "../components/AuthStatusCard";
 import {
   SOURCE_HINT_OPTIONS,
   apiErrorText,
@@ -140,6 +141,11 @@ export function ApiV1DebugPage() {
       </div>
       <h1>XiaoMusic Runtime / API v1 调试页</h1>
       <p>统一链路：先 resolve（可选），再 play。WebUI 仅调用正式 /api/v1 白名单接口。</p>
+
+      <section style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16, marginBottom: 16 }}>
+        <h2>认证状态</h2>
+        <AuthStatusCard />
+      </section>
 
       <section style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16, marginBottom: 16 }}>
         <h2>系统与设备</h2>
