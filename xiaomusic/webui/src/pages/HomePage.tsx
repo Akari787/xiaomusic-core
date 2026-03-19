@@ -40,6 +40,7 @@ type Device = {
 type PlayingInfo = {
   ret?: string;
   is_playing?: boolean;
+  current_track_title?: string;
   cur_music?: string;
   cur_playlist?: string;
   offset?: number;
@@ -545,7 +546,8 @@ export function HomePage() {
   const localSongFresh =
     localPlaybackStartedAt > 0 && Date.now() - Number(localPlaybackStartedAt || 0) < 12000;
   const currentMusicName = String(
-    status.cur_music ||
+    status.current_track_title ||
+      status.cur_music ||
       (status.is_playing ? rememberedPlayingSong : "") ||
       (localSongFresh ? localPlaybackSong : "") ||
       "",
@@ -940,6 +942,11 @@ export function HomePage() {
           offset: Math.max(0, Number(next.offset || 0)),
           duration: Math.max(0, Number(next.duration || 0)),
         };
+        const unifiedTitle = String(next.current_track_title || "").trim();
+        if (unifiedTitle) {
+          merged.current_track_title = unifiedTitle;
+          merged.cur_music = unifiedTitle;
+        }
         if (Date.now() < stopSuppressUntilRef.current) {
           merged = {
             ...merged,
@@ -1252,16 +1259,8 @@ export function HomePage() {
       const info = (await apiGet<{ ret?: string; name?: string; url?: string; tags?: { duration?: number } }>(
         `/musicinfo?name=${encodeURIComponent(picked)}&musictag=true`,
       )) as { ret?: string; name?: string; url?: string; tags?: { duration?: number } };
-      const resolvedUrl = String(info.url || "").trim();
       const infoDuration = Number(info.tags?.duration || 0);
-      const playResp = await v1Play({
-        device_id: deviceId,
-        query: resolvedUrl || picked,
-        source_hint: "auto",
-        options: {
-          list_name: playlist,
-        },
-      });
+      const playResp = await v1PlayPlaylist(deviceId, playlist, picked);
 
       if (isApiOk(playResp)) {
         stopSuppressUntilRef.current = 0;
