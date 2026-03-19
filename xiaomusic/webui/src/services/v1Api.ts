@@ -86,7 +86,21 @@ export interface ShutdownTimerData {
 export interface FavoritesData {
   status?: string;
   device_id?: string;
+  track_name?: string;
+}
+
+export interface PlaylistData {
+  status?: string;
+  device_id?: string;
+  playlist_name?: string;
   music_name?: string;
+}
+
+export interface PlaylistIndexData {
+  status?: string;
+  device_id?: string;
+  playlist_name?: string;
+  index?: number;
 }
 
 export interface ApiErrorInfo {
@@ -247,7 +261,38 @@ export async function setShutdownTimer(deviceId: string, minutes: number): Promi
 export async function addFavorite(deviceId: string, musicName: string): Promise<ApiEnvelope<FavoritesData>> {
   return await safePost<FavoritesData>("/api/v1/library/favorites/add", {
     device_id: deviceId,
-    music_name: musicName,
+    track_name: musicName,
+  });
+}
+
+export async function removeFavorite(deviceId: string, trackName: string): Promise<ApiEnvelope<FavoritesData>> {
+  return await safePost<FavoritesData>("/api/v1/library/favorites/remove", {
+    device_id: deviceId,
+    track_name: trackName,
+  });
+}
+
+export async function playPlaylist(
+  deviceId: string,
+  playlistName: string,
+  musicName?: string,
+): Promise<ApiEnvelope<PlaylistData>> {
+  return await safePost<PlaylistData>("/api/v1/playlist/play", {
+    device_id: deviceId,
+    playlist_name: playlistName,
+    music_name: musicName ?? "",
+  });
+}
+
+export async function playPlaylistByIndex(
+  deviceId: string,
+  playlistName: string,
+  index: number,
+): Promise<ApiEnvelope<PlaylistIndexData>> {
+  return await safePost<PlaylistIndexData>("/api/v1/playlist/play-index", {
+    device_id: deviceId,
+    playlist_name: playlistName,
+    index,
   });
 }
 

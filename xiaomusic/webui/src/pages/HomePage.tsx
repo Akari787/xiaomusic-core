@@ -9,7 +9,10 @@ import {
   isApiOk,
   next as v1Next,
   play as v1Play,
+  playPlaylist as v1PlayPlaylist,
+  playPlaylistByIndex as v1PlayPlaylistByIndex,
   previous as v1Previous,
+  removeFavorite as v1RemoveFavorite,
   setPlayMode as v1SetPlayMode,
   setShutdownTimer as v1SetShutdownTimer,
   setVolume as v1SetVolume,
@@ -19,6 +22,9 @@ import {
   type PlayMode,
   type PlayerStateData,
 } from "../services/v1Api";
+
+void [v1RemoveFavorite, v1PlayPlaylist, v1PlayPlaylistByIndex];
+
 import { useTheme } from "../theme/ThemeProvider";
 import "../styles/home.css";
 
