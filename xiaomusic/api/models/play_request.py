@@ -10,7 +10,7 @@ from xiaomusic.constants.api_fields import DEVICE_ID, OPTIONS, QUERY, REQUEST_ID
 class PlayRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    device_id: str = Field(alias=DEVICE_ID)
+    device_id: str = Field(alias=DEVICE_ID, min_length=1)
     query: str = Field(alias=QUERY)
     source_hint: str = Field(default="auto", alias=SOURCE_HINT)
     options: dict[str, Any] = Field(default_factory=dict, alias=OPTIONS)
@@ -29,14 +29,14 @@ class ResolveRequest(BaseModel):
 class ControlRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    device_id: str = Field(alias=DEVICE_ID)
+    device_id: str = Field(alias=DEVICE_ID, min_length=1)
     request_id: str | None = Field(default=None, alias=REQUEST_ID)
 
 
 class PlayModeRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    device_id: str = Field(alias=DEVICE_ID)
+    device_id: str = Field(alias=DEVICE_ID, min_length=1)
     play_mode: str
     request_id: str | None = Field(default=None, alias=REQUEST_ID)
 
@@ -44,7 +44,7 @@ class PlayModeRequest(BaseModel):
 class ShutdownTimerRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    device_id: str = Field(alias=DEVICE_ID)
+    device_id: str = Field(alias=DEVICE_ID, min_length=1)
     minutes: int = Field(ge=0)
     request_id: str | None = Field(default=None, alias=REQUEST_ID)
 
@@ -52,15 +52,15 @@ class ShutdownTimerRequest(BaseModel):
 class FavoritesRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    device_id: str = Field(alias=DEVICE_ID)
-    music_name: str = ""
+    device_id: str = Field(alias=DEVICE_ID, min_length=1)
+    track_name: str = ""
     request_id: str | None = Field(default=None, alias=REQUEST_ID)
 
 
 class PlaylistPlayRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    device_id: str = Field(alias=DEVICE_ID)
+    device_id: str = Field(alias=DEVICE_ID, min_length=1)
     playlist_name: str
     music_name: str = ""
     request_id: str | None = Field(default=None, alias=REQUEST_ID)
@@ -69,7 +69,7 @@ class PlaylistPlayRequest(BaseModel):
 class PlaylistPlayIndexRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    device_id: str = Field(alias=DEVICE_ID)
+    device_id: str = Field(alias=DEVICE_ID, min_length=1)
     playlist_name: str
     index: int = Field(ge=1)
     request_id: str | None = Field(default=None, alias=REQUEST_ID)
@@ -82,14 +82,14 @@ class LibraryRefreshRequest(BaseModel):
 class TtsRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    device_id: str = Field(alias=DEVICE_ID)
-    text: str
+    device_id: str = Field(alias=DEVICE_ID, min_length=1)
+    text: str = Field(min_length=1)
     request_id: str | None = Field(default=None, alias=REQUEST_ID)
 
 
 class VolumeRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    device_id: str = Field(alias=DEVICE_ID)
-    volume: int
+    device_id: str = Field(alias=DEVICE_ID, min_length=1)
+    volume: int = Field(ge=0, le=100)
     request_id: str | None = Field(default=None, alias=REQUEST_ID)

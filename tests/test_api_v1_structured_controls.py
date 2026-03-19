@@ -50,8 +50,8 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
         async def play_music_list(self, **kwargs):
             calls.append(("play_music_list", (), kwargs))
 
-        async def play_music_list_index(self, **kwargs):
-            calls.append(("play_music_list_index", (), kwargs))
+        async def play_music_list_by_index(self, **kwargs):
+            calls.append(("play_music_list_by_index", (), kwargs))
 
         async def gen_music_list(self, **kwargs):
             calls.append(("gen_music_list", (), kwargs))
@@ -63,8 +63,8 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
     out_next = await v1.api_v1_control_next(ControlRequest(device_id="did-1"))
     out_mode = await v1.api_v1_control_play_mode(PlayModeRequest(device_id="did-1", play_mode="random"))
     out_timer = await v1.api_v1_control_shutdown_timer(ShutdownTimerRequest(device_id="did-1", minutes=5))
-    out_add = await v1.api_v1_library_favorites_add(FavoritesRequest(device_id="did-1", music_name="song-a"))
-    out_remove = await v1.api_v1_library_favorites_remove(FavoritesRequest(device_id="did-1", music_name="song-a"))
+    out_add = await v1.api_v1_library_favorites_add(FavoritesRequest(device_id="did-1", track_name="song-a"))
+    out_remove = await v1.api_v1_library_favorites_remove(FavoritesRequest(device_id="did-1", track_name="song-a"))
     out_playlist = await v1.api_v1_playlist_play(
         PlaylistPlayRequest(device_id="did-1", playlist_name="收藏", music_name="song-a")
     )
@@ -81,13 +81,13 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
         "add_to_favorites",
         "del_from_favorites",
         "play_music_list",
-        "play_music_list_index",
+        "play_music_list_by_index",
         "gen_music_list",
     ]
     assert calls[3][2]["arg1"] == 5
     assert calls[4][2]["arg1"] == "song-a"
     assert calls[6][2]["arg1"] == "收藏|song-a"
-    assert calls[7][2]["arg1"] == "2个收藏"
+    assert calls[7][2] == {"did": "did-1", "playlist_name": "收藏", "index": 2}
     assert calls[2][2]["dotts"] is False
     assert calls[2][2]["refresh_playlist"] is False
     for out in (out_prev, out_next, out_mode, out_timer, out_add, out_remove, out_playlist, out_index, out_refresh):

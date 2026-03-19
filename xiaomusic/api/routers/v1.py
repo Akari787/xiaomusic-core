@@ -314,7 +314,8 @@ async def api_v1_system_status():
         return _map_api_exception(exc, request_id)
 
 
-@router.get("/api/v1/debug/auth_state")
+# diagnostic endpoint - not in v1 whitelist, exclude from public schema
+@router.get("/api/v1/debug/auth_state", include_in_schema=False)
 async def api_v1_debug_auth_state():
     request_id = _next_request_id(None)
     try:
@@ -335,7 +336,8 @@ async def api_v1_debug_auth_state():
         return _map_api_exception(exc, request_id)
 
 
-@router.get("/api/v1/debug/auth_recovery_state")
+# diagnostic endpoint - not in v1 whitelist, exclude from public schema
+@router.get("/api/v1/debug/auth_recovery_state", include_in_schema=False)
 async def api_v1_debug_auth_recovery_state():
     request_id = _next_request_id(None)
     try:
@@ -354,7 +356,8 @@ async def api_v1_debug_auth_recovery_state():
         return _map_api_exception(exc, request_id)
 
 
-@router.get("/api/v1/debug/miaccount_login_trace")
+# diagnostic endpoint - not in v1 whitelist, exclude from public schema
+@router.get("/api/v1/debug/miaccount_login_trace", include_in_schema=False)
 async def api_v1_debug_miaccount_login_trace():
     request_id = _next_request_id(None)
     try:
@@ -374,7 +377,8 @@ async def api_v1_debug_miaccount_login_trace():
         return _map_api_exception(exc, request_id)
 
 
-@router.get("/api/v1/debug/auth_rebuild_state")
+# diagnostic endpoint - not in v1 whitelist, exclude from public schema
+@router.get("/api/v1/debug/auth_rebuild_state", include_in_schema=False)
 async def api_v1_debug_auth_rebuild_state():
     request_id = _next_request_id(None)
     try:
@@ -393,7 +397,8 @@ async def api_v1_debug_auth_rebuild_state():
         return _map_api_exception(exc, request_id)
 
 
-@router.get("/api/v1/debug/auth_runtime_reload_state")
+# diagnostic endpoint - not in v1 whitelist, exclude from public schema
+@router.get("/api/v1/debug/auth_runtime_reload_state", include_in_schema=False)
 async def api_v1_debug_auth_runtime_reload_state():
     request_id = _next_request_id(None)
     try:
@@ -470,9 +475,9 @@ async def api_v1_library_favorites_add(data: FavoritesRequest):
     request_id = _next_request_id(data.request_id)
     try:
         xm = _require_device(data.device_id, request_id)
-        await xm.add_to_favorites(did=data.device_id, arg1=data.music_name)
+        await xm.add_to_favorites(did=data.device_id, arg1=data.track_name)
         return _api_ok(
-            {"status": "ok", DEVICE_ID: data.device_id, "music_name": data.music_name},
+            {"status": "ok", DEVICE_ID: data.device_id, "track_name": data.track_name},
             request_id=request_id,
         )
     except Exception as exc:
@@ -484,9 +489,9 @@ async def api_v1_library_favorites_remove(data: FavoritesRequest):
     request_id = _next_request_id(data.request_id)
     try:
         xm = _require_device(data.device_id, request_id)
-        await xm.del_from_favorites(did=data.device_id, arg1=data.music_name)
+        await xm.del_from_favorites(did=data.device_id, arg1=data.track_name)
         return _api_ok(
-            {"status": "ok", DEVICE_ID: data.device_id, "music_name": data.music_name},
+            {"status": "ok", DEVICE_ID: data.device_id, "track_name": data.track_name},
             request_id=request_id,
         )
     except Exception as exc:
@@ -521,7 +526,11 @@ async def api_v1_playlist_play_index(data: PlaylistPlayIndexRequest):
         if not str(data.playlist_name or "").strip():
             raise _bad_request(request_id, "playlist_name is required", field="playlist_name")
         xm = _require_device(data.device_id, request_id)
-        await xm.play_music_list_index(did=data.device_id, arg1=f"{int(data.index)}个{data.playlist_name}")
+        await xm.play_music_list_by_index(
+            did=data.device_id,
+            playlist_name=data.playlist_name,
+            index=int(data.index),
+        )
         return _api_ok(
             {
                 "status": "ok",
@@ -546,7 +555,8 @@ async def api_v1_library_refresh(data: LibraryRefreshRequest):
         return _map_api_exception(exc, request_id)
 
 
-@router.get("/api/v1/debug/auth_short_session_rebuild_state")
+# diagnostic endpoint - not in v1 whitelist, exclude from public schema
+@router.get("/api/v1/debug/auth_short_session_rebuild_state", include_in_schema=False)
 async def api_v1_debug_auth_short_session_rebuild_state():
     request_id = _next_request_id(None)
     try:

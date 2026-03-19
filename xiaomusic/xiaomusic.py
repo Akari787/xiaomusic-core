@@ -571,6 +571,24 @@ class XiaoMusic:
         # 调用设备播放音乐列表的方法
         await self.device_manager.devices[did].play_music_list(list_name, music_name)
 
+    async def play_music_list_by_index(self, did, playlist_name, index):
+        list_name = self._find_real_music_list_name(playlist_name)
+        if list_name not in self.music_library.music_list:
+            await self.do_tts(did, f"播放列表{list_name}不存在")
+            return
+
+        play_list = self.music_library.music_list[list_name]
+        if 0 <= index - 1 < len(play_list):
+            music_name = play_list[index - 1]
+            self.log.info(
+                f"即将播放歌单 {list_name} 里的第 {index} 个: {music_name}"
+            )
+            await self.device_manager.devices[did].play_music_list(
+                list_name, music_name
+            )
+            return
+        await self.do_tts(did, f"播放列表{list_name}中找不到第{index}个")
+
     # 口令:播放列表第
     async def play_music_list_index(self, did="", arg1="", **kwargs):
         patternarg = r"^([零一二三四五六七八九十百千万亿]+)个(.*)"

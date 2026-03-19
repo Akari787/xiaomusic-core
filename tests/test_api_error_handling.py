@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from xiaomusic.api.models import PlayRequest, VolumeRequest
 from xiaomusic.api.routers import v1
@@ -29,14 +30,6 @@ async def test_v1_errors_mapped_to_api_response(monkeypatch, exc: Exception, exp
     assert out["request_id"]
 
 
-@pytest.mark.asyncio
-async def test_v1_volume_invalid_request_error(monkeypatch):
-    class _Facade:
-        async def set_volume(self, device_id: str, volume: int, request_id: str | None = None):
-            _ = (device_id, volume, request_id)
-            raise InvalidRequestError("volume must be in range 0..100")
-
-    monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
-    out = await v1.api_v1_control_volume(VolumeRequest(device_id="did-1", volume=101))
-    assert out["code"] == 50001
-    assert out["message"]
+def test_v1_volume_request_rejects_out_of_range_value():
+    with pytest.raises(ValidationError):
+        VolumeRequest(device_id="did-1", volume=101)
