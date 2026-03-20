@@ -113,6 +113,7 @@ def _process_m3u8_content(m3u8_content: str, base_url: str, is_radio: bool) -> s
     return "\n".join(processed_lines)
 
 
+# Internal API - 仅供 WebUI/内部工具流程使用，不承诺兼容性。
 @router.post("/api/file/cleantempdir")
 async def cleantempdir(Verifcation=Depends(verification)):
     await clean_temp_dir(xiaomusic.config)
@@ -135,6 +136,7 @@ async def downloadjson(data: UrlInfo, Verifcation=Depends(verification)):
     return api_response.ok({"content": content}, contract="ret", ret=ret)
 
 
+# Internal API - 仅供 WebUI/内部文件流程使用，不承诺兼容性。
 @router.post("/api/file/fetch_playlist_json")
 async def fetch_playlist_json(data: UrlInfo, Verifcation=Depends(verification)):
     """通过后端拉取歌单 JSON 内容。"""

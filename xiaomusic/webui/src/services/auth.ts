@@ -1,5 +1,7 @@
 import { apiGet, apiPost } from "./apiClient";
 
+// Internal API only: auth/session endpoints are not part of the public v1 contract.
+
 export type AuthStatusReason =
   | "healthy"
   | "persistent_auth_missing"

@@ -1,5 +1,7 @@
 import { apiGetJson, apiPostJson } from "./apiClient";
 
+// Public API only: this module only wraps `/api/v1/*` interfaces.
+
 export type SourceHint = "auto" | "direct_url" | "site_media" | "jellyfin" | "local_library";
 
 export const SOURCE_HINT_OPTIONS: Array<{ value: SourceHint; label: string }> = [

@@ -257,6 +257,7 @@ async def delmusic(data: MusicItem):
     return api_response.ok("success", contract="raw")
 
 
+# Internal API - 仅供 WebUI/内部工具流程使用，不承诺兼容性。
 @router.post("/refreshmusictag")
 async def refreshmusictag(Verifcation=Depends(verification)):
     """刷新音乐标签"""

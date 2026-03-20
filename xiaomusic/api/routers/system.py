@@ -106,6 +106,7 @@ async def debug_api_v1_index():
     """API v1 调试页入口。"""
     return RedirectResponse(url="/webui/#/debug/api-v1", status_code=302)
 
+# Internal API - 仅供 WebUI/内部认证流程使用，不承诺兼容性。
 @router.get("/api/get_qrcode")
 async def get_qrcode():
     """生成小米账号扫码登录用二维码，返回 base64 图片 URL。"""
@@ -240,6 +241,7 @@ async def getsetting(need_device_list: bool = False):
     return api_response.ok(data, contract="raw")
 
 
+# Internal API - 仅供 WebUI/内部认证流程使用，不承诺兼容性。
 @router.get("/api/auth/status")
 async def auth_status():
     global qrcode_login_task
@@ -364,6 +366,7 @@ async def auth_status():
     )
 
 
+# Internal API - 仅供 WebUI/内部认证流程使用，不承诺兼容性。
 @router.post("/api/auth/logout")
 async def auth_logout():
     """退出认证登录并删除本地 token 文件。
@@ -436,6 +439,7 @@ async def auth_logout():
     )
 
 
+# Internal API - 仅供 WebUI/内部认证流程使用，不承诺兼容性。
 @router.post("/api/auth/refresh")
 async def auth_refresh():
     """手动触发认证运行时重载（从磁盘重新装载 auth.json 并重建会话）。"""
