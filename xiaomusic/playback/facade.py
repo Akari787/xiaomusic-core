@@ -80,6 +80,27 @@ class PlaybackFacade:
             raise InvalidRequestError("query is required")
         return q
 
+    @staticmethod
+    def _playlist_context(options: PlayOptions, query: str) -> tuple[str, str] | None:
+        context_hint = options.context_hint if isinstance(options.context_hint, dict) else {}
+        payload = options.source_payload if isinstance(options.source_payload, dict) else {}
+        context_type = str(
+            context_hint.get("context_type") or payload.get("context_type") or ""
+        ).strip().lower()
+        playlist_name = str(
+            context_hint.get("context_name")
+            or context_hint.get("context_id")
+            or payload.get("playlist_name")
+            or payload.get("context_name")
+            or ""
+        ).strip()
+        music_name = str(
+            payload.get("music_name") or payload.get("track_name") or query or ""
+        ).strip()
+        if context_type != "playlist" or not playlist_name or not music_name:
+            return None
+        return playlist_name, music_name
+
     async def play(
         self,
         *,
@@ -93,6 +114,43 @@ class PlaybackFacade:
         q = self._validate_query(query)
         opts = options or PlayOptions()
         normalized_hint = self._normalize_hint(source_hint)
+        if not bool(getattr(self.xiaomusic, "did_exist", lambda _did: False)(did)):
+            raise DeviceNotFoundError("device not found")
+
+        playlist_context = (
+            self._playlist_context(opts, q) if normalized_hint == "local_library" else None
+        )
+        if playlist_context is not None:
+            request_id_value = str(request_id or uuid4().hex[:16])
+            playlist_name, music_name = playlist_context
+            await self.xiaomusic.do_play_music_list(did, playlist_name, music_name)
+            self._record_playback_capability_verify(
+                result="ok",
+                verify_method="playlist_context_play",
+                playback_capability_level="runtime_playlist_context",
+                transport="device_player",
+            )
+            return {
+                "status": "playing",
+                DEVICE_ID: did,
+                "source_plugin": "local_library",
+                "transport": "device_player",
+                REQUEST_ID: request_id_value,
+                "media": {
+                    "media_id": request_id_value,
+                    "title": music_name,
+                    "stream_url": "",
+                    "is_live": False,
+                },
+                "extra": {
+                    "playback_context": {
+                        "context_type": "playlist",
+                        "context_name": playlist_name,
+                        "music_name": music_name,
+                    }
+                },
+            }
+
         req = MediaRequest.from_payload(
             request_id=str(request_id or uuid4().hex[:16]),
             source_hint=normalized_hint,

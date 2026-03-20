@@ -77,6 +77,7 @@ class PlayOptions:
     confirm_start_retries: int = 2
     confirm_start_interval_ms: int = 600
     source_payload: dict[str, Any] | None = None
+    context_hint: dict[str, Any] | None = None
     media_id: str = ""
     title: str = ""
 
@@ -87,6 +88,8 @@ class PlayOptions:
 
         source_payload = payload.get(OPT_SOURCE_PAYLOAD)
         normalized_payload = source_payload if isinstance(source_payload, dict) else None
+        context_hint = payload.get("context_hint")
+        normalized_context_hint = context_hint if isinstance(context_hint, dict) else None
         media_id = str(payload.get(OPT_MEDIA_ID) or payload.get(OPT_ID) or "").strip()
         title = str(payload.get(OPT_TITLE) or "").strip()
         volume: int | None = None
@@ -107,6 +110,7 @@ class PlayOptions:
             confirm_start_retries=_as_int(payload.get(OPT_CONFIRM_START_RETRIES), 2, min_value=0),
             confirm_start_interval_ms=_as_int(payload.get(OPT_CONFIRM_START_INTERVAL_MS), 600, min_value=100),
             source_payload=normalized_payload,
+            context_hint=normalized_context_hint,
             media_id=media_id,
             title=title,
         )
@@ -153,6 +157,8 @@ class PlayOptions:
 
         if source_hint == "local_library" and self.title:
             context[OPT_TITLE] = self.title
+        if isinstance(self.context_hint, dict):
+            context["context_hint"] = self.context_hint
 
         return context
 

@@ -219,7 +219,17 @@ describe("HomePage play button regression", () => {
       device_id: "981257654",
       query: "Song A",
       source_hint: "local_library",
-      options: { title: "Song A", context_hint: { context_type: "playlist", context_name: "所有歌曲" } },
+      options: {
+        title: "Song A",
+        context_hint: { context_type: "playlist", context_name: "所有歌曲", context_id: "所有歌曲" },
+        source_payload: {
+          source: "local_library",
+          playlist_name: "所有歌曲",
+          music_name: "Song A",
+          context_type: "playlist",
+          context_name: "所有歌曲",
+        },
+      },
     });
 
     const announcer = container.querySelector("#sr-announcer");

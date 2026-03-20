@@ -1294,6 +1294,14 @@ export function HomePage() {
           context_hint: {
             context_type: "playlist",
             context_name: playlist,
+            context_id: playlist,
+          },
+          source_payload: {
+            source: "local_library",
+            playlist_name: playlist,
+            music_name: picked,
+            context_type: "playlist",
+            context_name: playlist,
           },
         },
       });
