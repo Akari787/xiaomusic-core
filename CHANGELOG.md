@@ -2,7 +2,7 @@
 
 ### API 边界与收口
 
-- 将 `/api/v1/play` 固化为唯一正式播放入口，删除 `/api/v1/playlist/play` 与 `/api/v1/playlist/play-index` 实现，Public / Internal / Forbidden 三层接口边界在文档与代码层同步落地。
+- 将 `/api/v1/play` 固化为唯一正式播放入口，Public / Internal / Forbidden 三层接口边界在文档与代码层同步落地。
 - 完成 Public API / Internal API schema 隐藏策略：Internal API 不再出现在公开 OpenAPI 面中，WebUI service 层同步拆分为 `v1Api.ts`、`homeApi.ts`、`auth.ts`。
 - 删除已被 v1 替代的旧 device wrapper 与 facade compatibility 层，旧播放入口、旧 wrapper、legacy facade 方法全部进入 Removed 清单。
 
