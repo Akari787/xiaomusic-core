@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
 
@@ -18,6 +19,8 @@ from xiaomusic.api.models import (
     PlayRequest,
     ResolveRequest,
     ShutdownTimerRequest,
+    SystemSettingItemUpdateRequest,
+    SystemSettingsSaveRequest,
     TtsRequest,
     VolumeRequest,
 )
@@ -206,6 +209,47 @@ def _normalize_device(device: dict[str, Any]) -> dict[str, Any]:
         "name": str(device.get("name") or device.get("alias") or ""),
         "model": str(device.get("hardware") or ""),
         "online": bool(device.get("isOnline") or device.get("online") or False),
+    }
+
+
+async def _runtime_auth_ready_v1() -> bool:
+    try:
+        am = getattr(_get_xiaomusic(), "auth_manager", None)
+        if am is None:
+            return False
+        return not await am.need_login()
+    except Exception:
+        return False
+
+
+async def _settings_snapshot(include_devices: bool) -> dict[str, Any]:
+    xm = _get_xiaomusic()
+    config_data = asdict(xm.getconfig())
+    config_data["httpauth_password"] = "******"
+    if config_data.get("jellyfin_api_key"):
+        config_data["jellyfin_api_key"] = "******"
+
+    token_available = False
+    try:
+        ts = getattr(xm, "token_store", None)
+        token = ts.get() if ts is not None else {}
+        st = token.get("serviceToken") or token.get("yetAnotherServiceToken")
+        token_available = bool(token.get("userId") and token.get("passToken") and token.get("ssecurity") and st)
+    except Exception:
+        token_available = False
+    config_data["auth_token_available"] = token_available
+    config_data["auth_runtime_ready"] = await _runtime_auth_ready_v1()
+
+    device_ids = [part.strip() for part in str(config_data.get("mi_did") or "").split(",") if part.strip()]
+    devices: list[dict[str, Any]] = []
+    if include_devices:
+        raw_devices = await xm.getalldevices()
+        devices = [_normalize_device(item) for item in (raw_devices or []) if isinstance(item, dict)]
+
+    return {
+        "settings": config_data,
+        "device_ids": device_ids,
+        "devices": devices,
     }
 
 
@@ -413,6 +457,81 @@ async def api_v1_system_status():
             default_error_code="E_SYSTEM_STATUS_FAILED",
             default_stage="system",
             default_message="system status query failed",
+        )
+
+
+@router.get("/api/v1/system/settings")
+async def api_v1_system_settings(request_id: str | None = None):
+    rid = _next_request_id(request_id)
+    try:
+        return _api_ok(await _settings_snapshot(include_devices=True), request_id=rid)
+    except Exception as exc:
+        return _map_structured_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_SYSTEM_SETTINGS_QUERY_FAILED",
+            default_stage="system",
+            default_message="system settings query failed",
+        )
+
+
+@router.post("/api/v1/system/settings")
+async def api_v1_system_settings_save(data: SystemSettingsSaveRequest):
+    rid = _next_request_id(data.request_id)
+    try:
+        settings = dict(data.settings or {})
+        settings["mi_did"] = ",".join([str(item).strip() for item in data.device_ids if str(item).strip()])
+
+        config_obj = _get_xiaomusic().getconfig()
+        if settings.get("httpauth_password") in {"******", ""}:
+            settings["httpauth_password"] = config_obj.httpauth_password
+        if settings.get("jellyfin_api_key") in {"******", ""}:
+            settings["jellyfin_api_key"] = config_obj.jellyfin_api_key
+
+        await _get_xiaomusic().saveconfig(settings)
+
+        from xiaomusic.api.app import app
+        from xiaomusic.api.dependencies import reset_http_server
+
+        reset_http_server(app)
+        return _api_ok({"status": "ok", "saved": True}, request_id=rid)
+    except Exception as exc:
+        return _map_structured_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_SYSTEM_SETTINGS_SAVE_FAILED",
+            default_stage="system",
+            default_message="system settings save failed",
+        )
+
+
+@router.post("/api/v1/system/settings/item")
+async def api_v1_system_settings_item(data: SystemSettingItemUpdateRequest):
+    rid = _next_request_id(data.request_id)
+    try:
+        key = str(data.key or "").strip()
+        if not key:
+            raise _bad_request(rid, "key is required", field="key")
+
+        config_obj = _get_xiaomusic().getconfig()
+        update_data = {key: data.value}
+        has_http_config_changed = config_obj.is_http_server_config(key)
+        config_obj.update_config(update_data)
+        _get_xiaomusic().save_cur_config()
+        if has_http_config_changed:
+            from xiaomusic.api.app import app
+            from xiaomusic.api.dependencies import reset_http_server
+
+            reset_http_server(app)
+
+        return _api_ok({"status": "ok", "updated": True, "key": key}, request_id=rid)
+    except Exception as exc:
+        return _map_structured_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_SYSTEM_SETTING_UPDATE_FAILED",
+            default_stage="system",
+            default_message="system setting update failed",
         )
 
 

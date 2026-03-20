@@ -87,6 +87,30 @@ export interface SystemStatusData {
   devices_count?: number;
 }
 
+export interface SystemSettingsDeviceRow {
+  device_id: string;
+  name?: string;
+  model?: string;
+  online?: boolean;
+}
+
+export interface SystemSettingsData {
+  settings: Record<string, unknown>;
+  device_ids: string[];
+  devices: SystemSettingsDeviceRow[];
+}
+
+export interface SystemSettingsSaveData {
+  status?: string;
+  saved?: boolean;
+}
+
+export interface SystemSettingItemUpdateData {
+  status?: string;
+  updated?: boolean;
+  key?: string;
+}
+
 export interface ShutdownTimerData {
   status?: string;
   device_id?: string;
@@ -289,6 +313,30 @@ export async function getDevices(): Promise<ApiEnvelope<DevicesData>> {
 
 export async function getSystemStatus(): Promise<ApiEnvelope<SystemStatusData>> {
   return await safeGet<SystemStatusData>("/api/v1/system/status");
+}
+
+export async function getSystemSettings(): Promise<ApiEnvelope<SystemSettingsData>> {
+  return await safeGet<SystemSettingsData>("/api/v1/system/settings");
+}
+
+export async function saveSystemSettings(
+  settings: Record<string, unknown>,
+  deviceIds: string[],
+): Promise<ApiEnvelope<SystemSettingsSaveData>> {
+  return await safePost<SystemSettingsSaveData>("/api/v1/system/settings", {
+    settings,
+    device_ids: deviceIds,
+  });
+}
+
+export async function updateSystemSettingItem(
+  key: string,
+  value: unknown,
+): Promise<ApiEnvelope<SystemSettingItemUpdateData>> {
+  return await safePost<SystemSettingItemUpdateData>("/api/v1/system/settings/item", {
+    key,
+    value,
+  });
 }
 
 export async function getPlayerState(deviceId: string): Promise<ApiEnvelope<PlayerStateData>> {

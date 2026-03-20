@@ -61,6 +61,22 @@ class LibraryRefreshRequest(BaseModel):
     request_id: str | None = Field(default=None, alias=REQUEST_ID)
 
 
+class SystemSettingsSaveRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    settings: dict[str, Any] = Field(default_factory=dict)
+    device_ids: list[str] = Field(default_factory=list)
+    request_id: str | None = Field(default=None, alias=REQUEST_ID)
+
+
+class SystemSettingItemUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    key: str = ""
+    value: Any
+    request_id: str | None = Field(default=None, alias=REQUEST_ID)
+
+
 class TtsRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

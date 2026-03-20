@@ -10,6 +10,8 @@ from xiaomusic.api.models.play_request import (
     PlayRequest,
     ResolveRequest,
     ShutdownTimerRequest,
+    SystemSettingItemUpdateRequest,
+    SystemSettingsSaveRequest,
     TtsRequest,
     VolumeRequest,
 )
@@ -134,6 +136,8 @@ __all__ = [
     "ResolveRequest",
     "ShutdownTimerRequest",
     "SidObj",
+    "SystemSettingItemUpdateRequest",
+    "SystemSettingsSaveRequest",
     "TtsRequest",
     "UrlInfo",
     "VolumeRequest",

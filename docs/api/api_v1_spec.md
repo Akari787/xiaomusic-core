@@ -162,7 +162,7 @@ v1 API 负责暴露以下正式能力：
 
 ## 4. 正式白名单接口
 
-本版本正式白名单接口共 20 个：
+本版本正式白名单接口共 23 个：
 
 ### 4.1 播放与解析
 
@@ -194,7 +194,10 @@ v1 API 负责暴露以下正式能力：
 
 18. `GET /api/v1/devices`
 19. `GET /api/v1/system/status`
-20. `GET /api/v1/player/state`
+20. `GET /api/v1/system/settings`
+21. `POST /api/v1/system/settings`
+22. `POST /api/v1/system/settings/item`
+23. `GET /api/v1/player/state`
 
 ---
 
@@ -248,6 +251,8 @@ Class B 接口：
 - `POST /api/v1/library/favorites/add`
 - `POST /api/v1/library/favorites/remove`
 - `POST /api/v1/library/refresh`
+- `POST /api/v1/system/settings`
+- `POST /api/v1/system/settings/item`
 
 契约要求的内部归属：
 
@@ -269,6 +274,7 @@ Class C 接口：
 - `GET /api/v1/library/music-info`
 - `GET /api/v1/devices`
 - `GET /api/v1/system/status`
+- `GET /api/v1/system/settings`
 - `GET /api/v1/player/state`
 - `POST /api/v1/resolve`
 
@@ -479,11 +485,14 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 | `POST /api/v1/library/favorites/add` | B | library 本地控制路径 | `data.status`, `data.device_id`, `data.track_name` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `POST /api/v1/library/favorites/remove` | B | library 本地控制路径 | `data.status`, `data.device_id`, `data.track_name` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `POST /api/v1/library/refresh` | B | library 本地控制路径 | `data.status`，可含范围信息 | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `POST /api/v1/system/settings` | B | system 设置路径 | `data.status`, `data.saved` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `POST /api/v1/system/settings/item` | B | system 设置路径 | `data.status`, `data.updated`, `data.key` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `GET /api/v1/library/playlists` | C | library 查询路径 | `data.playlists` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `GET /api/v1/library/music-info` | C | library 查询路径 | `data.name`, `data.url`, `data.duration_seconds` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `POST /api/v1/resolve` | C | 只读解析 / 聚合路径 | 以解析结果字段为主 | 必须有 `error_code`, `stage` | 查询型；不要求 `transport` |
 | `GET /api/v1/devices` | C | 只读查询 / 聚合路径 | `data.devices` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `GET /api/v1/system/status` | C | 只读查询 / 聚合路径 | `data.status`, `data.version`, `data.devices_count` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `GET /api/v1/system/settings` | C | system 设置查询路径 | `data.settings`, `data.device_ids`, `data.devices` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `GET /api/v1/player/state` | C | 只读状态聚合路径 | `data.device_id`, `data.is_playing`, `data.cur_music`, `data.offset`, `data.duration` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 
 ---
@@ -798,7 +807,66 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.version`
 - `data.devices_count`
 
-### 10.20 `GET /api/v1/player/state`
+### 10.20 `GET /api/v1/system/settings`
+
+用途：获取 WebUI 当前所需的最小系统设置与设备联动信息。
+
+成功响应关键字段：
+
+- `data.settings`
+- `data.device_ids`
+- `data.devices`
+
+约束：
+
+- `data.settings` 为设置对象
+- `data.device_ids` 为当前已选择设备 DID 列表
+- `data.devices` 为可供设置页勾选的设备列表
+
+### 10.21 `POST /api/v1/system/settings`
+
+用途：保存设置页当前配置。
+
+请求体：
+
+```json
+{
+  "settings": {},
+  "device_ids": ["did-1"]
+}
+```
+
+成功响应最小字段：
+
+- `data.status`
+- `data.saved`
+
+### 10.22 `POST /api/v1/system/settings/item`
+
+用途：更新单个设置项。
+
+请求体：
+
+```json
+{
+  "key": "enable_pull_ask",
+  "value": true
+}
+```
+
+成功响应最小字段：
+
+- `data.status`
+- `data.updated`
+- `data.key`
+
+参数错误必须返回：
+
+- `code = 40001`
+- `data.error_code = E_INVALID_REQUEST`
+- `data.stage = request`
+
+### 10.23 `GET /api/v1/player/state`
 
 用途：获取播放状态查询结果。
 

@@ -16,12 +16,15 @@ const mockedV1 = vi.hoisted(() => ({
   play: vi.fn(),
   previous: vi.fn(),
   getDevices: vi.fn(),
+  getSystemSettings: vi.fn(),
   getSystemStatus: vi.fn(),
   getPlayerState: vi.fn(),
   libraryRefresh: vi.fn(),
+  saveSystemSettings: vi.fn(),
   setPlayMode: vi.fn(),
   setShutdownTimer: vi.fn(),
   tts: vi.fn(),
+  updateSystemSettingItem: vi.fn(),
   setVolume: vi.fn(),
   stop: vi.fn(),
 }));
@@ -46,12 +49,15 @@ vi.mock("../src/services/v1Api", () => ({
   play: mockedV1.play,
   previous: mockedV1.previous,
   getDevices: mockedV1.getDevices,
+  getSystemSettings: mockedV1.getSystemSettings,
   getSystemStatus: mockedV1.getSystemStatus,
   getPlayerState: mockedV1.getPlayerState,
   libraryRefresh: mockedV1.libraryRefresh,
+  saveSystemSettings: mockedV1.saveSystemSettings,
   setPlayMode: mockedV1.setPlayMode,
   setShutdownTimer: mockedV1.setShutdownTimer,
   tts: mockedV1.tts,
+  updateSystemSettingItem: mockedV1.updateSystemSettingItem,
   setVolume: mockedV1.setVolume,
   stop: mockedV1.stop,
   pause: vi.fn(),
@@ -94,24 +100,19 @@ describe("HomePage play button regression", () => {
     mockedV1.setShutdownTimer.mockReset();
     mockedV1.addFavorite.mockReset();
     mockedV1.getDevices.mockReset();
+    mockedV1.getSystemSettings.mockReset();
     mockedV1.getSystemStatus.mockReset();
     mockedV1.getPlayerState.mockReset();
     mockedV1.libraryRefresh.mockReset();
+    mockedV1.saveSystemSettings.mockReset();
     mockedV1.tts.mockReset();
+    mockedV1.updateSystemSettingItem.mockReset();
     mockedV1.setVolume.mockReset();
     mockedV1.stop.mockReset();
 
     mockedApi.apiGet.mockImplementation(async (path: string) => {
       if (path === "/api/auth/status") {
         return { token_valid: true, runtime_auth_ready: true, login_in_progress: false };
-      }
-      if (path === "/getsetting?need_device_list=true") {
-        return {
-          mi_did: "981257654",
-          public_base_url: "http://127.0.0.1:58090",
-          enable_pull_ask: false,
-          device_list: [{ miotDID: "981257654", name: "XiaoAI" }],
-        };
       }
       return {};
     });
@@ -157,6 +158,20 @@ describe("HomePage play button regression", () => {
       data: { status: "ok", version: "1.0.0", devices_count: 1 },
       request_id: "rid-status",
     });
+    mockedV1.getSystemSettings.mockResolvedValue({
+      code: 0,
+      message: "ok",
+      data: {
+        settings: {
+          mi_did: "981257654",
+          public_base_url: "http://127.0.0.1:58090",
+          enable_pull_ask: false,
+        },
+        device_ids: ["981257654"],
+        devices: [{ device_id: "981257654", name: "XiaoAI", model: "OH2P", online: true }],
+      },
+      request_id: "rid-settings",
+    });
     mockedV1.getLibraryPlaylists.mockResolvedValue({
       code: 0,
       message: "ok",
@@ -170,7 +185,9 @@ describe("HomePage play button regression", () => {
       request_id: "rid-musicinfo",
     });
     mockedV1.libraryRefresh.mockResolvedValue({ code: 0, message: "ok", data: { status: "ok", refreshed: true }, request_id: "rid-refresh" });
+    mockedV1.saveSystemSettings.mockResolvedValue({ code: 0, message: "ok", data: { status: "ok", saved: true }, request_id: "rid-save-settings" });
     mockedV1.tts.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-tts" });
+    mockedV1.updateSystemSettingItem.mockResolvedValue({ code: 0, message: "ok", data: { status: "ok", updated: true, key: "enable_pull_ask" }, request_id: "rid-update-setting" });
     mockedV1.setVolume.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-vol" });
     mockedV1.stop.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-stop" });
     mockedV1.previous.mockImplementation(async () => {

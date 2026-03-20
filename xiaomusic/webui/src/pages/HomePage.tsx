@@ -6,19 +6,22 @@ import {
   getDevices as v1GetDevices,
   getLibraryMusicInfo,
   getLibraryPlaylists,
+  getSystemSettings,
   getSystemStatus,
   getPlayerState,
   isApiOk,
+  libraryRefresh as v1LibraryRefresh,
   next as v1Next,
   play as v1Play,
   previous as v1Previous,
   removeFavorite as v1RemoveFavorite,
-  libraryRefresh as v1LibraryRefresh,
+  saveSystemSettings,
   setPlayMode as v1SetPlayMode,
   setShutdownTimer as v1SetShutdownTimer,
   setVolume as v1SetVolume,
   stop as v1Stop,
   tts as v1Tts,
+  updateSystemSettingItem,
   type ApiEnvelope,
   type PlayMode,
   type PlayerStateData,
@@ -28,11 +31,8 @@ import {
   cleanTempDir as cleanTempDirRequest,
   fetchPlaylistJson,
   fetchQrcode,
-  fetchSettingsWithDevices,
   refreshMusicTag as refreshMusicTagRequest,
-  saveSettingsPayload,
   searchOnlineMusic,
-  updateSystemSetting,
 } from "../services/homeApi";
 
 void [v1RemoveFavorite];
@@ -733,16 +733,20 @@ export function HomePage() {
   }
 
   async function loadSettingData() {
-    const out = (await fetchSettingsWithDevices<Record<string, unknown>>()) as Record<string, unknown> & { device_list?: Device[] };
-    const dids = String(out.mi_did || "")
-      .split(",")
-      .map((x) => x.trim())
-      .filter(Boolean);
+    const out = await getSystemSettings();
+    if (!isApiOk(out)) {
+      setMessage("获取设置失败");
+      return;
+    }
+    const settings = { ...(out.data.settings || {}) };
+    const dids = Array.isArray(out.data.device_ids)
+      ? out.data.device_ids.map((x) => String(x || "").trim()).filter(Boolean)
+      : [];
 
-    const manual = normalizeBaseUrlInput(out.public_base_url);
-    const legacy = legacyBaseUrl(out.hostname, out.public_port);
+    const manual = normalizeBaseUrlInput(settings.public_base_url);
+    const legacy = legacyBaseUrl(settings.hostname, settings.public_port);
     const auto = autoDetectedBaseUrl;
-    let hydrated = { ...out };
+    let hydrated = { ...settings };
     if (!manual) {
       if (legacy) {
         hydrated = withPublicBaseCompat(hydrated, legacy);
@@ -754,7 +758,9 @@ export function HomePage() {
     setSettingData(hydrated);
     setSettingJsonText(JSON.stringify(hydrated, null, 2));
     setSelectedSettingDids(dids);
-    const rows = Array.isArray(out.device_list) ? out.device_list : [];
+    const rows = Array.isArray(out.data.devices)
+      ? out.data.devices.map((d) => ({ miotDID: d.device_id, name: d.name || d.model || d.device_id }))
+      : [];
     setSettingDeviceList(rows);
     if (rows.length) {
       setDevices(rows);
@@ -766,18 +772,18 @@ export function HomePage() {
         setActiveDid((prev) => prev || preferredDid);
       }
     }
-    setPullAskEnabled(Boolean(out.enable_pull_ask));
+    setPullAskEnabled(Boolean(settings.enable_pull_ask));
 
     if (!publicBaseMigratedRef.current && !manual) {
-      const shouldUseLegacy = Boolean(legacy) && !legacyLooksUnconfigured(out.hostname, out.public_port);
+      const shouldUseLegacy = Boolean(legacy) && !legacyLooksUnconfigured(settings.hostname, settings.public_port);
       const target = shouldUseLegacy ? legacy : auto;
       if (target) {
         publicBaseMigratedRef.current = true;
         const payload = {
-          ...withPublicBaseCompat({ ...out }, target),
-          mi_did: dids.join(",") || String(out.mi_did || ""),
+          ...withPublicBaseCompat({ ...settings }, target),
+          mi_did: dids.join(",") || String(settings.mi_did || ""),
         };
-        await saveSettingsPayload(payload);
+        await saveSystemSettings(payload, dids);
       }
     }
   }
@@ -1614,12 +1620,13 @@ export function HomePage() {
       ...next,
       mi_did: selectedSettingDids.join(","),
     };
-    const out = (await saveSettingsPayload(payload)) as unknown;
-    if (typeof out === "string" && out.includes("save success")) {
-      setMessage(`已恢复自动地址：${autoDetectedBaseUrl}`);
-    } else {
-      setMessage(`已恢复自动地址：${autoDetectedBaseUrl}`);
+    const out = await saveSystemSettings(payload, selectedSettingDids);
+    if (!isApiOk(out)) {
+      const err = apiErrorInfo(out);
+      setMessage(err.message || "设置保存失败");
+      return;
     }
+    setMessage(`已恢复自动地址：${autoDetectedBaseUrl}`);
     await loadSettingData();
   }
 
@@ -1635,12 +1642,13 @@ export function HomePage() {
       ...parsed,
       mi_did: selectedSettingDids.join(","),
     };
-    const out = (await saveSettingsPayload(payload)) as unknown;
-    if (typeof out === "string" && out.includes("save success")) {
-      setMessage("配置已保存");
-    } else {
-      setMessage("配置已提交");
+    const out = await saveSystemSettings(payload, selectedSettingDids);
+    if (!isApiOk(out)) {
+      const err = apiErrorInfo(out);
+      setMessage(err.message || "配置保存失败");
+      return;
     }
+    setMessage("配置已保存");
     await loadSettingData();
     await loadDevices();
     await loadPlaylists();
@@ -1656,17 +1664,15 @@ export function HomePage() {
 
   async function togglePullAsk() {
     const next = !pullAskEnabled;
-    const out = (await updateSystemSetting<{ success?: boolean; message?: string }>({ enable_pull_ask: next })) as {
-      success?: boolean;
-      message?: string;
-    };
-    if (out.success) {
+    const out = await updateSystemSettingItem("enable_pull_ask", next);
+    if (isApiOk(out)) {
       setPullAskEnabled(next);
       updateSettingField("enable_pull_ask", next);
       setMessage(next ? "语音口令已开启" : "语音口令已关闭");
       return;
     }
-    setMessage(out.message || "切换失败，请重试");
+    const err = apiErrorInfo(out);
+    setMessage(err.message || "切换失败，请重试");
   }
 
   async function fetchMusicListJson() {

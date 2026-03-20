@@ -1,13 +1,5 @@
 import { apiGet, apiPost } from "./apiClient";
 
-export async function fetchSettingsWithDevices<T extends Record<string, unknown>>(): Promise<T & { device_list?: unknown[] }> {
-  return (await apiGet<T & { device_list?: unknown[] }>("/getsetting?need_device_list=true")) as T & { device_list?: unknown[] };
-}
-
-export async function saveSettingsPayload(payload: Record<string, unknown>): Promise<unknown> {
-  return (await apiPost<unknown>("/savesetting", payload)) as unknown;
-}
-
 export async function searchOnlineMusic(keyword: string): Promise<{ data?: unknown[]; success?: boolean; error?: string }> {
   return (await apiGet<{ data?: unknown[]; success?: boolean; error?: string }>(
     `/api/search/online?keyword=${encodeURIComponent(keyword)}&plugin=all&page=1&limit=20`,
@@ -16,10 +8,6 @@ export async function searchOnlineMusic(keyword: string): Promise<{ data?: unkno
 
 export async function fetchQrcode<T>(): Promise<T> {
   return (await apiGet<T>("/api/get_qrcode")) as T;
-}
-
-export async function updateSystemSetting<T>(payload: Record<string, unknown>): Promise<T> {
-  return (await apiPost<T>("/api/system/modifiysetting", payload)) as T;
 }
 
 export async function fetchPlaylistJson<T>(url: string): Promise<T> {
