@@ -6,6 +6,7 @@ import {
   getDevices as v1GetDevices,
   getLibraryMusicInfo,
   getLibraryPlaylists,
+  searchOnline as v1SearchOnline,
   getSystemSettings,
   getSystemStatus,
   getPlayerState,
@@ -32,7 +33,6 @@ import {
   fetchPlaylistJson,
   fetchQrcode,
   refreshMusicTag as refreshMusicTagRequest,
-  searchOnlineMusic,
 } from "../services/homeApi";
 
 void [v1RemoveFavorite];
@@ -1515,19 +1515,16 @@ export function HomePage() {
       setMessage("请输入搜索关键词");
       return;
     }
-    const out = (await searchOnlineMusic(kw)) as {
-      data?: OnlineSearchItem[];
-      success?: boolean;
-      error?: string;
-    };
-    if (out.success === false) {
-      setMessage(out.error || "搜索失败");
+    const out = await v1SearchOnline(kw);
+    if (!isApiOk(out)) {
+      const err = apiErrorInfo(out);
+      setMessage(err.message || "搜索失败");
       setSearchResults([]);
       return;
     }
-    setSearchResults(out.data || []);
+    setSearchResults((out.data.items || []) as OnlineSearchItem[]);
     setSelectedSearchIndex(-1);
-    setMessage(`搜索到 ${out.data?.length || 0} 条结果`);
+    setMessage(`搜索到 ${out.data.items?.length || 0} 条结果`);
   }
 
   async function confirmSearch() {

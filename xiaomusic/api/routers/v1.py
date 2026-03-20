@@ -819,6 +819,65 @@ async def api_v1_library_music_info(name: str = Query(""), request_id: str | Non
         )
 
 
+@router.get("/api/v1/search/online")
+async def api_v1_search_online(
+    keyword: str = Query(""),
+    plugin: str = Query("all"),
+    page: int = Query(1),
+    limit: int = Query(20),
+    request_id: str | None = None,
+):
+    rid = _next_request_id(request_id)
+    try:
+        query = str(keyword or "").strip()
+        if not query:
+            raise _bad_request(rid, "keyword is required", field="keyword")
+        result = await _get_xiaomusic().get_music_list_online(
+            keyword=query,
+            plugin=str(plugin or "all"),
+            page=int(page),
+            limit=int(limit),
+        )
+        if isinstance(result, dict) and result.get("success") is False:
+            return _api_response(
+                10000,
+                str(result.get("error") or "online search failed"),
+                {
+                    "error_code": "E_SEARCH_ONLINE_FAILED",
+                    "stage": "system",
+                },
+                rid,
+            )
+
+        items: list[dict[str, Any]] = []
+        for raw in list((result or {}).get("data") or []):
+            if not isinstance(raw, dict):
+                continue
+            items.append(
+                {
+                    "name": str(raw.get("name") or ""),
+                    "title": str(raw.get("title") or raw.get("name") or ""),
+                    "artist": str(raw.get("artist") or ""),
+                }
+            )
+
+        return _api_ok(
+            {
+                "items": items,
+                "total": int((result or {}).get("total") or len(items)),
+            },
+            request_id=rid,
+        )
+    except Exception as exc:
+        return _map_structured_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_SEARCH_ONLINE_FAILED",
+            default_stage="system",
+            default_message="online search failed",
+        )
+
+
 # diagnostic endpoint - not in v1 whitelist, exclude from public schema
 @router.get("/api/v1/debug/auth_short_session_rebuild_state", include_in_schema=False)
 async def api_v1_debug_auth_short_session_rebuild_state():

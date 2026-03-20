@@ -16,6 +16,7 @@ const mockedV1 = vi.hoisted(() => ({
   play: vi.fn(),
   previous: vi.fn(),
   getDevices: vi.fn(),
+  searchOnline: vi.fn(),
   getSystemSettings: vi.fn(),
   getSystemStatus: vi.fn(),
   getPlayerState: vi.fn(),
@@ -49,6 +50,7 @@ vi.mock("../src/services/v1Api", () => ({
   play: mockedV1.play,
   previous: mockedV1.previous,
   getDevices: mockedV1.getDevices,
+  searchOnline: mockedV1.searchOnline,
   getSystemSettings: mockedV1.getSystemSettings,
   getSystemStatus: mockedV1.getSystemStatus,
   getPlayerState: mockedV1.getPlayerState,
@@ -96,6 +98,7 @@ describe("HomePage play button regression", () => {
     mockedV1.next.mockReset();
     mockedV1.getLibraryMusicInfo.mockReset();
     mockedV1.getLibraryPlaylists.mockReset();
+    mockedV1.searchOnline.mockReset();
     mockedV1.setPlayMode.mockReset();
     mockedV1.setShutdownTimer.mockReset();
     mockedV1.addFavorite.mockReset();
@@ -171,6 +174,12 @@ describe("HomePage play button regression", () => {
         devices: [{ device_id: "981257654", name: "XiaoAI", model: "OH2P", online: true }],
       },
       request_id: "rid-settings",
+    });
+    mockedV1.searchOnline.mockResolvedValue({
+      code: 0,
+      message: "ok",
+      data: { items: [{ title: "Song A", artist: "Artist A" }], total: 1 },
+      request_id: "rid-search",
     });
     mockedV1.getLibraryPlaylists.mockResolvedValue({
       code: 0,

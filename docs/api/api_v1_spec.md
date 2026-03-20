@@ -162,7 +162,7 @@ v1 API 负责暴露以下正式能力：
 
 ## 4. 正式白名单接口
 
-本版本正式白名单接口共 23 个：
+本版本正式白名单接口共 24 个：
 
 ### 4.1 播放与解析
 
@@ -197,7 +197,8 @@ v1 API 负责暴露以下正式能力：
 20. `GET /api/v1/system/settings`
 21. `POST /api/v1/system/settings`
 22. `POST /api/v1/system/settings/item`
-23. `GET /api/v1/player/state`
+23. `GET /api/v1/search/online`
+24. `GET /api/v1/player/state`
 
 ---
 
@@ -275,6 +276,7 @@ Class C 接口：
 - `GET /api/v1/devices`
 - `GET /api/v1/system/status`
 - `GET /api/v1/system/settings`
+- `GET /api/v1/search/online`
 - `GET /api/v1/player/state`
 - `POST /api/v1/resolve`
 
@@ -493,6 +495,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 | `GET /api/v1/devices` | C | 只读查询 / 聚合路径 | `data.devices` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `GET /api/v1/system/status` | C | 只读查询 / 聚合路径 | `data.status`, `data.version`, `data.devices_count` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `GET /api/v1/system/settings` | C | system 设置查询路径 | `data.settings`, `data.device_ids`, `data.devices` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `GET /api/v1/search/online` | C | 搜索查询路径 | `data.items`, `data.total` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `GET /api/v1/player/state` | C | 只读状态聚合路径 | `data.device_id`, `data.is_playing`, `data.cur_music`, `data.offset`, `data.duration` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 
 ---
@@ -866,7 +869,32 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.error_code = E_INVALID_REQUEST`
 - `data.stage = request`
 
-### 10.23 `GET /api/v1/player/state`
+### 10.23 `GET /api/v1/search/online`
+
+用途：执行在线搜索，返回 WebUI 当前所需的最小搜索结果集合。
+
+查询参数：
+
+- `keyword`，必填，非空
+- `plugin`，可选，默认 `all`
+- `page`，可选，默认 `1`
+- `limit`，可选，默认 `20`
+
+成功响应最小字段：
+
+- `data.items[]`
+- `data.items[].name`
+- `data.items[].title`
+- `data.items[].artist`
+- `data.total`
+
+参数错误必须返回：
+
+- `code = 40001`
+- `data.error_code = E_INVALID_REQUEST`
+- `data.stage = request`
+
+### 10.24 `GET /api/v1/player/state`
 
 用途：获取播放状态查询结果。
 

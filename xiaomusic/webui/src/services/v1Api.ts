@@ -81,6 +81,17 @@ export interface LibraryMusicInfoData {
   duration_seconds?: number;
 }
 
+export interface OnlineSearchItemData {
+  name?: string;
+  title?: string;
+  artist?: string;
+}
+
+export interface OnlineSearchData {
+  items: OnlineSearchItemData[];
+  total?: number;
+}
+
 export interface SystemStatusData {
   status?: string;
   version?: string;
@@ -305,6 +316,12 @@ export async function getLibraryPlaylists(): Promise<ApiEnvelope<LibraryPlaylist
 
 export async function getLibraryMusicInfo(name: string): Promise<ApiEnvelope<LibraryMusicInfoData>> {
   return await safeGet<LibraryMusicInfoData>(`/api/v1/library/music-info?name=${encodeURIComponent(name)}`);
+}
+
+export async function searchOnline(keyword: string): Promise<ApiEnvelope<OnlineSearchData>> {
+  return await safeGet<OnlineSearchData>(
+    `/api/v1/search/online?keyword=${encodeURIComponent(keyword)}&plugin=all&page=1&limit=20`,
+  );
 }
 
 export async function getDevices(): Promise<ApiEnvelope<DevicesData>> {
