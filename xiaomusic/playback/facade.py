@@ -315,22 +315,6 @@ class PlaybackFacade:
             },
         }
 
-    async def status(self, device_id: str) -> dict[str, Any]:
-        speaker_id = str(device_id or "").strip()
-        if not speaker_id:
-            raise InvalidRequestError("device_id is required")
-        raw = await self.xiaomusic.get_player_status(did=speaker_id)
-        return {
-            "sid": "",
-            "speaker_id": speaker_id,
-            "state": str(raw.get("status", "unknown")),
-            "title": None,
-            "stream_url": "",
-            "error_code": None,
-            "ok": True,
-            "raw": raw,
-        }
-
     async def player_state(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         if not bool(getattr(self.xiaomusic, "did_exist", lambda _did: False)(did)):

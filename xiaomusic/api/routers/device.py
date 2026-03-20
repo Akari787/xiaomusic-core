@@ -14,24 +14,11 @@ from xiaomusic.api.dependencies import (
     verification,
     xiaomusic,
 )
-from xiaomusic.api.models import (
-    Did,
-    DidCmd,
-    DidVolume,
-)
-from xiaomusic.playback.facade import PlaybackFacade
+from xiaomusic.api.models import DidCmd
 
 from xiaomusic.security.exec_plugin import parse_exec_code
 
 router = APIRouter(dependencies=[Depends(verification)])
-_facade: PlaybackFacade | None = None
-
-
-def _get_facade() -> PlaybackFacade:
-    global _facade
-    if _facade is None:
-        _facade = PlaybackFacade(xiaomusic)
-    return _facade
 
 @router.get("/device_list")
 async def device_list():
@@ -47,45 +34,6 @@ async def getvolume(did: str = ""):
 
     volume = await xiaomusic.get_volume(did=did)
     return api_response.ok({"volume": volume}, contract="raw")
-
-
-@router.get("/getplayerstatus")
-async def getplayerstatus(did: str = ""):
-    """获取完整播放状态（deprecated wrapper，内部已收敛到统一状态入口）
-
-    返回小米音箱的完整播放状态，包括：
-    - status: 播放状态 (0=停止, 1=播放)
-    - volume: 音量
-    - play_song_detail: 播放详情
-        - position: 当前播放位置（毫秒）
-        - duration: 总时长（毫秒）
-    """
-    if not xiaomusic.did_exist(did):
-        return api_response.ok({"status": 0, "volume": 0}, contract="raw")
-
-    log.warning(
-        "deprecated_endpoint endpoint=/getplayerstatus replacement=/api/v1/player/state caller_should_migrate=true"
-    )
-    out = await _get_facade().status(did)
-    return out["raw"]
-
-
-@router.post("/setvolume")
-async def setvolume(data: DidVolume):
-    """设置音量"""
-    did = data.did
-    volume = data.volume
-    if not xiaomusic.did_exist(did):
-        return api_response.ok(contract="ret", ret="Did not exist")
-
-    log.warning(
-        "deprecated_endpoint endpoint=/setvolume replacement=/api/v1/control/volume caller_should_migrate=true"
-    )
-    log.info(f"set_volume {did} {volume}")
-    out = await _get_facade().set_volume(did, int(volume))
-    if out.get("status") != "ok":
-        return api_response.ok(contract="ret", ret="Did not exist")
-    return api_response.ok({"volume": volume}, contract="ret")
 
 
 @router.post("/cmd")
@@ -133,36 +81,3 @@ async def cmd_status():
         return api_response.ok({"status": "finish"}, contract="ret")
     return api_response.ok({"status": "running"}, contract="ret")
 
-
-@router.get("/playtts")
-async def playtts(did: str, text: str):
-    """播放 TTS"""
-    if not xiaomusic.did_exist(did):
-        return api_response.ok(contract="ret", ret="Did not exist")
-
-    log.warning(
-        "deprecated_endpoint endpoint=/playtts replacement=/api/v1/control/tts caller_should_migrate=true"
-    )
-    log.info(f"tts {did} {text}")
-    out = await _get_facade().tts(did, text)
-    if out.get("status") != "ok":
-        return api_response.ok(contract="ret", ret="Did not exist")
-    return api_response.ok(contract="ret")
-
-
-@router.post("/device/stop")
-async def stop(data: Did):
-    """关机（deprecated wrapper，内部已收敛到统一停止入口）"""
-    did = data.did
-    log.info(f"stop did:{did}")
-    if not xiaomusic.did_exist(did):
-        return api_response.ok(contract="ret", ret="Did not exist")
-
-    log.warning(
-        "deprecated_endpoint endpoint=/device/stop replacement=/api/v1/control/stop caller_should_migrate=true"
-    )
-    try:
-        await _get_facade().stop(did)
-    except Exception as e:
-        log.warning(f"Execption {e}")
-    return api_response.ok(contract="ret")
