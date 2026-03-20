@@ -97,7 +97,121 @@ v1 API 负责暴露以下正式能力：
 
 ---
 
-## 3. 通用协议要求
+## 3. 接口分层与边界
+
+### 3.1 Public API
+
+Public API 是唯一正式对外接口层。
+
+定义：
+
+- `/api/v1/*` 是唯一正式对外接口层
+- 仅第 4 章白名单中的接口属于 Public API
+- 仅 Public API 对 WebUI、Home Assistant、插件与第三方调用方提供兼容性与长期稳定性承诺
+- 任何未列入第 4 章白名单的接口都不属于 Public API
+
+Public API 面向：
+
+- WebUI
+- Home Assistant
+- 插件
+- 第三方自动化调用方
+
+### 3.2 Internal API
+
+Internal API 是非 `/api/v1/*` 的内部前后端通信接口层。
+
+定义：
+
+- Internal API 不是“暂时未迁移完成的 v1 残留”
+- Internal API 是有意保留的内部层，用于承载认证、会话、管理、工具、文件辅助与 WebUI 专用交互
+- Internal API 仅供 WebUI 与项目内部模块使用
+- Internal API 不属于公开稳定契约
+- Internal API 不承诺兼容性
+- 插件、第三方调用方、对外接入说明不得把 Internal API 当作正式能力依赖
+
+### 3.3 Forbidden / Removed
+
+Forbidden / Removed 是已删除接口与明确禁止恢复的入口集合。
+
+定义：
+
+- 已删除接口属于 Forbidden / Removed
+- 明确禁止恢复的入口类型属于 Forbidden / Removed
+- Forbidden / Removed 不得以兼容、桥接、legacy、deprecated wrapper 等名义重新引入
+- Forbidden / Removed 不得重新进入正式播放、正式控制或正式查询路径
+
+### 3.4 当前接口分层清单
+
+Public API：
+
+- 第 5 章正式白名单接口全部归属 Public API
+
+Internal API：
+
+- 认证 / 会话 Internal API
+  - `GET /api/auth/status`
+  - `POST /api/auth/refresh`
+  - `POST /api/auth/logout`
+  - `GET /api/get_qrcode`
+  - 归类理由：这些接口服务于认证状态、会话刷新与二维码登录流程，属于 WebUI 内部认证交互，不属于插件与第三方可复用的产品能力
+
+- 管理 / 文件 / 工具 Internal API
+  - `POST /api/file/fetch_playlist_json`
+  - `POST /api/file/cleantempdir`
+  - `POST /refreshmusictag`
+  - 归类理由：这些接口服务于文件读取、目录清理、标签刷新等内部管理与工具动作，不属于对外稳定控制面
+
+Forbidden / Removed：
+
+- 已删除的非正式播放入口
+  - `POST /api/v1/playlist/play`
+  - `POST /api/v1/playlist/play-index`
+- 已删除的旧 HTTP wrapper
+  - `GET /getplayerstatus`
+  - `POST /setvolume`
+  - `GET /playtts`
+  - `POST /device/stop`
+- 已删除的 compatibility / legacy facade 方法
+  - `stop_legacy`
+  - `pause_legacy`
+  - `tts_legacy`
+  - `set_volume_legacy`
+- 禁止恢复的入口类型
+  - 中文命令入口
+  - cmd 风格入口
+  - 自然语言控制入口
+  - 任何重新引入并行播放入口的设计
+
+### 3.5 进入 v1 的准入标准
+
+一个接口只有在同时满足以下条件时，才应进入 Public API / v1：
+
+- 属于用户面主功能或播放主流程
+- 对插件、Home Assistant、第三方调用方具有明确复用价值
+- 值得长期稳定承诺
+- 能遵守统一 envelope 与结构化错误模型
+- 表达的是产品能力，而不是内部实现细节、后台流程或管理动作
+
+以下类型原则上不进入 v1，除非被重新设计为明确的产品能力：
+
+- 二维码登录流程
+- 认证恢复流程
+- 文件工具
+- 缓存或目录清理
+- 内部管理动作
+
+### 3.6 Internal API 使用约束
+
+- Internal API 仅允许 WebUI 或项目内部模块使用
+- 插件、第三方调用方、对外接入文档不得把 Internal API 当作正式能力推荐
+- Internal API 不承诺兼容性
+- 若某项 Internal API 被证明具有稳定产品价值，必须先完成正式设计，再迁入 v1
+- 不得直接把现有 Internal API 路径视为未来 Public API
+
+---
+
+## 4. 通用协议要求
 
 ### 3.1 命名空间
 
@@ -160,7 +274,7 @@ v1 API 负责暴露以下正式能力：
 
 ---
 
-## 4. 正式白名单接口
+## 5. 正式白名单接口
 
 本版本正式白名单接口共 24 个：
 
@@ -202,7 +316,7 @@ v1 API 负责暴露以下正式能力：
 
 ---
 
-## 5. 接口分级与归属路径
+## 6. 接口分级与归属路径
 
 ### 5.1 分级定义
 
@@ -287,7 +401,7 @@ Class C 接口：
 
 ---
 
-## 6. 成功响应契约矩阵
+## 7. 成功响应契约矩阵
 
 ### 6.1 通用成功 Envelope
 
@@ -368,7 +482,7 @@ Class C 不承诺下列字段：
 
 ---
 
-## 7. 统一错误模型
+## 8. 统一错误模型
 
 ### 7.1 错误响应基础结构
 
@@ -447,7 +561,7 @@ Class C 错误要求：
 
 ---
 
-## 8. 内部归属约束
+## 9. 内部归属约束
 
 ### 8.1 Class A 归属约束
 
@@ -469,7 +583,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 ---
 
-## 9. 接口归属总表
+## 10. 接口归属总表
 
 | 接口 | 分类 | 契约要求的内部归属 | 成功响应关键字段 | 错误模型要求 | 备注 |
 |---|---|---|---|---|---|
@@ -500,7 +614,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 ---
 
-## 10. 接口逐项契约
+## 11. 接口逐项契约
 
 ### 10.1 `POST /api/v1/play`
 
@@ -917,7 +1031,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 ---
 
-## 11. 请求扩展对象
+## 12. 请求扩展对象
 
 ### 11.1 `context_hint`
 
@@ -938,7 +1052,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 ---
 
-## 12. 本次修改说明（供审阅）
+## 13. 本次修改说明（供审阅）
 
 1. 本次新增或重写了以下章节：
    - “总则与契约优先级”
@@ -961,7 +1075,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
    - Class C：查询型，必须提供统一 envelope 与结构化错误，不承诺 transport
 5. 本步不涉及代码改动，因为本次任务目标是先完成 v1 API 契约收口，把对外行为、内部归属、成功响应与错误模型定义清楚；代码实现是否符合规范属于后续代码修复步骤。
 
-## 13. 本次修正说明（供审阅）
+## 14. 本次修正说明（供审阅）
 
 1. 本次删除或降级了以下 `player/state` 相关字段的正式契约地位：
    - `current_track_title`
@@ -993,7 +1107,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
    - 内部归属约束
    - 接口归属总表的大框架
 
-## 14. 统一播放入口收敛原则
+## 15. 统一播放入口收敛原则
 
 1. `POST /api/v1/play` 是唯一正式播放入口。
 2. 所有正式播放请求必须通过 `POST /api/v1/play` 进入统一播放执行路径。
@@ -1002,14 +1116,18 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 5. 新插件能力与新来源扩展必须通过统一播放入口接入。
 6. 不再对 `/api/v1/playlist/*` 做长期接口能力扩展承诺。
 
-## 15. 本次修改说明（供审阅）
+## 16. 本次修改说明（供审阅）
 
-1. 本次依据历史统一播放模型中的核心原则修正了播放入口定义：`/api/v1/play` 是唯一正式播放入口，所有正式播放请求最终进入统一执行路径；`/api/v1/playlist/*` 已从正式实现与白名单中删除。
-2. 我将 `/api/v1/play` 与 `/api/v1/playlist/*` 的关系改写为：前者是唯一正式播放入口，后者不再作为实现中的正式接口存在。
-3. 被删除、降级或改写的旧表述包括：
-   - 将 `/api/v1/playlist/play`、`/api/v1/playlist/play-index` 继续当作一等播放能力描述的用语
-   - 会让调用方误以为它们与 `/api/v1/play` 并列长期存在的表述
-   - 任何把 `playlist/*` 写成新能力主入口的模糊描述
-4. 本次受影响的文档章节包括：
-   - `docs/api/api_v1_spec.md` 的设计目标、Class B 成功响应说明、接口归属总表、接口逐项契约、统一播放入口收敛原则章节
-5. 本步不涉及代码修改，因为本次任务目标是先把正式播放入口的文档定义重新收紧，明确后续代码收敛方向；实际入口迁移与状态机收敛属于后续代码步骤。
+1. 本次新增了“接口分层与边界”章节，并补齐了 Public API、Internal API、Forbidden / Removed 三层正式定义。
+2. Public API 被定义为第 5 章 v1 白名单接口集合；Internal API 被定义为内部前后端通信、认证、文件、工具与管理辅助接口；Forbidden / Removed 被定义为已删除接口与明确禁止恢复的入口集合。
+3. 当前被明确写入 Internal API 清单的接口包括：
+   - 认证 / 会话接口：`/api/auth/status`、`/api/auth/refresh`、`/api/auth/logout`、`/api/get_qrcode`
+   - 管理 / 文件 / 工具接口：`/api/file/fetch_playlist_json`、`/api/file/cleantempdir`、`/refreshmusictag`
+4. 当前被明确写入 Forbidden / Removed 清单的内容包括：
+   - `/api/v1/playlist/play`
+   - `/api/v1/playlist/play-index`
+   - 已删除的旧 device wrapper
+   - 已删除的 `*_legacy` facade 方法
+   - 中文命令入口、cmd 风格入口、自然语言控制入口、并行播放入口设计
+5. 本次新增了“进入 v1 的准入标准”与“Internal API 使用约束”，明确只有具备长期复用价值、能遵守统一 envelope 与结构化错误模型、且表达产品能力的接口，才可以进入 v1。
+6. 本步不涉及代码修改，因为本次任务目标是先把接口分层边界写成强约束文档，为后续接口去留与迁移判断提供统一依据。

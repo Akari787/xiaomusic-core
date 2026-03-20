@@ -35,6 +35,12 @@ v1 API 的以下内容统一以 `docs/api/api_v1_spec.md` 为准：
 - `POST /api/v1/play` 是唯一正式播放入口
 - `/api/v1/playlist/*` 不属于正式播放入口
 
+其中与接口分层直接相关的约束也以 `docs/api/api_v1_spec.md` 为准：
+
+- `/api/v1/*` 白名单接口属于 Public API
+- 认证、文件、工具、管理辅助接口属于 Internal API
+- 已删除接口与禁止恢复入口属于 Forbidden / Removed
+
 ### 1.3 本文档不承担的职责
 
 本文档不定义：
@@ -48,7 +54,61 @@ v1 API 的以下内容统一以 `docs/api/api_v1_spec.md` 为准：
 
 ---
 
-## 2. 当前架构现状
+## 2. 接口分层视图
+
+### 2.1 Public API 层
+
+Public API 层是唯一正式对外接口层。
+
+边界：
+
+- `/api/v1/*` 白名单接口全部归属 Public API
+- Public API 面向 WebUI、Home Assistant、插件与第三方调用方
+- Public API 是唯一承诺兼容性与长期稳定性的接口层
+
+### 2.2 Internal API 层
+
+Internal API 层是内部前后端通信与辅助动作接口层。
+
+边界：
+
+- Internal API 不属于 v1 白名单
+- Internal API 仅供 WebUI 与项目内部模块使用
+- Internal API 承载认证、二维码、文件工具、后台管理与内部辅助流程
+- Internal API 不承诺兼容性
+- 插件与第三方调用方不得依赖 Internal API
+
+当前明确属于 Internal API 的接口类型包括：
+
+- 认证 / 会话接口，如 `/api/auth/status`、`/api/auth/refresh`、`/api/auth/logout`、`/api/get_qrcode`
+- 文件 / 工具接口，如 `/api/file/fetch_playlist_json`、`/api/file/cleantempdir`、`/refreshmusictag`
+
+### 2.3 Forbidden / Removed
+
+Forbidden / Removed 是已删除接口与禁止恢复入口集合。
+
+边界：
+
+- 已删除的旧播放入口、旧 wrapper、legacy facade 方法属于 Forbidden / Removed
+- 这些接口与入口类型不得重新进入目标架构
+- 不得以 compatibility、legacy、bridge、deprecated wrapper 名义恢复
+
+当前明确属于 Forbidden / Removed 的接口类型包括：
+
+- 已删除的 `/api/v1/playlist/play`、`/api/v1/playlist/play-index`
+- 已删除的旧 device wrapper，如 `/getplayerstatus`、`/setvolume`、`/playtts`、`/device/stop`
+- 已删除的 `*_legacy` facade 方法
+- 中文命令入口、cmd 风格入口、自然语言控制入口、并行播放入口设计
+
+### 2.4 调用方约束
+
+- WebUI 可以同时调用 Public API 与 Internal API
+- 插件与第三方只能依赖 Public API
+- Forbidden / Removed 不得被任何调用方重新接入
+
+---
+
+## 3. 当前架构现状
 
 ### 2.1 当前现状概述
 
@@ -56,6 +116,7 @@ v1 API 的以下内容统一以 `docs/api/api_v1_spec.md` 为准：
 
 - 一部分接口已经或应走统一调度 / 分发链路
 - 另一部分接口当前保留在 router / runtime 本地控制路径
+- 同时还存在一层不进入 v1 白名单的 Internal API，用于认证、二维码、文件与管理辅助流程
 
 在当前现状中，`POST /api/v1/play` 已被设计为统一播放入口；`/api/v1/playlist/*` 仍是历史残留路径的一部分，但这种并存只表示现状，不表示它们仍是长期正式播放入口。
 
@@ -66,7 +127,8 @@ v1 API 的以下内容统一以 `docs/api/api_v1_spec.md` 为准：
 ```mermaid
 flowchart TD
     U[WebUI / HA / 第三方调用方]
-    R[HTTP Router / API v1 路由层]
+    P[Public API 层 /api/v1/*]
+    I[Internal API 层 auth file tool admin]
 
     F[Playback Facade]
     C[Playback Coordinator]
@@ -77,21 +139,24 @@ flowchart TD
     L[Library / Playlist / Favorites / 本地控制]
     Q[Query / Status 聚合]
 
-    U --> R
+    U --> P
+    U --> I
 
-    R -->|正式播放与动作型接口| F
+    P -->|正式播放与动作型接口| F
     F --> C
     C --> T
     T --> X
     X --> D
 
-    R -->|歌单残留路径/收藏/本地控制接口| X
+    P -->|收藏/本地控制接口| X
     X --> L
 
-    R -->|查询接口| Q
+    P -->|查询接口| Q
     Q --> X
     Q --> D
     Q --> L
+
+    I -->|认证/文件/管理辅助流程| X
 ```
 
 图中表达的只是当前实现分层与调用方向，不代表所有接口都已经稳定收敛到相同内部路径。
@@ -111,7 +176,7 @@ flowchart TD
 
 ---
 
-## 3. 目标架构
+## 4. 目标架构
 
 ### 3.1 目标架构原则
 
@@ -124,19 +189,25 @@ flowchart TD
 - 所有正式播放请求经 `POST /api/v1/play` 进入统一播放执行路径
 - `/api/v1/playlist/*` 不再作为正式并列播放入口存在
 
+对于接口分层，目标架构还必须满足：
+
+- Public API 与 Internal API 在边界上明确分层
+- 插件与第三方只依赖 Public API
+- Internal API 不进入对外承诺层
+
 ### 3.2 目标架构图
 
 ```mermaid
 flowchart TD
     U[WebUI / HA / 第三方调用方]
-    R[API v1 Router]
+    P[Public API 层 /api/v1/*]
+    I[Internal API 层 auth qrcode file tool]
 
     A[Class A 设备动作型接口]
     B[Class B 本地控制型接口]
     Cq[Class C 查询型接口]
 
     Play[/POST /api/v1/play\n唯一正式播放入口/]
-    Legacy[/POST /api/v1/playlist/*\n残留过渡入口/]
 
     PF[Playback Facade / Coordinator]
     TR[Transport Router]
@@ -145,9 +216,10 @@ flowchart TD
     LB[Library / Playlist / Favorites]
     QS[Query / Status 聚合层]
 
-    U --> R
+    U --> P
+    U --> I
 
-    R --> Play
+    P --> Play
     Play --> A
 
     A --> PF
@@ -155,17 +227,17 @@ flowchart TD
     TR --> RT
     RT --> DV
 
-    R --> Legacy
-    Legacy --> B
-    R --> B
+    P --> B
     B --> RT
     RT --> LB
 
-    R --> Cq
+    P --> Cq
     Cq --> QS
     QS --> RT
     QS --> DV
     QS --> LB
+
+    I --> RT
 ```
 
 ### 3.3 目标分层解释
@@ -192,7 +264,7 @@ flowchart TD
 
 ---
 
-## 4. 模块边界与职责
+## 5. 模块边界与职责
 
 ### 4.1 API Router
 
@@ -396,7 +468,7 @@ flowchart TD
 
 ---
 
-## 5. 调用链说明
+## 6. 调用链说明
 
 ### 5.1 Class A 典型链路
 
@@ -466,7 +538,7 @@ flowchart TD
 
 ---
 
-## 6. 当前问题与收敛方向
+## 7. 当前问题与收敛方向
 
 ### 6.1 当前问题
 
@@ -497,7 +569,7 @@ flowchart TD
 
 ---
 
-## 7. 与 API 契约文档的关系
+## 8. 与 API 契约文档的关系
 
 ### 7.1 架构文档不定义契约细节
 
@@ -533,7 +605,7 @@ flowchart TD
 
 ---
 
-## 8. 关键文档导航
+## 9. 关键文档导航
 
 | 文档 | 说明 |
 |---|---|
@@ -548,7 +620,7 @@ flowchart TD
 
 ---
 
-## 9. 本次修改说明（供审阅）
+## 10. 本次修改说明（供审阅）
 
 1. 我将 `ARCHITECTURE.md` 与 `docs/api/api_v1_spec.md` 的优先级关系写明为：API 契约、字段、错误模型、接口分级与内部归属约束统一以 `docs/api/api_v1_spec.md` 为准，架构文档不再承担第二份契约职责。
 2. 我将“当前现状图”和“目标架构图”明确分开：前者描述当前双轨并存的实现状态，后者描述按照 Class A / B / C 收敛后的目标归属。
@@ -556,13 +628,11 @@ flowchart TD
 4. 三类接口在架构图中的归属体现为：Class A 进入统一调度 / 分发链路，Class B 进入 router / runtime 本地控制路径，Class C 进入只读查询 / 聚合路径。
 5. 本步仍然不涉及代码改动，因为本次任务目标是修正文档角色边界与架构说明方式，避免架构文档与 API 契约文档冲突；实现收敛属于后续代码步骤。
 
-## 10. 本次修改说明（供审阅）
+## 11. 本次修改说明（供审阅）
 
-1. 本次依据历史统一播放模型中的原则修正了播放入口定义：`/api/v1/play` 是唯一正式播放入口，所有正式播放请求最终进入统一播放执行路径；`/api/v1/playlist/*` 不再被当作并列正式入口。
-2. 我将 `/api/v1/play` 与 `/api/v1/playlist/*` 的关系改写为：前者是目标态唯一正式播放入口，后者只在“当前现状”或“过渡桥接”语境中出现。
-3. 被删除、降级或改写的旧表述包括：
-   - 可能让人误解 `playlist/*` 与 `/api/v1/play` 并列承担播放入口职责的描述
-   - 在目标架构里将多个播放入口并列进入统一链路的风险表述
-4. 本次受影响的章节包括：
-   - `ARCHITECTURE.md` 的文档优先级、当前架构现状、目标架构图、模块边界、调用链说明、当前问题与收敛方向、与 API 契约文档的关系
-5. 本步不涉及代码修改，因为本次任务目标是先把“唯一正式播放入口”的架构与契约叙述统一；实际入口收敛与状态机迁移属于后续代码步骤。
+1. 本次新增了“接口分层视图”，把 HTTP 接口正式区分为 Public API、Internal API、Forbidden / Removed 三层。
+2. 我将架构边界写清为：WebUI 可以调用 Public API 与 Internal API；插件与第三方只能依赖 Public API；Forbidden / Removed 不再出现在目标架构中。
+3. 当前被明确保留为 Internal API 的接口主要是认证 / 会话接口与文件 / 工具接口，它们服务于内部前后端协作，不属于对外稳定控制面。
+4. 这些 Internal 接口不对插件和第三方公开承诺，因为它们表达的是认证流程、文件工具和后台辅助动作，而不是值得长期稳定承诺的产品级能力。
+5. 被明确列入禁止恢复清单的内容包括：已删除的旧播放入口、旧 wrapper、legacy facade 方法，以及中文命令、cmd 风格入口、自然语言控制入口和并行播放入口设计。
+6. 本步不涉及代码修改，因为目标是先把接口边界、调用方约束与接口去留标准写成强约束文档；实现迁移与删除动作属于后续代码步骤。
