@@ -517,6 +517,9 @@ export function HomePage() {
   const lastAutoSyncedPlayingSongRef = useRef<string>("");
   const statusRequestSeqRef = useRef<number>(0);
   const activeActionSeqRef = useRef<number>(0);
+  const fastPollUntilRef = useRef<number>(0);
+  const lastStatusPollAtRef = useRef<number>(0);
+  const statusPollInFlightRef = useRef<boolean>(false);
   const pendingPlayRef = useRef<{ did: string; song: string; expiresAt: number } | null>(null);
   const themeFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -579,7 +582,7 @@ export function HomePage() {
     if (!safeDuration) {
       return 0;
     }
-    return Math.max(0, Math.min(100, Math.round((safeOffset / safeDuration) * 100)));
+    return Math.max(0, Math.min(100, (safeOffset / safeDuration) * 100));
   }, [safeDuration, safeOffset]);
   const isSoundscapeLayout = activeLayout === "soundscape";
   const localSongFresh =
@@ -889,6 +892,14 @@ export function HomePage() {
     }
   }
 
+  function triggerFastPolling(windowMs = 6000): void {
+    fastPollUntilRef.current = Math.max(fastPollUntilRef.current, Date.now() + windowMs);
+  }
+
+  function currentStatusPollIntervalMs(): number {
+    return Date.now() < fastPollUntilRef.current ? 350 : 1000;
+  }
+
   async function waitForPlayerState(
     did: string,
     actionSeq: number,
@@ -920,6 +931,7 @@ export function HomePage() {
     if (!did) {
       return null;
     }
+    lastStatusPollAtRef.current = Date.now();
     const requestSeq = statusRequestSeqRef.current + 1;
     statusRequestSeqRef.current = requestSeq;
     const stateResp = await Promise.resolve(getPlayerState(did)).then(
@@ -1116,13 +1128,24 @@ export function HomePage() {
     setVolume(loadRememberedVolume(activeDid));
     setRememberedPlayingSong(remembered);
     rememberedPlayingSongRef.current = remembered;
+    fastPollUntilRef.current = Date.now() + 4000;
     void loadStatus(activeDid);
     const timer = window.setInterval(() => {
-      if (activeActionSeqRef.current) {
+      const now = Date.now();
+      const intervalMs = currentStatusPollIntervalMs();
+      if (statusPollInFlightRef.current) {
         return;
       }
-      void loadStatus(activeDid);
-    }, 4000);
+      if (now - lastStatusPollAtRef.current < intervalMs) {
+        return;
+      }
+      statusPollInFlightRef.current = true;
+      Promise.resolve()
+        .then(() => loadStatus(activeDid))
+        .finally(() => {
+          statusPollInFlightRef.current = false;
+        });
+    }, 250);
     return () => window.clearInterval(timer);
   }, [activeDid]);
 
@@ -1135,7 +1158,7 @@ export function HomePage() {
         if (!prev.is_playing) {
           return prev;
         }
-        const elapsed = Math.max(0, Math.floor((Date.now() - localPlaybackStartedAt) / 1000));
+        const elapsed = Math.max(0, (Date.now() - localPlaybackStartedAt) / 1000);
         const currentOffset = Number(prev.offset || 0);
         const currentDuration = Number(prev.duration || 0);
         const offsetLooksReasonable =
@@ -1146,7 +1169,7 @@ export function HomePage() {
         const nextDuration = Number(prev.duration || 0) > 0 ? Number(prev.duration || 0) : localPlaybackDuration;
         const nextMusic = String(prev.cur_music || "").trim() || localPlaybackSong;
         if (
-          nextOffset === Number(prev.offset || 0) &&
+          Math.abs(nextOffset - Number(prev.offset || 0)) < 0.15 &&
           nextDuration === Number(prev.duration || 0) &&
           nextMusic === String(prev.cur_music || "")
         ) {
@@ -1159,7 +1182,7 @@ export function HomePage() {
           cur_music: nextMusic,
         };
       });
-    }, 1000);
+    }, 250);
     return () => window.clearInterval(timer);
   }, [localPlaybackStartedAt, localPlaybackDuration, localPlaybackSong]);
 
@@ -1252,11 +1275,12 @@ export function HomePage() {
       return false;
     };
 
+    triggerFastPolling();
     setMessage(`${okText}，正在同步播放信息...`);
     try {
       const out = action === "previous" ? await v1Previous(did) : await v1Next(did);
       if (isApiOk(out)) {
-        const synced = await waitForPlayerState(did, actionSeq, hasTrackSwitched, 12, 900);
+        const synced = await waitForPlayerState(did, actionSeq, hasTrackSwitched, 14, 450);
         if (synced && hasTrackSwitched()) {
           setMessage(okText);
         } else {
@@ -1286,6 +1310,7 @@ export function HomePage() {
       return;
     }
     setMusic(picked);
+    triggerFastPolling();
     setMessage(`正在切换到 ${picked}...`);
     try {
       const info = await getLibraryMusicInfo(picked);
@@ -1354,8 +1379,8 @@ export function HomePage() {
             const current = String(state.cur_music || "").trim();
             return !current || current === picked;
           },
-          12,
-          700,
+          16,
+          400,
         );
         if (synced) {
           const syncedStartedAt = Math.max(0, Date.now() - Math.max(0, Math.floor(Number(synced.offset || 0))) * 1000);
@@ -1436,6 +1461,7 @@ export function HomePage() {
         return;
       }
 
+      triggerFastPolling();
       const out = await v1Play({
         device_id: activeDid,
         query: url,
@@ -1540,6 +1566,7 @@ export function HomePage() {
       setMessage("选中结果缺少歌曲名");
       return;
     }
+    triggerFastPolling();
     const out = await v1Play({
       device_id: activeDid,
       query: title,
@@ -2100,6 +2127,7 @@ export function HomePage() {
                     if (!requireDid()) {
                       return;
                     }
+                    triggerFastPolling();
                     const out = await v1Stop(activeDid);
                     if (isApiOk(out)) {
                       stopSuppressUntilRef.current = Date.now() + 6000;
