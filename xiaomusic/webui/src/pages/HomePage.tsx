@@ -1059,6 +1059,16 @@ export function HomePage() {
               duration: Math.max(0, Math.floor(Number(merged.duration || 0))),
             }),
           );
+          if (remembered && remembered !== localPlaybackSongRef.current) {
+            const newStartedAt = startedAtFromOffset || Date.now();
+            const newDuration = Math.max(0, Math.floor(Number(merged.duration || 0)));
+            setLocalPlaybackSong(remembered);
+            setLocalPlaybackStartedAt(newStartedAt);
+            setLocalPlaybackDuration(newDuration);
+            localPlaybackSongRef.current = remembered;
+            localPlaybackStartedAtRef.current = newStartedAt;
+            localPlaybackDurationRef.current = newDuration;
+          }
         }
         if (isLatestStatusRequest(requestSeq, did)) {
           if (pending && pending.did === did) {
