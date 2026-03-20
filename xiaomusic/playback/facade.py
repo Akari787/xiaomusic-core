@@ -15,7 +15,6 @@ from xiaomusic.core.delivery import DeliveryAdapter
 from xiaomusic.core.device import DeviceRegistry
 from xiaomusic.core.errors import DeviceNotFoundError, InvalidRequestError
 from xiaomusic.core.models import MediaRequest, PlayOptions
-from xiaomusic.core.models.payload_keys import KEY_SPEAKER_ID
 from xiaomusic.core.source import SourceRegistry
 from xiaomusic.core.transport import TransportPolicy, TransportRouter
 
@@ -389,70 +388,4 @@ class PlaybackFacade:
             "offset": safe_offset,
             "duration": safe_duration,
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
-        }
-
-    async def stop_legacy(self, target: dict[str, Any]) -> dict[str, Any]:
-        # compatibility_layer: legacy facade method retained for deprecated router wrappers.
-        # removal_condition: remove after device router legacy endpoints are dropped.
-        speaker_id = str(target.get(KEY_SPEAKER_ID) or "").strip()
-        out = await self.stop(speaker_id)
-        return {
-            "sid": "",
-            "speaker_id": speaker_id,
-            "state": out.get("status"),
-            "title": None,
-            "stream_url": "",
-            "error_code": None,
-            "ok": True,
-            "raw": {
-                "ret": "OK",
-                "transport": out.get("transport"),
-                "dispatch": out.get("extra", {}).get("dispatch", {}),
-            },
-        }
-
-    async def pause_legacy(self, speaker_id: str) -> dict[str, Any]:
-        # compatibility_layer: legacy facade method retained for deprecated router wrappers.
-        # removal_condition: remove after device router legacy endpoints are dropped.
-        out = await self.pause(speaker_id)
-        return {
-            "speaker_id": speaker_id,
-            "ok": True,
-            "error_code": None,
-            "raw": {
-                "ret": "OK",
-                "transport": out.get("transport"),
-                "dispatch": out.get("extra", {}).get("dispatch", {}),
-            },
-        }
-
-    async def tts_legacy(self, speaker_id: str, text: str) -> dict[str, Any]:
-        # compatibility_layer: legacy facade method retained for deprecated router wrappers.
-        # removal_condition: remove after device router legacy endpoints are dropped.
-        out = await self.tts(speaker_id, text)
-        return {
-            "speaker_id": speaker_id,
-            "ok": True,
-            "error_code": None,
-            "raw": {
-                "ret": "OK",
-                "transport": out.get("transport"),
-                "dispatch": out.get("extra", {}).get("dispatch", {}),
-            },
-        }
-
-    async def set_volume_legacy(self, speaker_id: str, volume: int) -> dict[str, Any]:
-        # compatibility_layer: legacy facade method retained for deprecated router wrappers.
-        # removal_condition: remove after device router legacy endpoints are dropped.
-        out = await self.set_volume(speaker_id, volume)
-        return {
-            "speaker_id": speaker_id,
-            "ok": True,
-            "error_code": None,
-            "raw": {
-                "ret": "OK",
-                "volume": int(volume),
-                "transport": out.get("transport"),
-                "dispatch": out.get("extra", {}).get("dispatch", {}),
-            },
         }

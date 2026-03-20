@@ -57,7 +57,7 @@ async def test_setvolume_wrapper_stays_compatible(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
-async def test_stop_wrapper_calls_legacy_bridge(monkeypatch, caplog):
+async def test_stop_wrapper_calls_formal_stop(monkeypatch, caplog):
     _bind_test_logger(monkeypatch)
     caplog.set_level(logging.WARNING)
     class _XM:
@@ -65,17 +65,17 @@ async def test_stop_wrapper_calls_legacy_bridge(monkeypatch, caplog):
         def did_exist(did: str) -> bool:
             return did == "did-1"
 
-    called = {"stop_legacy": False}
+    called = {"stop": False}
 
     class _Facade:
-        async def stop_legacy(self, target: dict[str, str]):
-            assert target["speaker_id"] == "did-1"
-            called["stop_legacy"] = True
-            return {"ok": True}
+        async def stop(self, device_id: str):
+            assert device_id == "did-1"
+            called["stop"] = True
+            return {"status": "stopped", "transport": "mina", "extra": {"dispatch": {}}}
 
     monkeypatch.setattr(device, "xiaomusic", _XM())
     monkeypatch.setattr(device, "_get_facade", lambda: _Facade())
     out = await device.stop(Did(did="did-1"))
     assert out["ret"] == "OK"
-    assert called["stop_legacy"] is True
+    assert called["stop"] is True
     assert "deprecated_endpoint endpoint=/device/stop" in caplog.text

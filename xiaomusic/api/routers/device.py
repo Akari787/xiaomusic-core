@@ -162,7 +162,7 @@ async def stop(data: Did):
         "deprecated_endpoint endpoint=/device/stop replacement=/api/v1/control/stop caller_should_migrate=true"
     )
     try:
-        await _get_facade().stop_legacy({"speaker_id": did})
+        await _get_facade().stop(did)
     except Exception as e:
         log.warning(f"Execption {e}")
     return api_response.ok(contract="ret")
