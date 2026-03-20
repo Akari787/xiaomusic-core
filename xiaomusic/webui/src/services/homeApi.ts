@@ -8,16 +8,6 @@ export async function saveSettingsPayload(payload: Record<string, unknown>): Pro
   return (await apiPost<unknown>("/savesetting", payload)) as unknown;
 }
 
-export async function fetchMusicList<T extends Record<string, string[]>>(): Promise<T> {
-  return (await apiGet<T>("/musiclist")) as T;
-}
-
-export async function fetchMusicInfo(name: string): Promise<{ ret?: string; name?: string; url?: string; tags?: { duration?: number } }> {
-  return (await apiGet<{ ret?: string; name?: string; url?: string; tags?: { duration?: number } }>(
-    `/musicinfo?name=${encodeURIComponent(name)}&musictag=true`,
-  )) as { ret?: string; name?: string; url?: string; tags?: { duration?: number } };
-}
-
 export async function searchOnlineMusic(keyword: string): Promise<{ data?: unknown[]; success?: boolean; error?: string }> {
   return (await apiGet<{ data?: unknown[]; success?: boolean; error?: string }>(
     `/api/search/online?keyword=${encodeURIComponent(keyword)}&plugin=all&page=1&limit=20`,

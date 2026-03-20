@@ -162,7 +162,7 @@ v1 API 负责暴露以下正式能力：
 
 ## 4. 正式白名单接口
 
-本版本正式白名单接口共 18 个：
+本版本正式白名单接口共 20 个：
 
 ### 4.1 播放与解析
 
@@ -187,12 +187,14 @@ v1 API 负责暴露以下正式能力：
 13. `POST /api/v1/library/favorites/add`
 14. `POST /api/v1/library/favorites/remove`
 15. `POST /api/v1/library/refresh`
+16. `GET /api/v1/library/playlists`
+17. `GET /api/v1/library/music-info`
 
 ### 4.4 查询
 
-16. `GET /api/v1/devices`
-17. `GET /api/v1/system/status`
-18. `GET /api/v1/player/state`
+18. `GET /api/v1/devices`
+19. `GET /api/v1/system/status`
+20. `GET /api/v1/player/state`
 
 ---
 
@@ -263,6 +265,8 @@ Class B 接口：
 
 Class C 接口：
 
+- `GET /api/v1/library/playlists`
+- `GET /api/v1/library/music-info`
 - `GET /api/v1/devices`
 - `GET /api/v1/system/status`
 - `GET /api/v1/player/state`
@@ -475,6 +479,8 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 | `POST /api/v1/library/favorites/add` | B | library 本地控制路径 | `data.status`, `data.device_id`, `data.track_name` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `POST /api/v1/library/favorites/remove` | B | library 本地控制路径 | `data.status`, `data.device_id`, `data.track_name` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `POST /api/v1/library/refresh` | B | library 本地控制路径 | `data.status`，可含范围信息 | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `GET /api/v1/library/playlists` | C | library 查询路径 | `data.playlists` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `GET /api/v1/library/music-info` | C | library 查询路径 | `data.name`, `data.url`, `data.duration_seconds` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `POST /api/v1/resolve` | C | 只读解析 / 聚合路径 | 以解析结果字段为主 | 必须有 `error_code`, `stage` | 查询型；不要求 `transport` |
 | `GET /api/v1/devices` | C | 只读查询 / 聚合路径 | `data.devices` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `GET /api/v1/system/status` | C | 只读查询 / 聚合路径 | `data.status`, `data.version`, `data.devices_count` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
@@ -739,7 +745,38 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 该接口不承诺 `data.transport`。
 
-### 10.16 `GET /api/v1/devices`
+### 10.16 `GET /api/v1/library/playlists`
+
+用途：获取播放上下文所需的歌单与歌曲列表。
+
+成功响应关键字段：
+
+- `data.playlists`
+- `data.playlists.<playlist_name>[]`
+
+查询错误应返回结构化 `error_code/stage`，推荐归类为 `library` 或 `request`。
+
+### 10.17 `GET /api/v1/library/music-info`
+
+用途：获取单曲的最小上下文信息。
+
+查询参数：
+
+- `name`，必填，非空
+
+成功响应最小字段：
+
+- `data.name: string`
+- `data.url: string`
+- `data.duration_seconds: number`
+
+参数错误必须返回：
+
+- `code = 40001`
+- `data.error_code = E_INVALID_REQUEST`
+- `data.stage = request`
+
+### 10.18 `GET /api/v1/devices`
 
 用途：获取设备列表。
 
@@ -751,7 +788,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.devices[].model`
 - `data.devices[].online`
 
-### 10.17 `GET /api/v1/system/status`
+### 10.19 `GET /api/v1/system/status`
 
 用途：获取系统状态。
 
@@ -761,7 +798,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.version`
 - `data.devices_count`
 
-### 10.18 `GET /api/v1/player/state`
+### 10.20 `GET /api/v1/player/state`
 
 用途：获取播放状态查询结果。
 

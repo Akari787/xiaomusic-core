@@ -4,6 +4,8 @@ import {
   addFavorite as v1AddFavorite,
   apiErrorInfo,
   getDevices as v1GetDevices,
+  getLibraryMusicInfo,
+  getLibraryPlaylists,
   getSystemStatus,
   getPlayerState,
   isApiOk,
@@ -24,8 +26,6 @@ import {
 import { fetchAuthStatus, logoutAuth as logoutAuthRequest, reloadAuthRuntime } from "../services/auth";
 import {
   cleanTempDir as cleanTempDirRequest,
-  fetchMusicInfo,
-  fetchMusicList,
   fetchPlaylistJson,
   fetchQrcode,
   fetchSettingsWithDevices,
@@ -850,11 +850,17 @@ export function HomePage() {
   }
 
   async function loadPlaylists() {
-    const out = (await fetchMusicList<Record<string, string[]>>()) as Record<string, string[]>;
-    setPlaylists(out);
-    const names = Object.keys(out);
+    const out = await getLibraryPlaylists();
+    if (!isApiOk(out)) {
+      setPlaylists({});
+      setMessage("获取歌单失败");
+      return;
+    }
+    const playlistsData = out.data.playlists || {};
+    setPlaylists(playlistsData);
+    const names = Object.keys(playlistsData);
     if (names.length) {
-      setPlaylist((prev) => (prev && out[prev] ? prev : names[0]));
+      setPlaylist((prev) => (prev && playlistsData[prev] ? prev : names[0]));
     }
   }
 
@@ -1277,8 +1283,8 @@ export function HomePage() {
     setMusic(picked);
     setMessage(`正在切换到 ${picked}...`);
     try {
-      const info = await fetchMusicInfo(picked);
-      const infoDuration = Number(info.tags?.duration || 0);
+      const info = await getLibraryMusicInfo(picked);
+      const infoDuration = isApiOk(info) ? Number(info.data.duration_seconds || 0) : 0;
       const playResp = await v1Play({
         device_id: deviceId,
         query: picked,

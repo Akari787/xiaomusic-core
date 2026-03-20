@@ -651,6 +651,55 @@ async def api_v1_library_refresh(data: LibraryRefreshRequest):
         )
 
 
+@router.get("/api/v1/library/playlists")
+async def api_v1_library_playlists(request_id: str | None = None):
+    rid = _next_request_id(request_id)
+    try:
+        playlists = _get_xiaomusic().music_library.get_music_list()
+        return _api_ok({"playlists": playlists if isinstance(playlists, dict) else {}}, request_id=rid)
+    except Exception as exc:
+        return _map_structured_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_LIBRARY_PLAYLISTS_QUERY_FAILED",
+            default_stage="library",
+            default_message="library playlists query failed",
+        )
+
+
+@router.get("/api/v1/library/music-info")
+async def api_v1_library_music_info(name: str = Query(""), request_id: str | None = None):
+    rid = _next_request_id(request_id)
+    try:
+        music_name = str(name or "").strip()
+        if not music_name:
+            raise _bad_request(rid, "name is required", field="name")
+        url, _ = await _get_xiaomusic().music_library.get_music_url(music_name)
+        tags = await _get_xiaomusic().music_library.get_music_tags(music_name)
+        duration_seconds = 0.0
+        if isinstance(tags, dict):
+            try:
+                duration_seconds = float(tags.get("duration") or 0)
+            except Exception:
+                duration_seconds = 0.0
+        return _api_ok(
+            {
+                "name": music_name,
+                "url": url,
+                "duration_seconds": duration_seconds,
+            },
+            request_id=rid,
+        )
+    except Exception as exc:
+        return _map_structured_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_LIBRARY_MUSIC_INFO_FAILED",
+            default_stage="library",
+            default_message="library music-info query failed",
+        )
+
+
 # diagnostic endpoint - not in v1 whitelist, exclude from public schema
 @router.get("/api/v1/debug/auth_short_session_rebuild_state", include_in_schema=False)
 async def api_v1_debug_auth_short_session_rebuild_state():

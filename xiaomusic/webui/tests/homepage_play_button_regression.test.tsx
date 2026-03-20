@@ -10,11 +10,15 @@ const mockedApi = vi.hoisted(() => ({
 
 const mockedV1 = vi.hoisted(() => ({
   addFavorite: vi.fn(),
+  getLibraryMusicInfo: vi.fn(),
+  getLibraryPlaylists: vi.fn(),
   next: vi.fn(),
   play: vi.fn(),
   previous: vi.fn(),
   getDevices: vi.fn(),
+  getSystemStatus: vi.fn(),
   getPlayerState: vi.fn(),
+  libraryRefresh: vi.fn(),
   setPlayMode: vi.fn(),
   setShutdownTimer: vi.fn(),
   tts: vi.fn(),
@@ -36,11 +40,15 @@ vi.mock("../src/services/v1Api", () => ({
     stage: null,
   }),
   addFavorite: mockedV1.addFavorite,
+  getLibraryMusicInfo: mockedV1.getLibraryMusicInfo,
+  getLibraryPlaylists: mockedV1.getLibraryPlaylists,
   next: mockedV1.next,
   play: mockedV1.play,
   previous: mockedV1.previous,
   getDevices: mockedV1.getDevices,
+  getSystemStatus: mockedV1.getSystemStatus,
   getPlayerState: mockedV1.getPlayerState,
+  libraryRefresh: mockedV1.libraryRefresh,
   setPlayMode: mockedV1.setPlayMode,
   setShutdownTimer: mockedV1.setShutdownTimer,
   tts: mockedV1.tts,
@@ -80,19 +88,20 @@ describe("HomePage play button regression", () => {
     mockedV1.play.mockReset();
     mockedV1.previous.mockReset();
     mockedV1.next.mockReset();
+    mockedV1.getLibraryMusicInfo.mockReset();
+    mockedV1.getLibraryPlaylists.mockReset();
     mockedV1.setPlayMode.mockReset();
     mockedV1.setShutdownTimer.mockReset();
     mockedV1.addFavorite.mockReset();
     mockedV1.getDevices.mockReset();
+    mockedV1.getSystemStatus.mockReset();
     mockedV1.getPlayerState.mockReset();
+    mockedV1.libraryRefresh.mockReset();
     mockedV1.tts.mockReset();
     mockedV1.setVolume.mockReset();
     mockedV1.stop.mockReset();
 
     mockedApi.apiGet.mockImplementation(async (path: string) => {
-      if (path === "/getversion") {
-        return { version: "1.0.0" };
-      }
       if (path === "/api/auth/status") {
         return { token_valid: true, runtime_auth_ready: true, login_in_progress: false };
       }
@@ -103,22 +112,6 @@ describe("HomePage play button regression", () => {
           enable_pull_ask: false,
           device_list: [{ miotDID: "981257654", name: "XiaoAI" }],
         };
-      }
-      if (path === "/musiclist") {
-        return { 所有歌曲: ["Song A"] };
-      }
-      if (path.startsWith("/musicinfo?name=")) {
-        return {
-          ret: "OK",
-          name: "Song A",
-          url: "http://127.0.0.1:58090/static/media/song-a.mp3",
-        };
-      }
-      if (path === "/device_list") {
-        return { devices: [{ miotDID: "981257654", name: "XiaoAI" }] };
-      }
-      if (path.startsWith("/getvolume?did=")) {
-        return { volume: 45 };
       }
       return {};
     });
@@ -158,6 +151,25 @@ describe("HomePage play button regression", () => {
       data: { devices: [{ device_id: "981257654", name: "XiaoAI", model: "OH2P", online: true }] },
       request_id: "rid-dev",
     });
+    mockedV1.getSystemStatus.mockResolvedValue({
+      code: 0,
+      message: "ok",
+      data: { status: "ok", version: "1.0.0", devices_count: 1 },
+      request_id: "rid-status",
+    });
+    mockedV1.getLibraryPlaylists.mockResolvedValue({
+      code: 0,
+      message: "ok",
+      data: { playlists: { 所有歌曲: ["Song A"] } },
+      request_id: "rid-playlists",
+    });
+    mockedV1.getLibraryMusicInfo.mockResolvedValue({
+      code: 0,
+      message: "ok",
+      data: { name: "Song A", url: "http://127.0.0.1:58090/static/media/song-a.mp3", duration_seconds: 180 },
+      request_id: "rid-musicinfo",
+    });
+    mockedV1.libraryRefresh.mockResolvedValue({ code: 0, message: "ok", data: { status: "ok", refreshed: true }, request_id: "rid-refresh" });
     mockedV1.tts.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-tts" });
     mockedV1.setVolume.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-vol" });
     mockedV1.stop.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-stop" });
@@ -200,15 +212,14 @@ describe("HomePage play button regression", () => {
       await vi.advanceTimersByTimeAsync(3000);
     });
 
-    const infoCalls = mockedApi.apiGet.mock.calls.filter((args) => String(args[0]).startsWith("/musicinfo?name="));
-    expect(infoCalls).toHaveLength(1);
+    expect(mockedV1.getLibraryMusicInfo).toHaveBeenCalledWith("Song A");
 
     expect(mockedV1.play).toHaveBeenCalledTimes(1);
     expect(mockedV1.play).toHaveBeenCalledWith({
       device_id: "981257654",
-      query: "http://127.0.0.1:58090/static/media/song-a.mp3",
-      source_hint: "auto",
-      options: { list_name: "所有歌曲" },
+      query: "Song A",
+      source_hint: "local_library",
+      options: { title: "Song A", context_hint: { context_type: "playlist", context_name: "所有歌曲" } },
     });
 
     const announcer = container.querySelector("#sr-announcer");

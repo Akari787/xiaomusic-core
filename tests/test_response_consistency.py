@@ -29,6 +29,8 @@ def test_api_v1_routes_whitelist_only():
         ("POST", "/api/v1/library/favorites/add"),
         ("POST", "/api/v1/library/favorites/remove"),
         ("POST", "/api/v1/library/refresh"),
+        ("GET", "/api/v1/library/playlists"),
+        ("GET", "/api/v1/library/music-info"),
         ("GET", "/api/v1/devices"),
         ("GET", "/api/v1/system/status"),
         ("GET", "/api/v1/debug/auth_state"),

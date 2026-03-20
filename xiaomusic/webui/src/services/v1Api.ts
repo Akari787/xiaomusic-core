@@ -71,6 +71,16 @@ export interface DevicesData {
   devices: DeviceRow[];
 }
 
+export interface LibraryPlaylistsData {
+  playlists: Record<string, string[]>;
+}
+
+export interface LibraryMusicInfoData {
+  name?: string;
+  url?: string;
+  duration_seconds?: number;
+}
+
 export interface SystemStatusData {
   status?: string;
   version?: string;
@@ -263,6 +273,14 @@ export async function removeFavorite(deviceId: string, trackName: string): Promi
 
 export async function libraryRefresh(): Promise<ApiEnvelope<{ status?: string; refreshed?: boolean }>> {
   return await safePost<{ status?: string; refreshed?: boolean }>("/api/v1/library/refresh", {});
+}
+
+export async function getLibraryPlaylists(): Promise<ApiEnvelope<LibraryPlaylistsData>> {
+  return await safeGet<LibraryPlaylistsData>("/api/v1/library/playlists");
+}
+
+export async function getLibraryMusicInfo(name: string): Promise<ApiEnvelope<LibraryMusicInfoData>> {
+  return await safeGet<LibraryMusicInfoData>(`/api/v1/library/music-info?name=${encodeURIComponent(name)}`);
 }
 
 export async function getDevices(): Promise<ApiEnvelope<DevicesData>> {
