@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { apiGet, apiPost } from "../services/apiClient";
 import {
   addFavorite as v1AddFavorite,
   apiErrorInfo,
@@ -20,6 +19,21 @@ import {
   type PlayMode,
   type PlayerStateData,
 } from "../services/v1Api";
+import { fetchAuthStatus, logoutAuth as logoutAuthRequest, reloadAuthRuntime } from "../services/auth";
+import {
+  cleanTempDir as cleanTempDirRequest,
+  fetchMusicInfo,
+  fetchMusicList,
+  fetchPlaylistJson,
+  fetchQrcode,
+  fetchSettingsWithDevices,
+  fetchVersion,
+  refreshMusicLibrary,
+  refreshMusicTag as refreshMusicTagRequest,
+  saveSettingsPayload,
+  searchOnlineMusic,
+  updateSystemSetting,
+} from "../services/homeApi";
 
 void [v1RemoveFavorite];
 
@@ -427,6 +441,26 @@ function playbackSnapshotKey(did: string): string {
   return `xm_playback_snapshot_${did}`;
 }
 
+function volumeStorageKey(did: string): string {
+  return `xm_volume_${did}`;
+}
+
+function loadRememberedVolume(did: string): number {
+  if (!did) {
+    return 50;
+  }
+  const raw = Number(loadLocal(volumeStorageKey(did)));
+  return Number.isFinite(raw) && raw >= 0 && raw <= 100 ? raw : 50;
+}
+
+function saveRememberedVolume(did: string, volume: number): void {
+  if (!did) {
+    return;
+  }
+  const next = Math.max(0, Math.min(100, Math.floor(Number(volume) || 0)));
+  saveLocal(volumeStorageKey(did), String(next));
+}
+
 export function HomePage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [activeDid, setActiveDid] = useState<string>(() => loadLocal("xm_ui_active_did"));
@@ -668,12 +702,12 @@ export function HomePage() {
   }
 
   async function loadVersion() {
-    const out = (await apiGet<{ version?: string }>("/getversion")) as { version?: string };
+    const out = await fetchVersion();
     setVersion(out.version || "");
   }
 
   async function loadAuthStatus() {
-    const out = (await apiGet<AuthStatus>("/api/auth/status")) as AuthStatus;
+    const out = (await fetchAuthStatus()) as AuthStatus;
     setAuthStatus(out);
   }
 
@@ -695,9 +729,7 @@ export function HomePage() {
   }
 
   async function loadSettingData() {
-    const out = (await apiGet<Record<string, unknown> & { device_list?: Device[] }>(
-      "/getsetting?need_device_list=true",
-    )) as Record<string, unknown> & { device_list?: Device[] };
+    const out = (await fetchSettingsWithDevices<Record<string, unknown>>()) as Record<string, unknown> & { device_list?: Device[] };
     const dids = String(out.mi_did || "")
       .split(",")
       .map((x) => x.trim())
@@ -741,7 +773,7 @@ export function HomePage() {
           ...withPublicBaseCompat({ ...out }, target),
           mi_did: dids.join(",") || String(out.mi_did || ""),
         };
-        await apiPost("/savesetting", payload);
+        await saveSettingsPayload(payload);
       }
     }
   }
@@ -814,7 +846,7 @@ export function HomePage() {
   }
 
   async function loadPlaylists() {
-    const out = (await apiGet<Record<string, string[]>>("/musiclist")) as Record<string, string[]>;
+    const out = (await fetchMusicList<Record<string, string[]>>()) as Record<string, string[]>;
     setPlaylists(out);
     const names = Object.keys(out);
     if (names.length) {
@@ -1066,6 +1098,7 @@ export function HomePage() {
     localPlaybackDurationRef.current = 0;
     localPlaybackSongRef.current = "";
     const remembered = loadRememberedPlayingSong(activeDid);
+    setVolume(loadRememberedVolume(activeDid));
     setRememberedPlayingSong(remembered);
     rememberedPlayingSongRef.current = remembered;
     void loadStatus(activeDid);
@@ -1240,9 +1273,7 @@ export function HomePage() {
     setMusic(picked);
     setMessage(`正在切换到 ${picked}...`);
     try {
-      const info = (await apiGet<{ ret?: string; name?: string; url?: string; tags?: { duration?: number } }>(
-        `/musicinfo?name=${encodeURIComponent(picked)}&musictag=true`,
-      )) as { ret?: string; name?: string; url?: string; tags?: { duration?: number } };
+      const info = await fetchMusicInfo(picked);
       const infoDuration = Number(info.tags?.duration || 0);
       const playResp = await v1Play({
         device_id: deviceId,
@@ -1460,9 +1491,7 @@ export function HomePage() {
       setMessage("请输入搜索关键词");
       return;
     }
-    const out = (await apiGet<{ data?: OnlineSearchItem[]; success?: boolean; error?: string }>(
-      `/api/search/online?keyword=${encodeURIComponent(kw)}&plugin=all&page=1&limit=20`,
-    )) as {
+    const out = (await searchOnlineMusic(kw)) as {
       data?: OnlineSearchItem[];
       success?: boolean;
       error?: string;
@@ -1508,7 +1537,7 @@ export function HomePage() {
   }
 
   async function getQrcode() {
-    const out = (await apiGet<QrcodeResp>("/api/get_qrcode")) as QrcodeResp;
+    const out = (await fetchQrcode<QrcodeResp>()) as QrcodeResp;
     if (out.success === false) {
       setQrcodeStatus(out.message || out.error || "二维码获取失败");
       return;
@@ -1531,7 +1560,7 @@ export function HomePage() {
   }
 
   async function refreshAuthRuntime() {
-    const out = (await apiPost<Record<string, unknown>>("/api/auth/refresh", {})) as Record<string, unknown>;
+    const out = (await reloadAuthRuntime()) as Record<string, unknown>;
     if (out.runtime_auth_ready) {
       setQrcodeStatus("运行时刷新成功，正在更新设备列表");
     } else {
@@ -1543,7 +1572,7 @@ export function HomePage() {
   }
 
   async function logoutAuth() {
-    await apiPost("/api/auth/logout", {});
+    await logoutAuthRequest();
     setQrcodeUrl("");
     setQrcodeExpireAt(0);
     setQrcodeRemain(0);
@@ -1567,7 +1596,7 @@ export function HomePage() {
       ...next,
       mi_did: selectedSettingDids.join(","),
     };
-    const out = (await apiPost<unknown>("/savesetting", payload)) as unknown;
+    const out = (await saveSettingsPayload(payload)) as unknown;
     if (typeof out === "string" && out.includes("save success")) {
       setMessage(`已恢复自动地址：${autoDetectedBaseUrl}`);
     } else {
@@ -1588,7 +1617,7 @@ export function HomePage() {
       ...parsed,
       mi_did: selectedSettingDids.join(","),
     };
-    const out = (await apiPost<unknown>("/savesetting", payload)) as unknown;
+    const out = (await saveSettingsPayload(payload)) as unknown;
     if (typeof out === "string" && out.includes("save success")) {
       setMessage("配置已保存");
     } else {
@@ -1609,10 +1638,10 @@ export function HomePage() {
 
   async function togglePullAsk() {
     const next = !pullAskEnabled;
-    const out = (await apiPost<{ success?: boolean; message?: string }>(
-      "/api/system/modifiysetting",
-      { enable_pull_ask: next },
-    )) as { success?: boolean; message?: string };
+    const out = (await updateSystemSetting<{ success?: boolean; message?: string }>({ enable_pull_ask: next })) as {
+      success?: boolean;
+      message?: string;
+    };
     if (out.success) {
       setPullAskEnabled(next);
       updateSettingField("enable_pull_ask", next);
@@ -1623,9 +1652,10 @@ export function HomePage() {
   }
 
   async function fetchMusicListJson() {
-    const out = (await apiPost<{ ret?: string; content?: string }>("/api/file/fetch_playlist_json", {
-      url: fieldValue("music_list_url"),
-    })) as { ret?: string; content?: string };
+    const out = (await fetchPlaylistJson<{ ret?: string; content?: string }>(fieldValue("music_list_url"))) as {
+      ret?: string;
+      content?: string;
+    };
     if (out.ret === "OK") {
       updateSettingField("music_list_json", out.content || "");
       setMessage("歌单内容已获取");
@@ -1635,7 +1665,7 @@ export function HomePage() {
   }
 
   async function refreshMusicTag() {
-    const out = (await apiPost<{ ret?: string }>("/refreshmusictag", {})) as { ret?: string };
+    const out = (await refreshMusicTagRequest<{ ret?: string }>()) as { ret?: string };
     setMessage(out.ret || "已触发刷新");
   }
 
@@ -1645,7 +1675,7 @@ export function HomePage() {
   }
 
   async function cleanTempDir() {
-    const out = (await apiPost<{ ret?: string }>("/api/file/cleantempdir", {})) as { ret?: string };
+    const out = (await cleanTempDirRequest<{ ret?: string }>()) as { ret?: string };
     setMessage(out.ret || "临时目录清理已触发");
   }
 
@@ -1786,7 +1816,7 @@ export function HomePage() {
               <button
                 onClick={() =>
                   void (async () => {
-                    await apiPost("/api/music/refreshlist", {});
+                    await refreshMusicLibrary<unknown>();
                     await loadPlaylists();
                     setMessage("列表已刷新");
                   })()
@@ -1977,7 +2007,7 @@ export function HomePage() {
               tabIndex={0}
               onClick={() =>
                 void (async () => {
-                  await apiPost("/api/music/refreshlist", {});
+                  await refreshMusicLibrary<unknown>();
                   await loadPlaylists();
                   setMessage("列表已刷新");
                 })()
@@ -2248,6 +2278,7 @@ export function HomePage() {
               }
               const out = await v1SetVolume(activeDid, volume);
               if (isApiOk(out)) {
+                saveRememberedVolume(activeDid, volume);
                 setMessage("音量已设置");
               } else {
                 const err = apiErrorInfo(out);
@@ -2263,6 +2294,7 @@ export function HomePage() {
               }
               const out = await v1SetVolume(activeDid, volume);
               if (isApiOk(out)) {
+                saveRememberedVolume(activeDid, volume);
                 setMessage("音量已设置");
               } else {
                 const err = apiErrorInfo(out);
