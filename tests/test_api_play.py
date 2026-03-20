@@ -68,7 +68,7 @@ async def test_api_v1_play_success(monkeypatch, source_hint: str):
         (DeliveryPrepareError("prepare failed"), 30001),
         (TransportError("transport failed"), 40002),
         (DeviceNotFoundError("missing device"), 40004),
-        (InvalidRequestError("invalid payload"), 50001),
+        (InvalidRequestError("invalid payload"), 40001),
     ],
 )
 async def test_api_v1_play_error_mapping(monkeypatch, exc: Exception, expected_code: int):
@@ -82,3 +82,18 @@ async def test_api_v1_play_error_mapping(monkeypatch, exc: Exception, expected_c
     assert out["code"] == expected_code
     assert out["request_id"]
     assert out["message"]
+
+
+@pytest.mark.asyncio
+async def test_api_v1_play_unknown_error_has_structured_dispatch_fallback(monkeypatch):
+    class _Facade:
+        async def play(self, *, device_id, query, source_hint="auto", options=None, request_id=None):  # noqa: ANN001
+            _ = (device_id, query, source_hint, options, request_id)
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
+    out = await v1.api_v1_play(PlayRequest(device_id="did-1", query="http://a/b.mp3"))
+    assert out["code"] == 10000
+    assert out["message"] == "play operation failed"
+    assert out["data"]["error_code"] == "E_PLAY_OPERATION_FAILED"
+    assert out["data"]["stage"] == "dispatch"

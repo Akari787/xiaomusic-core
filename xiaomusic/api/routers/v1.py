@@ -101,7 +101,7 @@ def _map_api_exception(exc: Exception, request_id: str) -> dict[str, Any]:
         return _api_response(exc.code, exc.message, exc.data, str(exc.request_id or request_id))
     if isinstance(exc, InvalidRequestError):
         return _api_response(
-            50001,
+            40001,
             str(exc),
             {
                 "error_type": exc.__class__.__name__,
@@ -160,7 +160,7 @@ def _map_api_exception(exc: Exception, request_id: str) -> dict[str, Any]:
         {
             "error_type": exc.__class__.__name__,
             "error_code": "E_INTERNAL",
-            "stage": None,
+            "stage": "system",
         },
         request_id,
     )
@@ -185,6 +185,23 @@ def _map_structured_endpoint_exception(
             "stage": default_stage,
         },
         request_id,
+    )
+
+
+def _map_public_endpoint_exception(
+    exc: Exception,
+    request_id: str,
+    *,
+    default_error_code: str,
+    default_stage: str,
+    default_message: str,
+) -> dict[str, Any]:
+    return _map_structured_endpoint_exception(
+        exc,
+        request_id,
+        default_error_code=default_error_code,
+        default_stage=default_stage,
+        default_message=default_message,
     )
 
 
@@ -230,7 +247,13 @@ async def api_v1_play(data: PlayRequest):
             getattr(data, SOURCE_HINT),
             exc.__class__.__name__,
         )
-        return _map_api_exception(exc, request_id)
+        return _map_public_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_PLAY_OPERATION_FAILED",
+            default_stage="dispatch",
+            default_message="play operation failed",
+        )
 
 
 @router.post("/api/v1/resolve")
@@ -254,7 +277,13 @@ async def api_v1_resolve(data: ResolveRequest):
             request_id=request_id,
         )
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_public_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_RESOLVE_OPERATION_FAILED",
+            default_stage="resolve",
+            default_message="resolve operation failed",
+        )
 
 
 @router.post("/api/v1/control/stop")
@@ -264,7 +293,13 @@ async def api_v1_control_stop(data: ControlRequest):
         out = await _get_facade().stop(data.device_id, request_id=request_id)
         return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_public_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_STOP_OPERATION_FAILED",
+            default_stage="dispatch",
+            default_message="stop operation failed",
+        )
 
 
 @router.post("/api/v1/control/pause")
@@ -274,7 +309,13 @@ async def api_v1_control_pause(data: ControlRequest):
         out = await _get_facade().pause(data.device_id, request_id=request_id)
         return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_public_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_PAUSE_OPERATION_FAILED",
+            default_stage="dispatch",
+            default_message="pause operation failed",
+        )
 
 
 @router.post("/api/v1/control/resume")
@@ -284,7 +325,13 @@ async def api_v1_control_resume(data: ControlRequest):
         out = await _get_facade().resume(data.device_id, request_id=request_id)
         return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_public_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_RESUME_OPERATION_FAILED",
+            default_stage="dispatch",
+            default_message="resume operation failed",
+        )
 
 
 @router.post("/api/v1/control/tts")
@@ -294,7 +341,13 @@ async def api_v1_control_tts(data: TtsRequest):
         out = await _get_facade().tts(data.device_id, data.text, request_id=request_id)
         return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_public_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_TTS_OPERATION_FAILED",
+            default_stage="dispatch",
+            default_message="tts operation failed",
+        )
 
 
 @router.post("/api/v1/control/volume")
@@ -304,7 +357,13 @@ async def api_v1_control_volume(data: VolumeRequest):
         out = await _get_facade().set_volume(data.device_id, int(data.volume), request_id=request_id)
         return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_public_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_VOLUME_OPERATION_FAILED",
+            default_stage="dispatch",
+            default_message="volume operation failed",
+        )
 
 
 @router.post("/api/v1/control/probe")
@@ -314,7 +373,13 @@ async def api_v1_control_probe(data: ControlRequest):
         out = await _get_facade().probe(data.device_id, request_id=request_id)
         return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_public_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_PROBE_OPERATION_FAILED",
+            default_stage="dispatch",
+            default_message="probe operation failed",
+        )
 
 
 @router.get("/api/v1/devices")
@@ -464,7 +529,13 @@ async def api_v1_control_previous(data: ControlRequest):
         out = await _get_facade().previous(device_id=data.device_id, request_id=request_id)
         return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_public_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_PREVIOUS_OPERATION_FAILED",
+            default_stage="dispatch",
+            default_message="previous operation failed",
+        )
 
 
 @router.post("/api/v1/control/next")
@@ -474,7 +545,13 @@ async def api_v1_control_next(data: ControlRequest):
         out = await _get_facade().next(device_id=data.device_id, request_id=request_id)
         return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_public_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_NEXT_OPERATION_FAILED",
+            default_stage="dispatch",
+            default_message="next operation failed",
+        )
 
 
 @router.post("/api/v1/control/play-mode")
@@ -674,4 +751,10 @@ async def api_v1_player_state(device_id: str = Query(..., min_length=1), request
         }
         return _api_ok(data, request_id=rid)
     except Exception as exc:
-        return _map_api_exception(exc, rid)
+        return _map_public_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_PLAYER_STATE_FAILED",
+            default_stage="system",
+            default_message="player state query failed",
+        )

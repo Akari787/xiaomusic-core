@@ -222,3 +222,18 @@ async def test_api_v1_devices_and_system_status_internal_failure_are_structured(
     assert status_out["message"] == "system status query failed"
     assert status_out["data"]["error_code"] == "E_SYSTEM_STATUS_FAILED"
     assert status_out["data"]["stage"] == "system"
+
+
+@pytest.mark.asyncio
+async def test_api_v1_next_unknown_error_has_structured_dispatch_fallback(monkeypatch):
+    class _Facade:
+        async def next(self, device_id: str, request_id: str | None = None):
+            _ = (device_id, request_id)
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
+    out = await v1.api_v1_control_next(ControlRequest(device_id="did-1"))
+    assert out["code"] == 10000
+    assert out["message"] == "next operation failed"
+    assert out["data"]["error_code"] == "E_NEXT_OPERATION_FAILED"
+    assert out["data"]["stage"] == "dispatch"

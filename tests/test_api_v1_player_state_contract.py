@@ -91,3 +91,20 @@ def test_player_state_omits_non_contract_extended_fields(monkeypatch):
     assert "play_mode" not in body["data"]
     assert "context_type" not in body["data"]
     assert "queue_supported" not in body["data"]
+
+
+def test_player_state_unknown_error_has_non_null_stage(monkeypatch):
+    class _Facade:
+        async def player_state(self, device_id: str, request_id: str | None = None):
+            _ = (device_id, request_id)
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
+    client = _v1_client()
+    resp = client.get("/api/v1/player/state", params={"device_id": "did-1"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 10000
+    assert body["message"] == "player state query failed"
+    assert body["data"]["error_code"] == "E_PLAYER_STATE_FAILED"
+    assert body["data"]["stage"] == "system"
