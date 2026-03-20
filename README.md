@@ -59,12 +59,12 @@ docker compose -f docker-compose.hardened.yml up -d --build
 
 ## ✨ 主要改动
 
-### v1.0.7 重点更新
+### v1.0.8 重点更新
 
-- 认证恢复链正式收口为：`clear_short_session -> rebuild_short_session_from_persistent_auth -> runtime_rebind -> verify`。
-- 项目主线彻底统一到 `auth` 语义：主接口使用 `/api/auth/*`，配置使用 `auth_token_file`，WebUI 与文档使用统一认证命名。
-- 新增认证架构文档与恢复规范文档，便于维护者理解“为什么扫码一次后可以长期运行”。
-- 调整 CI / Pages / hardened compose，使 `main`、`.env` 与当前部署方式保持一致。
+- `/api/v1/play` 已成为唯一正式播放入口，旧 playlist 播放入口、旧 device wrapper 与 legacy facade 兼容层均已删除。
+- Public API / Internal API / Forbidden & Removed 三层接口边界已在文档、代码和 schema 暴露层同步落实。
+- WebUI 主流程继续收敛到 v1：播放、设备、设置、媒体库查询、在线搜索均已切到正式接口；Internal API 仅保留认证与少量工具辅助动作。
+- 播放页状态同步提速：常规轮询约 1s，操作后短时快轮询，时间轴刷新和切歌后的页面同步明显更快。
 
 ### 认证登录改造
 
@@ -119,7 +119,7 @@ curl "http://<HOST>:<PORT>/api/v1/system/status"
 
 - `stable`：稳定版（推荐）
 - `latest`：最新构建
-- `v1.0.7`：指定版本
+- `v1.0.8`：指定版本
 
 快速启动（示例）：
 
@@ -179,7 +179,7 @@ docker compose --profile test up -d
 ```yaml
 services:
   xiaomusic-core:
-    image: akari787/xiaomusic-core:v1.0.7
+    image: akari787/xiaomusic-core:v1.0.8
     container_name: xiaomusic-core
     restart: unless-stopped
     ports:
@@ -205,7 +205,7 @@ curl -fsS http://127.0.0.1:58090/getversion
 # 查看日志
 docker logs --tail 200 xiaomusic-core
 
-# 更新到新版本镜像（示例 v1.0.7）
+# 更新到新版本镜像（示例 v1.0.8）
 docker compose pull
 docker compose up -d --force-recreate
 ```
@@ -346,7 +346,7 @@ XIAOMUSIC_ENABLE_ANALYTICS=false
 
 ## 版本
 
-当前维护版本: `1.0.7`
+当前维护版本: `1.0.8`
 
 更新记录: [CHANGELOG.md](CHANGELOG.md)
 

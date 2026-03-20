@@ -1,3 +1,38 @@
+## v1.0.8 (2026-03-20)
+
+### API 边界与收口
+
+- 将 `/api/v1/play` 固化为唯一正式播放入口，删除 `/api/v1/playlist/play` 与 `/api/v1/playlist/play-index` 实现，Public / Internal / Forbidden 三层接口边界在文档与代码层同步落地。
+- 完成 Public API / Internal API schema 隐藏策略：Internal API 不再出现在公开 OpenAPI 面中，WebUI service 层同步拆分为 `v1Api.ts`、`homeApi.ts`、`auth.ts`。
+- 删除已被 v1 替代的旧 device wrapper 与 facade compatibility 层，旧播放入口、旧 wrapper、legacy facade 方法全部进入 Removed 清单。
+
+### WebUI 与交互体验
+
+- WebUI 主播放流程统一收敛到 `/api/v1/play`，歌单内点歌恢复为“统一播放入口 + playlist context”语义，不再退化为 direct_url 单曲播放。
+- 播放页状态同步提速：常规轮询收紧到约 1s，操作后进入短时快轮询，时间轴本地推进更顺滑，切歌后的状态回写明显更快。
+- WebUI 已脱离 `/device_list`、`/getvolume`、`/musiclist`、`/musicinfo`、`/getversion`、`/savesetting`、`/api/system/modifiysetting`、`/api/search/online` 等历史主路径依赖。
+
+### 新增正式 v1 能力
+
+- 新增媒体库上下文查询：`/api/v1/library/playlists`、`/api/v1/library/music-info`。
+- 新增系统设置接口：`/api/v1/system/settings`、`/api/v1/system/settings/item`。
+- 新增正式在线搜索接口：`/api/v1/search/online`。
+
+### 错误模型与契约一致性
+
+- 完成 Class B / C 以及剩余公共 v1 接口错误模型收口，`InvalidRequestError` 外部语义统一为请求级错误，Public whitelist 接口不再返回 `stage=null`。
+- `player/state` 返回收紧为最小正式字段集合，前后端围绕同一最小状态模型运行。
+
+### Internal API 收口
+
+- 删除 `/refreshmusictag`，保留 `/api/file/cleantempdir` 作为内部维护动作。
+- `/api/file/fetch_playlist_json` 被收紧为仅服务 WebUI 歌单 JSON 导入流程的 Internal API，增加 URL 与 JSON 有效性约束。
+
+### 测试与验收
+
+- 增加并更新接口边界、Removed 路由、设置接口、媒体库查询、搜索接口、playlist context 播放等 focused tests。
+- 测试服务器完成多轮后端与 WebUI 实机验收，覆盖 schema 暴露、播放主链路、自动切歌、设置页、搜索与 Internal API 最终状态。
+
 ## v1.0.7 (2026-03-15)
 
 ### 认证恢复链稳定化
