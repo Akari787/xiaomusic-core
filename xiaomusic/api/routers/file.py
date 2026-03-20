@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import json
 import os
 import shutil
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -139,15 +140,25 @@ async def downloadjson(data: UrlInfo, Verifcation=Depends(verification)):
 # Internal API - 仅供 WebUI/内部文件流程使用，不承诺兼容性。
 @router.post("/api/file/fetch_playlist_json")
 async def fetch_playlist_json(data: UrlInfo, Verifcation=Depends(verification)):
-    """通过后端拉取歌单 JSON 内容。"""
+    """仅供 WebUI 歌单 JSON 导入流程使用。"""
     url = str(data.url or "").strip()
     if not url:
         return api_response.ok({"content": ""}, contract="ret", ret="URL required")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return api_response.ok(
+            {"content": ""}, contract="ret", ret="URL must use http or https"
+        )
     log.info(data)
     content = ""
     try:
         content = await downloadfile(url, config)
+        json.loads(content)
         return api_response.ok({"content": content}, contract="ret")
+    except json.JSONDecodeError:
+        return api_response.ok(
+            {"content": content}, contract="ret", ret="Playlist JSON required"
+        )
     except Exception as e:
         log.exception(f"Execption {e}")
         detail = str(e).strip()

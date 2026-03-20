@@ -159,7 +159,7 @@ Internal API：
 - 管理 / 文件 / 工具 Internal API
   - `POST /api/file/fetch_playlist_json`
   - `POST /api/file/cleantempdir`
-  - 归类理由：这些接口服务于文件读取、目录清理、标签刷新等内部管理与工具动作，不属于对外稳定控制面
+  - 归类理由：这些接口服务于歌单 JSON 导入与目录清理等内部文件/工具动作，不属于对外稳定控制面
 
 Forbidden / Removed：
 

@@ -33,6 +33,45 @@ def test_fetch_playlist_json_requires_non_empty_url() -> None:
     assert resp.json()["ret"] == "URL required"
 
 
+def test_fetch_playlist_json_rejects_non_http_scheme() -> None:
+    client = _internal_client()
+    resp = client.post("/api/file/fetch_playlist_json", json={"url": "file:///tmp/test.json"})
+    assert resp.status_code == 200
+    assert resp.json()["ret"] == "URL must use http or https"
+
+
+def test_fetch_playlist_json_requires_json_payload(monkeypatch) -> None:
+    async def _fake_downloadfile(url, config):  # noqa: ANN001
+        _ = (url, config)
+        return "not-json"
+
+    monkeypatch.setattr(file, "downloadfile", _fake_downloadfile)
+    monkeypatch.setattr(file, "log", type("_Log", (), {"info": staticmethod(lambda *args, **kwargs: None)})())
+
+    client = _internal_client()
+    resp = client.post("/api/file/fetch_playlist_json", json={"url": "https://example.com/list.json"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ret"] == "Playlist JSON required"
+    assert body["content"] == "not-json"
+
+
+def test_fetch_playlist_json_success_for_valid_json(monkeypatch) -> None:
+    async def _fake_downloadfile(url, config):  # noqa: ANN001
+        _ = (url, config)
+        return '{"items":[1,2,3]}'
+
+    monkeypatch.setattr(file, "downloadfile", _fake_downloadfile)
+    monkeypatch.setattr(file, "log", type("_Log", (), {"info": staticmethod(lambda *args, **kwargs: None)})())
+
+    client = _internal_client()
+    resp = client.post("/api/file/fetch_playlist_json", json={"url": "https://example.com/list.json"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ret"] == "OK"
+    assert body["content"] == '{"items":[1,2,3]}'
+
+
 def test_cleantempdir_and_public_refresh_can_coexist(monkeypatch) -> None:
     called = {"clean": False, "refresh": False}
 
