@@ -9,8 +9,6 @@ import {
   isApiOk,
   next as v1Next,
   play as v1Play,
-  playPlaylist as v1PlayPlaylist,
-  playPlaylistByIndex as v1PlayPlaylistByIndex,
   previous as v1Previous,
   removeFavorite as v1RemoveFavorite,
   setPlayMode as v1SetPlayMode,
@@ -23,7 +21,7 @@ import {
   type PlayerStateData,
 } from "../services/v1Api";
 
-void [v1RemoveFavorite, v1PlayPlaylist, v1PlayPlaylistByIndex];
+void [v1RemoveFavorite];
 
 import { useTheme } from "../theme/ThemeProvider";
 import "../styles/home.css";
@@ -1253,7 +1251,18 @@ export function HomePage() {
         `/musicinfo?name=${encodeURIComponent(picked)}&musictag=true`,
       )) as { ret?: string; name?: string; url?: string; tags?: { duration?: number } };
       const infoDuration = Number(info.tags?.duration || 0);
-      const playResp = await v1PlayPlaylist(deviceId, playlist, picked);
+      const playResp = await v1Play({
+        device_id: deviceId,
+        query: picked,
+        source_hint: "local_library",
+        options: {
+          title: picked,
+          context_hint: {
+            context_type: "playlist",
+            context_name: playlist,
+          },
+        },
+      });
 
       if (isApiOk(playResp)) {
         stopSuppressUntilRef.current = 0;
@@ -1316,17 +1325,7 @@ export function HomePage() {
               duration: infoDuration > 0 ? Math.floor(infoDuration) : Math.max(0, Math.floor(Number(synced.duration || 0))),
             }),
           );
-          const playlistName = String(playResp.data?.playlist_name || playlist || "").trim();
-          const trackName = String(playResp.data?.music_name || picked || "").trim();
-          if (trackName && playlistName) {
-            setMessage(`已请求播放歌单《${playlistName}》中的《${trackName}》`);
-          } else if (trackName) {
-            setMessage(`已请求播放《${trackName}》`);
-          } else if (playlistName) {
-            setMessage(`已开始播放歌单《${playlistName}》`);
-          } else {
-            setMessage("播放歌单成功");
-          }
+          setMessage(`已发送播放《${picked}》`);
         } else {
           setMessage(`播放指令已发送，正在等待设备切换到 ${picked}`);
           await loadStatus(deviceId);

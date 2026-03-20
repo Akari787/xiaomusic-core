@@ -272,7 +272,7 @@ export async function removeFavorite(deviceId: string, trackName: string): Promi
   });
 }
 
-export async function playPlaylist(
+export async function legacyPlayPlaylist(
   deviceId: string,
   playlistName: string,
   musicName?: string,
@@ -284,7 +284,7 @@ export async function playPlaylist(
   });
 }
 
-export async function playPlaylistByIndex(
+export async function legacyPlayPlaylistByIndex(
   deviceId: string,
   playlistName: string,
   index: number,
