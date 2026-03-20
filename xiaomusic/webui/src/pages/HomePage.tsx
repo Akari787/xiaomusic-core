@@ -768,10 +768,6 @@ export function HomePage() {
     const rows: Device[] = isApiOk(v1Out)
       ? (v1Out.data.devices || []).map((d) => ({ miotDID: d.device_id, name: d.name || d.model || d.device_id }))
       : [];
-    if (!rows.length) {
-      const out = (await apiGet<{ devices?: Device[] }>("/device_list")) as { devices?: Device[] };
-      rows.push(...(out.devices || []));
-    }
     setDevices(rows);
     if (!rows.length) {
       setMessage("未获取到设备，请在设置页完成认证登录。");
@@ -879,10 +875,10 @@ export function HomePage() {
     }
     const requestSeq = statusRequestSeqRef.current + 1;
     statusRequestSeqRef.current = requestSeq;
-    const [stateResp, volumeResp] = await Promise.allSettled([
-      getPlayerState(did),
-      apiGet<{ volume?: number }>(`/getvolume?did=${encodeURIComponent(did)}`),
-    ]);
+    const stateResp = await Promise.resolve(getPlayerState(did)).then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (reason) => ({ status: "rejected" as const, reason }),
+    );
 
     const mergePlayingViewState = (prev: PlayingInfo, merged: PlayingInfo, fallbackSong: string): PlayingInfo => {
       const mergedOffsetRaw = Number(merged.offset);
@@ -1042,19 +1038,7 @@ export function HomePage() {
         } else {
           return merged;
         }
-        if (volumeResp.status === "fulfilled" && isLatestStatusRequest(requestSeq, did)) {
-          const vol = volumeResp.value as { volume?: number };
-          if (typeof vol.volume === "number") {
-            setVolume(vol.volume);
-          }
-        }
         return merged;
-      }
-    }
-    if (volumeResp.status === "fulfilled" && isLatestStatusRequest(requestSeq, did)) {
-      const vol = volumeResp.value as { volume?: number };
-      if (typeof vol.volume === "number") {
-        setVolume(vol.volume);
       }
     }
     return null;
