@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from xiaomusic.api.models import PlayRequest, VolumeRequest
 from xiaomusic.api.routers import v1
-from xiaomusic.core.errors import InvalidRequestError, SourceResolveError, TransportError
+from xiaomusic.core.errors import DeviceNotFoundError, InvalidRequestError, SourceResolveError, TransportError
 
 
 @pytest.mark.asyncio
@@ -28,6 +28,20 @@ async def test_v1_errors_mapped_to_api_response(monkeypatch, exc: Exception, exp
     assert out["code"] == expected_code
     assert set(out.keys()) == {"code", "message", "data", "request_id"}
     assert out["request_id"]
+
+
+@pytest.mark.asyncio
+async def test_v1_invalid_request_and_device_not_found_are_structured():
+    invalid = v1._map_api_exception(InvalidRequestError("invalid request"), "rid-1")
+    missing = v1._map_api_exception(DeviceNotFoundError("device not found"), "rid-2")
+
+    assert invalid["code"] == 50001
+    assert invalid["data"]["error_code"] == "E_INVALID_REQUEST"
+    assert invalid["data"]["stage"] == "request"
+
+    assert missing["code"] == 40004
+    assert missing["data"]["error_code"] == "E_DEVICE_NOT_FOUND"
+    assert missing["data"]["stage"] == "request"
 
 
 def test_v1_volume_request_rejects_out_of_range_value():

@@ -72,7 +72,7 @@ def _api_ok(data: dict[str, Any], request_id: str) -> dict[str, Any]:
 
 
 def _bad_request(request_id: str, message: str, *, field: str = "", allowed: list[str] | None = None) -> ApiError:
-    data: dict[str, Any] = {"error_code": "E_INVALID_REQUEST", "stage": "validate"}
+    data: dict[str, Any] = {"error_code": "E_INVALID_REQUEST", "stage": "request"}
     if field:
         data["field"] = field
     if allowed:
@@ -86,7 +86,7 @@ def _require_device(device_id: str, request_id: str):
         raise ApiError(
             code=40004,
             message="device not found",
-            data={"error_code": "E_XIAOMI_PLAY_FAILED", "stage": "xiaomi"},
+            data={"error_code": "E_DEVICE_NOT_FOUND", "stage": "request"},
             request_id=request_id,
         )
     return xm
@@ -100,7 +100,16 @@ def _map_api_exception(exc: Exception, request_id: str) -> dict[str, Any]:
     if isinstance(exc, ApiError):
         return _api_response(exc.code, exc.message, exc.data, str(exc.request_id or request_id))
     if isinstance(exc, InvalidRequestError):
-        return _api_response(50001, str(exc), {}, request_id)
+        return _api_response(
+            50001,
+            str(exc),
+            {
+                "error_type": exc.__class__.__name__,
+                "error_code": "E_INVALID_REQUEST",
+                "stage": "request",
+            },
+            request_id,
+        )
     if isinstance(exc, SourceResolveError):
         return _api_response(
             20002,
@@ -140,8 +149,8 @@ def _map_api_exception(exc: Exception, request_id: str) -> dict[str, Any]:
             "device not found",
             {
                 "error_type": exc.__class__.__name__,
-                "error_code": "E_XIAOMI_PLAY_FAILED",
-                "stage": "xiaomi",
+                "error_code": "E_DEVICE_NOT_FOUND",
+                "stage": "request",
             },
             request_id,
         )
@@ -152,6 +161,28 @@ def _map_api_exception(exc: Exception, request_id: str) -> dict[str, Any]:
             "error_type": exc.__class__.__name__,
             "error_code": "E_INTERNAL",
             "stage": None,
+        },
+        request_id,
+    )
+
+
+def _map_structured_endpoint_exception(
+    exc: Exception,
+    request_id: str,
+    *,
+    default_error_code: str,
+    default_stage: str,
+    default_message: str,
+) -> dict[str, Any]:
+    if isinstance(exc, (ApiError, InvalidRequestError, SourceResolveError, DeliveryPrepareError, TransportError, DeviceNotFoundError)):
+        return _map_api_exception(exc, request_id)
+    return _api_response(
+        10000,
+        default_message,
+        {
+            "error_type": exc.__class__.__name__,
+            "error_code": default_error_code,
+            "stage": default_stage,
         },
         request_id,
     )
@@ -294,7 +325,13 @@ async def api_v1_devices():
         rows = [_normalize_device(item) for item in (devices or []) if isinstance(item, dict)]
         return _api_ok({"devices": rows}, request_id=request_id)
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_structured_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_DEVICES_QUERY_FAILED",
+            default_stage="system",
+            default_message="devices query failed",
+        )
 
 
 @router.get("/api/v1/system/status")
@@ -311,7 +348,13 @@ async def api_v1_system_status():
             request_id=request_id,
         )
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_structured_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_SYSTEM_STATUS_FAILED",
+            default_stage="system",
+            default_message="system status query failed",
+        )
 
 
 # diagnostic endpoint - not in v1 whitelist, exclude from public schema
@@ -451,7 +494,13 @@ async def api_v1_control_play_mode(data: PlayModeRequest):
         await handler(did=data.device_id, dotts=False, refresh_playlist=False)
         return _api_ok({"status": "ok", DEVICE_ID: data.device_id, "play_mode": play_mode}, request_id=request_id)
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_structured_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_PLAY_MODE_OPERATION_FAILED",
+            default_stage="xiaomi",
+            default_message="play_mode operation failed",
+        )
 
 
 @router.post("/api/v1/control/shutdown-timer")
@@ -465,7 +514,13 @@ async def api_v1_control_shutdown_timer(data: ShutdownTimerRequest):
             request_id=request_id,
         )
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_structured_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_SHUTDOWN_TIMER_OPERATION_FAILED",
+            default_stage="xiaomi",
+            default_message="shutdown timer operation failed",
+        )
 
 
 @router.post("/api/v1/library/favorites/add")
@@ -479,7 +534,13 @@ async def api_v1_library_favorites_add(data: FavoritesRequest):
             request_id=request_id,
         )
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_structured_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_FAVORITES_ADD_FAILED",
+            default_stage="library",
+            default_message="favorites add failed",
+        )
 
 
 @router.post("/api/v1/library/favorites/remove")
@@ -493,7 +554,13 @@ async def api_v1_library_favorites_remove(data: FavoritesRequest):
             request_id=request_id,
         )
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_structured_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_FAVORITES_REMOVE_FAILED",
+            default_stage="library",
+            default_message="favorites remove failed",
+        )
 
 
 @router.post("/api/v1/playlist/play")
@@ -514,7 +581,13 @@ async def api_v1_playlist_play(data: PlaylistPlayRequest):
             request_id=request_id,
         )
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_structured_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_PLAYLIST_PLAY_FAILED",
+            default_stage="library",
+            default_message="playlist play failed",
+        )
 
 
 @router.post("/api/v1/playlist/play-index")
@@ -539,7 +612,13 @@ async def api_v1_playlist_play_index(data: PlaylistPlayIndexRequest):
             request_id=request_id,
         )
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_structured_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_PLAYLIST_INDEX_FAILED",
+            default_stage="library",
+            default_message="playlist play-index failed",
+        )
 
 
 @router.post("/api/v1/library/refresh")
@@ -550,7 +629,13 @@ async def api_v1_library_refresh(data: LibraryRefreshRequest):
         await xm.gen_music_list()
         return _api_ok({"status": "ok", "refreshed": True}, request_id=request_id)
     except Exception as exc:
-        return _map_api_exception(exc, request_id)
+        return _map_structured_endpoint_exception(
+            exc,
+            request_id,
+            default_error_code="E_LIBRARY_REFRESH_FAILED",
+            default_stage="library",
+            default_message="library refresh failed",
+        )
 
 
 # diagnostic endpoint - not in v1 whitelist, exclude from public schema

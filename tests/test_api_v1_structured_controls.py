@@ -113,6 +113,8 @@ async def test_api_v1_play_mode_rejects_invalid_value(monkeypatch):
     assert out["code"] == 40001
     assert out["message"] == "invalid play_mode"
     assert out["data"]["field"] == "play_mode"
+    assert out["data"]["error_code"] == "E_INVALID_REQUEST"
+    assert out["data"]["stage"] == "request"
 
 
 @pytest.mark.asyncio
@@ -128,3 +130,95 @@ async def test_api_v1_structured_controls_reject_missing_device(monkeypatch):
     out = await v1.api_v1_control_next(ControlRequest(device_id="missing"))
     assert out["code"] == 40004
     assert out["message"] == "device not found"
+    assert out["data"]["error_code"] == "E_DEVICE_NOT_FOUND"
+    assert out["data"]["stage"] == "request"
+
+
+@pytest.mark.asyncio
+async def test_api_v1_playlist_play_rejects_missing_playlist_name(monkeypatch):
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return True
+
+    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    out = await v1.api_v1_playlist_play(
+        PlaylistPlayRequest(device_id="did-1", playlist_name="", music_name="song-a")
+    )
+    assert out["code"] == 40001
+    assert out["message"] == "playlist_name is required"
+    assert out["data"]["field"] == "playlist_name"
+    assert out["data"]["error_code"] == "E_INVALID_REQUEST"
+    assert out["data"]["stage"] == "request"
+
+
+@pytest.mark.asyncio
+async def test_api_v1_playlist_play_rejects_missing_device_with_device_error(monkeypatch):
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return False
+
+    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    out = await v1.api_v1_playlist_play(
+        PlaylistPlayRequest(device_id="missing", playlist_name="收藏", music_name="song-a")
+    )
+    assert out["code"] == 40004
+    assert out["message"] == "device not found"
+    assert out["data"]["error_code"] == "E_DEVICE_NOT_FOUND"
+    assert out["data"]["stage"] == "request"
+
+
+@pytest.mark.asyncio
+async def test_api_v1_favorites_add_internal_failure_is_structured(monkeypatch):
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return True
+
+        async def add_to_favorites(self, **kwargs):
+            _ = kwargs
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    out = await v1.api_v1_library_favorites_add(FavoritesRequest(device_id="did-1", track_name="song-a"))
+    assert out["code"] == 10000
+    assert out["message"] == "favorites add failed"
+    assert out["data"]["error_code"] == "E_FAVORITES_ADD_FAILED"
+    assert out["data"]["stage"] == "library"
+
+
+@pytest.mark.asyncio
+async def test_api_v1_library_refresh_internal_failure_is_structured(monkeypatch):
+    class _XM:
+        async def gen_music_list(self, **kwargs):
+            _ = kwargs
+            raise RuntimeError("refresh failed")
+
+    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    out = await v1.api_v1_library_refresh(LibraryRefreshRequest())
+    assert out["code"] == 10000
+    assert out["message"] == "library refresh failed"
+    assert out["data"]["error_code"] == "E_LIBRARY_REFRESH_FAILED"
+    assert out["data"]["stage"] == "library"
+
+
+@pytest.mark.asyncio
+async def test_api_v1_devices_and_system_status_internal_failure_are_structured(monkeypatch):
+    class _XM:
+        async def getalldevices(self):
+            raise RuntimeError("query failed")
+
+    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    devices_out = await v1.api_v1_devices()
+    status_out = await v1.api_v1_system_status()
+
+    assert devices_out["code"] == 10000
+    assert devices_out["message"] == "devices query failed"
+    assert devices_out["data"]["error_code"] == "E_DEVICES_QUERY_FAILED"
+    assert devices_out["data"]["stage"] == "system"
+
+    assert status_out["code"] == 10000
+    assert status_out["message"] == "system status query failed"
+    assert status_out["data"]["error_code"] == "E_SYSTEM_STATUS_FAILED"
+    assert status_out["data"]["stage"] == "system"
