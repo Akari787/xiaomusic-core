@@ -1,9 +1,5 @@
 import { apiGet, apiPost } from "./apiClient";
 
-export async function fetchVersion(): Promise<{ version?: string }> {
-  return (await apiGet<{ version?: string }>("/getversion")) as { version?: string };
-}
-
 export async function fetchSettingsWithDevices<T extends Record<string, unknown>>(): Promise<T & { device_list?: unknown[] }> {
   return (await apiGet<T & { device_list?: unknown[] }>("/getsetting?need_device_list=true")) as T & { device_list?: unknown[] };
 }
@@ -46,8 +42,4 @@ export async function refreshMusicTag<T>(): Promise<T> {
 
 export async function cleanTempDir<T>(): Promise<T> {
   return (await apiPost<T>("/api/file/cleantempdir", {})) as T;
-}
-
-export async function refreshMusicLibrary<T>(): Promise<T> {
-  return (await apiPost<T>("/api/music/refreshlist", {})) as T;
 }

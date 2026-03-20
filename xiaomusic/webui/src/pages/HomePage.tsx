@@ -4,12 +4,14 @@ import {
   addFavorite as v1AddFavorite,
   apiErrorInfo,
   getDevices as v1GetDevices,
+  getSystemStatus,
   getPlayerState,
   isApiOk,
   next as v1Next,
   play as v1Play,
   previous as v1Previous,
   removeFavorite as v1RemoveFavorite,
+  libraryRefresh as v1LibraryRefresh,
   setPlayMode as v1SetPlayMode,
   setShutdownTimer as v1SetShutdownTimer,
   setVolume as v1SetVolume,
@@ -27,8 +29,6 @@ import {
   fetchPlaylistJson,
   fetchQrcode,
   fetchSettingsWithDevices,
-  fetchVersion,
-  refreshMusicLibrary,
   refreshMusicTag as refreshMusicTagRequest,
   saveSettingsPayload,
   searchOnlineMusic,
@@ -702,8 +702,12 @@ export function HomePage() {
   }
 
   async function loadVersion() {
-    const out = await fetchVersion();
-    setVersion(out.version || "");
+    const out = await getSystemStatus();
+    if (isApiOk(out)) {
+      setVersion(String(out.data.version || ""));
+      return;
+    }
+    setVersion("");
   }
 
   async function loadAuthStatus() {
@@ -1816,7 +1820,7 @@ export function HomePage() {
               <button
                 onClick={() =>
                   void (async () => {
-                    await refreshMusicLibrary<unknown>();
+                    await v1LibraryRefresh();
                     await loadPlaylists();
                     setMessage("列表已刷新");
                   })()
@@ -2007,7 +2011,7 @@ export function HomePage() {
               tabIndex={0}
               onClick={() =>
                 void (async () => {
-                  await refreshMusicLibrary<unknown>();
+                  await v1LibraryRefresh();
                   await loadPlaylists();
                   setMessage("列表已刷新");
                 })()

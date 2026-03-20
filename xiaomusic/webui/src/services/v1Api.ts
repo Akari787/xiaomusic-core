@@ -261,6 +261,10 @@ export async function removeFavorite(deviceId: string, trackName: string): Promi
   });
 }
 
+export async function libraryRefresh(): Promise<ApiEnvelope<{ status?: string; refreshed?: boolean }>> {
+  return await safePost<{ status?: string; refreshed?: boolean }>("/api/v1/library/refresh", {});
+}
+
 export async function getDevices(): Promise<ApiEnvelope<DevicesData>> {
   return await safeGet<DevicesData>("/api/v1/devices");
 }
