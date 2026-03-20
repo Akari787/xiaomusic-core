@@ -212,15 +212,15 @@ Forbidden / Removed：
 
 ## 4. 通用协议要求
 
-### 3.1 命名空间
+### 4.1 命名空间
 
 正式 v1 接口必须以 `/api/v1` 为前缀。
 
-### 3.2 JSON 协议
+### 4.2 JSON 协议
 
 除查询参数外，正式接口请求体与响应体均使用 JSON。
 
-### 3.3 统一 Envelope
+### 4.3 统一 Envelope
 
 所有 v1 白名单接口的响应均必须使用统一 envelope：
 
@@ -247,7 +247,7 @@ Forbidden / Removed：
 - `request_id` 是 envelope 顶层字段，所有白名单接口必须返回
 - 顶层不得用 `ret / success / status` 替代 `code/message`
 
-### 3.4 通用请求约束
+### 4.4 通用请求约束
 
 凡是对具体设备生效的接口，请求中必须包含：
 
@@ -260,7 +260,7 @@ Forbidden / Removed：
 - `device_id: string`
 - `device_id` 必须是非空字符串
 
-### 3.5 中文命令字符串禁入
+### 4.5 中文命令字符串禁入
 
 以下输入形式不得进入 v1 正式接口：
 
