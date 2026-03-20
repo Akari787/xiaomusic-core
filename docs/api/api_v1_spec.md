@@ -1,57 +1,101 @@
 # XiaoMusic Runtime API v1 规范
 
-版本：v1.1
-状态：本版本目标契约
-最后更新：2026-03-15
+版本：v1.2
+状态：正式契约
+最后更新：2026-03-20
 适用范围：XiaoMusic Runtime HTTP API（WebUI、Home Assistant 与第三方调用）
 
 ---
 
-## 1. 设计目标
+## 1. 总则与契约优先级
 
-本版本 API 收口目标如下：
+### 1.1 唯一权威来源
 
-1. **彻底替代 `/cmd` 作为正式控制入口**
-   - 正式 API 不再接受中文命令字符串。
-   - `match_cmd()` 不再作为 HTTP v1 的业务分发器。
+本文档是 XiaoMusic Runtime v1 API 的唯一权威契约来源。
 
-2. **统一 WebUI 与 HA 的调用模型**
-   - WebUI 当前使用的历史 `/cmd` 能力，必须提供等价的结构化 v1 接口。
-   - 面向 HA 的歌单播放类能力，必须直接以结构化 API 暴露，而不是依赖自然语言命令。
+本文档定义并约束以下内容：
 
-3. **统一请求/响应协议**
-   - `/api/v1/*` 的请求体与响应体统一为 JSON。
-   - 响应统一使用 envelope：`code/message/data/request_id`。
+- 对外 HTTP 接口行为
+- 请求字段与查询参数
+- 成功响应结构
+- 错误响应结构
+- v1 白名单接口的内部归属路径
 
-4. **控制面、资源面、状态面分离**
-   - 控制类动作使用 `POST /api/v1/control/*`。
-   - 播放列表与收藏等资源能力使用 `POST /api/v1/playlist/*`、`/api/v1/library/*`。
-   - 状态查询使用 `GET /api/v1/*`。
+### 1.2 冲突裁决规则
+
+当以下内容与本文档冲突时，一律以本文档为准：
+
+- 当前实现行为
+- 历史文档
+- 前端假设
+- 手工验收口径
+- 临时调试结论
+
+后续所有代码修复、前端修复、测试修复与验收结论，均以本文档为基准。
+
+### 1.3 显式列出原则
+
+只有本文档中显式列出的行为，才属于 v1 正式承诺。
+
+下列内容若未在本文档中被明确定义，则不属于 v1 契约：
+
+- 额外顶层字段
+- 未声明的 `data` 字段
+- 未声明的错误阶段值
+- 未声明的内部归属路径
+- 未声明的字段同构关系
+
+### 1.4 规范要求与实现现状
+
+本文档中的“必须 / 不得 / 应 / 可以”均为规范要求。
+
+若当前实现与规范要求不一致，应判定为“实现不符合规范”，而不是修改规范去描述偏差实现。
 
 ---
 
-## 2. 设计原则
+## 2. 设计目标与范围
 
-### 2.1 单一播放入口
+### 2.1 v1 的定位
 
-所有“播放某个具体媒体目标”的请求必须通过：
+v1 API 是 XiaoMusic Runtime 对外稳定控制面的正式契约，面向：
 
-- `POST /api/v1/play`
+- WebUI
+- Home Assistant
+- 第三方自动化调用方
 
-说明：
+### 2.2 v1 的职责边界
 
-- 单曲点播、直链播放、站点媒体播放、Jellyfin 解析结果播放等，统一归入 `/api/v1/play`。
-- “播放某个歌单”与“播放歌单第 N 首”属于**歌单控制语义**，不属于 `/api/v1/play` 的职责范围。
+v1 API 负责暴露以下正式能力：
 
-### 2.2 `/cmd` 不再属于正式契约
+- 媒体播放与解析
+- 设备控制动作
+- 歌单与收藏控制
+- 设备与系统状态查询
 
-- `/cmd` 不属于 Runtime API v1 正式白名单。
-- `/cmd`、中文命令字符串、`match_cmd()`、`exec#...` 均不得作为新功能实现依据。
-- 若迁移期仍保留 `/cmd`，它仅可作为兼容层存在，不得承载新能力。
+### 2.3 非 v1 范围
 
-### 2.3 统一 JSON Envelope
+以下内容不属于 v1 正式契约：
 
-正式接口统一响应格式：
+- 中文命令字符串
+- 依赖自然语言表达的控制入口
+- 未列入白名单的 `/api/v1/*` 路由
+- 未通过统一 envelope 暴露的 HTTP 返回形式
+
+---
+
+## 3. 通用协议要求
+
+### 3.1 命名空间
+
+正式 v1 接口必须以 `/api/v1` 为前缀。
+
+### 3.2 JSON 协议
+
+除查询参数外，正式接口请求体与响应体均使用 JSON。
+
+### 3.3 统一 Envelope
+
+所有 v1 白名单接口的响应均必须使用统一 envelope：
 
 ```json
 {
@@ -62,40 +106,56 @@
 }
 ```
 
-约束：
+字段约束：
 
-- `code = 0` 表示成功。
-- `code != 0` 表示失败。
-- v1 不使用历史顶层字段（如 `ret`、`success`、`status`）作为主语义。
-- 业务结果放入 `data`。
+- `code: integer`
+- `message: string`
+- `data: object`
+- `request_id: string`
 
-### 2.4 Runtime 负责业务判断
+约束说明：
 
-- 来源识别、插件选择、传输路径、状态聚合在 Runtime 内完成。
-- WebUI/HA 只提交结构化参数，不做中文命令拼装，不做设备逻辑推断。
+- `code = 0` 表示成功
+- `code != 0` 表示失败
+- `request_id` 是 envelope 顶层字段，所有白名单接口必须返回
+- 顶层不得用 `ret / success / status` 替代 `code/message`
 
----
+### 3.4 通用请求约束
 
-## 3. 命名空间
+凡是对具体设备生效的接口，请求中必须包含：
 
-正式接口命名空间：
+```json
+{ "device_id": "<device_id>" }
+```
 
-- `/api/v1`
+字段约束：
 
-正式接口必须以 `/api/v1` 开头。
+- `device_id: string`
+- `device_id` 必须是非空字符串
+
+### 3.5 中文命令字符串禁入
+
+以下输入形式不得进入 v1 正式接口：
+
+- `上一首`
+- `下一首`
+- `30分钟后关机`
+- `播放歌单日语`
+- `播放列表第三个日语`
+- 任意 `cmd` 文本
 
 ---
 
 ## 4. 正式白名单接口
 
-本版本正式白名单接口共 **20 个**：
+本版本正式白名单接口共 20 个：
 
 ### 4.1 播放与解析
 
 1. `POST /api/v1/play`
 2. `POST /api/v1/resolve`
 
-### 4.2 基础控制
+### 4.2 控制
 
 3. `POST /api/v1/control/stop`
 4. `POST /api/v1/control/pause`
@@ -108,7 +168,7 @@
 11. `POST /api/v1/control/play-mode`
 12. `POST /api/v1/control/shutdown-timer`
 
-### 4.3 歌单与收藏
+### 4.3 歌单与音乐库
 
 13. `POST /api/v1/playlist/play`
 14. `POST /api/v1/playlist/play-index`
@@ -116,53 +176,318 @@
 16. `POST /api/v1/library/favorites/remove`
 17. `POST /api/v1/library/refresh`
 
-### 4.4 查询接口
+### 4.4 查询
 
 18. `GET /api/v1/devices`
 19. `GET /api/v1/system/status`
 20. `GET /api/v1/player/state`
 
-> 注：本规范以 20 项为目标契约；若实现阶段选择暂缓 `POST /api/v1/resolve` 的正式收口，需要在实现文档中单独声明，不得影响其他结构化控制能力的落地。
+---
+
+## 5. 接口分级与归属路径
+
+### 5.1 分级定义
+
+v1 白名单接口按契约分为 Class A / B / C 三类。
+
+该分级不是文档标签，而是正式约束；每个接口的成功响应契约、错误契约与内部归属路径均由分级决定。
+
+### 5.2 Class A：设备动作型接口
+
+判定标准：
+
+- 直接涉及设备侧动作执行
+- 存在 transport 语义
+- 成功响应必须可观测 `transport`
+- 必须进入统一调度/分发链路
+
+Class A 接口：
+
+- `POST /api/v1/play`
+- `POST /api/v1/control/stop`
+- `POST /api/v1/control/previous`
+- `POST /api/v1/control/next`
+- `POST /api/v1/control/pause`
+- `POST /api/v1/control/resume`
+- `POST /api/v1/control/tts`
+- `POST /api/v1/control/volume`
+- `POST /api/v1/control/probe`
+
+契约要求的内部归属：
+
+- 必须进入 Runtime 的统一调度/分发链路
+- 必须以 transport 作为设备动作观测结果的一部分
+
+### 5.3 Class B：本地状态 / 歌单 / 收藏 / 控制型接口
+
+判定标准：
+
+- 不以 transport 可观测性为契约核心
+- 允许保留在 router / runtime 侧实现
+- 必须遵守统一 envelope 与统一错误模型
+- 不得伪装成 Class A 的返回结构
+
+Class B 接口：
+
+- `POST /api/v1/control/play-mode`
+- `POST /api/v1/control/shutdown-timer`
+- `POST /api/v1/playlist/play`
+- `POST /api/v1/playlist/play-index`
+- `POST /api/v1/library/favorites/add`
+- `POST /api/v1/library/favorites/remove`
+- `POST /api/v1/library/refresh`
+
+契约要求的内部归属：
+
+- 可以由 router / runtime 本地控制路径承载
+- 不要求暴露 transport 作为成功契约字段
+- 仍必须输出结构化成功结果与结构化错误结果
+
+### 5.4 Class C：查询型接口
+
+判定标准：
+
+- 只读查询或状态聚合
+- 不要求 transport
+- 必须有统一 envelope 与可判别错误语义
+
+Class C 接口：
+
+- `GET /api/v1/devices`
+- `GET /api/v1/system/status`
+- `GET /api/v1/player/state`
+- `POST /api/v1/resolve`
+
+契约要求的内部归属：
+
+- 必须以只读查询 / 聚合路径提供结果
+- 不得将 transport 作为该类接口的成功契约要求
 
 ---
 
-## 5. 请求通用约束
+## 6. 成功响应契约矩阵
 
-### 5.1 Device ID
+### 6.1 通用成功 Envelope
 
-凡是对具体设备生效的控制类接口，请求体必须包含：
+所有成功响应必须满足：
+
+- 顶层 `code = 0`
+- 顶层 `message` 必须存在
+- 顶层 `data` 必须存在
+- 顶层 `request_id` 必须存在
+
+### 6.2 Class A 成功响应
+
+Class A 成功响应必须包含：
+
+- 顶层 `code`
+- 顶层 `message`
+- 顶层 `request_id`
+- `data.status`
+- `data.transport`
+- `data.device_id`（对设备动作型接口适用时必须存在；本类接口均适用）
+
+Class A 成功响应按接口需要可以包含：
+
+- `data.source_plugin`
+- `data.resolved_title`
+- `data.extra`
+
+调用方可以依赖的最小事实：
+
+- 动作已进入设备动作链路
+- transport 已被选定并回传
+
+### 6.3 Class B 成功响应
+
+Class B 成功响应必须包含：
+
+- 顶层 `code`
+- 顶层 `message`
+- 顶层 `request_id`
+- `data.status`
+- `data.device_id`（若该接口天然作用于设备，则必须存在）
+
+Class B 成功响应不得要求调用方假设存在：
+
+- `data.transport`
+- `data.source_plugin`
+
+特别约束：
+
+- `POST /api/v1/playlist/play` 的成功响应不与 `POST /api/v1/play` 同构
+- `POST /api/v1/playlist/play` 不保证返回 `source_plugin`
+- `POST /api/v1/playlist/play` 不保证返回 `transport`
+- 前端与其他调用方不得依赖 `POST /api/v1/playlist/play` 具备 `source_plugin/transport`
+
+同样约束也适用于：
+
+- `POST /api/v1/playlist/play-index`
+- `POST /api/v1/library/favorites/add`
+- `POST /api/v1/library/favorites/remove`
+- `POST /api/v1/library/refresh`
+- `POST /api/v1/control/play-mode`
+- `POST /api/v1/control/shutdown-timer`
+
+### 6.4 Class C 成功响应
+
+Class C 成功响应必须包含：
+
+- 顶层 `code`
+- 顶层 `message`
+- 顶层 `request_id`
+- `data` 中与查询结果直接相关的字段
+
+Class C 不承诺下列字段：
+
+- `data.transport`
+- `data.source_plugin`（除非该查询接口的字段定义中显式列出）
+
+### 6.5 成功字段禁止假设规则
+
+调用方不得做以下假设：
+
+- 因为 `/api/v1/play` 有 `transport`，就假设 `/api/v1/playlist/play` 也必须有 `transport`
+- 因为某次实现返回了 `source_plugin`，就假设该字段属于所有控制接口正式契约
+- 因为某个内部对象存在更多字段，就假设这些字段属于 v1 正式响应
+
+---
+
+## 7. 统一错误模型
+
+### 7.1 错误响应基础结构
+
+所有 v1 白名单接口的失败响应必须满足：
+
+- 顶层 `code != 0`
+- 顶层 `message` 必须存在
+- 顶层 `request_id` 必须存在
+- `data.error_code` 必须存在
+- `data.stage` 必须存在
+
+错误响应示例：
 
 ```json
-{ "device_id": "<device_id>" }
+{
+  "code": 50001,
+  "message": "invalid request",
+  "data": {
+    "error_code": "E_INVALID_REQUEST",
+    "stage": "request"
+  },
+  "request_id": "req_xxx"
+}
 ```
 
-字段约束：
+### 7.2 `stage` 合法枚举
 
-- `device_id: string`
-- 不允许使用中文设备名替代 `device_id` 作为正式协议字段。
+`stage` 必须属于以下有限集合，不允许自由扩张或随意漂移：
 
-### 5.2 中文命令字符串禁入
+- `request`
+- `resolve`
+- `prepare`
+- `dispatch`
+- `xiaomi`
+- `library`
+- `system`
+- `auth`
 
-以下输入形式不得进入 v1 正式接口：
+### 7.3 错误阶段语义
 
-- `"上一首"`
-- `"下一首"`
-- `"30分钟后关机"`
-- `"播放歌单日语"`
-- `"播放列表第三个日语"`
-- 任意 `cmd` 文本
+- `request`：请求参数、字段约束、查询参数等边界错误
+- `resolve`：来源识别、媒体解析、歌单索引定位等失败
+- `prepare`：播放前资源准备失败
+- `dispatch`：动作下发、统一调度或 transport 分发失败
+- `xiaomi`：设备平台调用失败
+- `library`：本地库、歌单、收藏、索引刷新相关失败
+- `system`：系统状态、运行时状态、非业务依赖失败
+- `auth`：鉴权、认证恢复、会话状态相关失败
 
-这些形式只允许存在于旧兼容层，不得作为 v1 契约的一部分。
+### 7.4 各分类接口的错误要求
+
+Class A 错误要求：
+
+- 必须提供可判别的 `error_code`
+- 必须提供合法 `stage`
+- 不得把 transport / dispatch / xiaomi 失败压扁成无阶段的通用错误
+
+Class B 错误要求：
+
+- 即使不走统一 transport 主链路，也必须提供结构化错误
+- 不得只返回模糊消息而缺少 `error_code/stage`
+
+Class C 错误要求：
+
+- 即使是查询接口，也必须提供结构化错误
+- 查询失败不得退化为只有 envelope 顶层文案的错误
+
+### 7.5 禁止项
+
+禁止以下做法：
+
+- 把可识别业务异常退化为无阶段的通用内部错误
+- 要求前端依赖 traceback 文本判断错误类型
+- 以临时调试字段代替 `error_code`
+- 以随机字符串、模块名或异常类名代替正式 `stage`
 
 ---
 
-## 6. 播放与解析接口
+## 8. 内部归属约束
 
-## 6.1 POST /api/v1/play
+### 8.1 Class A 归属约束
+
+Class A 接口必须进入统一调度 / 分发链路。
+
+若 Class A 接口未进入统一调度 / 分发链路，应判定为实现不符合规范。
+
+### 8.2 Class B 归属约束
+
+Class B 接口可以在 router / runtime 侧实现，但必须保持其自身成功返回模型。
+
+若 Class B 接口伪装为 Class A 返回模型，应判定为实现不符合规范。
+
+### 8.3 Class C 归属约束
+
+Class C 接口必须提供统一 envelope 与结构化错误。
+
+若 Class C 接口缺少统一 envelope 或结构化错误，应判定为实现不符合规范。
+
+---
+
+## 9. 接口归属总表
+
+| 接口 | 分类 | 契约要求的内部归属 | 成功响应关键字段 | 错误模型要求 | 备注 |
+|---|---|---|---|---|---|
+| `POST /api/v1/play` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport`，可含 `data.source_plugin`, `data.extra` | 必须有 `error_code`, `stage`；设备动作失败不得退化为模糊内部错误 | 要求 `transport` |
+| `POST /api/v1/control/stop` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
+| `POST /api/v1/control/pause` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
+| `POST /api/v1/control/resume` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
+| `POST /api/v1/control/tts` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
+| `POST /api/v1/control/volume` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
+| `POST /api/v1/control/probe` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
+| `POST /api/v1/control/previous` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
+| `POST /api/v1/control/next` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
+| `POST /api/v1/control/play-mode` | B | router / runtime 本地控制路径 | `data.status`, `data.device_id`, `request_id` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `POST /api/v1/control/shutdown-timer` | B | router / runtime 本地控制路径 | `data.status`, `data.device_id`, `request_id` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `POST /api/v1/playlist/play` | B | 歌单控制路径 | `data.status`, `data.device_id`, `data.playlist_name`，可含 `data.music_name` | 必须有 `error_code`, `stage` | 与 `/api/v1/play` 非同构；不得要求 `transport/source_plugin` |
+| `POST /api/v1/playlist/play-index` | B | 歌单控制路径 | `data.status`, `data.device_id`, `data.playlist_name`, `data.index` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `POST /api/v1/library/favorites/add` | B | library 本地控制路径 | `data.status`, `data.device_id`, `data.track_name` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `POST /api/v1/library/favorites/remove` | B | library 本地控制路径 | `data.status`, `data.device_id`, `data.track_name` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `POST /api/v1/library/refresh` | B | library 本地控制路径 | `data.status`，可含范围信息 | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `POST /api/v1/resolve` | C | 只读解析 / 聚合路径 | 以解析结果字段为主 | 必须有 `error_code`, `stage` | 查询型；不要求 `transport` |
+| `GET /api/v1/devices` | C | 只读查询 / 聚合路径 | `data.devices` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `GET /api/v1/system/status` | C | 只读查询 / 聚合路径 | `data.status`, `data.version`, `data.devices_count` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `GET /api/v1/player/state` | C | 只读状态聚合路径 | `data.device_id`, `data.is_playing`, `data.cur_music`, `data.offset`, `data.duration` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+
+---
+
+## 10. 接口逐项契约
+
+### 10.1 `POST /api/v1/play`
 
 用途：播放一个明确媒体目标。
 
-请求示例：
+请求体：
 
 ```json
 {
@@ -173,12 +498,12 @@
 }
 ```
 
-字段说明：
+字段约束：
 
-- `device_id: string`，必填。
-- `query: string`，必填；表示单曲名、URL、站点链接或其他可解析媒体目标。
-- `source_hint: string`，可选，默认 `auto`。
-- `options: object`，可选。
+- `device_id: string`，必填，非空
+- `query: string`，必填，非空
+- `source_hint: string`，可选，默认 `auto`
+- `options: object`，可选
 
 `source_hint` 允许值：
 
@@ -188,46 +513,36 @@
 - `jellyfin`
 - `local_library`
 
-成功响应示例：
+成功响应最小契约：
 
-```json
-{
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "status": "playing",
-    "device_id": "<device_id>",
-    "source_plugin": "direct_url",
-    "transport": "mina"
-  },
-  "request_id": "req_123"
-}
-```
+- 顶层 envelope
+- `data.status`
+- `data.device_id`
+- `data.transport`
 
-### 6.2 POST /api/v1/resolve
+按接口需要可包含：
+
+- `data.source_plugin`
+- `data.resolved_title`
+- `data.extra`
+
+### 10.2 `POST /api/v1/resolve`
 
 用途：只解析，不播放。
 
-请求示例：
+请求体：
 
 ```json
 {
-  "query": "https://youtube.com/...",
+  "query": "https://example.com/video",
   "source_hint": "auto",
   "options": {}
 }
 ```
 
-说明：
+成功响应以解析结果字段为主，不承诺 `transport`。
 
-- 该接口不替代 `/api/v1/play`。
-- 该接口适合调试、预解析或上层编排使用。
-
----
-
-## 7. 基础控制接口
-
-## 7.1 POST /api/v1/control/stop
+### 10.3 `POST /api/v1/control/stop`
 
 用途：停止当前播放。
 
@@ -237,7 +552,9 @@
 { "device_id": "<device_id>" }
 ```
 
-## 7.2 POST /api/v1/control/pause
+成功响应必须包含 `data.transport`。
+
+### 10.4 `POST /api/v1/control/pause`
 
 用途：暂停当前播放。
 
@@ -247,7 +564,9 @@
 { "device_id": "<device_id>" }
 ```
 
-## 7.3 POST /api/v1/control/resume
+成功响应必须包含 `data.transport`。
+
+### 10.5 `POST /api/v1/control/resume`
 
 用途：恢复当前播放。
 
@@ -257,11 +576,13 @@
 { "device_id": "<device_id>" }
 ```
 
-## 7.4 POST /api/v1/control/tts
+成功响应必须包含 `data.transport`。
+
+### 10.6 `POST /api/v1/control/tts`
 
 用途：播放一段 TTS 文本。
 
-请求示例：
+请求体：
 
 ```json
 {
@@ -270,11 +591,17 @@
 }
 ```
 
-## 7.5 POST /api/v1/control/volume
+字段约束：
+
+- `text: string`，必填，非空
+
+成功响应必须包含 `data.transport`。
+
+### 10.7 `POST /api/v1/control/volume`
 
 用途：设置设备音量。
 
-请求示例：
+请求体：
 
 ```json
 {
@@ -286,11 +613,13 @@
 字段约束：
 
 - `volume: integer`
-- 推荐范围：`0 ~ 100`
+- `0 <= volume <= 100`
 
-## 7.6 POST /api/v1/control/probe
+成功响应必须包含 `data.transport`。
 
-用途：执行设备探活或基础可用性检查。
+### 10.8 `POST /api/v1/control/probe`
+
+用途：执行设备可用性探测。
 
 最小请求体：
 
@@ -298,7 +627,9 @@
 { "device_id": "<device_id>" }
 ```
 
-## 7.7 POST /api/v1/control/previous
+成功响应必须包含 `data.transport`。
+
+### 10.9 `POST /api/v1/control/previous`
 
 用途：切到上一首。
 
@@ -308,12 +639,9 @@
 { "device_id": "<device_id>" }
 ```
 
-说明：
+成功响应必须包含 `data.transport`。
 
-- 该接口用于替代 `/cmd` 的 `上一首`。
-- 不允许再通过命令字符串表达此能力。
-
-## 7.8 POST /api/v1/control/next
+### 10.10 `POST /api/v1/control/next`
 
 用途：切到下一首。
 
@@ -323,15 +651,13 @@
 { "device_id": "<device_id>" }
 ```
 
-说明：
+成功响应必须包含 `data.transport`。
 
-- 该接口用于替代 `/cmd` 的 `下一首`。
-
-## 7.9 POST /api/v1/control/play-mode
+### 10.11 `POST /api/v1/control/play-mode`
 
 用途：设置播放模式。
 
-请求示例：
+请求体：
 
 ```json
 {
@@ -340,34 +666,21 @@
 }
 ```
 
-字段约束：
+允许值：
 
-- `play_mode: string`，必填。
-- 允许值：
-  - `one`
-  - `all`
-  - `random`
-  - `single`
-  - `sequence`
+- `one`
+- `all`
+- `random`
+- `single`
+- `sequence`
 
-映射关系：
+该接口不承诺 `data.transport`。
 
-- `one`：单曲循环
-- `all`：全部循环
-- `random`：随机播放
-- `single`：单曲播放
-- `sequence`：顺序播放
+### 10.12 `POST /api/v1/control/shutdown-timer`
 
-约束：
+用途：设置停止播放定时器。
 
-- v1 协议只接受英文枚举值。
-- WebUI/HA 不允许以中文文案作为协议值。
-
-## 7.10 POST /api/v1/control/shutdown-timer
-
-用途：设置定时停止播放。
-
-请求示例：
+请求体：
 
 ```json
 {
@@ -378,51 +691,55 @@
 
 字段约束：
 
-- `minutes: integer`，必填。
-- `minutes > 0`
+- `minutes: integer`
+- `minutes >= 0`
 
-说明：
+该接口不承诺 `data.transport`。
 
-- 该接口用于替代 `/cmd` 的 `xx分钟后关机`。
-- v1 协议不接受 `"30分钟后关机"` 这类自然语言文本。
-- 若后续需要支持取消定时关机，应新增结构化能力，不得回退到字符串命令。
+### 10.13 `POST /api/v1/playlist/play`
 
----
+用途：播放指定歌单，或播放歌单中的指定歌曲。
 
-## 8. 歌单与收藏接口
-
-## 8.1 POST /api/v1/playlist/play
-
-用途：播放指定歌单。
-
-适用场景：
-
-- WebUI 后续歌单播放能力
-- Home Assistant 自动化场景
-
-请求示例：
+请求体：
 
 ```json
 {
   "device_id": "<device_id>",
-  "playlist_name": "日语"
+  "playlist_name": "日语",
+  "music_name": "夜に駆ける"
 }
 ```
 
 字段约束：
 
-- `playlist_name: string`，必填。
+- `device_id: string`，必填，非空
+- `playlist_name: string`，必填，非空
+- `music_name: string`，可选；为空时表示按歌单默认播放规则执行
 
-说明：
+成功响应最小契约：
 
-- 该接口用于替代 `/cmd` 的 `播放歌单xxx` / `播放列表xxx`。
-- 这是 HA 侧的重要编排接口，必须是结构化能力。
+- 顶层 envelope
+- `data.status`
+- `data.device_id`
+- `data.playlist_name`
 
-## 8.2 POST /api/v1/playlist/play-index
+可以包含：
+
+- `data.music_name`
+- `data.extra`
+
+不得要求：
+
+- `data.transport`
+- `data.source_plugin`
+
+该接口与 `POST /api/v1/play` 非同构。
+
+### 10.14 `POST /api/v1/playlist/play-index`
 
 用途：播放指定歌单中的第 N 首。
 
-请求示例：
+请求体：
 
 ```json
 {
@@ -434,20 +751,17 @@
 
 字段约束：
 
-- `playlist_name: string`，必填。
-- `index: integer`，必填。
-- 建议约定为 **1-based** 序号，与历史“第 N 个”语义保持一致。
+- `playlist_name: string`，必填，非空
+- `index: integer`，必填
+- `index` 采用 1-based 序号
 
-说明：
+不得要求 `data.transport`。
 
-- 该接口用于替代 `/cmd` 的 `播放列表第N个xxx`。
-- v1 协议不接受 `"播放列表第三个日语"` 这类自然语言表达。
-
-## 8.3 POST /api/v1/library/favorites/add
+### 10.15 `POST /api/v1/library/favorites/add`
 
 用途：将歌曲加入收藏。
 
-请求示例：
+请求体：
 
 ```json
 {
@@ -458,249 +772,81 @@
 
 字段约束：
 
-- `device_id: string`，必填。
-- `track_name: string`，可选。
+- `device_id: string`，必填，非空
+- `track_name: string`，可选
 
-行为约束：
+该接口不承诺 `data.transport`。
 
-- 当 `track_name` 为空时，默认以当前正在播放的歌曲作为目标。
-
-说明：
-
-- 该接口用于替代 `/cmd` 的 `加入收藏`。
-
-## 8.4 POST /api/v1/library/favorites/remove
+### 10.16 `POST /api/v1/library/favorites/remove`
 
 用途：将歌曲移出收藏。
 
-请求示例：
+请求体与字段约束与 `favorites/add` 保持一致。
 
-```json
-{
-  "device_id": "<device_id>",
-  "track_name": "夜に駆ける"
-}
-```
+该接口不承诺 `data.transport`。
 
-字段与行为约束：
-
-- 与 `/api/v1/library/favorites/add` 保持一致。
-- 当 `track_name` 为空时，默认以当前正在播放的歌曲作为目标。
-
-说明：
-
-- 该接口用于替代 `/cmd` 的 `取消收藏`。
-- 收藏能力应以 add/remove 成对提供，便于 HA 自动化闭环控制。
-
-## 8.5 POST /api/v1/library/refresh
+### 10.17 `POST /api/v1/library/refresh`
 
 用途：刷新音乐库或歌单索引。
 
-请求示例：
+请求体：
 
 ```json
 {}
 ```
 
-可选扩展示例：
+该接口不承诺 `data.transport`。
 
-```json
-{
-  "scope": "all"
-}
-```
-
-说明：
-
-- 该接口用于替代 `/cmd` 的 `刷新列表`。
-- 该接口也用于替代旧的刷新入口，不再新增新的 legacy 刷新路由。
-
----
-
-## 9. 查询接口
-
-## 9.1 GET /api/v1/devices
+### 10.18 `GET /api/v1/devices`
 
 用途：获取设备列表。
 
-成功响应示例：
+成功响应关键字段：
 
-```json
-{
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "devices": [
-      {
-        "device_id": "<device_id>",
-        "name": "XiaoAi",
-        "model": "LX06",
-        "online": true
-      }
-    ]
-  },
-  "request_id": "req_123"
-}
-```
+- `data.devices[]`
+- `data.devices[].device_id`
+- `data.devices[].name`
+- `data.devices[].model`
+- `data.devices[].online`
 
-## 9.2 GET /api/v1/system/status
+### 10.19 `GET /api/v1/system/status`
 
 用途：获取系统状态。
 
-成功响应示例：
+成功响应关键字段：
 
-```json
-{
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "status": "ok",
-    "version": "1.0.7",
-    "devices_count": 1
-  },
-  "request_id": "req_123"
-}
-```
+- `data.status`
+- `data.version`
+- `data.devices_count`
 
-## 9.3 GET /api/v1/player/state
+### 10.20 `GET /api/v1/player/state`
 
-用途：统一播放状态查询。
+用途：获取播放状态查询结果。
 
 查询参数：
 
-- `device_id`（必填）
+- `device_id`，必填
 
-`data` 字段定义：
+成功响应最小字段：
 
-- `device_id: string`
-- `is_playing: boolean`
-- `cur_music: string`
-- `offset: number`（秒，整数，>= 0）
-- `duration: number`（秒，整数，>= 0）
-
-建议扩展字段：
-
-- `volume: integer`
-- `play_mode: string`
-- `playlist_name: string | null`
-- `playlist_index: integer | null`
-- `shutdown_timer_minutes: integer | null`
+- `data.device_id: string`
+- `data.is_playing: boolean`
+- `data.cur_music: string`
+- `data.offset: number`
+- `data.duration: number`
 
 约束：
 
-- `offset/duration` 单位固定为秒。
-- WebUI 不允许再做毫秒/秒猜测。
-- 状态由 Runtime 统一聚合，避免前端通过多接口拼装。
-
-成功响应示例：
-
-```json
-{
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "device_id": "<device_id>",
-    "is_playing": true,
-    "cur_music": "test.mp3",
-    "offset": 12,
-    "duration": 180,
-    "volume": 35,
-    "play_mode": "random",
-    "playlist_name": "日语",
-    "playlist_index": 3,
-    "shutdown_timer_minutes": 30
-  },
-  "request_id": "req_123"
-}
-```
+- `offset / duration` 单位固定为秒
+- 查询型接口不承诺 `transport`
 
 ---
 
-## 10. WebUI 与 HA 调用约束
+## 11. 请求扩展对象
 
-### 10.1 WebUI 约束
+### 11.1 `context_hint`
 
-WebUI 不得再调用：
-
-- `POST /cmd`
-- `GET /getvolume`
-- 任何以中文命令字符串作为协议输入的接口
-
-WebUI 应迁移到本规范定义的正式接口。
-
-### 10.2 Home Assistant 约束
-
-HA 对接应优先使用结构化控制能力，尤其是：
-
-- `POST /api/v1/control/previous`
-- `POST /api/v1/control/next`
-- `POST /api/v1/control/play-mode`
-- `POST /api/v1/control/shutdown-timer`
-- `POST /api/v1/playlist/play`
-- `POST /api/v1/playlist/play-index`
-- `POST /api/v1/library/favorites/add`
-- `POST /api/v1/library/favorites/remove`
-
-HA 不应通过发送中文命令字符串调用历史 `/cmd`。
-
----
-
-## 11. 兼容与迁移策略
-
-### 11.1 迁移原则
-
-- 非 `/api/v1/*` 历史接口在迁移期可暂时保留。
-- 历史接口不属于正式契约。
-- 新功能必须优先落入 `/api/v1/*`。
-
-### 11.2 `/cmd` 的迁移地位
-
-- `/cmd` 仅可作为迁移期兼容层。
-- `/cmd` 不得再承载任何新能力。
-- 当 WebUI 与 HA 所需能力全部迁移完成后，`/cmd` 应可直接下线。
-
-### 11.3 当前需要从 `/cmd` 迁移的核心能力
-
-- `上一首`
-- `下一首`
-- `单曲循环 / 全部循环 / 随机播放 / 单曲播放 / 顺序播放`
-- `xx分钟后关机`
-- `加入收藏`
-- `取消收藏`
-- `播放歌单xxx`
-- `播放列表第N个xxx`
-- `刷新列表`
-
-### 11.4 不进入正式 v1 的历史能力
-
-以下能力不进入正式 v1 契约：
-
-- 自定义口令输入
-- `exec#...`
-- `match_cmd()` 动态分发机制
-- `active_cmd` 作为 HTTP 正式控制面的规则来源
-
----
-
-## 12. 错误码
-
-错误码分段：
-
-- `1xxxx` 系统
-- `2xxxx` 来源解析
-- `3xxxx` Delivery
-- `4xxxx` Transport
-- `5xxxx` API 请求
-
-详细定义见：
-
-- `docs/dev/runtime_contracts.md`
-- 相关运行时规范文档
-
-
-
-## context_hint
-Optional object to guide context selection.
+`context_hint` 是可选对象，用于指导上下文选择：
 
 ```json
 {
@@ -709,27 +855,67 @@ Optional object to guide context selection.
   "context_name": "..."
 }
 ```
-Rules:
-- If provided, adapters MUST prioritize it
-- Otherwise adapter selects context
 
+约束：
 
-## Player State (Unified Context)
-```json
-{
-  "source_type": "...",
-  "playback_kind": "single|queue|stream",
-  "current_track_id": "...",
-  "current_track_title": "...",
-  "current_track_duration": 0,
-  "play_mode": "...",
-  "context_type": "...",
-  "context_id": "...",
-  "context_name": "...",
-  "queue_supported": true,
-  "current_index": 0,
-  "queue_length": 0,
-  "has_next": true,
-  "has_previous": true
-}
-```
+- 若提供，适配层必须优先使用
+- 若未提供，由实现自行选择上下文
+
+---
+
+## 12. 本次修改说明（供审阅）
+
+1. 本次新增或重写了以下章节：
+   - “总则与契约优先级”
+   - “接口分级与归属路径”
+   - “成功响应契约矩阵”
+   - “统一错误模型”
+   - “内部归属约束”
+   - “接口归属总表”
+2. 本次删除或修正了以下旧冲突表述：
+   - 删除了旧文档中以阶段性落地口径描述正式接口的章节
+   - 删除了把部分接口写成“目标契约”或“可暂缓收口”的表述
+   - 删除了对未显式列出旧行为的默认承诺
+3. `playlist/play` 与 `play` 的契约边界已明确写为：
+   - `POST /api/v1/playlist/play` 属于 Class B
+   - 它不是 `POST /api/v1/play` 的同构接口
+   - 不保证 `source_plugin`
+   - 不保证 `transport`
+   - 调用方不得依赖这两个字段
+4. Class A / B / C 划分方式如下：
+   - Class A：设备动作型，必须进入统一调度 / 分发链路，成功响应必须可观测 `transport`
+   - Class B：本地状态 / 歌单 / 收藏 / 控制型，可保留在 router / runtime 路径，但必须遵守统一 envelope 与错误模型，且不得伪装为 Class A
+   - Class C：查询型，必须提供统一 envelope 与结构化错误，不承诺 transport
+5. 本步不涉及代码改动，因为本次任务目标是先完成 v1 API 契约收口，把对外行为、内部归属、成功响应与错误模型定义清楚；代码实现是否符合规范属于后续代码修复步骤。
+
+## 13. 本次修正说明（供审阅）
+
+1. 本次删除或降级了以下 `player/state` 相关字段的正式契约地位：
+   - `current_track_title`
+   - `current_track_id`
+   - `current_track_duration`
+   - `play_mode`
+   - `context_type`
+   - `context_id`
+   - `context_name`
+   - `queue_supported`
+   - `current_index`
+   - `queue_length`
+   - `has_next`
+   - `has_previous`
+2. 这些字段不应在当前阶段写成正式契约，因为本轮文档收口只保留当前代码可稳定承诺的最小查询字段；上述字段属于状态聚合扩展信息，当前不应成为前端或外部调用方可依赖的稳定约束。
+3. `GET /api/v1/player/state` 当前最终保留的最小正式字段为：
+   - `data.device_id`
+   - `data.is_playing`
+   - `data.cur_music`
+   - `data.offset`
+   - `data.duration`
+4. 以下大框架内容本次保留未动：
+   - v1 唯一权威来源
+   - Class A / B / C 接口分级
+   - `playlist/play` 与 `play` 非同构
+   - Class A 必须要求 `transport`
+   - Class B / C 不得假设 `transport`
+   - 统一错误模型
+   - 内部归属约束
+   - 接口归属总表的大框架

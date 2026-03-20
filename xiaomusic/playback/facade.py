@@ -216,6 +216,30 @@ class PlaybackFacade:
             "extra": {"dispatch": result["dispatch"].data},
         }
 
+    async def previous(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+        did = self._validate_device_id(device_id)
+        result = await self._core().previous(did)
+        return {
+            "status": "ok",
+            DEVICE_ID: did,
+            "transport": result["transport"],
+            REQUEST_ID: str(request_id or uuid4().hex[:16]),
+            "action": "previous",
+            "extra": {"dispatch": result["dispatch"].data},
+        }
+
+    async def next(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+        did = self._validate_device_id(device_id)
+        result = await self._core().next(did)
+        return {
+            "status": "ok",
+            DEVICE_ID: did,
+            "transport": result["transport"],
+            REQUEST_ID: str(request_id or uuid4().hex[:16]),
+            "action": "next",
+            "extra": {"dispatch": result["dispatch"].data},
+        }
+
     async def pause(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         result = await self._core().pause(did)

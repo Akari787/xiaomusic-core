@@ -52,6 +52,44 @@ class MiioTransport(Transport):
             )
             raise
 
+    async def previous(self, device_id: str) -> dict[str, Any]:
+        start = time.perf_counter()
+        try:
+            player = self._xiaomusic.device_manager.devices[device_id]
+            await player.play_prev()
+            LOG.info(
+                "transport_action action=previous success=true latency_ms=%d device_id=%s",
+                int((time.perf_counter() - start) * 1000),
+                device_id,
+            )
+            return {"ret": "OK"}
+        except Exception:
+            LOG.warning(
+                "transport_action action=previous success=false latency_ms=%d device_id=%s",
+                int((time.perf_counter() - start) * 1000),
+                device_id,
+            )
+            raise
+
+    async def next(self, device_id: str) -> dict[str, Any]:
+        start = time.perf_counter()
+        try:
+            player = self._xiaomusic.device_manager.devices[device_id]
+            await player.play_next()
+            LOG.info(
+                "transport_action action=next success=true latency_ms=%d device_id=%s",
+                int((time.perf_counter() - start) * 1000),
+                device_id,
+            )
+            return {"ret": "OK"}
+        except Exception:
+            LOG.warning(
+                "transport_action action=next success=false latency_ms=%d device_id=%s",
+                int((time.perf_counter() - start) * 1000),
+                device_id,
+            )
+            raise
+
     async def pause(self, device_id: str) -> dict[str, Any]:
         start = time.perf_counter()
         try:

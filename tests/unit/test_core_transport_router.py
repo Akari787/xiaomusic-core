@@ -28,6 +28,18 @@ class _TransportStub(Transport):
             raise RuntimeError("stop failed")
         return {"ret": "OK"}
 
+    async def previous(self, device_id: str) -> dict:
+        _ = device_id
+        if "previous" in self.fail_actions:
+            raise RuntimeError("previous failed")
+        return {"ret": "OK"}
+
+    async def next(self, device_id: str) -> dict:
+        _ = device_id
+        if "next" in self.fail_actions:
+            raise RuntimeError("next failed")
+        return {"ret": "OK"}
+
     async def pause(self, device_id: str) -> dict:
         _ = device_id
         if "pause" in self.fail_actions:
@@ -91,6 +103,27 @@ async def test_transport_router_fallback_for_tts_inside_candidates():
     assert out.ok is True
     assert out.transport == "mina"
     assert out.errors
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_transport_router_routes_previous_with_capability_policy_intersection():
+    router = TransportRouter(policy=TransportPolicy({"previous": ["miio", "mina"]}))
+    router.register_transport(_TransportStub("miio"))
+    router.register_transport(_TransportStub("mina"))
+
+    profile = DeviceProfile(did="d1", model="m", name="n", group="g")
+    capability = TransportCapabilityMatrix(previous=["miio"])
+
+    out = await router.dispatch(
+        action="previous",
+        device_id="d1",
+        profile=profile,
+        capability_matrix=capability,
+    )
+
+    assert out.ok is True
+    assert out.transport == "miio"
 
 
 @pytest.mark.unit

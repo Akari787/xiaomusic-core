@@ -7,6 +7,8 @@ class TransportPolicy:
     def __init__(self, action_map: dict[str, list[str]] | None = None) -> None:
         self._actions = action_map or {
             "play": ["mina"],
+            "previous": ["miio", "mina"],
+            "next": ["miio", "mina"],
             "tts": ["miio", "mina"],
             "volume": ["miio", "mina"],
             "stop": ["miio", "mina"],

@@ -94,9 +94,6 @@ export interface PlaylistData {
   device_id?: string;
   playlist_name?: string;
   music_name?: string;
-  source_plugin?: string;
-  transport?: string;
-  extra?: Record<string, unknown>;
 }
 
 export interface PlaylistIndexData {

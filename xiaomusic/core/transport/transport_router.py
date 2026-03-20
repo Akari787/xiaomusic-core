@@ -125,6 +125,10 @@ class TransportRouter:
             return await transport.play_url(device_id, prepared)
         if action == "stop":
             return await transport.stop(device_id)
+        if action == "previous":
+            return await transport.previous(device_id)
+        if action == "next":
+            return await transport.next(device_id)
         if action == "pause":
             return await transport.pause(device_id)
         if action == "tts":

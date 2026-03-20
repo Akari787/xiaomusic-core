@@ -418,9 +418,8 @@ async def api_v1_debug_auth_runtime_reload_state():
 async def api_v1_control_previous(data: ControlRequest):
     request_id = _next_request_id(data.request_id)
     try:
-        xm = _require_device(data.device_id, request_id)
-        await xm.play_prev(did=data.device_id)
-        return _api_ok({"status": "ok", DEVICE_ID: data.device_id, "action": "previous"}, request_id=request_id)
+        out = await _get_facade().previous(device_id=data.device_id, request_id=request_id)
+        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
@@ -429,9 +428,8 @@ async def api_v1_control_previous(data: ControlRequest):
 async def api_v1_control_next(data: ControlRequest):
     request_id = _next_request_id(data.request_id)
     try:
-        xm = _require_device(data.device_id, request_id)
-        await xm.play_next(did=data.device_id)
-        return _api_ok({"status": "ok", DEVICE_ID: data.device_id, "action": "next"}, request_id=request_id)
+        out = await _get_facade().next(device_id=data.device_id, request_id=request_id)
+        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
@@ -582,6 +580,13 @@ async def api_v1_player_state(device_id: str = Query(..., min_length=1), request
     rid = _next_request_id(request_id)
     try:
         out = await _get_facade().player_state(device_id=device_id, request_id=rid)
-        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=rid)
+        data = {
+            DEVICE_ID: str(out.get(DEVICE_ID, device_id)),
+            "is_playing": bool(out.get("is_playing", False)),
+            "cur_music": str(out.get("cur_music", "") or ""),
+            "offset": max(0, int(out.get("offset", 0) or 0)),
+            "duration": max(0, int(out.get("duration", 0) or 0)),
+        }
+        return _api_ok(data, request_id=rid)
     except Exception as exc:
         return _map_api_exception(exc, rid)

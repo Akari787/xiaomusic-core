@@ -44,6 +44,12 @@ class _TransportStub(Transport):
     async def stop(self, device_id: str) -> dict:
         return {"ret": "OK", "device_id": device_id}
 
+    async def previous(self, device_id: str) -> dict:
+        return {"ret": "OK", "device_id": device_id}
+
+    async def next(self, device_id: str) -> dict:
+        return {"ret": "OK", "device_id": device_id}
+
     async def pause(self, device_id: str) -> dict:
         return {"ret": "OK", "device_id": device_id}
 
@@ -75,6 +81,12 @@ class _RecordingTransportStub(Transport):
         return {"ret": "OK", "url": prepared.final_url}
 
     async def stop(self, device_id: str) -> dict:
+        return {"ret": "OK", "device_id": device_id}
+
+    async def previous(self, device_id: str) -> dict:
+        return {"ret": "OK", "device_id": device_id}
+
+    async def next(self, device_id: str) -> dict:
         return {"ret": "OK", "device_id": device_id}
 
     async def pause(self, device_id: str) -> dict:
@@ -111,6 +123,8 @@ def _build_coordinator(
         ),
         capability_matrix=TransportCapabilityMatrix(
             play=["mina"],
+            previous=["mina"],
+            next=["mina"],
             stop=["mina"],
             pause=["mina"],
             tts=["mina"],
@@ -188,12 +202,16 @@ async def test_playback_coordinator_control_actions_and_probe_update():
     coordinator = _build_coordinator(plugin)
 
     stop_out = await coordinator.stop("d1")
+    previous_out = await coordinator.previous("d1")
+    next_out = await coordinator.next("d1")
     pause_out = await coordinator.pause("d1")
     tts_out = await coordinator.tts("d1", "hello")
     volume_out = await coordinator.set_volume("d1", 33)
     probe_out = await coordinator.probe("d1")
 
     assert stop_out["transport"] == "mina"
+    assert previous_out["transport"] == "mina"
+    assert next_out["transport"] == "mina"
     assert pause_out["transport"] == "mina"
     assert tts_out["dispatch"].data["text"] == "hello"
     assert volume_out["dispatch"].data["volume"] == 33

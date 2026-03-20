@@ -18,16 +18,19 @@ from xiaomusic.api.routers import v1
 async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
     calls: list[tuple[str, tuple, dict]] = []
 
+    class _Facade:
+        async def previous(self, device_id: str, request_id: str | None = None):
+            calls.append(("facade.previous", (), {"device_id": device_id, "request_id": request_id}))
+            return {"status": "ok", "device_id": device_id, "transport": "miio", "request_id": request_id, "action": "previous"}
+
+        async def next(self, device_id: str, request_id: str | None = None):
+            calls.append(("facade.next", (), {"device_id": device_id, "request_id": request_id}))
+            return {"status": "ok", "device_id": device_id, "transport": "miio", "request_id": request_id, "action": "next"}
+
     class _XM:
         @staticmethod
         def did_exist(did: str) -> bool:
             return did == "did-1"
-
-        async def play_prev(self, **kwargs):
-            calls.append(("play_prev", (), kwargs))
-
-        async def play_next(self, **kwargs):
-            calls.append(("play_next", (), kwargs))
 
         async def set_play_type_rnd(self, **kwargs):
             calls.append(("set_play_type_rnd", (), kwargs))
@@ -58,6 +61,7 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
 
     xm = _XM()
     monkeypatch.setattr(v1, "_get_xiaomusic", lambda: xm)
+    monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
 
     out_prev = await v1.api_v1_control_previous(ControlRequest(device_id="did-1"))
     out_next = await v1.api_v1_control_next(ControlRequest(device_id="did-1"))
@@ -74,8 +78,8 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
     out_refresh = await v1.api_v1_library_refresh(LibraryRefreshRequest())
 
     assert [item[0] for item in calls] == [
-        "play_prev",
-        "play_next",
+        "facade.previous",
+        "facade.next",
         "set_play_type_rnd",
         "stop_after_minute",
         "add_to_favorites",
@@ -90,6 +94,8 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
     assert calls[7][2] == {"did": "did-1", "playlist_name": "收藏", "index": 2}
     assert calls[2][2]["dotts"] is False
     assert calls[2][2]["refresh_playlist"] is False
+    assert out_prev["data"]["transport"] == "miio"
+    assert out_next["data"]["transport"] == "miio"
     for out in (out_prev, out_next, out_mode, out_timer, out_add, out_remove, out_playlist, out_index, out_refresh):
         assert out["code"] == 0
         assert out["message"] == "ok"
@@ -111,12 +117,14 @@ async def test_api_v1_play_mode_rejects_invalid_value(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_api_v1_structured_controls_reject_missing_device(monkeypatch):
-    class _XM:
-        @staticmethod
-        def did_exist(did: str) -> bool:
-            return False
+    from xiaomusic.core.errors import DeviceNotFoundError
 
-    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    class _Facade:
+        async def next(self, device_id: str, request_id: str | None = None):
+            _ = (device_id, request_id)
+            raise DeviceNotFoundError("device not found")
+
+    monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
     out = await v1.api_v1_control_next(ControlRequest(device_id="missing"))
     assert out["code"] == 40004
     assert out["message"] == "device not found"

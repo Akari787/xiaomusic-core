@@ -18,6 +18,14 @@ class Transport(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def previous(self, device_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def next(self, device_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
     async def pause(self, device_id: str) -> dict[str, Any]:
         raise NotImplementedError
 

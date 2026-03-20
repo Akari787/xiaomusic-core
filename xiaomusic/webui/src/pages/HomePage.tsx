@@ -40,7 +40,6 @@ type Device = {
 type PlayingInfo = {
   ret?: string;
   is_playing?: boolean;
-  current_track_title?: string;
   cur_music?: string;
   cur_playlist?: string;
   offset?: number;
@@ -546,8 +545,7 @@ export function HomePage() {
   const localSongFresh =
     localPlaybackStartedAt > 0 && Date.now() - Number(localPlaybackStartedAt || 0) < 12000;
   const currentMusicName = String(
-    status.current_track_title ||
-      status.cur_music ||
+    status.cur_music ||
       (status.is_playing ? rememberedPlayingSong : "") ||
       (localSongFresh ? localPlaybackSong : "") ||
       "",
@@ -942,11 +940,6 @@ export function HomePage() {
           offset: Math.max(0, Number(next.offset || 0)),
           duration: Math.max(0, Number(next.duration || 0)),
         };
-        const unifiedTitle = String(next.current_track_title || "").trim();
-        if (unifiedTitle) {
-          merged.current_track_title = unifiedTitle;
-          merged.cur_music = unifiedTitle;
-        }
         if (Date.now() < stopSuppressUntilRef.current) {
           merged = {
             ...merged,
@@ -1323,7 +1316,17 @@ export function HomePage() {
               duration: infoDuration > 0 ? Math.floor(infoDuration) : Math.max(0, Math.floor(Number(synced.duration || 0))),
             }),
           );
-          setMessage(`开始播放（来源: ${playResp.data?.source_plugin || "unknown"}, 传输: ${playResp.data?.transport || "unknown"}）`);
+          const playlistName = String(playResp.data?.playlist_name || playlist || "").trim();
+          const trackName = String(playResp.data?.music_name || picked || "").trim();
+          if (trackName && playlistName) {
+            setMessage(`已请求播放歌单《${playlistName}》中的《${trackName}》`);
+          } else if (trackName) {
+            setMessage(`已请求播放《${trackName}》`);
+          } else if (playlistName) {
+            setMessage(`已开始播放歌单《${playlistName}》`);
+          } else {
+            setMessage("播放歌单成功");
+          }
         } else {
           setMessage(`播放指令已发送，正在等待设备切换到 ${picked}`);
           await loadStatus(deviceId);
