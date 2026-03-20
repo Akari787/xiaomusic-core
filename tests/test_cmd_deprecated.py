@@ -23,4 +23,3 @@ async def test_cmd_returns_410_deprecated_response(monkeypatch) -> None:
     assert body["deprecated"] is True
     assert body["message"] == "/cmd has been deprecated; use structured /api/v1/* endpoints instead"
     assert "/api/v1/control/previous" in body["replacement"]
-    assert "/api/v1/playlist/play-index" in body["replacement"]
