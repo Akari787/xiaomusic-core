@@ -32,7 +32,6 @@ import {
   cleanTempDir as cleanTempDirRequest,
   fetchPlaylistJson,
   fetchQrcode,
-  refreshMusicTag as refreshMusicTagRequest,
 } from "../services/homeApi";
 
 void [v1RemoveFavorite];
@@ -1685,11 +1684,6 @@ export function HomePage() {
     setMessage(out.ret || "获取歌单失败");
   }
 
-  async function refreshMusicTag() {
-    const out = (await refreshMusicTagRequest<{ ret?: string }>()) as { ret?: string };
-    setMessage(out.ret || "已触发刷新");
-  }
-
   function clearCache() {
     localStorage.clear();
     setMessage("浏览器缓存已清除");
@@ -2571,10 +2565,6 @@ export function HomePage() {
             </div>
             <div className={`section-content ${operationOpen ? "" : "collapsed"}`} style={{ display: operationOpen ? "block" : "none" }}>
               <div className="button-grid">
-                <button onClick={() => void refreshMusicTag()}>
-                  <span className="material-icons">refresh</span>
-                  <span>刷新tag</span>
-                </button>
                 <button onClick={() => clearCache()}>
                   <span className="material-icons">delete_sweep</span>
                   <span>清空缓存</span>

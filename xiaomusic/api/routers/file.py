@@ -140,8 +140,10 @@ async def downloadjson(data: UrlInfo, Verifcation=Depends(verification)):
 @router.post("/api/file/fetch_playlist_json")
 async def fetch_playlist_json(data: UrlInfo, Verifcation=Depends(verification)):
     """通过后端拉取歌单 JSON 内容。"""
+    url = str(data.url or "").strip()
+    if not url:
+        return api_response.ok({"content": ""}, contract="ret", ret="URL required")
     log.info(data)
-    url = data.url
     content = ""
     try:
         content = await downloadfile(url, config)

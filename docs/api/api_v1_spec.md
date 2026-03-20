@@ -159,7 +159,6 @@ Internal API：
 - 管理 / 文件 / 工具 Internal API
   - `POST /api/file/fetch_playlist_json`
   - `POST /api/file/cleantempdir`
-  - `POST /refreshmusictag`
   - 归类理由：这些接口服务于文件读取、目录清理、标签刷新等内部管理与工具动作，不属于对外稳定控制面
 
 Forbidden / Removed：
@@ -1131,3 +1130,5 @@ Class C 接口必须提供统一 envelope 与结构化错误。
    - 中文命令入口、cmd 风格入口、自然语言控制入口、并行播放入口设计
 5. 本次新增了“进入 v1 的准入标准”与“Internal API 使用约束”，明确只有具备长期复用价值、能遵守统一 envelope 与结构化错误模型、且表达产品能力的接口，才可以进入 v1。
 6. 本步不涉及代码修改，因为本次任务目标是先把接口分层边界写成强约束文档，为后续接口去留与迁移判断提供统一依据。
+- 已删除的 Internal API 工具入口
+  - `POST /refreshmusictag`

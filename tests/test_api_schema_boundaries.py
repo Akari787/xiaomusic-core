@@ -15,11 +15,9 @@ def test_router_registration_marks_internal_routers_hidden_from_schema():
 def test_internal_route_files_have_internal_api_comments():
     system_text = Path("xiaomusic/api/routers/system.py").read_text(encoding="utf-8")
     file_text = Path("xiaomusic/api/routers/file.py").read_text(encoding="utf-8")
-    music_text = Path("xiaomusic/api/routers/music.py").read_text(encoding="utf-8")
 
     assert "Internal API - 仅供 WebUI/内部认证流程使用，不承诺兼容性。" in system_text
     assert "Internal API - 仅供 WebUI/内部文件流程使用，不承诺兼容性。" in file_text
-    assert "Internal API - 仅供 WebUI/内部工具流程使用，不承诺兼容性。" in music_text
 
 
 def test_removed_and_internal_routes_not_promoted_into_public_whitelist():

@@ -81,7 +81,7 @@ Internal API 层是内部前后端通信与辅助动作接口层。
 当前明确属于 Internal API 的接口类型包括：
 
 - 认证 / 会话接口，如 `/api/auth/status`、`/api/auth/refresh`、`/api/auth/logout`、`/api/get_qrcode`
-- 文件 / 工具接口，如 `/api/file/fetch_playlist_json`、`/api/file/cleantempdir`、`/refreshmusictag`
+- 文件 / 工具接口，如 `/api/file/fetch_playlist_json`、`/api/file/cleantempdir`
 
 ### 2.3 Forbidden / Removed
 
