@@ -165,20 +165,23 @@ export function apiErrorInfo<T>(out: ApiEnvelope<T>): ApiErrorInfo {
   const data = (out.data || {}) as Record<string, unknown>;
   const numCode = Number(out.code ?? 0);
   const codeToErrorCode: Record<number, string> = {
+    40001: "E_INVALID_REQUEST",
     20002: "E_RESOLVE_NONZERO_EXIT",
     30001: "E_STREAM_NOT_FOUND",
     40002: "E_XIAOMI_PLAY_FAILED",
-    40004: "E_XIAOMI_PLAY_FAILED",
+    40004: "E_DEVICE_NOT_FOUND",
+  };
+  const codeToStage: Record<number, string> = {
+    40001: "request",
+    20002: "resolve",
+    30001: "prepare",
+    40002: "dispatch",
+    40004: "request",
+    10000: "system",
   };
   const stage =
     String(data.stage || "") ||
-    (numCode === 20002
-      ? "resolve"
-      : numCode === 30001
-        ? "prepare"
-        : numCode === 40002 || numCode === 40004
-          ? "dispatch"
-          : "");
+    (numCode !== 0 ? codeToStage[numCode] || "" : "");
   const errorCode = String(data.error_code || "") || (numCode !== 0 ? codeToErrorCode[numCode] || "" : "");
   return {
     message: String(out.message || data.message || "请求失败"),

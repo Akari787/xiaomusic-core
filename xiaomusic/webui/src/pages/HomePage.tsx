@@ -286,6 +286,15 @@ function explainPlaybackError(
   if (code === "E_XIAOMI_PLAY_FAILED") {
     return "小爱端播放失败，请检查设备在线状态与当前播放权限。";
   }
+  if (code === "E_DEVICE_NOT_FOUND") {
+    return "目标设备不存在或当前不可用，请重新选择设备后重试。";
+  }
+  if (code === "E_INVALID_REQUEST") {
+    return message || "请求参数不合法，请检查输入后重试。";
+  }
+  if (stage === "request") {
+    return `请求参数错误：${message || code || "未知错误"}`;
+  }
   if (stage === "resolve") {
     return `解析阶段失败：${message || code || "未知错误"}`;
   }
