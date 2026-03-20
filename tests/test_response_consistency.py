@@ -28,8 +28,6 @@ def test_api_v1_routes_whitelist_only():
         ("POST", "/api/v1/control/shutdown-timer"),
         ("POST", "/api/v1/library/favorites/add"),
         ("POST", "/api/v1/library/favorites/remove"),
-        ("POST", "/api/v1/playlist/play"),
-        ("POST", "/api/v1/playlist/play-index"),
         ("POST", "/api/v1/library/refresh"),
         ("GET", "/api/v1/devices"),
         ("GET", "/api/v1/system/status"),

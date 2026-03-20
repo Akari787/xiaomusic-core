@@ -4,7 +4,7 @@ import logging
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Query
 
 from xiaomusic import __version__
 from xiaomusic.api.api_error import ApiError
@@ -16,7 +16,6 @@ from xiaomusic.api.models import (
     LibraryRefreshRequest,
     PlayModeRequest,
     PlayRequest,
-    PlaylistPlayRequest,
     ResolveRequest,
     ShutdownTimerRequest,
     TtsRequest,
@@ -89,10 +88,6 @@ def _require_device(device_id: str, request_id: str):
             request_id=request_id,
         )
     return xm
-
-
-def _playlist_arg(playlist_name: str, music_name: str = "") -> str:
-    return f"{playlist_name}|{music_name}" if music_name else playlist_name
 
 
 def _map_api_exception(exc: Exception, request_id: str) -> dict[str, Any]:
@@ -636,80 +631,6 @@ async def api_v1_library_favorites_remove(data: FavoritesRequest):
             default_error_code="E_FAVORITES_REMOVE_FAILED",
             default_stage="library",
             default_message="favorites remove failed",
-        )
-
-
-@router.post("/api/v1/playlist/play")
-async def api_v1_playlist_play(data: PlaylistPlayRequest):
-    request_id = _next_request_id(data.request_id)
-    try:
-        if not str(data.playlist_name or "").strip():
-            raise _bad_request(request_id, "playlist_name is required", field="playlist_name")
-        xm = _require_device(data.device_id, request_id)
-        await xm.play_music_list(did=data.device_id, arg1=_playlist_arg(data.playlist_name, data.music_name))
-        return _api_ok(
-            {
-                "status": "ok",
-                DEVICE_ID: data.device_id,
-                "playlist_name": data.playlist_name,
-                "music_name": data.music_name,
-            },
-            request_id=request_id,
-        )
-    except Exception as exc:
-        return _map_structured_endpoint_exception(
-            exc,
-            request_id,
-            default_error_code="E_PLAYLIST_PLAY_FAILED",
-            default_stage="library",
-            default_message="playlist play failed",
-        )
-
-
-@router.post("/api/v1/playlist/play-index")
-async def api_v1_playlist_play_index(data: dict[str, Any] = Body(...)):
-    request_id = _next_request_id(str(data.get(REQUEST_ID) or "") or None)
-    try:
-        device_id = str(data.get(DEVICE_ID) or "").strip()
-        if not device_id:
-            raise _bad_request(request_id, "device_id is required", field=DEVICE_ID)
-
-        playlist_name = str(data.get("playlist_name") or "").strip()
-        if not playlist_name:
-            raise _bad_request(request_id, "playlist_name is required", field="playlist_name")
-
-        raw_index = data.get("index")
-        if raw_index in (None, ""):
-            raise _bad_request(request_id, "index is required", field="index")
-        try:
-            index = int(raw_index)
-        except (TypeError, ValueError):
-            raise _bad_request(request_id, "index must be an integer", field="index") from None
-        if index < 1:
-            raise _bad_request(request_id, "index must be >= 1", field="index")
-
-        xm = _require_device(device_id, request_id)
-        await xm.play_music_list_by_index(
-            did=device_id,
-            playlist_name=playlist_name,
-            index=index,
-        )
-        return _api_ok(
-            {
-                "status": "ok",
-                DEVICE_ID: device_id,
-                "playlist_name": playlist_name,
-                "index": index,
-            },
-            request_id=request_id,
-        )
-    except Exception as exc:
-        return _map_structured_endpoint_exception(
-            exc,
-            request_id,
-            default_error_code="E_PLAYLIST_INDEX_FAILED",
-            default_stage="library",
-            default_message="playlist play-index failed",
         )
 
 

@@ -78,20 +78,13 @@ v1 API 负责暴露以下正式能力：
 
 所有正式播放请求必须通过 `POST /api/v1/play` 进入统一播放执行路径。
 
-`POST /api/v1/playlist/play` 与 `POST /api/v1/playlist/play-index` 不属于正式播放入口。
-
-这两个接口当前若仍存在，只能按以下定位理解：
-
-- 过渡入口
-- 非推荐入口
-- 待收敛入口
+`POST /api/v1/playlist/play` 与 `POST /api/v1/playlist/play-index` 已从正式实现中删除。
 
 约束：
 
 - 新前端功能不得新增对 `/api/v1/playlist/*` 的依赖
 - 新插件能力与新来源扩展必须通过 `/api/v1/play` 接入
 - 不再对 `/api/v1/playlist/*` 做长期播放能力扩展承诺
-- 若后续继续保留 `/api/v1/playlist/*`，其职责应逐步转向播放上下文构建或选择，而不是继续承担正式播放入口职责
 
 ### 2.4 非 v1 范围
 
@@ -169,7 +162,7 @@ v1 API 负责暴露以下正式能力：
 
 ## 4. 正式白名单接口
 
-本版本正式白名单接口共 20 个：
+本版本正式白名单接口共 18 个：
 
 ### 4.1 播放与解析
 
@@ -189,19 +182,17 @@ v1 API 负责暴露以下正式能力：
 11. `POST /api/v1/control/play-mode`
 12. `POST /api/v1/control/shutdown-timer`
 
-### 4.3 歌单与音乐库
+### 4.3 音乐库
 
-13. `POST /api/v1/playlist/play`
-14. `POST /api/v1/playlist/play-index`
-15. `POST /api/v1/library/favorites/add`
-16. `POST /api/v1/library/favorites/remove`
-17. `POST /api/v1/library/refresh`
+13. `POST /api/v1/library/favorites/add`
+14. `POST /api/v1/library/favorites/remove`
+15. `POST /api/v1/library/refresh`
 
 ### 4.4 查询
 
-18. `GET /api/v1/devices`
-19. `GET /api/v1/system/status`
-20. `GET /api/v1/player/state`
+16. `GET /api/v1/devices`
+17. `GET /api/v1/system/status`
+18. `GET /api/v1/player/state`
 
 ---
 
@@ -252,8 +243,6 @@ Class B 接口：
 
 - `POST /api/v1/control/play-mode`
 - `POST /api/v1/control/shutdown-timer`
-- `POST /api/v1/playlist/play`（过渡入口，非正式播放入口）
-- `POST /api/v1/playlist/play-index`（过渡入口，非正式播放入口）
 - `POST /api/v1/library/favorites/add`
 - `POST /api/v1/library/favorites/remove`
 - `POST /api/v1/library/refresh`
@@ -337,20 +326,12 @@ Class B 成功响应不得要求调用方假设存在：
 特别约束：
 
 - `POST /api/v1/play` 是唯一正式播放入口
-- `POST /api/v1/playlist/play` 的成功响应不与 `POST /api/v1/play` 同构
-- `POST /api/v1/playlist/play` 不保证返回 `source_plugin`
-- `POST /api/v1/playlist/play` 不保证返回 `transport`
-- 前端与其他调用方不得依赖 `POST /api/v1/playlist/play` 具备 `source_plugin/transport`
-- `POST /api/v1/playlist/play` 不得作为新能力设计的正式播放基准
-
-同样约束也适用于：
-
-- `POST /api/v1/playlist/play-index`
 - `POST /api/v1/library/favorites/add`
 - `POST /api/v1/library/favorites/remove`
 - `POST /api/v1/library/refresh`
 - `POST /api/v1/control/play-mode`
 - `POST /api/v1/control/shutdown-timer`
+  均不要求 `transport/source_plugin`
 
 ### 6.4 Class C 成功响应
 
@@ -370,10 +351,8 @@ Class C 不承诺下列字段：
 
 调用方不得做以下假设：
 
-- 因为 `/api/v1/play` 有 `transport`，就假设 `/api/v1/playlist/play` 也必须有 `transport`
 - 因为某次实现返回了 `source_plugin`，就假设该字段属于所有控制接口正式契约
 - 因为某个内部对象存在更多字段，就假设这些字段属于 v1 正式响应
-- 因为 `/api/v1/playlist/*` 当前仍存在，就假设它们仍是长期正式播放入口
 
 ---
 
@@ -493,8 +472,6 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 | `POST /api/v1/control/next` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
 | `POST /api/v1/control/play-mode` | B | router / runtime 本地控制路径 | `data.status`, `data.device_id`, `request_id` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `POST /api/v1/control/shutdown-timer` | B | router / runtime 本地控制路径 | `data.status`, `data.device_id`, `request_id` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
-| `POST /api/v1/playlist/play` | B | 歌单控制路径 | `data.status`, `data.device_id`, `data.playlist_name`，可含 `data.music_name` | 必须有 `error_code`, `stage` | 过渡入口；非正式播放入口；与 `/api/v1/play` 非同构；不得要求 `transport/source_plugin` |
-| `POST /api/v1/playlist/play-index` | B | 歌单控制路径 | `data.status`, `data.device_id`, `data.playlist_name`, `data.index` | 必须有 `error_code`, `stage` | 过渡入口；非正式播放入口；不得要求 `transport` |
 | `POST /api/v1/library/favorites/add` | B | library 本地控制路径 | `data.status`, `data.device_id`, `data.track_name` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `POST /api/v1/library/favorites/remove` | B | library 本地控制路径 | `data.status`, `data.device_id`, `data.track_name` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `POST /api/v1/library/refresh` | B | library 本地控制路径 | `data.status`，可含范围信息 | 必须有 `error_code`, `stage` | 不得要求 `transport` |
@@ -722,84 +699,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 该接口不承诺 `data.transport`。
 
-### 10.13 `POST /api/v1/playlist/play`
-
-用途：过渡期歌单播放桥接入口，用于表达当前实现中的歌单选择语义。
-
-定位：非正式播放入口，不得作为新播放能力设计基准。
-
-请求体：
-
-```json
-{
-  "device_id": "<device_id>",
-  "playlist_name": "日语",
-  "music_name": "夜に駆ける"
-}
-```
-
-字段约束：
-
-- `device_id: string`，必填，非空
-- `playlist_name: string`，必填，非空
-- `music_name: string`，可选；为空时表示按歌单默认播放规则执行
-
-成功响应最小契约：
-
-- 顶层 envelope
-- `data.status`
-- `data.device_id`
-- `data.playlist_name`
-
-可以包含：
-
-- `data.music_name`
-- `data.extra`
-
-不得要求：
-
-- `data.transport`
-- `data.source_plugin`
-
-该接口与 `POST /api/v1/play` 非同构。
-
-额外约束：
-
-- 新前端功能不得新增对该接口的主播放依赖
-- 新插件能力不得以该接口作为正式播放接入点
-- 对该接口的修改应以维持最小可用和为收敛到 `POST /api/v1/play` 提供桥接为原则
-
-### 10.14 `POST /api/v1/playlist/play-index`
-
-用途：过渡期歌单索引选择桥接入口，用于表达歌单中的第 N 首选择。
-
-定位：非正式播放入口，不得作为新播放能力设计基准。
-
-请求体：
-
-```json
-{
-  "device_id": "<device_id>",
-  "playlist_name": "日语",
-  "index": 3
-}
-```
-
-字段约束：
-
-- `playlist_name: string`，必填，非空
-- `index: integer`，必填
-- `index` 采用 1-based 序号
-
-不得要求 `data.transport`。
-
-额外约束：
-
-- 新前端功能不得新增对该接口的主播放依赖
-- 新插件能力不得以该接口作为正式播放接入点
-- 对该接口的修改应以维持最小可用和为收敛到 `POST /api/v1/play` 提供桥接为原则
-
-### 10.15 `POST /api/v1/library/favorites/add`
+### 10.13 `POST /api/v1/library/favorites/add`
 
 用途：将歌曲加入收藏。
 
@@ -819,7 +719,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 该接口不承诺 `data.transport`。
 
-### 10.16 `POST /api/v1/library/favorites/remove`
+### 10.14 `POST /api/v1/library/favorites/remove`
 
 用途：将歌曲移出收藏。
 
@@ -827,7 +727,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 该接口不承诺 `data.transport`。
 
-### 10.17 `POST /api/v1/library/refresh`
+### 10.15 `POST /api/v1/library/refresh`
 
 用途：刷新音乐库或歌单索引。
 
@@ -839,7 +739,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 该接口不承诺 `data.transport`。
 
-### 10.18 `GET /api/v1/devices`
+### 10.16 `GET /api/v1/devices`
 
 用途：获取设备列表。
 
@@ -851,7 +751,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.devices[].model`
 - `data.devices[].online`
 
-### 10.19 `GET /api/v1/system/status`
+### 10.17 `GET /api/v1/system/status`
 
 用途：获取系统状态。
 
@@ -861,7 +761,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.version`
 - `data.devices_count`
 
-### 10.20 `GET /api/v1/player/state`
+### 10.18 `GET /api/v1/player/state`
 
 用途：获取播放状态查询结果。
 
@@ -918,12 +818,10 @@ Class C 接口必须提供统一 envelope 与结构化错误。
    - 删除了旧文档中以阶段性落地口径描述正式接口的章节
    - 删除了把部分接口写成“目标契约”或“可暂缓收口”的表述
    - 删除了对未显式列出旧行为的默认承诺
-3. `playlist/play` 与 `play` 的契约边界已明确写为：
-   - `POST /api/v1/playlist/play` 属于 Class B
-   - 它不是 `POST /api/v1/play` 的同构接口
-   - 不保证 `source_plugin`
-   - 不保证 `transport`
-   - 调用方不得依赖这两个字段
+3. 播放入口边界已明确写为：
+   - `POST /api/v1/play` 是唯一正式播放入口
+   - `/api/v1/playlist/*` 不再属于白名单正式接口
+   - 新能力不得再以 `playlist/*` 作为播放入口基准
 4. Class A / B / C 划分方式如下：
    - Class A：设备动作型，必须进入统一调度 / 分发链路，成功响应必须可观测 `transport`
    - Class B：本地状态 / 歌单 / 收藏 / 控制型，可保留在 router / runtime 路径，但必须遵守统一 envelope 与错误模型，且不得伪装为 Class A
@@ -955,7 +853,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 4. 以下大框架内容本次保留未动：
    - v1 唯一权威来源
    - Class A / B / C 接口分级
-   - `playlist/play` 与 `play` 非同构
+   - `/api/v1/play` 是唯一正式播放入口
    - Class A 必须要求 `transport`
    - Class B / C 不得假设 `transport`
    - 统一错误模型
@@ -966,16 +864,15 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 1. `POST /api/v1/play` 是唯一正式播放入口。
 2. 所有正式播放请求必须通过 `POST /api/v1/play` 进入统一播放执行路径。
-3. `POST /api/v1/playlist/play` 与 `POST /api/v1/playlist/play-index` 不属于正式播放入口。
+3. `/api/v1/playlist/play` 与 `/api/v1/playlist/play-index` 已从正式白名单实现中删除。
 4. 新前端功能不得新增对 `/api/v1/playlist/*` 的依赖。
 5. 新插件能力与新来源扩展必须通过统一播放入口接入。
-6. 对现有 `/api/v1/playlist/*` 的修改应以维持最小可用和为收敛到 `/api/v1/play` 提供桥接为原则。
-7. 不再对 `/api/v1/playlist/*` 做长期接口能力扩展承诺。
+6. 不再对 `/api/v1/playlist/*` 做长期接口能力扩展承诺。
 
 ## 15. 本次修改说明（供审阅）
 
-1. 本次依据历史统一播放模型中的核心原则修正了播放入口定义：`/api/v1/play` 是唯一正式播放入口，所有正式播放请求最终进入统一执行路径；`/api/v1/playlist/*` 仅保留为过渡桥接入口。
-2. 我将 `/api/v1/play` 与 `/api/v1/playlist/*` 的关系改写为：前者是唯一正式播放入口，后者不是正式播放入口，只是当前仍存在的过渡接口，不得作为新能力设计基准。
+1. 本次依据历史统一播放模型中的核心原则修正了播放入口定义：`/api/v1/play` 是唯一正式播放入口，所有正式播放请求最终进入统一执行路径；`/api/v1/playlist/*` 已从正式实现与白名单中删除。
+2. 我将 `/api/v1/play` 与 `/api/v1/playlist/*` 的关系改写为：前者是唯一正式播放入口，后者不再作为实现中的正式接口存在。
 3. 被删除、降级或改写的旧表述包括：
    - 将 `/api/v1/playlist/play`、`/api/v1/playlist/play-index` 继续当作一等播放能力描述的用语
    - 会让调用方误以为它们与 `/api/v1/play` 并列长期存在的表述

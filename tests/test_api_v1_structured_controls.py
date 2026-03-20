@@ -9,7 +9,6 @@ from xiaomusic.api.models import (
     FavoritesRequest,
     LibraryRefreshRequest,
     PlayModeRequest,
-    PlaylistPlayRequest,
     ShutdownTimerRequest,
 )
 from xiaomusic.api.routers import v1
@@ -57,12 +56,6 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
         async def del_from_favorites(self, **kwargs):
             calls.append(("del_from_favorites", (), kwargs))
 
-        async def play_music_list(self, **kwargs):
-            calls.append(("play_music_list", (), kwargs))
-
-        async def play_music_list_by_index(self, **kwargs):
-            calls.append(("play_music_list_by_index", (), kwargs))
-
         async def gen_music_list(self, **kwargs):
             calls.append(("gen_music_list", (), kwargs))
 
@@ -76,12 +69,6 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
     out_timer = await v1.api_v1_control_shutdown_timer(ShutdownTimerRequest(device_id="did-1", minutes=5))
     out_add = await v1.api_v1_library_favorites_add(FavoritesRequest(device_id="did-1", track_name="song-a"))
     out_remove = await v1.api_v1_library_favorites_remove(FavoritesRequest(device_id="did-1", track_name="song-a"))
-    out_playlist = await v1.api_v1_playlist_play(
-        PlaylistPlayRequest(device_id="did-1", playlist_name="收藏", music_name="song-a")
-    )
-    out_index = await v1.api_v1_playlist_play_index(
-        {"device_id": "did-1", "playlist_name": "收藏", "index": 2}
-    )
     out_refresh = await v1.api_v1_library_refresh(LibraryRefreshRequest())
 
     assert [item[0] for item in calls] == [
@@ -91,19 +78,15 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
         "stop_after_minute",
         "add_to_favorites",
         "del_from_favorites",
-        "play_music_list",
-        "play_music_list_by_index",
         "gen_music_list",
     ]
     assert calls[3][2]["arg1"] == 5
     assert calls[4][2]["arg1"] == "song-a"
-    assert calls[6][2]["arg1"] == "收藏|song-a"
-    assert calls[7][2] == {"did": "did-1", "playlist_name": "收藏", "index": 2}
     assert calls[2][2]["dotts"] is False
     assert calls[2][2]["refresh_playlist"] is False
     assert out_prev["data"]["transport"] == "miio"
     assert out_next["data"]["transport"] == "miio"
-    for out in (out_prev, out_next, out_mode, out_timer, out_add, out_remove, out_playlist, out_index, out_refresh):
+    for out in (out_prev, out_next, out_mode, out_timer, out_add, out_remove, out_refresh):
         assert out["code"] == 0
         assert out["message"] == "ok"
 
@@ -135,41 +118,6 @@ async def test_api_v1_structured_controls_reject_missing_device(monkeypatch):
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
     out = await v1.api_v1_control_next(ControlRequest(device_id="missing"))
-    assert out["code"] == 40004
-    assert out["message"] == "device not found"
-    assert out["data"]["error_code"] == "E_DEVICE_NOT_FOUND"
-    assert out["data"]["stage"] == "request"
-
-
-@pytest.mark.asyncio
-async def test_api_v1_playlist_play_rejects_missing_playlist_name(monkeypatch):
-    class _XM:
-        @staticmethod
-        def did_exist(did: str) -> bool:
-            return True
-
-    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
-    out = await v1.api_v1_playlist_play(
-        PlaylistPlayRequest(device_id="did-1", playlist_name="", music_name="song-a")
-    )
-    assert out["code"] == 40001
-    assert out["message"] == "playlist_name is required"
-    assert out["data"]["field"] == "playlist_name"
-    assert out["data"]["error_code"] == "E_INVALID_REQUEST"
-    assert out["data"]["stage"] == "request"
-
-
-@pytest.mark.asyncio
-async def test_api_v1_playlist_play_rejects_missing_device_with_device_error(monkeypatch):
-    class _XM:
-        @staticmethod
-        def did_exist(did: str) -> bool:
-            return False
-
-    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
-    out = await v1.api_v1_playlist_play(
-        PlaylistPlayRequest(device_id="missing", playlist_name="收藏", music_name="song-a")
-    )
     assert out["code"] == 40004
     assert out["message"] == "device not found"
     assert out["data"]["error_code"] == "E_DEVICE_NOT_FOUND"
@@ -246,56 +194,7 @@ async def test_api_v1_next_unknown_error_has_structured_dispatch_fallback(monkey
     assert out["data"]["stage"] == "dispatch"
 
 
-def test_api_v1_playlist_play_index_http_validates_request_fields_structurally(monkeypatch):
-    class _XM:
-        @staticmethod
-        def did_exist(did: str) -> bool:
-            return did == "did-1"
-
-        async def play_music_list_by_index(self, **kwargs):
-            _ = kwargs
-
-    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+def test_api_v1_playlist_routes_removed_from_router():
     client = _v1_client()
-
-    missing_playlist = client.post(
-        "/api/v1/playlist/play-index",
-        json={"device_id": "did-1", "playlist_name": "", "index": 1},
-    ).json()
-    non_integer_index = client.post(
-        "/api/v1/playlist/play-index",
-        json={"device_id": "did-1", "playlist_name": "收藏", "index": "abc"},
-    ).json()
-    invalid_range_index = client.post(
-        "/api/v1/playlist/play-index",
-        json={"device_id": "did-1", "playlist_name": "收藏", "index": 0},
-    ).json()
-    success = client.post(
-        "/api/v1/playlist/play-index",
-        json={"device_id": "did-1", "playlist_name": "收藏", "index": 2},
-    ).json()
-
-    assert missing_playlist["code"] == 40001
-    assert missing_playlist["data"]["error_code"] == "E_INVALID_REQUEST"
-    assert missing_playlist["data"]["stage"] == "request"
-    assert missing_playlist["data"]["field"] == "playlist_name"
-
-    assert non_integer_index["code"] == 40001
-    assert non_integer_index["message"] == "index must be an integer"
-    assert non_integer_index["data"]["error_code"] == "E_INVALID_REQUEST"
-    assert non_integer_index["data"]["stage"] == "request"
-    assert non_integer_index["data"]["field"] == "index"
-
-    assert invalid_range_index["code"] == 40001
-    assert invalid_range_index["message"] == "index must be >= 1"
-    assert invalid_range_index["data"]["error_code"] == "E_INVALID_REQUEST"
-    assert invalid_range_index["data"]["stage"] == "request"
-    assert invalid_range_index["data"]["field"] == "index"
-
-    assert success["code"] == 0
-    assert success["data"] == {
-        "status": "ok",
-        "device_id": "did-1",
-        "playlist_name": "收藏",
-        "index": 2,
-    }
+    assert client.post("/api/v1/playlist/play", json={}).status_code == 404
+    assert client.post("/api/v1/playlist/play-index", json={}).status_code == 404

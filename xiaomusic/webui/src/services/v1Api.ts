@@ -89,20 +89,6 @@ export interface FavoritesData {
   track_name?: string;
 }
 
-export interface PlaylistData {
-  status?: string;
-  device_id?: string;
-  playlist_name?: string;
-  music_name?: string;
-}
-
-export interface PlaylistIndexData {
-  status?: string;
-  device_id?: string;
-  playlist_name?: string;
-  index?: number;
-}
-
 export interface ApiErrorInfo {
   message: string;
   errorCode: string;
@@ -272,30 +258,6 @@ export async function removeFavorite(deviceId: string, trackName: string): Promi
   return await safePost<FavoritesData>("/api/v1/library/favorites/remove", {
     device_id: deviceId,
     track_name: trackName,
-  });
-}
-
-export async function legacyPlayPlaylist(
-  deviceId: string,
-  playlistName: string,
-  musicName?: string,
-): Promise<ApiEnvelope<PlaylistData>> {
-  return await safePost<PlaylistData>("/api/v1/playlist/play", {
-    device_id: deviceId,
-    playlist_name: playlistName,
-    music_name: musicName ?? "",
-  });
-}
-
-export async function legacyPlayPlaylistByIndex(
-  deviceId: string,
-  playlistName: string,
-  index: number,
-): Promise<ApiEnvelope<PlaylistIndexData>> {
-  return await safePost<PlaylistIndexData>("/api/v1/playlist/play-index", {
-    device_id: deviceId,
-    playlist_name: playlistName,
-    index,
   });
 }
 
