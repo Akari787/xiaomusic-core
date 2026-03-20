@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from xiaomusic.api.models import (
     ControlRequest,
     FavoritesRequest,
     LibraryRefreshRequest,
     PlayModeRequest,
-    PlaylistPlayIndexRequest,
     PlaylistPlayRequest,
     ShutdownTimerRequest,
 )
 from xiaomusic.api.routers import v1
+
+
+def _v1_client() -> TestClient:
+    app = FastAPI()
+    app.include_router(v1.router)
+    return TestClient(app)
 
 
 @pytest.mark.asyncio
@@ -73,7 +80,7 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
         PlaylistPlayRequest(device_id="did-1", playlist_name="收藏", music_name="song-a")
     )
     out_index = await v1.api_v1_playlist_play_index(
-        PlaylistPlayIndexRequest(device_id="did-1", playlist_name="收藏", index=2)
+        {"device_id": "did-1", "playlist_name": "收藏", "index": 2}
     )
     out_refresh = await v1.api_v1_library_refresh(LibraryRefreshRequest())
 
@@ -237,3 +244,58 @@ async def test_api_v1_next_unknown_error_has_structured_dispatch_fallback(monkey
     assert out["message"] == "next operation failed"
     assert out["data"]["error_code"] == "E_NEXT_OPERATION_FAILED"
     assert out["data"]["stage"] == "dispatch"
+
+
+def test_api_v1_playlist_play_index_http_validates_request_fields_structurally(monkeypatch):
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return did == "did-1"
+
+        async def play_music_list_by_index(self, **kwargs):
+            _ = kwargs
+
+    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    client = _v1_client()
+
+    missing_playlist = client.post(
+        "/api/v1/playlist/play-index",
+        json={"device_id": "did-1", "playlist_name": "", "index": 1},
+    ).json()
+    non_integer_index = client.post(
+        "/api/v1/playlist/play-index",
+        json={"device_id": "did-1", "playlist_name": "收藏", "index": "abc"},
+    ).json()
+    invalid_range_index = client.post(
+        "/api/v1/playlist/play-index",
+        json={"device_id": "did-1", "playlist_name": "收藏", "index": 0},
+    ).json()
+    success = client.post(
+        "/api/v1/playlist/play-index",
+        json={"device_id": "did-1", "playlist_name": "收藏", "index": 2},
+    ).json()
+
+    assert missing_playlist["code"] == 40001
+    assert missing_playlist["data"]["error_code"] == "E_INVALID_REQUEST"
+    assert missing_playlist["data"]["stage"] == "request"
+    assert missing_playlist["data"]["field"] == "playlist_name"
+
+    assert non_integer_index["code"] == 40001
+    assert non_integer_index["message"] == "index must be an integer"
+    assert non_integer_index["data"]["error_code"] == "E_INVALID_REQUEST"
+    assert non_integer_index["data"]["stage"] == "request"
+    assert non_integer_index["data"]["field"] == "index"
+
+    assert invalid_range_index["code"] == 40001
+    assert invalid_range_index["message"] == "index must be >= 1"
+    assert invalid_range_index["data"]["error_code"] == "E_INVALID_REQUEST"
+    assert invalid_range_index["data"]["stage"] == "request"
+    assert invalid_range_index["data"]["field"] == "index"
+
+    assert success["code"] == 0
+    assert success["data"] == {
+        "status": "ok",
+        "device_id": "did-1",
+        "playlist_name": "收藏",
+        "index": 2,
+    }

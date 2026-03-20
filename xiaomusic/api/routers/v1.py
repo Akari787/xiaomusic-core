@@ -4,7 +4,7 @@ import logging
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Body, Query
 
 from xiaomusic import __version__
 from xiaomusic.api.api_error import ApiError
@@ -16,7 +16,6 @@ from xiaomusic.api.models import (
     LibraryRefreshRequest,
     PlayModeRequest,
     PlayRequest,
-    PlaylistPlayIndexRequest,
     PlaylistPlayRequest,
     ResolveRequest,
     ShutdownTimerRequest,
@@ -668,23 +667,39 @@ async def api_v1_playlist_play(data: PlaylistPlayRequest):
 
 
 @router.post("/api/v1/playlist/play-index")
-async def api_v1_playlist_play_index(data: PlaylistPlayIndexRequest):
-    request_id = _next_request_id(data.request_id)
+async def api_v1_playlist_play_index(data: dict[str, Any] = Body(...)):
+    request_id = _next_request_id(str(data.get(REQUEST_ID) or "") or None)
     try:
-        if not str(data.playlist_name or "").strip():
+        device_id = str(data.get(DEVICE_ID) or "").strip()
+        if not device_id:
+            raise _bad_request(request_id, "device_id is required", field=DEVICE_ID)
+
+        playlist_name = str(data.get("playlist_name") or "").strip()
+        if not playlist_name:
             raise _bad_request(request_id, "playlist_name is required", field="playlist_name")
-        xm = _require_device(data.device_id, request_id)
+
+        raw_index = data.get("index")
+        if raw_index in (None, ""):
+            raise _bad_request(request_id, "index is required", field="index")
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            raise _bad_request(request_id, "index must be an integer", field="index") from None
+        if index < 1:
+            raise _bad_request(request_id, "index must be >= 1", field="index")
+
+        xm = _require_device(device_id, request_id)
         await xm.play_music_list_by_index(
-            did=data.device_id,
-            playlist_name=data.playlist_name,
-            index=int(data.index),
+            did=device_id,
+            playlist_name=playlist_name,
+            index=index,
         )
         return _api_ok(
             {
                 "status": "ok",
-                DEVICE_ID: data.device_id,
-                "playlist_name": data.playlist_name,
-                "index": int(data.index),
+                DEVICE_ID: device_id,
+                "playlist_name": playlist_name,
+                "index": index,
             },
             request_id=request_id,
         )
