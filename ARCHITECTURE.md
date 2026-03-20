@@ -30,6 +30,11 @@ v1 API 的以下内容统一以 `docs/api/api_v1_spec.md` 为准：
 
 当本文档与 `docs/api/api_v1_spec.md` 冲突时，一律以 `docs/api/api_v1_spec.md` 为准。
 
+其中与播放入口直接相关的约束也以 `docs/api/api_v1_spec.md` 为准：
+
+- `POST /api/v1/play` 是唯一正式播放入口
+- `/api/v1/playlist/*` 不属于正式播放入口
+
 ### 1.3 本文档不承担的职责
 
 本文档不定义：
@@ -52,6 +57,8 @@ v1 API 的以下内容统一以 `docs/api/api_v1_spec.md` 为准：
 - 一部分接口已经或应走统一调度 / 分发链路
 - 另一部分接口当前保留在 router / runtime 本地控制路径
 
+在当前现状中，`POST /api/v1/play` 已被设计为统一播放入口；`/api/v1/playlist/*` 仍是历史残留路径的一部分，但这种并存只表示现状，不表示它们仍是长期正式播放入口。
+
 这种双轨结构是当前实现现状说明，不是契约授权；接口是否允许走哪条路径，以 `docs/api/api_v1_spec.md` 的分类与归属约束为准。
 
 ### 2.2 当前架构现状图
@@ -72,13 +79,13 @@ flowchart TD
 
     U --> R
 
-    R -->|部分动作型接口| F
+    R -->|正式播放与动作型接口| F
     F --> C
     C --> T
     T --> X
     X --> D
 
-    R -->|部分歌单/收藏/本地控制接口| X
+    R -->|歌单残留路径/收藏/本地控制接口| X
     X --> L
 
     R -->|查询接口| Q
@@ -112,6 +119,11 @@ flowchart TD
 
 目标收敛必须与 `docs/api/api_v1_spec.md` 的 Class A / B / C 分类保持一致。
 
+对于播放入口，目标架构还必须满足：
+
+- 所有正式播放请求经 `POST /api/v1/play` 进入统一播放执行路径
+- `/api/v1/playlist/*` 不再作为正式并列播放入口存在
+
 ### 3.2 目标架构图
 
 ```mermaid
@@ -123,6 +135,9 @@ flowchart TD
     B[Class B 本地控制型接口]
     Cq[Class C 查询型接口]
 
+    Play[/POST /api/v1/play\n唯一正式播放入口/]
+    Legacy[/POST /api/v1/playlist/*\n残留过渡入口/]
+
     PF[Playback Facade / Coordinator]
     TR[Transport Router]
     RT[Runtime / XiaoMusic]
@@ -132,12 +147,16 @@ flowchart TD
 
     U --> R
 
-    R --> A
+    R --> Play
+    Play --> A
+
     A --> PF
     PF --> TR
     TR --> RT
     RT --> DV
 
+    R --> Legacy
+    Legacy --> B
     R --> B
     B --> RT
     RT --> LB
@@ -156,12 +175,14 @@ flowchart TD
 - 归属统一调度 / 分发链路
 - 典型路径：Router -> Facade / Coordinator -> Transport Router -> Runtime / Device
 - 核心特征：设备动作执行与 transport 可观测性
+- 正式播放请求只能通过 `POST /api/v1/play` 进入该链路
 
 #### Class B
 
 - 允许保留在 router / runtime 本地控制路径
 - 核心特征：本地控制、歌单控制、收藏控制、库刷新
 - 约束重点：统一 envelope、统一错误模型、不伪装成 Class A
+- `/api/v1/playlist/*` 若仍存在，只是过渡接口，不是正式播放入口
 
 #### Class C
 
@@ -203,6 +224,7 @@ flowchart TD
 
 - 在 `xiaomusic/api/routers/v1.py` 中完成接口语义到内部模块调用的映射
 - 将 API 分级落到正确路径上
+- 保证正式播放请求统一经 `/api/v1/play` 进入播放执行路径
 
 不负责：
 
@@ -225,6 +247,7 @@ flowchart TD
 - 承接统一调度链路的入口
 - 协调来源解析、资源准备与分发动作
 - 组织 Class A 路径中的播放与设备动作编排
+- 承接 `/api/v1/play` 对应的正式播放入口语义
 
 不负责：
 
@@ -310,12 +333,13 @@ flowchart TD
 负责：
 
 - 本地库、歌单、收藏与索引刷新相关能力
-- 歌单内播放、本地歌曲定位、收藏增删等本地控制语义
+- 歌单选择、本地歌曲定位、收藏增删等本地控制语义
 
 不负责：
 
 - 提供 transport 语义
 - 伪装成统一调度型动作链路
+- 定义正式播放入口
 
 上下游交互：
 
@@ -353,11 +377,13 @@ flowchart TD
 
 - 调用 v1 正式接口
 - 根据契约展示结果和错误信息
+- 新播放功能通过 `/api/v1/play` 接入
 
 不负责：
 
 - 推断未在 spec 中承诺的字段
 - 以页面假设定义后端契约
+- 把 `/api/v1/playlist/*` 当作长期正式播放入口
 
 上下游交互：
 
@@ -392,14 +418,15 @@ flowchart TD
 架构含义：
 
 - Class A 的关键不只是“能执行动作”，而是“动作通过统一调度 / 分发链路执行，且 transport 可观测”
+- 其中正式播放请求的唯一入口是 `POST /api/v1/play`
 
 ### 5.2 Class B 典型链路
 
 适用接口示例：
 
-- `POST /api/v1/playlist/play`
 - `POST /api/v1/control/play-mode`
 - `POST /api/v1/library/refresh`
+- `POST /api/v1/playlist/play`（残留过渡路径）
 
 典型调用链：
 
@@ -413,6 +440,7 @@ flowchart TD
 - Class B 的关键不是 transport
 - Class B 不应被包装成 Class A 的响应形态
 - 该类接口仍必须输出统一 envelope 与结构化错误
+- `/api/v1/playlist/*` 当前若仍保留在 Class B 路径中，只表示历史残留实现，不表示其仍是目标态正式播放入口
 
 ### 5.3 Class C 典型链路
 
@@ -448,6 +476,7 @@ flowchart TD
 2. 若不区分 A / B / C，接口容易被误要求同构
 3. 查询接口、歌单接口、本地控制接口容易被错误套入播放动作型契约
 4. 若架构文档越界描述字段与返回模型，就会与 API 契约文档发生冲突
+5. 若继续把 `/api/v1/playlist/*` 当作正式播放入口，会削弱统一播放状态机与唯一播放入口模型
 
 ### 6.2 收敛方向
 
@@ -456,6 +485,8 @@ flowchart TD
 - Class A 进入统一调度 / 分发链路
 - Class B 进入受约束的本地控制路径
 - Class C 进入受约束的只读查询 / 聚合路径
+- 正式播放入口收敛到 `/api/v1/play`
+- `/api/v1/playlist/*` 逐步退化为过渡期上下文桥接接口
 
 收敛重点是：
 
@@ -487,7 +518,15 @@ flowchart TD
 2. 再修改实现
 3. 最后更新 `ARCHITECTURE.md` 中与模块路径、分层解释、收敛阶段相关的说明
 
-### 7.3 文档协作关系
+### 7.3 统一播放入口的架构约束
+
+- `ARCHITECTURE.md` 不定义新的正式播放入口
+- 目标架构中只有 `POST /api/v1/play` 可以承载正式播放入口语义
+- `/api/v1/playlist/*` 在架构说明中只能作为当前残留路径或过渡桥接路径出现
+- 新前端功能不得新增对 `/api/v1/playlist/*` 的依赖
+- 新插件与新来源扩展必须通过统一播放入口接入
+
+### 7.4 文档协作关系
 
 - `docs/api/api_v1_spec.md` 负责“接口怎么承诺”
 - `ARCHITECTURE.md` 负责“系统如何分层、模块如何协作、当前处于什么阶段、目标收敛到哪里”
@@ -516,3 +555,14 @@ flowchart TD
 3. 我把双轨结构写成“当前实现现状说明”，而不是“契约授权”；并明确指出双轨存在的风险是路径差异引发文档漂移，而不是为模糊契约提供合法性。
 4. 三类接口在架构图中的归属体现为：Class A 进入统一调度 / 分发链路，Class B 进入 router / runtime 本地控制路径，Class C 进入只读查询 / 聚合路径。
 5. 本步仍然不涉及代码改动，因为本次任务目标是修正文档角色边界与架构说明方式，避免架构文档与 API 契约文档冲突；实现收敛属于后续代码步骤。
+
+## 10. 本次修改说明（供审阅）
+
+1. 本次依据历史统一播放模型中的原则修正了播放入口定义：`/api/v1/play` 是唯一正式播放入口，所有正式播放请求最终进入统一播放执行路径；`/api/v1/playlist/*` 不再被当作并列正式入口。
+2. 我将 `/api/v1/play` 与 `/api/v1/playlist/*` 的关系改写为：前者是目标态唯一正式播放入口，后者只在“当前现状”或“过渡桥接”语境中出现。
+3. 被删除、降级或改写的旧表述包括：
+   - 可能让人误解 `playlist/*` 与 `/api/v1/play` 并列承担播放入口职责的描述
+   - 在目标架构里将多个播放入口并列进入统一链路的风险表述
+4. 本次受影响的章节包括：
+   - `ARCHITECTURE.md` 的文档优先级、当前架构现状、目标架构图、模块边界、调用链说明、当前问题与收敛方向、与 API 契约文档的关系
+5. 本步不涉及代码修改，因为本次任务目标是先把“唯一正式播放入口”的架构与契约叙述统一；实际入口收敛与状态机迁移属于后续代码步骤。
