@@ -52,6 +52,10 @@ def default_auth_refresh_min_interval_minutes() -> int:
     return int(os.getenv("AUTH_REFRESH_MIN_INTERVAL_MINUTES", "30"))
 
 
+def default_auth_refresh_threshold() -> float:
+    return float(os.getenv("AUTH_REFRESH_THRESHOLD", "0.3"))
+
+
 def default_user_key_word_dict():
     # Unsafe features (exec#) are disabled by default; keep this empty.
     return {}
@@ -314,6 +318,7 @@ class Config:
     qrcode_timeout: int = int(os.getenv("QRCODE_TIMEOUT", "120"))
     auth_refresh_interval_hours: float = field(default_factory=default_auth_refresh_interval_hours)
     auth_refresh_min_interval_minutes: int = field(default_factory=default_auth_refresh_min_interval_minutes)
+    auth_refresh_threshold: float = field(default_factory=default_auth_refresh_threshold)
     mina_high_freq_min_interval_seconds: int = int(
         os.getenv("XIAOMUSIC_MINA_HIGH_FREQ_MIN_INTERVAL_SECONDS", "8")
     )

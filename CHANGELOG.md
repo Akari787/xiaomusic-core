@@ -1,4 +1,11 @@
-## v1.0.8 (2026-03-20)
+## v1.0.8 (2026-03-21)
+
+### Bug 修复
+
+- 修复 `_persist_auth_data()` 无条件覆盖 `saveTime` 导致 24 小时掉线问题：仅在新 token 与旧 token 不同时更新 `saveTime`
+- 优化 `_maybe_scheduled_refresh()` 触发机制：改用百分比阈值判断（默认剩余 30% 时触发），替代固定时间窗口
+- 新增 `auth_refresh_threshold` 配置项（默认 0.3，范围 0.01~0.99），可通过环境变量 `AUTH_REFRESH_THRESHOLD` 覆盖
+- 保留降级路径：TTL 未知时仍使用原有时间窗口逻辑
 
 ### API 边界与收口
 

@@ -1667,6 +1667,11 @@ class AuthManager:
         return max(0.01, float(getattr(self.config, "auth_refresh_interval_hours", 6.0)))
 
     @property
+    def _refresh_threshold(self) -> float:
+        raw = float(getattr(self.config, "auth_refresh_threshold", 0.3))
+        return max(0.01, min(0.99, raw))
+
+    @property
     def _refresh_min_interval_sec(self) -> int:
         mins = max(1, int(getattr(self.config, "auth_refresh_min_interval_minutes", 30)))
         return mins * 60
@@ -2274,8 +2279,25 @@ class AuthManager:
         save_ts = self._token_save_ts()
         if not save_ts:
             return
-        if now - save_ts < self._refresh_interval_hours * 3600:
-            return
+
+        if self._auth_expires_at_ts > 0:
+            total_ttl = self._auth_expires_at_ts - self._auth_login_at_ts
+            remaining = self._auth_expires_at_ts - now
+            threshold = self._refresh_threshold
+            estimated = self._auth_login_at_ts <= 0
+            if remaining < total_ttl * threshold:
+                return
+            self.log.info(
+                f"scheduled_refresh trigger: remaining=%ds total=%ds threshold=%.2f estimated=%s",
+                int(remaining),
+                int(total_ttl),
+                threshold,
+                estimated,
+            )
+        else:
+            if now - save_ts < self._refresh_interval_hours * 3600:
+                return
+
         async with self._relogin_lock:
             ref = await self.refresh_auth_if_needed(
                 reason="scheduled_refresh",
@@ -3176,9 +3198,10 @@ class AuthManager:
             )
             return
         merged = deepcopy(auth_data or {})
-        merged["saveTime"] = int(time.time() * 1000)
         wrote_service = False
         wrote_yast = False
+        old_service = auth_data.get("serviceToken") or ""
+        old_yast = auth_data.get("yetAnotherServiceToken") or ""
         try:
             acct = getattr(mi_account, "token", {}) or {}
             for key in ("passToken", "userId", "deviceId", "cUserId"):
@@ -3191,16 +3214,23 @@ class AuthManager:
                 if mico[1]:
                     merged["serviceToken"] = mico[1]
                     merged.setdefault("yetAnotherServiceToken", mico[1])
-                    wrote_service = True
-                    wrote_yast = True
+                    if mico[1] != old_service:
+                        wrote_service = True
+                    if mico[1] != old_yast:
+                        wrote_yast = True
             if acct.get("serviceToken"):
                 merged["serviceToken"] = acct.get("serviceToken")
-                wrote_service = True
+                if merged["serviceToken"] != old_service:
+                    wrote_service = True
             if acct.get("yetAnotherServiceToken"):
                 merged["yetAnotherServiceToken"] = acct.get("yetAnotherServiceToken")
-                wrote_yast = True
+                if merged["yetAnotherServiceToken"] != old_yast:
+                    wrote_yast = True
         except Exception as e:
             self.log.warning("persist token merge failed: %s", e)
+
+        if wrote_service or wrote_yast:
+            merged["saveTime"] = int(time.time() * 1000)
 
         self.token_store.update(merged, reason=reason or "login")
         self.token_store.flush()
