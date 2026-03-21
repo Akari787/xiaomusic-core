@@ -154,3 +154,112 @@ async def test_player_state_falls_back_to_playingmusic_when_detail_has_no_title(
 
     assert state["cur_music"] == "Local Song"
     assert state["is_playing"] is True
+
+
+@pytest.mark.asyncio
+async def test_player_state_detail_title_overrides_playingmusic_when_playing() -> None:
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return False
+
+        @staticmethod
+        def playingmusic(did: str) -> str:
+            return "Local Song"
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[int, int]:
+            return (0, 0)
+
+        async def get_player_status(self, did: str) -> dict:
+            return {
+                "status": 1,
+                "play_song_detail": {
+                    "audio_name": "YouTube Title",
+                    "position": 5000,
+                    "duration": 180000,
+                },
+            }
+
+    facade = PlaybackFacade(_XM())
+    state = await facade.player_state("did-test")
+
+    assert state["cur_music"] == "YouTube Title"
+    assert state["is_playing"] is True
+
+
+@pytest.mark.asyncio
+async def test_player_state_detail_title_not_used_when_not_playing() -> None:
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return False
+
+        @staticmethod
+        def playingmusic(did: str) -> str:
+            return "Local Song"
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[int, int]:
+            return (0, 0)
+
+        async def get_player_status(self, did: str) -> dict:
+            return {
+                "status": 0,
+                "play_song_detail": {
+                    "audio_name": "Unknown Track",
+                    "position": 0,
+                    "duration": 0,
+                },
+            }
+
+    facade = PlaybackFacade(_XM())
+    state = await facade.player_state("did-test")
+
+    assert state["cur_music"] == "Local Song"
+    assert state["is_playing"] is False
+
+
+@pytest.mark.asyncio
+async def test_player_state_idle_returns_empty_music() -> None:
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return False
+
+        @staticmethod
+        def playingmusic(did: str) -> str:
+            return ""
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[int, int]:
+            return (0, 0)
+
+        async def get_player_status(self, did: str) -> dict:
+            return {
+                "status": 0,
+                "play_song_detail": {
+                    "audio_name": "Unknown Music",
+                    "title": "未知音乐",
+                    "position": 0,
+                    "duration": 0,
+                },
+            }
+
+    facade = PlaybackFacade(_XM())
+    state = await facade.player_state("did-test")
+
+    assert state["cur_music"] == ""
+    assert state["is_playing"] is False

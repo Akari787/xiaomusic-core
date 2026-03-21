@@ -396,7 +396,7 @@ class PlaybackFacade:
             is_playing = True
 
         detail = raw_status.get("play_song_detail")
-        if isinstance(detail, dict):
+        if isinstance(detail, dict) and is_playing:
             song_title = str(
                 detail.get("audio_name") or detail.get("title") or detail.get("name") or ""
             )
