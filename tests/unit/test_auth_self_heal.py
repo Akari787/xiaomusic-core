@@ -1581,3 +1581,67 @@ async def test_auth_call_marks_recovery_active_when_clear_skipped(auth_manager, 
         pass
 
     assert auth_manager._recovery_is_active() is True
+
+
+@pytest.mark.asyncio
+async def test_ensure_logged_in_bypasses_backoff_when_need_login(auth_manager, monkeypatch):
+    """When need_login() is True and backoff is active, ensure_logged_in must
+    bypass the backoff and proceed with recovery — not raise 'relogin backoff
+    active Ns'."""
+
+    auth_manager._next_relogin_allowed_ts = time.time() + 300
+
+    events = []
+
+    class _Log:
+        @staticmethod
+        def info(*args, **kwargs):
+            pass
+
+        @staticmethod
+        def warning(msg, *args, **kwargs):
+            events.append(str(msg))
+
+    auth_manager.log = _Log()
+
+    async def _need_login():
+        return True
+
+    async def _short_rebuild(reason):
+        events.append("short_rebuild")
+        return True
+
+    async def _rebuild(reason, allow_login_fallback=False):
+        events.append("rebuild")
+        auth_manager.mina_service = object()
+        auth_manager.miio_service = object()
+        return True
+
+    auth_manager.need_login = _need_login
+    auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
+    auth_manager.rebuild_services = _rebuild
+    auth_manager._last_ok_ts = 0
+
+    out = await auth_manager.ensure_logged_in(force=True, reason="ut-bypass", prefer_refresh=True)
+    assert out is True
+    bypass_log = next((e for e in events if "bypass_backoff=true" in e), None)
+    assert bypass_log is not None, f"bypass log not found in {events}"
+    assert "reason=need_login" in bypass_log
+
+
+@pytest.mark.asyncio
+async def test_ensure_logged_in_respects_backoff_when_not_need_login(auth_manager):
+    """When need_login() is False and backoff is active, ensure_logged_in must
+    raise 'relogin backoff active Ns' — normal retry throttling is preserved."""
+
+    auth_manager._next_relogin_allowed_ts = time.time() + 300
+
+    async def _need_login():
+        return False
+
+    auth_manager.need_login = _need_login
+    auth_manager._last_ok_ts = time.time() - 60
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await auth_manager.ensure_logged_in(force=True, reason="ut-backoff-preserved")
+    assert "relogin backoff active" in str(exc_info.value)

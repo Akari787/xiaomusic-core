@@ -2328,8 +2328,14 @@ class AuthManager:
                 return False
 
             if now < self._next_relogin_allowed_ts:
-                wait_sec = int(self._next_relogin_allowed_ts - now)
-                raise RuntimeError(f"relogin backoff active {wait_sec}s")
+                if need:
+                    self.log.warning(
+                        f"auth_relogin: bypass_backoff=true reason=need_login "
+                        f"(backoff remaining={int(self._next_relogin_allowed_ts - now)}s)"
+                    )
+                else:
+                    wait_sec = int(self._next_relogin_allowed_ts - now)
+                    raise RuntimeError(f"relogin backoff active {wait_sec}s")
 
             if reason:
                 self.log.warning(f"ensure_logged_in start reason={reason} force={force}")
