@@ -8,9 +8,9 @@ import subprocess
 from urllib.request import urlopen
 from typing import Callable
 
-from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer
-from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy
-from xiaomusic.network_audio.session_manager import StreamSessionManager
+from xiaomusic.relay.local_http_stream_server import LocalHttpStreamServer
+from xiaomusic.relay.reconnect_policy import ReconnectPolicy
+from xiaomusic.relay.session_manager import StreamSessionManager
 
 
 class AudioStreamer:

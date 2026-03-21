@@ -1,4 +1,4 @@
-"""Runtime holder for network audio pipeline inside main app."""
+"""Runtime holder for relay session pipeline inside main app."""
 
 from __future__ import annotations
 
@@ -8,18 +8,18 @@ from dataclasses import asdict
 from threading import Lock
 from urllib.request import urlopen
 
-from xiaomusic.network_audio.audio_streamer import AudioStreamer
-from xiaomusic.network_audio.contracts import ERROR_CODES
-from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer
-from xiaomusic.network_audio.play_service import NetworkAudioPlayService
-from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy
-from xiaomusic.network_audio.resolver import Resolver
-from xiaomusic.network_audio.resolver_cache import ResolverCache
-from xiaomusic.network_audio.session_manager import StreamSessionManager
+from xiaomusic.relay.audio_streamer import AudioStreamer
+from xiaomusic.relay.contracts import ERROR_CODES
+from xiaomusic.relay.local_http_stream_server import LocalHttpStreamServer
+from xiaomusic.relay.play_service import RelayPlayService
+from xiaomusic.relay.reconnect_policy import ReconnectPolicy
+from xiaomusic.relay.resolver import Resolver
+from xiaomusic.relay.resolver_cache import ResolverCache
+from xiaomusic.relay.session_manager import StreamSessionManager
 from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
 
 
-class NetworkAudioRuntime:
+class RelayRuntime:
     def __init__(self, xiaomusic) -> None:
         self.xiaomusic = xiaomusic
         stream_port = os.getenv("XIAOMUSIC_NETWORK_AUDIO_STREAM_PORT")
@@ -56,7 +56,7 @@ class NetworkAudioRuntime:
             live_ttl_seconds=int(os.getenv("XIAOMUSIC_RESOLVER_CACHE_LIVE_TTL_SECONDS", "30")),
             vod_ttl_seconds=int(os.getenv("XIAOMUSIC_RESOLVER_CACHE_VOD_TTL_SECONDS", "300")),
         )
-        self.play_service = NetworkAudioPlayService(
+        self.play_service = RelayPlayService(
             session_manager=self.session_manager,
             resolver=self.resolver,
             audio_streamer=self.audio_streamer,
@@ -147,9 +147,9 @@ class NetworkAudioRuntime:
                 "stream_url": proxy_url,
             }
 
-        if strategy.should_use_network_audio(url):
+        if strategy.should_use_relay(url):
             out = await self.play_and_cast(did=did, url=info.normalized_url, no_cache=no_cache)
-            out["mode"] = "network_audio"
+            out["mode"] = "relay"
             return out
 
         cast_ret = await self.xiaomusic.play_url(did=did, arg1=url)
@@ -188,11 +188,11 @@ class NetworkAudioRuntime:
                 "stream_url": proxy_url,
             }
 
-        if strategy.should_use_network_audio(url):
+        if strategy.should_use_relay(url):
             self.sweep_idle_sessions()
             self.ensure_started()
             out = self.play_service.play_url(info.normalized_url, no_cache=no_cache)
-            out["mode"] = "network_audio"
+            out["mode"] = "relay"
             out["url_info"] = asdict(info)
             if not out.get("ok"):
                 return out
@@ -353,3 +353,6 @@ class NetworkAudioRuntime:
         )
         self.audio_streamer.stop_stream(oldest.sid)
         return True
+
+
+NetworkAudioRuntime = RelayRuntime

@@ -1,16 +1,16 @@
-"""Network audio play orchestration: classify -> resolve -> start stream."""
+"""Relay play orchestration: classify -> resolve -> start stream."""
 
 from __future__ import annotations
 
 from dataclasses import asdict
 import time
 
-from xiaomusic.network_audio.audio_streamer import AudioStreamer
-from xiaomusic.network_audio.resolver_cache import ResolverCache, normalize_cache_key
-from xiaomusic.network_audio.session_manager import StreamSessionManager
+from xiaomusic.relay.audio_streamer import AudioStreamer
+from xiaomusic.relay.resolver_cache import ResolverCache, normalize_cache_key
+from xiaomusic.relay.session_manager import StreamSessionManager
 
 
-class NetworkAudioPlayService:
+class RelayPlayService:
     def __init__(
         self,
         session_manager: StreamSessionManager,

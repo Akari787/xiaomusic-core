@@ -1,4 +1,4 @@
-"""Xiaomi playback adapter contract for network audio."""
+"""Xiaomi playback adapter contract for relay."""
 
 from __future__ import annotations
 

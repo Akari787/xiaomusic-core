@@ -1,10 +1,10 @@
-"""URL classification and normalization for network audio."""
+"""URL classification and normalization for relay sources."""
 
 from __future__ import annotations
 
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from xiaomusic.network_audio.contracts import UrlInfo
+from xiaomusic.relay.contracts import UrlInfo
 
 
 class UrlClassifier:

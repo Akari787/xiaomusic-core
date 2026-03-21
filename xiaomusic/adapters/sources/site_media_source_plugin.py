@@ -6,8 +6,8 @@ from typing import Any, Protocol
 from xiaomusic.core.errors.source_errors import SourceResolveError
 from xiaomusic.core.models.media import MediaRequest, ResolvedMedia
 from xiaomusic.core.source.source_plugin import SourcePlugin
-from xiaomusic.network_audio.resolver import Resolver
-from xiaomusic.network_audio.url_classifier import UrlClassifier
+from xiaomusic.relay.resolver import Resolver
+from xiaomusic.relay.url_classifier import UrlClassifier
 
 
 class _PrepareLinkRuntime(Protocol):

@@ -1,4 +1,4 @@
-"""In-memory stream session lifecycle manager for network audio."""
+"""In-memory relay session lifecycle manager."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from threading import Lock
 from uuid import uuid4
 
-from xiaomusic.network_audio.contracts import SESSION_STATES, Session
+from xiaomusic.relay.contracts import SESSION_STATES, Session
 
 
 def _now_iso() -> str:

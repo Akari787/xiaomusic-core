@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from xiaomusic.network_audio.runtime import NetworkAudioRuntime
+from xiaomusic.relay.runtime import RelayRuntime
 
-_runtime: NetworkAudioRuntime | None = None
+_runtime: RelayRuntime | None = None
 
 
-def get_runtime() -> NetworkAudioRuntime:
+def get_runtime() -> RelayRuntime:
     global _runtime
     if _runtime is None:
         from xiaomusic.api.dependencies import xiaomusic
 
-        _runtime = NetworkAudioRuntime(xiaomusic)
+        _runtime = RelayRuntime(xiaomusic)
     return _runtime

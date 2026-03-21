@@ -1,4 +1,4 @@
-"""Local HTTP stream endpoint for network audio sessions."""
+"""Local HTTP stream endpoint for relay sessions."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import Empty, Queue
 from urllib.parse import urlparse
 
-from xiaomusic.network_audio.session_manager import StreamSessionManager
+from xiaomusic.relay.session_manager import StreamSessionManager
 
 
 class LocalHttpStreamServer:

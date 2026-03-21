@@ -1,4 +1,4 @@
-"""Deterministic reconnect policy for network audio."""
+"""Deterministic reconnect policy for relay streams."""
 
 from __future__ import annotations
 

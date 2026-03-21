@@ -6,7 +6,7 @@ import time
 from threading import Lock
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from xiaomusic.network_audio.contracts import ResolveResult
+from xiaomusic.relay.contracts import ResolveResult
 
 
 def normalize_cache_key(url: str) -> str:

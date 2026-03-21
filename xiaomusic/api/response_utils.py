@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from xiaomusic.api.models import ApiPlaybackResponse, ApiResponse
-from xiaomusic.network_audio.contracts import ERROR_CODES
+from xiaomusic.relay.contracts import ERROR_CODES
 
 
 OK_CODE = 0

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urlparse
 
-from xiaomusic.network_audio.url_classifier import UrlClassifier
+from xiaomusic.relay.url_classifier import UrlClassifier
 
 
 @dataclass
@@ -29,9 +29,12 @@ class LinkPlaybackStrategy:
     def classify(self, raw_url: str):
         return self.classifier.classify(raw_url)
 
-    def should_use_network_audio(self, raw_url: str) -> bool:
+    def should_use_relay(self, raw_url: str) -> bool:
         info = self.classify(raw_url)
         return info.site in {"youtube", "bilibili"}
+
+    def should_use_network_audio(self, raw_url: str) -> bool:
+        return self.should_use_relay(raw_url)
 
     def normalize_input_url(self, raw_url: str) -> str:
         info = self.classify(raw_url)

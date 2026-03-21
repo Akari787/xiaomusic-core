@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
-from xiaomusic.network_audio.contracts import ResolveResult
+from xiaomusic.relay.contracts import ResolveResult
 
 
 def parse_ytdlp_output(payload: dict[str, Any]) -> ResolveResult:

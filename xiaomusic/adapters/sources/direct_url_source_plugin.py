@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from xiaomusic.core.errors.source_errors import SourceResolveError
 from xiaomusic.core.models.media import MediaRequest, ResolvedMedia
 from xiaomusic.core.source.source_plugin import SourcePlugin
-from xiaomusic.network_audio.url_classifier import UrlClassifier
+from xiaomusic.relay.url_classifier import UrlClassifier
 
 
 class DirectUrlSourcePlugin(SourcePlugin):
