@@ -24,13 +24,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: true
+        uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "24"
           cache: "npm"
@@ -46,7 +43,7 @@ jobs:
         env:
           VITE_GITHUB_ISSUES_TOKEN: ${{ secrets.VITE_GITHUB_ISSUES_TOKEN }}
           # Override via repo variable if you use a custom domain.
-          VITE_SITE_BASE: ${{ vars.VITE_SITE_BASE || (github.event.repository.name == format('{0}.github.io', github.repository_owner) && '/' || format('/{0}/', github.event.repository.name)) }}
+          VITE_SITE_BASE: ${{ vars.VITE_SITE_BASE || (github.event.repository.name == format('{0}.github.io', github.repository_owner) && '/' || format('/{0}/', github.repository.name)) }}
         continue-on-error: true
         run: |
           set -o pipefail
@@ -54,7 +51,7 @@ jobs:
 
       - name: Upload VitePress build log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: vitepress-build-log
           path: docs/vitepress-build.log
@@ -65,7 +62,7 @@ jobs:
         run: exit 1
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
