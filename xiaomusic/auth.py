@@ -1566,6 +1566,7 @@ class AuthManager:
         )
         return {
             "auth_mode": self._auth_mode,
+            "last_auth_mode_transition": getattr(self, "_last_auth_mode_transition", {}),
             "login_at": self._iso_utc(self._auth_login_at_ts),
             "expires_at": self._iso_utc(self._auth_expires_at_ts),
             "ttl_remaining_seconds": self._ttl_remaining_seconds() if short_session_available else 0,
@@ -1575,15 +1576,38 @@ class AuthManager:
             "short_session_available": short_session_available,
         }
 
-    def _set_auth_mode(self, mode: str, reason: str = "") -> None:
-        if self._auth_mode == mode:
+    _VALID_AUTH_MODES: frozenset[str] = frozenset({"healthy", "degraded", "locked"})
+
+    def _transition_auth_mode(self, to_mode: str, reason: str = "") -> None:
+        if to_mode not in self._VALID_AUTH_MODES:
+            self.log.warning(
+                "auth_mode transition rejected: invalid mode=%s (current=%s, reason=%s)",
+                to_mode,
+                self._auth_mode,
+                reason,
+            )
             return
-        self._auth_mode = mode
+        from_mode = self._auth_mode
+        if from_mode == to_mode:
+            return
+        self._auth_mode = to_mode
         self._auth_log(
             reason=reason or "auth_state",
-            action="auth_mode",
-            result=mode,
+            action="auth_mode_transition",
+            result=f"{from_mode}->{to_mode}",
         )
+        self._record_last_auth_mode_transition(from_mode, to_mode, reason)
+
+    def _record_last_auth_mode_transition(self, from_mode: str, to_mode: str, reason: str) -> None:
+        if not hasattr(self, "_last_auth_mode_transition"):
+            self._last_auth_mode_transition = {}
+        self._last_auth_mode_transition["from"] = from_mode
+        self._last_auth_mode_transition["to"] = to_mode
+        self._last_auth_mode_transition["reason"] = reason or ""
+        self._last_auth_mode_transition["ts"] = time.time()
+
+    def _set_auth_mode(self, mode: str, reason: str = "") -> None:
+        self._transition_auth_mode(mode, reason)
 
     def _is_auth_locked(self) -> bool:
         return time.time() < self._auth_locked_until_ts
@@ -1596,7 +1620,7 @@ class AuthManager:
         mode_before = self._auth_mode
         self._auth_locked_until_ts = time.time() + self._auth_lock_sec
         self._auth_lock_reason = (reason or "auth failed")[:200]
-        self._set_auth_mode("locked", reason=reason or "auth_lock")
+        self._transition_auth_mode("locked", reason=reason or "auth_lock")
         self._auth_cookie_rebuild_state["last_locked_transition"] = {
             "event": "auth_lock_transition",
             "result": "locked",
@@ -1627,7 +1651,7 @@ class AuthManager:
         self._relogin_fail_streak = 0
         self._next_relogin_allowed_ts = 0.0
         if mode in {"healthy", "degraded"}:
-            self._set_auth_mode(mode, reason=reason or "auth_unlock")
+            self._transition_auth_mode(mode, reason=reason or "auth_unlock")
         self._auth_log(
             reason=reason or "auth_unlock",
             action="unlock",
@@ -1637,7 +1661,7 @@ class AuthManager:
     def auth_status_snapshot(self) -> dict[str, Any]:
         locked = self._is_auth_locked()
         if not locked and self._auth_mode == "locked":
-            self._set_auth_mode("degraded", reason="auth_lock_expired")
+            self._transition_auth_mode("degraded", reason="auth_lock_expired")
         return {
             "mode": self._auth_mode,
             "locked": locked,
@@ -1759,7 +1783,7 @@ class AuthManager:
                     used_refresh_fallback = bool(used_rebuild_strategy == "refresh_token_fallback")
                     if not rebuilt:
                         self._last_auth_error = "missing short session token; rebuild from long auth required"
-                        self._set_auth_mode("degraded", reason="init_all_data_verify_failed")
+                        self._transition_auth_mode("degraded", reason="init_all_data_verify_failed")
                         self._record_runtime_rebind_state(
                             result="failed",
                             reason="init_all_data_verify_failed",
@@ -2160,7 +2184,7 @@ class AuthManager:
                     else:
                         error_code = "short_session_missing_for_runtime_reload"
                         last_error = "short session tokens missing; runtime reload cannot proceed without short session"
-                    self._set_auth_mode("degraded", reason=reason)
+                    self._transition_auth_mode("degraded", reason=reason)
                     self._last_auth_error = last_error
                     self._emit_auth_runtime_reload(
                         result="failed",
@@ -2209,19 +2233,19 @@ class AuthManager:
                     await self.device_manager.update_device_info(self)
                     device_map_refreshed = True
                     self._last_auth_error = ""
-                    self._set_auth_mode("healthy", reason=reason)
+                    self._transition_auth_mode("healthy", reason=reason)
                     verify_result = "ok"
                 else:
                     error_code = "runtime_verify_failed"
                     last_error = "runtime verify failed"
                     self._last_auth_error = last_error
-                    self._set_auth_mode("degraded", reason=reason)
+                    self._transition_auth_mode("degraded", reason=reason)
 
             except Exception as e:
                 last_error = str(e)
                 error_code = type(e).__name__
                 self._last_auth_error = last_error
-                self._set_auth_mode("degraded", reason=reason)
+                self._transition_auth_mode("degraded", reason=reason)
                 runtime_auth_ready = False
 
             self._emit_auth_runtime_reload(
@@ -2382,7 +2406,7 @@ class AuthManager:
                         err_code = "manual_login_required" if entered_manual_login else "short_session_rebuild_failed"
                         err_msg = "short session rebuild failed"
                         final_mode = "locked" if not persistent_auth_available else "degraded"
-                        self._set_auth_mode(final_mode, reason=reason or "ensure_logged_in")
+                        self._transition_auth_mode(final_mode, reason=reason or "ensure_logged_in")
                         self._record_runtime_rebind_state(
                             result="failed",
                             reason=reason or "auth_error",
@@ -2435,7 +2459,7 @@ class AuthManager:
                             error_code="runtime_rebind_failed",
                             error_message="rebuild after short session rebuild failed",
                         )
-                        self._set_auth_mode("degraded", reason=reason or "ensure_logged_in")
+                        self._transition_auth_mode("degraded", reason=reason or "ensure_logged_in")
                         self._emit_auth_recovery_flow(
                             result="failed",
                             initial_state="short_session_missing",
@@ -2484,14 +2508,14 @@ class AuthManager:
                 self._next_relogin_allowed_ts = 0.0
                 self._auth_locked_until_ts = 0.0
                 self._auth_lock_reason = ""
-                self._set_auth_mode("healthy", reason=reason or "ensure_logged_in")
+                self._transition_auth_mode("healthy", reason=reason or "ensure_logged_in")
                 self.log.info("ensure_logged_in success")
                 return True
             except Exception as e:
                 self._relogin_fail_streak += 1
                 delay = min(30 * (2 ** max(self._relogin_fail_streak - 1, 0)), 300)
                 self._next_relogin_allowed_ts = time.time() + delay
-                self._set_auth_mode("degraded", reason=reason or "ensure_logged_in")
+                self._transition_auth_mode("degraded", reason=reason or "ensure_logged_in")
                 persistent_auth_ok = self._has_persistent_auth_fields(self._get_auth_data())
                 if not persistent_auth_ok:
                     self._enter_auth_lock(reason=reason or str(e))

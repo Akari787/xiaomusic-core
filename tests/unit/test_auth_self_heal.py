@@ -542,6 +542,7 @@ def test_auth_debug_state_has_required_fields(auth_manager):
     state = auth_manager.auth_debug_state()
     assert set(state.keys()) == {
         "auth_mode",
+        "last_auth_mode_transition",
         "login_at",
         "expires_at",
         "ttl_remaining_seconds",
@@ -1908,3 +1909,75 @@ async def test_keepalive_proactive_recovery_success_resets_last_ok_ts_and_streak
     assert auth_manager._keepalive_fail_streak == 0
     assert auth_manager._last_ok_ts > 0
     assert auth_manager._keepalive_recovery_cooldown_ts == 0.0
+
+
+# ---------------------------------------------------------------------------
+# State Machine Tests
+# ---------------------------------------------------------------------------
+
+
+def test_auth_mode_healthy_to_degraded_to_healthy(auth_manager):
+    assert auth_manager._auth_mode == "healthy"
+
+    class _LogCapture:
+        def __getattr__(self, name):
+            return lambda *a, **k: None
+
+    auth_manager.log = _LogCapture()
+
+    auth_manager._transition_auth_mode("degraded", reason="sm-test-degraded")
+    assert auth_manager._auth_mode == "degraded"
+    trans = auth_manager.auth_debug_state()["last_auth_mode_transition"]
+    assert trans["from"] == "healthy"
+    assert trans["to"] == "degraded"
+    assert trans["reason"] == "sm-test-degraded"
+
+    auth_manager._transition_auth_mode("healthy", reason="sm-test-recovered")
+    assert auth_manager._auth_mode == "healthy"
+    trans = auth_manager.auth_debug_state()["last_auth_mode_transition"]
+    assert trans["from"] == "degraded"
+    assert trans["to"] == "healthy"
+    assert trans["reason"] == "sm-test-recovered"
+
+
+def test_auth_mode_degraded_to_locked(auth_manager):
+    auth_manager._transition_auth_mode("degraded", reason="sm-test")
+    assert auth_manager._auth_mode == "degraded"
+
+    auth_manager._transition_auth_mode("locked", reason="sm-test-lock")
+    assert auth_manager._auth_mode == "locked"
+    trans = auth_manager.auth_debug_state()["last_auth_mode_transition"]
+    assert trans["from"] == "degraded"
+    assert trans["to"] == "locked"
+
+
+def test_auth_mode_clear_auth_lock_restores_state(auth_manager):
+    auth_manager._transition_auth_mode("locked", reason="sm-test")
+    assert auth_manager._auth_mode == "locked"
+
+    auth_manager.clear_auth_lock(reason="sm-test-unlock", mode="degraded")
+    assert auth_manager._auth_mode == "degraded"
+
+    auth_manager._transition_auth_mode("healthy", reason="sm-test-final")
+    assert auth_manager._auth_mode == "healthy"
+
+
+def test_auth_mode_invalid_mode_rejected(auth_manager):
+    auth_manager._transition_auth_mode("healthy", reason="sm-test-init")
+    assert auth_manager._auth_mode == "healthy"
+
+    warning_log = []
+
+    class _LogCapture:
+        def __getattr__(self, name):
+            return lambda *a, **k: None
+
+        def warning(self, msg, *args, **kwargs):
+            warning_log.append(str(msg) % args)
+
+    auth_manager.log = _LogCapture()
+
+    auth_manager._transition_auth_mode("foobar", reason="sm-test-invalid")
+    assert auth_manager._auth_mode == "healthy"
+    assert len(warning_log) == 1
+    assert "invalid mode=foobar" in warning_log[0]
