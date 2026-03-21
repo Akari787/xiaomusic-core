@@ -1431,7 +1431,7 @@ class AuthManager:
             return True
         if "refresh failed" in text or "刷新token失败" in text:
             return True
-        if "login failed" in text and "mina" in text:
+        if "login failed" in text:
             return True
         return False
 
@@ -2548,10 +2548,12 @@ class AuthManager:
                 result="fail",
                 err=f"{type(e).__name__}:{e}",
             )
-            self._clear_short_lived_session(
+            cleared = self._clear_short_lived_session(
                 clear_reason=ctx or "auth_error",
                 err=e,
             )
+            if not cleared and await self.need_login():
+                self._mark_recovery_active(f"auth_call:{ctx or 'unknown'}")
             await self.ensure_logged_in(
                 force=True,
                 reason=ctx or str(e),

@@ -1464,3 +1464,120 @@ async def test_path_attempts_include_diagnostic_in_rebuild_result(auth_manager, 
     assert first_attempt["result"] == "failed"
     assert first_attempt["error_code"] != ""
     assert first_attempt["failed_reason"] != ""
+
+
+def test_is_short_session_failure_signal_miio_login_failed():
+    """Fix A: miio-class "Login failed" errors (no "mina" in text) should be recognized
+    as short-session failure signals, triggering recovery flow."""
+    from xiaomusic.auth import AuthManager
+
+    am = AuthManager.__new__(AuthManager)
+
+    assert am._is_short_session_failure_signal(
+        reason="miio:text_to_speech",
+        err="Error https://api.io.mi.com/app/miotspec/action: Login failed",
+    ) is True
+
+    assert am._is_short_session_failure_signal(
+        reason="",
+        err="https://api.io.mi.com/remote/ubus: Login failed",
+    ) is True
+
+    assert am._is_short_session_failure_signal(
+        reason="",
+        err="Error https://api.io.mi.com/app/miotspec/action: Login failed (not mina service)",
+    ) is True
+
+    assert am._is_short_session_failure_signal(
+        reason="keepalive",
+        err="network timeout",
+    ) is False
+
+
+def test_is_short_session_failure_signal_mina_still_recognized():
+    """Fix A: mina-class "Login failed" errors still work as before."""
+    from xiaomusic.auth import AuthManager
+
+    am = AuthManager.__new__(AuthManager)
+
+    assert am._is_short_session_failure_signal(
+        reason="mina:player_get_status",
+        err="Error https://api2.mina.mi.com/remote/ubus: Login failed",
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_auth_call_proceeds_recovery_when_clear_skipped_but_need_login(auth_manager, monkeypatch):
+    """Fix B: when _clear_short_lived_session returns False (e.g. signal not recognized)
+    but need_login() is True, auth_call must still call ensure_logged_in and mark
+    recovery as active — recovery should never be silently skipped."""
+
+    call_order = []
+
+    def _clear(clear_reason: str, err=None):
+        call_order.append("clear")
+        return False
+
+    async def _need_login():
+        call_order.append("need_login")
+        return True
+
+    async def _ensure(force=False, reason="", prefer_refresh=False):
+        call_order.append("ensure_logged_in")
+        assert force is True
+        assert prefer_refresh is True
+        return True
+
+    monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
+    auth_manager.need_login = _need_login
+    auth_manager.ensure_logged_in = _ensure
+
+    state = {"n": 0}
+
+    async def _fn():
+        if state["n"] == 0:
+            state["n"] += 1
+            raise RuntimeError("Error https://api.io.mi.com/app/miotspec/action: Login failed")
+        return "ok"
+
+    out = await auth_manager.auth_call(_fn, retry=1, ctx="miio:text_to_speech")
+    assert out == "ok"
+    assert "clear" in call_order
+    assert "need_login" in call_order
+    assert "ensure_logged_in" in call_order
+    assert call_order.index("need_login") > call_order.index("clear")
+    assert auth_manager._recovery_is_active() is True
+
+
+@pytest.mark.asyncio
+async def test_auth_call_marks_recovery_active_when_clear_skipped(auth_manager, monkeypatch):
+    """Fix B: even when _clear_short_lived_session returns False, _mark_recovery_active
+    must be called so that subsequent stages in the recovery flow can observe that
+    recovery is in progress."""
+
+    recovery_before = []
+
+    def _clear(clear_reason: str, err=None):
+        return False
+
+    async def _need_login():
+        return True
+
+    async def _ensure(force=False, reason="", prefer_refresh=False):
+        return True
+
+    monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
+    auth_manager.need_login = _need_login
+    auth_manager.ensure_logged_in = _ensure
+
+    before_chain_id = auth_manager._auth_recovery_chain_id
+
+    async def _fn():
+        raise RuntimeError("Error https://api.io.mi.com/app/miotspec/action: Login failed")
+
+    try:
+        await auth_manager.auth_call(_fn, retry=0, ctx="miio:text_to_speech")
+    except RuntimeError:
+        pass
+
+    assert auth_manager._recovery_is_active() is True
