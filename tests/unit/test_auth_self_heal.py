@@ -1751,3 +1751,160 @@ async def test_keepalive_proactive_recovery_fails_and_sets_cooldown(auth_manager
     assert proactive_forces == [True]
     assert auth_manager._keepalive_recovery_cooldown_ts > time.time()
     assert auth_manager._keepalive_degraded is True
+
+
+@pytest.mark.asyncio
+async def test_ensure_logged_in_locks_when_persistent_auth_missing(auth_manager):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("passToken", None)
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    async def _need_login():
+        return True
+
+    auth_manager.need_login = _need_login
+
+    with pytest.raises(RuntimeError):
+        await auth_manager.ensure_logged_in(force=True, reason="ut-no-persistent", prefer_refresh=True)
+    assert auth_manager.is_auth_locked() is True
+
+
+@pytest.mark.asyncio
+async def test_keepalive_proactive_recovery_succeeds_after_initial_failure(auth_manager, monkeypatch):
+    proactive_attempts = []
+    mina_ctxs = []
+    sleep_count = {"n": 0}
+    ensure_call_n = {"n": 0}
+
+    async def _sleep(delay):
+        sleep_count["n"] += 1
+        if sleep_count["n"] >= 4:
+            raise asyncio.CancelledError()
+
+    async def _noop():
+        pass
+
+    async def _need_login():
+        return False
+
+    async def _ensure(force=False, reason="", prefer_refresh=False):
+        ensure_call_n["n"] += 1
+        if "proactive" in reason:
+            proactive_attempts.append(ensure_call_n["n"])
+        if ensure_call_n["n"] == 1:
+            return False
+        return True
+
+    async def _mina_call(method, *args, **kwargs):
+        ctx = kwargs.get("ctx", "")
+        mina_ctxs.append(ctx)
+        if ctx == "keepalive-proactive-recover":
+            return []
+        raise RuntimeError("401 unauthorized")
+
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    monkeypatch.setattr(auth_manager, "_maybe_scheduled_refresh", _noop)
+    monkeypatch.setattr(auth_manager, "_rebuild_short_session_from_persistent_auth", _noop)
+    auth_manager.need_login = _need_login
+    auth_manager.ensure_logged_in = _ensure
+    auth_manager.mina_call = _mina_call
+    auth_manager._keepalive_degraded = True
+    auth_manager._keepalive_fail_streak = 3
+    auth_manager._keepalive_recovery_cooldown_ts = 0.0
+
+    with pytest.raises(asyncio.CancelledError):
+        await auth_manager.keepalive_loop(interval_sec=7)
+
+    assert len(proactive_attempts) >= 2, f"Expected >=2 proactive attempts, got {proactive_attempts}"
+    assert "keepalive-proactive-recover" in mina_ctxs
+    assert auth_manager._keepalive_degraded is False
+    assert auth_manager._keepalive_fail_streak == 0
+
+
+@pytest.mark.asyncio
+async def test_backoff_bypass_allows_complete_recovery_flow(auth_manager, monkeypatch):
+    auth_manager._next_relogin_allowed_ts = time.time() + 300
+
+    events = []
+
+    class _Log:
+        @staticmethod
+        def info(*args, **kwargs):
+            pass
+
+        @staticmethod
+        def warning(msg, *args, **kwargs):
+            events.append(str(msg))
+
+    auth_manager.log = _Log()
+
+    async def _need_login():
+        return True
+
+    async def _short_rebuild(reason):
+        events.append("short_rebuild")
+        auth_manager.mina_service = object()
+        auth_manager.miio_service = object()
+        return True
+
+    async def _rebuild(reason, allow_login_fallback=False):
+        events.append("rebuild")
+        return True
+
+    def _clear(clear_reason: str, err=None):
+        events.append("clear")
+        return False
+
+    monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
+    auth_manager.need_login = _need_login
+    auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
+    auth_manager.rebuild_services = _rebuild
+    auth_manager._last_ok_ts = 0
+
+    out = await auth_manager.ensure_logged_in(force=True, reason="ut-bypass-clear", prefer_refresh=True)
+    assert out is True
+    bypass_log = next((e for e in events if "bypass_backoff" in e), None)
+    assert bypass_log is not None, f"bypass log not found in {events}"
+    assert "clear" in events
+    assert "short_rebuild" in events
+    assert "rebuild" in events
+
+
+@pytest.mark.asyncio
+async def test_keepalive_proactive_recovery_success_resets_last_ok_ts_and_streak(auth_manager, monkeypatch):
+    async def _sleep(delay):
+        raise asyncio.CancelledError()
+
+    async def _noop():
+        pass
+
+    async def _need_login():
+        return False
+
+    async def _ensure(force=False, reason="", prefer_refresh=False):
+        return True
+
+    async def _mina_call(method, *args, **kwargs):
+        ctx = kwargs.get("ctx", "")
+        if ctx == "keepalive-proactive-recover":
+            return []
+        raise RuntimeError("401 unauthorized")
+
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    monkeypatch.setattr(auth_manager, "_maybe_scheduled_refresh", _noop)
+    auth_manager.need_login = _need_login
+    auth_manager.ensure_logged_in = _ensure
+    auth_manager.mina_call = _mina_call
+    auth_manager._keepalive_degraded = True
+    auth_manager._keepalive_fail_streak = 3
+
+    with pytest.raises(asyncio.CancelledError):
+        await auth_manager.keepalive_loop(interval_sec=7)
+
+    assert auth_manager._keepalive_degraded is False
+    assert auth_manager._keepalive_fail_streak == 0
+    assert auth_manager._last_ok_ts > 0
+    assert auth_manager._keepalive_recovery_cooldown_ts == 0.0

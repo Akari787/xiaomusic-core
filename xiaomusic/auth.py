@@ -2691,6 +2691,7 @@ class AuthManager:
                         )
                         await self.mina_call("device_list", retry=0, ctx="keepalive-proactive-recover")
                         self.log.info("auth keepalive proactive_recovery result=success")
+                        self._last_ok_ts = time.time()
                         self._keepalive_degraded = False
                         self._keepalive_fail_streak = 0
                         self._keepalive_recovery_cooldown_ts = 0.0
