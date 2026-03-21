@@ -83,3 +83,74 @@ async def test_playback_facade_playlist_context_play_uses_runtime_playlist_flow(
     assert out["source_plugin"] == "local_library"
     assert out["transport"] == "device_player"
     assert out["media"]["title"] == "Song A"
+
+
+@pytest.mark.asyncio
+async def test_player_state_prefers_play_song_detail_title_over_playingmusic() -> None:
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def playingmusic(did: str) -> str:
+            return "Old Local Song"
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[int, int]:
+            return (0, 0)
+
+        async def get_player_status(self, did: str) -> dict:
+            return {
+                "status": 1,
+                "play_song_detail": {
+                    "audio_name": "YouTube Video Title",
+                    "position": 0,
+                    "duration": 0,
+                },
+            }
+
+    facade = PlaybackFacade(_XM())
+    state = await facade.player_state("did-test")
+
+    assert state["cur_music"] == "YouTube Video Title"
+    assert state["is_playing"] is True
+
+
+@pytest.mark.asyncio
+async def test_player_state_falls_back_to_playingmusic_when_detail_has_no_title() -> None:
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def playingmusic(did: str) -> str:
+            return "Local Song"
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[int, int]:
+            return (0, 0)
+
+        async def get_player_status(self, did: str) -> dict:
+            return {
+                "status": 1,
+                "play_song_detail": {
+                    "position": 0,
+                    "duration": 0,
+                },
+            }
+
+    facade = PlaybackFacade(_XM())
+    state = await facade.player_state("did-test")
+
+    assert state["cur_music"] == "Local Song"
+    assert state["is_playing"] is True

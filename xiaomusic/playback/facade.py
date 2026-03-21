@@ -397,13 +397,13 @@ class PlaybackFacade:
 
         detail = raw_status.get("play_song_detail")
         if isinstance(detail, dict):
-            if not cur_music:
-                cur_music = str(
-                    detail.get("audio_name")
-                    or detail.get("title")
-                    or detail.get("name")
-                    or ""
-                )
+            song_title = str(
+                detail.get("audio_name") or detail.get("title") or detail.get("name") or ""
+            )
+            if song_title:
+                cur_music = song_title
+            elif not cur_music:
+                cur_music = str(getattr(self.xiaomusic, "playingmusic", lambda _did: "")(did) or "")
             try:
                 detail_pos = float(detail.get("position") or 0)
             except Exception:
