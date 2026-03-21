@@ -20,7 +20,7 @@
 - `xiaomusic/playback/link_strategy.py`：播放链接策略与代理回退决策。
 
 ### Network Audio（relay，legacy alias）
-- `xiaomusic/network_audio/*`（`network_audio` 为 deprecated 术语，正式命名见 `docs/spec/relay_terminology.md`）：relay session 管理、流解析与站内流端点（`/relay/stream/{sid}`）等独立链路。
+- `xiaomusic/relay/*`：relay session 管理、流解析与站内流端点（`/relay/stream/{sid}`）等独立链路。
 
 ### Services
 - `xiaomusic/services/online_music_service.py`：在线音乐搜索、MusicFree JS 插件调用、Jellyfin 搜索/同步。

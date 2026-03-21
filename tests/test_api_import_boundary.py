@@ -27,8 +27,8 @@ def test_import_api_package_no_bcrypt_dependency_load():
     assert "xiaomusic.api.app" not in sys.modules
 
 
-def test_import_api_v1_and_network_audio_without_dependencies_chain():
+def test_import_api_v1_and_relay_without_dependencies_chain():
     _clear_api_modules()
     importlib.import_module("xiaomusic.api.routers.v1")
-    importlib.import_module("xiaomusic.api.routers.network_audio")
+    importlib.import_module("xiaomusic.api.routers.relay")
     assert "xiaomusic.api.dependencies" not in sys.modules

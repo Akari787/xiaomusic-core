@@ -27,7 +27,7 @@
 
 关键文件：`source_plugin.py`、`source_registry.py`
 
-兼容说明：`SourceRegistry.LEGACY_HINT_MAP` 保留旧 hint（`http_url / network_audio / local_music`）到新 hint 的映射，直到外部调用方迁移完成。
+兼容说明：`SourceRegistry.LEGACY_HINT_MAP` 保留旧 hint（`http_url / local_music`）到新 hint 的映射，直到外部调用方迁移完成。`network_audio` hint 已移除。
 
 ## delivery/
 
@@ -92,7 +92,7 @@
 - HTTP 路由与请求解析（属于 `api/`）
 - 具体传输协议实现（属于 `adapters/miio/` 或 `adapters/mina/`）
 - 具体来源插件实现（属于 `adapters/sources/`）
-- 网络音频 session / streamer 等子系统细节（属于 `network_audio/`）
+- relay session / streamer 等子系统细节（属于 `relay/`）
 - 设备生命周期管理（属于 `device_manager.py`）
 - 配置持久化、插件管理（属于各自模块）
 

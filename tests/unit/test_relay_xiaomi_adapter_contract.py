@@ -14,7 +14,7 @@ class _MockMiRejected:
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_ut6_0_xiaomi_adapter_contract_accepts():
-    from xiaomusic.network_audio.xiaomi_adapter import XiaomiPlaybackAdapter  # noqa: PLC0415
+    from xiaomusic.relay.xiaomi_adapter import XiaomiPlaybackAdapter  # noqa: PLC0415
 
     adapter = XiaomiPlaybackAdapter(mina_service=_MockMiAccepted())
     out = await adapter.play(speaker_id="981257654", stream_url="http://127.0.0.1:18090/stream/s_1")
@@ -25,7 +25,7 @@ async def test_ut6_0_xiaomi_adapter_contract_accepts():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_ut6_0_xiaomi_adapter_contract_rejects_with_error_code():
-    from xiaomusic.network_audio.xiaomi_adapter import XiaomiPlaybackAdapter  # noqa: PLC0415
+    from xiaomusic.relay.xiaomi_adapter import XiaomiPlaybackAdapter  # noqa: PLC0415
 
     adapter = XiaomiPlaybackAdapter(mina_service=_MockMiRejected())
     out = await adapter.play(speaker_id="981257654", stream_url="http://127.0.0.1:18090/stream/s_1")

@@ -1,3 +1,16 @@
+## v1.0.9 (unreleased)
+
+### Breaking Change
+
+- **彻底移除 `network_audio` 兼容层**：
+  - 删除 `/network_audio/healthz`、`/network_audio/sessions`、`/network_audio/stream/{sid}` 路由
+  - 删除 `xiaomusic/network_audio/` 模块目录与 `xiaomusic/api/routers/network_audio.py`
+  - 删除 `NetworkAudioRuntime`、`NetworkAudioPlayService`、`should_use_network_audio()` 等兼容别名
+  - 正式路径统一为 `/relay/{healthz,sessions,stream/{sid}}`
+  - 旧有会话不受影响；新生成的 sid 使用 `rs_` 前缀
+  - sid 生成策略不变（`secrets.token_urlsafe(16)`）
+  - API 返回结构不变
+
 ## v1.0.8 (2026-03-21)
 
 ### Bug 修复

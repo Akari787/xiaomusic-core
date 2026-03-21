@@ -39,7 +39,7 @@
 # 与其他目录的关系
 
 - 与 `xiaomusic/playback/`：API 层调用 playback facade 暴露播放控制，不直接承载播放编排细节。
-- 与 `xiaomusic/network_audio/`：API 可以触发网络音频能力，但不应内嵌 resolver、session、streamer 逻辑。
+- 与 `xiaomusic/relay/`：API 可以触发 relay 能力，但不应内嵌 resolver、session、streamer 逻辑。
 - 与 `xiaomusic/core/`：v1 播放接口通过 facade 间接使用 core 模块，不直接操作 coordinator 细节。
 - 与 `xiaomusic/services/` / `xiaomusic/managers/`：API 可以调用 service/manager，但不应在 router 中重新实现其职责。
 

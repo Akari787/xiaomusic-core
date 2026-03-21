@@ -19,7 +19,7 @@ from xiaomusic.core.source.source_registry import SourceRegistry
 from xiaomusic.core.transport.transport import Transport
 from xiaomusic.core.transport.transport_policy import TransportPolicy
 from xiaomusic.core.transport.transport_router import TransportRouter
-from xiaomusic.network_audio.contracts import ResolveResult
+from xiaomusic.relay.contracts import ResolveResult
 
 
 class _TransportStub(Transport):

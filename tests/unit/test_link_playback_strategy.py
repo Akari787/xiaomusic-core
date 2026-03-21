@@ -23,13 +23,13 @@ def test_link_strategy_normalizes_bilibili_video_url():
 
 
 @pytest.mark.unit
-def test_link_strategy_selects_network_audio_for_youtube_and_bilibili():
+def test_link_strategy_selects_relay_for_youtube_and_bilibili():
     from xiaomusic.playback.link_strategy import LinkPlaybackStrategy  # noqa: PLC0415
 
     s = LinkPlaybackStrategy(music_library=_FakeMusicLibrary(), log=None)
-    assert s.should_use_network_audio("https://www.youtube.com/watch?v=vNG3-GRjrAo")
-    assert s.should_use_network_audio("https://www.bilibili.com/video/BV1JbZCBvEdp")
-    assert not s.should_use_network_audio("https://lhttp.qtfm.cn/live/4915/64k.mp3")
+    assert s.should_use_relay("https://www.youtube.com/watch?v=vNG3-GRjrAo")
+    assert s.should_use_relay("https://www.bilibili.com/video/BV1JbZCBvEdp")
+    assert not s.should_use_relay("https://lhttp.qtfm.cn/live/4915/64k.mp3")
 
 
 @pytest.mark.unit

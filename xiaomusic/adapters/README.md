@@ -38,7 +38,7 @@
 
 - 接口定义与抽象基类（属于 `core/source/`、`core/transport/`）
 - 传输路由策略（属于 `core/transport/transport_policy.py`）
-- 网络音频 session、streamer、resolver 细节（属于 `network_audio/`）
+- relay session、streamer、resolver 细节（属于 `relay/`）
 - HTTP API 路由与请求模型（属于 `api/`）
 
 # 关键入口
@@ -51,7 +51,7 @@
 
 - **`xiaomusic/core/`**：本目录实现 core 定义的接口（`SourcePlugin` / `Transport`），core 通过注册表持有接口引用，不直接 import 本目录。
 - **`xiaomusic/playback/`**：facade 层在启动时触发 `register_default_source_plugins()` 完成注册，之后不再直接访问本目录。
-- **`xiaomusic/network_audio/`**：`SiteMediaSourcePlugin` 内部使用 network_audio 的 resolver / runtime 能力，属于单向依赖。
+- **`xiaomusic/relay/`**：`SiteMediaSourcePlugin` 内部使用 relay 的 resolver / runtime 能力，属于单向依赖。
 
 # 新增代码规则
 

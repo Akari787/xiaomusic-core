@@ -5,8 +5,8 @@ import pytest
 
 @pytest.mark.component
 def test_ct3_1_single_connection_policy_rejects_second_client():
-    from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
-    from xiaomusic.network_audio.session_manager import StreamSessionManager  # noqa: PLC0415
+    from xiaomusic.relay.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
+    from xiaomusic.relay.session_manager import StreamSessionManager  # noqa: PLC0415
 
     sessions = StreamSessionManager()
     session = sessions.create_session(input_url="https://www.youtube.com/watch?v=vNG3-GRjrAo")
@@ -35,8 +35,8 @@ def test_ct3_1_single_connection_policy_rejects_second_client():
 
 @pytest.mark.component
 def test_ct3_1_multi_client_policy_allows_second_when_configured():
-    from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
-    from xiaomusic.network_audio.session_manager import StreamSessionManager  # noqa: PLC0415
+    from xiaomusic.relay.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
+    from xiaomusic.relay.session_manager import StreamSessionManager  # noqa: PLC0415
 
     sessions = StreamSessionManager()
     session = sessions.create_session(input_url="https://www.youtube.com/watch?v=vNG3-GRjrAo")

@@ -9,7 +9,7 @@ from xiaomusic.adapters.sources.site_media_source_plugin import SiteMediaSourceP
 from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
 from xiaomusic.core.errors.source_errors import SourceResolveError
 from xiaomusic.core.models.media import MediaRequest
-from xiaomusic.network_audio.contracts import ResolveResult
+from xiaomusic.relay.contracts import ResolveResult
 
 
 @dataclass

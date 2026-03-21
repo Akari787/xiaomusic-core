@@ -1,7 +1,7 @@
 import pytest
 
-from xiaomusic.network_audio.contracts import SESSION_STATES
-from xiaomusic.network_audio.session_manager import StreamSessionManager
+from xiaomusic.relay.contracts import SESSION_STATES
+from xiaomusic.relay.session_manager import StreamSessionManager
 
 
 def test_update_state_updates_transition_and_error_fields():

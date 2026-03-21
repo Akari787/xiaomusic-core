@@ -51,7 +51,7 @@
 - Cookie 与 HTTP 会话工具
 - 随机字符串生成
 
-典型使用方：`xiaomusic.py`（版本更新）、`network_audio/`（进程调用）
+典型使用方：`xiaomusic.py`（版本更新）、`relay/`（进程调用）
 
 ## text_utils.py
 

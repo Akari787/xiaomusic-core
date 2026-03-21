@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from xiaomusic.network_audio.contracts import ResolveResult
-from xiaomusic.network_audio.runtime import NetworkAudioRuntime
+from xiaomusic.relay.contracts import ResolveResult
+from xiaomusic.relay.runtime import RelayRuntime
 
 
 def _fake_xiaomusic():
@@ -18,7 +18,7 @@ def _fake_xiaomusic():
 
 
 def test_stream_fail_invalidates_resolver_cache():
-    runtime = NetworkAudioRuntime(_fake_xiaomusic())
+    runtime = RelayRuntime(_fake_xiaomusic())
     key = "https://www.youtube.com/watch?v=abc123"
 
     result = ResolveResult(
@@ -44,7 +44,7 @@ def test_stream_fail_invalidates_resolver_cache():
 
 
 def test_non_stream_error_does_not_invalidate_cache():
-    runtime = NetworkAudioRuntime(_fake_xiaomusic())
+    runtime = RelayRuntime(_fake_xiaomusic())
     key = "https://www.youtube.com/watch?v=abc124"
     result = ResolveResult(
         ok=True,

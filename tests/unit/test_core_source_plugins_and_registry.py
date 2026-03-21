@@ -14,7 +14,7 @@ from xiaomusic.adapters.sources.site_media_source_plugin import SiteMediaSourceP
 from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
 from xiaomusic.core.models.media import MediaRequest
 from xiaomusic.core.source.source_registry import SourceRegistry
-from xiaomusic.network_audio.contracts import ResolveResult
+from xiaomusic.relay.contracts import ResolveResult
 
 
 @pytest.mark.unit
@@ -118,13 +118,6 @@ def test_source_registry_prefers_source_hint_then_can_resolve():
         query="https://www.youtube.com/watch?v=iPnaF8Ngk3Q",
     )
     assert registry.get_plugin(req_na.source_hint, req_na).name == "site_media"
-
-    req_na_compat = MediaRequest(
-        request_id="r5c",
-        source_hint="network_audio",
-        query="https://www.youtube.com/watch?v=iPnaF8Ngk3Q",
-    )
-    assert registry.get_plugin(req_na_compat.source_hint, req_na_compat).name == "site_media"
 
     req_local = MediaRequest(
         request_id="r6",

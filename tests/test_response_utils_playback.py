@@ -1,5 +1,5 @@
 from xiaomusic.api.response_utils import playback_response
-from xiaomusic.network_audio.contracts import ERROR_CODES
+from xiaomusic.relay.contracts import ERROR_CODES
 
 
 def test_playback_response_error_uses_error_code_mapping():

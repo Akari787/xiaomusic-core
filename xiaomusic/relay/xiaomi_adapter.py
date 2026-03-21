@@ -15,15 +15,15 @@ class XiaomiPlaybackAdapter:
                     "play_by_music_url",
                     speaker_id,
                     stream_url,
-                    audio_id="network_audio_stream",
+                    audio_id="relay_stream",
                     retry=1,
-                    ctx="network_audio_adapter",
+                    ctx="relay_adapter",
                 )
             else:
                 ret = await self.mina_service.play_by_music_url(
                     device_id=speaker_id,
                     url=stream_url,
-                    audio_id="network_audio_stream",
+                    audio_id="relay_stream",
                 )
         except Exception as exc:  # noqa: BLE001
             return {

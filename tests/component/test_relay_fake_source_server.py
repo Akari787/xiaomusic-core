@@ -5,7 +5,7 @@ import pytest
 
 @pytest.mark.component
 def test_ct2_0_fake_source_available_for_stream_read():
-    from xiaomusic.network_audio.fake_source_server import FakeSourceServer  # noqa: PLC0415
+    from xiaomusic.relay.fake_source_server import FakeSourceServer  # noqa: PLC0415
 
     server = FakeSourceServer()
     server.start()

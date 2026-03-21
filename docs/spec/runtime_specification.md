@@ -76,7 +76,7 @@
 
 约束：
 
-- `source` 字段必须是四类正式来源标识之一，不允许历史名（`network_audio`）进入本字段。
+- `source` 字段必须是四类正式来源标识之一，`network_audio` 已从 source hint 中移除。
 - `stream_url` 必须是 `http://` 或 `https://`，否则 `DeliveryAdapter` 会拒绝并抛 `UndeliverableStreamError`。
 
 ### 1.4 PreparedStream 与 DeliveryPlan
@@ -171,7 +171,7 @@ class SourcePlugin(ABC):
 | 旧值 | 映射目标 |
 |---|---|
 | `http_url` | `direct_url` |
-| `network_audio` | `site_media` |
+| `site_media` | `site_media` |
 | `local_music` | `local_library` |
 
 ---

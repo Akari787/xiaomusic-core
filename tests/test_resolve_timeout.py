@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from xiaomusic.network_audio.runtime import NetworkAudioRuntime
+from xiaomusic.relay.runtime import RelayRuntime
 
 
 def _fake_xiaomusic():
@@ -17,7 +17,7 @@ def _fake_xiaomusic():
 
 
 def test_resolving_session_timeout_moves_to_failed():
-    runtime = NetworkAudioRuntime(_fake_xiaomusic())
+    runtime = RelayRuntime(_fake_xiaomusic())
     runtime.resolve_timeout_seconds = 15
 
     s = runtime.session_manager.create_session("https://a")

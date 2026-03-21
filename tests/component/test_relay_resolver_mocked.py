@@ -13,8 +13,8 @@ class _FakeRunner:
 
 @pytest.mark.component
 def test_ct1_resolver_mocked_success():
-    from xiaomusic.network_audio.resolver import Resolver  # noqa: PLC0415
-    from xiaomusic.network_audio.ytdlp_runner import RunnerResult  # noqa: PLC0415
+    from xiaomusic.relay.resolver import Resolver  # noqa: PLC0415
+    from xiaomusic.relay.ytdlp_runner import RunnerResult  # noqa: PLC0415
 
     stdout = json.dumps(
         {
@@ -39,8 +39,8 @@ def test_ct1_resolver_mocked_success():
 
 @pytest.mark.component
 def test_ct1_resolver_mocked_timeout_error():
-    from xiaomusic.network_audio.resolver import Resolver  # noqa: PLC0415
-    from xiaomusic.network_audio.ytdlp_runner import RunnerResult  # noqa: PLC0415
+    from xiaomusic.relay.resolver import Resolver  # noqa: PLC0415
+    from xiaomusic.relay.ytdlp_runner import RunnerResult  # noqa: PLC0415
 
     runner = _FakeRunner(
         RunnerResult(
@@ -61,8 +61,8 @@ def test_ct1_resolver_mocked_timeout_error():
 
 @pytest.mark.component
 def test_ct1_resolver_mocked_nonzero_exit_error():
-    from xiaomusic.network_audio.resolver import Resolver  # noqa: PLC0415
-    from xiaomusic.network_audio.ytdlp_runner import RunnerResult  # noqa: PLC0415
+    from xiaomusic.relay.resolver import Resolver  # noqa: PLC0415
+    from xiaomusic.relay.ytdlp_runner import RunnerResult  # noqa: PLC0415
 
     runner = _FakeRunner(
         RunnerResult(

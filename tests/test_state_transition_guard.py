@@ -1,4 +1,4 @@
-from xiaomusic.network_audio.session_manager import StreamSessionManager
+from xiaomusic.relay.session_manager import StreamSessionManager
 
 
 def test_illegal_transition_creating_to_streaming_rejected():

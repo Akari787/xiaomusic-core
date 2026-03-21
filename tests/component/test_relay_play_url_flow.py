@@ -8,7 +8,7 @@ class _MockResolver:
         self.source_url = source_url
 
     def resolve(self, url, timeout_seconds=8):  # noqa: ARG002
-        from xiaomusic.network_audio.contracts import ResolveResult  # noqa: PLC0415
+        from xiaomusic.relay.contracts import ResolveResult  # noqa: PLC0415
 
         return ResolveResult(
             ok=True,
@@ -24,12 +24,12 @@ class _MockResolver:
 
 @pytest.mark.component
 def test_ct4_0_play_url_with_mock_resolver():
-    from xiaomusic.network_audio.audio_streamer import AudioStreamer  # noqa: PLC0415
-    from xiaomusic.network_audio.fake_source_server import FakeSourceServer  # noqa: PLC0415
-    from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
-    from xiaomusic.network_audio.play_service import NetworkAudioPlayService  # noqa: PLC0415
-    from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
-    from xiaomusic.network_audio.session_manager import StreamSessionManager  # noqa: PLC0415
+    from xiaomusic.relay.audio_streamer import AudioStreamer  # noqa: PLC0415
+    from xiaomusic.relay.fake_source_server import FakeSourceServer  # noqa: PLC0415
+    from xiaomusic.relay.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
+    from xiaomusic.relay.play_service import RelayPlayService  # noqa: PLC0415
+    from xiaomusic.relay.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
+    from xiaomusic.relay.session_manager import StreamSessionManager  # noqa: PLC0415
 
     sessions = StreamSessionManager()
     local = LocalHttpStreamServer(session_manager=sessions)
@@ -43,7 +43,7 @@ def test_ct4_0_play_url_with_mock_resolver():
         reconnect_policy=ReconnectPolicy(base_delay_seconds=1, max_delay_seconds=1, max_retries=1),
     )
     resolver = _MockResolver(fake.url("/fake/live"))
-    service = NetworkAudioPlayService(
+    service = RelayPlayService(
         session_manager=sessions,
         resolver=resolver,
         audio_streamer=streamer,

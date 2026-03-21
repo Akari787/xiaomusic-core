@@ -33,9 +33,6 @@ class LinkPlaybackStrategy:
         info = self.classify(raw_url)
         return info.site in {"youtube", "bilibili"}
 
-    def should_use_network_audio(self, raw_url: str) -> bool:
-        return self.should_use_relay(raw_url)
-
     def normalize_input_url(self, raw_url: str) -> str:
         info = self.classify(raw_url)
         return info.normalized_url

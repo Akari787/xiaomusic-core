@@ -5,20 +5,20 @@ import pytest
 def test_ct4_1_healthz_and_sessions():
     from fastapi.testclient import TestClient  # noqa: PLC0415
 
-    from xiaomusic.network_audio.api import build_network_audio_app  # noqa: PLC0415
-    from xiaomusic.network_audio.audio_streamer import AudioStreamer  # noqa: PLC0415
-    from xiaomusic.network_audio.fake_source_server import FakeSourceServer  # noqa: PLC0415
-    from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
-    from xiaomusic.network_audio.play_service import NetworkAudioPlayService  # noqa: PLC0415
-    from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
-    from xiaomusic.network_audio.session_manager import StreamSessionManager  # noqa: PLC0415
+    from xiaomusic.relay.api import build_relay_app  # noqa: PLC0415
+    from xiaomusic.relay.audio_streamer import AudioStreamer  # noqa: PLC0415
+    from xiaomusic.relay.fake_source_server import FakeSourceServer  # noqa: PLC0415
+    from xiaomusic.relay.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
+    from xiaomusic.relay.play_service import RelayPlayService  # noqa: PLC0415
+    from xiaomusic.relay.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
+    from xiaomusic.relay.session_manager import StreamSessionManager  # noqa: PLC0415
 
     class _MockResolver:
         def __init__(self, source_url):
             self._source_url = source_url
 
         def resolve(self, url, timeout_seconds=8):  # noqa: ARG002
-            from xiaomusic.network_audio.contracts import ResolveResult  # noqa: PLC0415
+            from xiaomusic.relay.contracts import ResolveResult  # noqa: PLC0415
 
             return ResolveResult(
                 ok=True,
@@ -42,12 +42,12 @@ def test_ct4_1_healthz_and_sessions():
         stream_server=local,
         reconnect_policy=ReconnectPolicy(base_delay_seconds=1, max_delay_seconds=1, max_retries=1),
     )
-    service = NetworkAudioPlayService(
+    service = RelayPlayService(
         session_manager=sessions,
         resolver=_MockResolver(fake.url("/fake/live")),
         audio_streamer=streamer,
     )
-    app = build_network_audio_app(play_service=service, session_manager=sessions)
+    app = build_relay_app(play_service=service, session_manager=sessions)
     client = TestClient(app)
 
     try:

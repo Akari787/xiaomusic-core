@@ -85,13 +85,12 @@ docker compose -f docker-compose.hardened.yml up -d --build
 - 优化播放结束后切下一首的计时触发逻辑，降低竞态问题。
 - 新增统一链接播放策略层（`xiaomusic/playback/link_strategy.py`），Jellyfin 自动降级复用同一套 URL 判定/规范化能力。
 - 默认主题"播放测试"已整合为单一"播放链接"入口：同一输入框可直接处理普通音频链接、B 站与 YouTube 链接。
-- 网络视频/直播播放（relay 语义）通过站内流端点回放，正式路径为 `/relay/stream/{sid}`；旧路径 `/network_audio/stream/{sid}` 保留为兼容别名。术语规范详见 `docs/spec/relay_terminology.md`。
+- 网络视频/直播播放（relay 语义）通过站内流端点回放，正式路径为 `/relay/stream/{sid}`。术语规范详见 `docs/spec/relay_terminology.md`。
 
 ### API 收敛说明
 
 - 控制面接口已统一为 `/api/v1/*`。
-- **Breaking Change**：已移除 `/network_audio/play_url`、`/network_audio/play_link`、`/network_audio/stop`。
-- Relay 流端点正式路径为 `/relay/stream/{sid}`；旧路径 `/network_audio/stream/{sid}` 保留为兼容别名，不再作为主文档正式路径。
+- Relay 流端点路径为 `/relay/{healthz,sessions,stream/{sid}}`。
 
 ### API v1 调用示例
 

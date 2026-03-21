@@ -1,6 +1,6 @@
 import pytest
 
-from xiaomusic.network_audio.runtime import NetworkAudioRuntime
+from xiaomusic.relay.runtime import RelayRuntime
 
 
 def test_runtime_healthz_contains_cache_and_active_stats():
@@ -10,7 +10,7 @@ def test_runtime_healthz_contains_cache_and_active_stats():
             self.music_library = object()
             self.log = object()
 
-    rt = NetworkAudioRuntime(_XM())
+    rt = RelayRuntime(_XM())
     out = rt.healthz()
     assert "active_sessions" in out
     assert "cache_stats" in out

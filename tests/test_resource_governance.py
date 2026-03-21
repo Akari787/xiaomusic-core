@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from xiaomusic.network_audio.runtime import NetworkAudioRuntime
+from xiaomusic.relay.runtime import RelayRuntime
 
 
 def _fake_xiaomusic():
@@ -22,7 +22,7 @@ def _fake_xiaomusic():
 
 @pytest.mark.asyncio
 async def test_max_active_sessions_auto_stops_oldest_then_allows_new_play(monkeypatch):
-    runtime = NetworkAudioRuntime(_fake_xiaomusic())
+    runtime = RelayRuntime(_fake_xiaomusic())
     runtime.max_active_sessions = 3
     monkeypatch.setattr(runtime, "ensure_started", lambda: None)
 
@@ -63,7 +63,7 @@ async def test_max_active_sessions_auto_stops_oldest_then_allows_new_play(monkey
 
 
 def test_idle_timeout_sweep_stops_old_active_session(monkeypatch):
-    runtime = NetworkAudioRuntime(_fake_xiaomusic())
+    runtime = RelayRuntime(_fake_xiaomusic())
     runtime.idle_timeout_seconds = 120
 
     s = runtime.session_manager.create_session("https://x")
@@ -81,7 +81,7 @@ def test_idle_timeout_sweep_stops_old_active_session(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_max_active_sessions_still_returns_error_when_cannot_free_slot(monkeypatch):
-    runtime = NetworkAudioRuntime(_fake_xiaomusic())
+    runtime = RelayRuntime(_fake_xiaomusic())
     runtime.max_active_sessions = 3
     monkeypatch.setattr(runtime, "ensure_started", lambda: None)
     monkeypatch.setattr(runtime, "_stop_oldest_active_session", lambda: False)
@@ -98,7 +98,7 @@ async def test_max_active_sessions_still_returns_error_when_cannot_free_slot(mon
 
 @pytest.mark.asyncio
 async def test_active_limit_uses_selected_device_count(monkeypatch):
-    runtime = NetworkAudioRuntime(_fake_xiaomusic())
+    runtime = RelayRuntime(_fake_xiaomusic())
     runtime.max_active_sessions = 10
     runtime.xiaomusic.config.mi_did = "did-1,did-2"
     monkeypatch.setattr(runtime, "ensure_started", lambda: None)

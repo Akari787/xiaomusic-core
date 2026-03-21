@@ -60,7 +60,7 @@ MediaRequest
 
 兼容项：
 
-- `SourceRegistry.LEGACY_HINT_MAP` 仍保留：`http_url/network_audio (deprecated)/local_music` -> 新 hint（其中 `network_audio` 语义已拆分为 `site_media` 或 `direct_url`）。
+- `SourceRegistry.LEGACY_HINT_MAP` 仍保留：`http_url/local_music` -> 新 hint。`network_audio` 已从 hint 映射中移除。
 - `LegacyPayloadSourcePlugin` 仅承接旧 caller，不作为新功能入口。
 
 ---

@@ -6,11 +6,11 @@ import pytest
 
 @pytest.mark.component
 def test_ct2_2_audio_streamer_reconnect_once_with_flaky_source():
-    from xiaomusic.network_audio.audio_streamer import AudioStreamer  # noqa: PLC0415
-    from xiaomusic.network_audio.fake_source_server import FakeSourceServer  # noqa: PLC0415
-    from xiaomusic.network_audio.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
-    from xiaomusic.network_audio.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
-    from xiaomusic.network_audio.session_manager import StreamSessionManager  # noqa: PLC0415
+    from xiaomusic.relay.audio_streamer import AudioStreamer  # noqa: PLC0415
+    from xiaomusic.relay.fake_source_server import FakeSourceServer  # noqa: PLC0415
+    from xiaomusic.relay.local_http_stream_server import LocalHttpStreamServer  # noqa: PLC0415
+    from xiaomusic.relay.reconnect_policy import ReconnectPolicy  # noqa: PLC0415
+    from xiaomusic.relay.session_manager import StreamSessionManager  # noqa: PLC0415
 
     sessions = StreamSessionManager()
     local = LocalHttpStreamServer(session_manager=sessions)

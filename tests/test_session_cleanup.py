@@ -1,6 +1,6 @@
 import pytest
 
-from xiaomusic.network_audio.session_manager import StreamSessionManager
+from xiaomusic.relay.session_manager import StreamSessionManager
 
 
 @pytest.mark.unit

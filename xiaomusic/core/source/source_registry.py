@@ -24,7 +24,6 @@ class SourceRegistry:
         # compatibility_layer: keep legacy source hints until all external callers migrate.
         # removal_condition: remove after API v2 and configuration migration completion.
         "http_url": "direct_url",
-        "network_audio": "site_media",
         "local_music": "local_library",
     }
 

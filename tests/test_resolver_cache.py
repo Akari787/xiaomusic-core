@@ -1,7 +1,7 @@
 import time
 
-from xiaomusic.network_audio.contracts import ResolveResult
-from xiaomusic.network_audio.resolver_cache import ResolverCache
+from xiaomusic.relay.contracts import ResolveResult
+from xiaomusic.relay.resolver_cache import ResolverCache
 
 
 def _ok_result(is_live=False):

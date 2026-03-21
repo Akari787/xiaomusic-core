@@ -14,9 +14,9 @@ import pytest
     ],
 )
 def test_ct1_0_parse_ytdlp_output_fixture(fixture_name, expected_live, expected_ext):
-    from xiaomusic.network_audio.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
+    from xiaomusic.relay.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
 
-    p = Path("tests/fixtures/network_audio") / fixture_name
+    p = Path("tests/fixtures/relay") / fixture_name
     payload = json.loads(p.read_text(encoding="utf-8"))
 
     result = parse_ytdlp_output(payload)
@@ -31,7 +31,7 @@ def test_ct1_0_parse_ytdlp_output_fixture(fixture_name, expected_live, expected_
 
 @pytest.mark.component
 def test_ct1_0_parse_ytdlp_output_fallback_to_requested_formats_audio_url():
-    from xiaomusic.network_audio.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
+    from xiaomusic.relay.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
 
     payload = {
         "id": "iPnaF8Ngk3Q",
@@ -64,7 +64,7 @@ def test_ct1_0_parse_ytdlp_output_fallback_to_requested_formats_audio_url():
 
 @pytest.mark.component
 def test_ct1_0_parse_ytdlp_output_live_youtube_prefers_non_manifest_audio_url():
-    from xiaomusic.network_audio.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
+    from xiaomusic.relay.ytdlp_parser import parse_ytdlp_output  # noqa: PLC0415
 
     payload = {
         "id": "7CQSzyi8UJE",

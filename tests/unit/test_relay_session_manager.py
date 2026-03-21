@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.unit
 def test_session_manager_create_generates_unique_sid_and_initial_state():
-    from xiaomusic.network_audio.session_manager import StreamSessionManager  # noqa: PLC0415
+    from xiaomusic.relay.session_manager import StreamSessionManager  # noqa: PLC0415
 
     mgr = StreamSessionManager()
 
@@ -17,7 +17,7 @@ def test_session_manager_create_generates_unique_sid_and_initial_state():
 
 @pytest.mark.unit
 def test_session_manager_stop_is_idempotent():
-    from xiaomusic.network_audio.session_manager import StreamSessionManager  # noqa: PLC0415
+    from xiaomusic.relay.session_manager import StreamSessionManager  # noqa: PLC0415
 
     mgr = StreamSessionManager()
     session = mgr.create_session(input_url="https://www.youtube.com/watch?v=iPnaF8Ngk3Q")
@@ -33,7 +33,7 @@ def test_session_manager_stop_is_idempotent():
 
 @pytest.mark.unit
 def test_session_manager_stop_unknown_sid_returns_none():
-    from xiaomusic.network_audio.session_manager import StreamSessionManager  # noqa: PLC0415
+    from xiaomusic.relay.session_manager import StreamSessionManager  # noqa: PLC0415
 
     mgr = StreamSessionManager()
     assert mgr.stop_session("missing") is None

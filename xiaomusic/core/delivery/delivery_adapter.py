@@ -53,7 +53,7 @@ class DeliveryAdapter:
         proxy_url = self._build_proxy_url(media)
         has_proxy = bool(proxy_url)
         can_fallback = media.source in {"site_media", "direct_url", "jellyfin"}
-        is_prepared_stream = parsed.path.startswith("/network_audio/stream/")
+        is_prepared_stream = parsed.path.startswith("/relay/stream/")
 
         direct = PreparedStream(
             final_url=media.stream_url,

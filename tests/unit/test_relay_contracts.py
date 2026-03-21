@@ -7,7 +7,7 @@ import pytest
 
 @pytest.mark.unit
 def test_contract_examples_match_model_definitions():
-    from xiaomusic.network_audio.contracts import (  # noqa: PLC0415
+    from xiaomusic.relay.contracts import (  # noqa: PLC0415
         ERROR_CODES,
         Event,
         ResolveResult,
@@ -15,8 +15,8 @@ def test_contract_examples_match_model_definitions():
         UrlInfo,
     )
 
-    examples_path = Path("docs/network_audio/contracts.examples.json")
-    assert examples_path.exists(), "missing docs/network_audio/contracts.examples.json"
+    examples_path = Path("docs/dev/relay/contracts.examples.json")
+    assert examples_path.exists(), "missing docs/dev/relay/contracts.examples.json"
 
     payload = json.loads(examples_path.read_text(encoding="utf-8"))
 

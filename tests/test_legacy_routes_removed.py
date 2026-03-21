@@ -1,28 +1,28 @@
-from xiaomusic.api.routers import network_audio
+from xiaomusic.api.routers import relay
 
 
 def _route_keys():
     rows = set()
-    for route in network_audio.router.routes:
+    for route in relay.router.routes:
         methods = route.methods or set()
         for method in methods:
             rows.add((method.upper(), route.path))
     return rows
 
 
-def test_legacy_control_routes_removed_from_network_audio_router():
+def test_relay_control_routes_removed():
     routes = _route_keys()
-    assert ("POST", "/network_audio/play_url") not in routes
-    assert ("POST", "/network_audio/play_link") not in routes
-    assert ("POST", "/network_audio/stop") not in routes
+    assert ("POST", "/relay/play_url") not in routes
+    assert ("POST", "/relay/play_link") not in routes
+    assert ("POST", "/relay/stop") not in routes
 
 
-def test_network_audio_stream_route_kept():
+def test_relay_stream_route_exists():
     routes = _route_keys()
-    assert ("GET", "/network_audio/stream/{sid}") in routes
+    assert ("GET", "/relay/stream/{sid}") in routes
 
 
-def test_network_audio_observability_routes_kept():
+def test_relay_observability_routes_exist():
     routes = _route_keys()
-    assert ("GET", "/network_audio/healthz") in routes
-    assert ("GET", "/network_audio/sessions") in routes
+    assert ("GET", "/relay/healthz") in routes
+    assert ("GET", "/relay/sessions") in routes

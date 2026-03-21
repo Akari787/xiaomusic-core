@@ -5,7 +5,7 @@ import pytest
 
 @pytest.mark.component
 def test_ct1_1_ytdlp_runner_kills_process_on_timeout():
-    from xiaomusic.network_audio.ytdlp_runner import YtdlpRunner  # noqa: PLC0415
+    from xiaomusic.relay.ytdlp_runner import YtdlpRunner  # noqa: PLC0415
 
     runner = YtdlpRunner()
     result = runner.run(
