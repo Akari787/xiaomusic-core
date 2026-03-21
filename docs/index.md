@@ -20,6 +20,9 @@ hero:
       text: 开发文档
       link: /dev/index
     - theme: alt
+      text: 规范文档
+      link: /spec/relay_terminology
+    - theme: alt
       text: FAQ
       link: /issues/99
     - theme: alt
