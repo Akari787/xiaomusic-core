@@ -10,11 +10,12 @@
 
 | 正式术语 | 说明 |
 |---|---|
-| **relay** | 由 xiaomusic 进行中转输出的流媒体。当播放源无法被目标设备直连时，由服务端代理转发流量。 |
+| **relay** | xiaomusic 建立 relay session 并通过站内流端点（`/relay/stream/{sid}`）输出的流媒体。relay 会话有独立的生命周期与资源占用。 |
+| **proxy** | xiaomusic 代理请求并将响应透传，不建立持久会话。设备侧拿到的是经过转发的 URL，relay session 不存在。 |
 | **relay session** | 一次 relay 传输的会话实例。 |
 | **relay session id**（sid） | relay session 的唯一标识，用于路由到对应会话。 |
-| **delivery mode** | 流媒体投递方式，取值：`direct`（直连）、`proxy`（透明代理）、`relay`（中转）。 |
-| **network source** | 广义的网络来源媒体，不等同于 relay。任何需要网络获取的媒体源均可称为 network source。 |
+| **delivery mode** | 流媒体投递方式，取值：`direct`（直连）、`proxy`（透明代理）、`relay`（中转）。三者互斥。 |
+| **network source** | 来源层面的概念，指来自远端网络的媒体，不决定最终采用哪种 delivery mode。同一 network source 可能走 direct、proxy 或 relay，视网络条件而定。 |
 
 ---
 
