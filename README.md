@@ -83,15 +83,15 @@ docker compose -f docker-compose.hardened.yml up -d --build
 
 - 修复 Jellyfin `.m4a` 播放无声问题（统一为可播放链路）。
 - 优化播放结束后切下一首的计时触发逻辑，降低竞态问题。
-- 新增统一链接播放策略层（`xiaomusic/playback/link_strategy.py`），Jellyfin 自动降级与网络音频入口复用同一套 URL 判定/规范化能力。
-- 默认主题“播放测试”已整合为单一“播放链接”入口：同一输入框可直接处理普通音频链接、B 站与 YouTube 链接。
-- 网络视频/直播播放统一通过站内路径 `/network_audio/stream/{sid}` 回放，不再需要额外暴露独立转流端口。
+- 新增统一链接播放策略层（`xiaomusic/playback/link_strategy.py`），Jellyfin 自动降级复用同一套 URL 判定/规范化能力。
+- 默认主题"播放测试"已整合为单一"播放链接"入口：同一输入框可直接处理普通音频链接、B 站与 YouTube 链接。
+- 网络视频/直播播放（relay 语义）通过站内流端点回放，当前兼容路径为 `/network_audio/stream/{sid}`；正式路由为 `/relay/stream/{sid}`。术语规范详见 `docs/spec/relay_terminology.md`。
 
 ### API 收敛说明
 
 - 控制面接口已统一为 `/api/v1/*`。
 - **Breaking Change**：已移除 `/network_audio/play_url`、`/network_audio/play_link`、`/network_audio/stop`。
-- 媒体流回放路径保留为 `/network_audio/stream/{sid}`。
+- 媒体流 relay 端点当前兼容路径为 `/network_audio/stream/{sid}`；正式路径为 `/relay/stream/{sid}`。
 
 ### API v1 调用示例
 

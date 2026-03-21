@@ -19,8 +19,8 @@
 - `xiaomusic/playback/facade.py`：API 到新播放核心的薄适配层。
 - `xiaomusic/playback/link_strategy.py`：播放链接策略与代理回退决策。
 
-### Network Audio
-- `xiaomusic/network_audio/*`：网络音频播放、解析、缓存、契约、session 管理等独立链路。
+### Network Audio（relay，legacy alias）
+- `xiaomusic/network_audio/*`（`network_audio` 为 deprecated 术语，正式命名见 `docs/spec/relay_terminology.md`）：relay session 管理、流解析与站内流端点（`/relay/stream/{sid}`）等独立链路。
 
 ### Services
 - `xiaomusic/services/online_music_service.py`：在线音乐搜索、MusicFree JS 插件调用、Jellyfin 搜索/同步。
