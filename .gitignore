@@ -178,3 +178,4 @@ reference/
 
 # Release/build artifacts (do not commit)
 xiaomusic-oauth2-prod-latest-*.tar.gz
+.opencode

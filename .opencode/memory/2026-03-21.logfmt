@@ -1,1 +1,0 @@
-ts=2026-03-21T04:13:15.672Z type=preference scope=global content="每次完成修改后自动提交到GitHub，除非用户明确要求不提交" tags=git,github,commit

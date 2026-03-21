@@ -1,1 +1,0 @@
-ts=2026-03-20T03:16:30.597Z type=preference scope=repo:D:\AI\xiaomusic content="User wants every completed modification pushed to GitHub after it is done; after each completed code/doc change, commit and push to GitHub unless they say otherwise." tags=git,push,workflow
