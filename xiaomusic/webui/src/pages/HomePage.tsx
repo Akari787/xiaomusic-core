@@ -612,8 +612,21 @@ export function HomePage() {
   const isSoundscapeLayout = activeLayout === "soundscape";
   const localSongFresh =
     localPlaybackStartedAt > 0 && Date.now() - Number(localPlaybackStartedAt || 0) < 12000;
+  
+  // Helper function to get snapshot song for fallback display
+  const getSnapshotSongForDisplay = (): string => {
+    if (!activeDid) return "";
+    const snapshot = loadPlaybackSnapshot(activeDid);
+    if (snapshot && snapshot.song) {
+      return String(snapshot.song || "").trim();
+    }
+    return "";
+  };
+  
+  const snapshotSong = status.is_playing ? getSnapshotSongForDisplay() : "";
   const currentMusicName = String(
     status.cur_music ||
+      snapshotSong ||
       (status.is_playing ? rememberedPlayingSong : "") ||
       (localSongFresh ? localPlaybackSong : "") ||
       "",
@@ -1064,8 +1077,23 @@ export function HomePage() {
               );
           }
         }
+        // When is_playing=true but cur_music is empty, try to restore from snapshot
         if (merged.is_playing && !String(merged.cur_music || "").trim()) {
-          merged.cur_music = "";
+          const snapshot = loadPlaybackSnapshot(did);
+          if (snapshot && snapshot.song) {
+            const restoredSong = String(snapshot.song || "").trim();
+            merged.cur_music = restoredSong;
+            // Also try to restore duration if not provided
+            if (!merged.duration && snapshot.duration) {
+              merged.duration = snapshot.duration;
+            }
+          } else if (localPlaybackSongRef.current) {
+            // Fallback to local playback state
+            merged.cur_music = localPlaybackSongRef.current;
+          } else if (rememberedPlayingSongRef.current) {
+            // Fallback to remembered playing song
+            merged.cur_music = rememberedPlayingSongRef.current;
+          }
         }
 
         if (merged.is_playing && String(merged.cur_music || "").trim()) {
@@ -1154,19 +1182,15 @@ export function HomePage() {
       return;
     }
     lastAutoSyncedPlayingSongRef.current = "";
-    setLocalPlaybackStartedAt(0);
-    setLocalPlaybackDuration(0);
-    setLocalPlaybackSong("");
-    localPlaybackStartedAtRef.current = 0;
-    localPlaybackDurationRef.current = 0;
-    localPlaybackSongRef.current = "";
     const remembered = loadRememberedPlayingSong(activeDid);
     const snapshot = loadPlaybackSnapshot(activeDid);
-    if (snapshot) {
+    
+    if (snapshot && snapshot.song) {
       const restoredSong = String(snapshot.song || "").trim();
       const restoredStartedAt = Number(snapshot.started_at) || 0;
       const restoredDuration = Number(snapshot.duration) || 0;
       const snapshotFresh = restoredStartedAt > 0 && Date.now() - restoredStartedAt < 12000;
+      
       if (restoredSong) {
         if (snapshotFresh) {
           setLocalPlaybackSong(restoredSong);
@@ -1183,6 +1207,7 @@ export function HomePage() {
           };
           lastPositivePlaybackAtRef.current = restoredStartedAt;
         } else {
+          // Snapshot is stale but still show the song name
           statusRef.current = {
             ...statusRef.current,
             is_playing: true,
@@ -1190,7 +1215,16 @@ export function HomePage() {
           };
         }
       }
+    } else {
+      // No snapshot found, reset local playback state
+      setLocalPlaybackStartedAt(0);
+      setLocalPlaybackDuration(0);
+      setLocalPlaybackSong("");
+      localPlaybackStartedAtRef.current = 0;
+      localPlaybackDurationRef.current = 0;
+      localPlaybackSongRef.current = "";
     }
+    
     setVolume(loadRememberedVolume(activeDid));
     setRememberedPlayingSong(remembered);
     rememberedPlayingSongRef.current = remembered;
@@ -2206,6 +2240,9 @@ export function HomePage() {
                       localPlaybackSongRef.current = "";
                       lastPositivePlaybackAtRef.current = 0;
                       removeLocal(playbackSnapshotKey(activeDid));
+                      // Also clear remembered playing song when stopping
+                      setRememberedPlayingSong("");
+                      rememberedPlayingSongRef.current = "";
                       setStatus((prev) => ({
                         ...prev,
                         is_playing: false,
