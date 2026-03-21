@@ -1014,7 +1014,8 @@ export function HomePage() {
         } else {
           const liveStatus = statusRef.current;
           const withinStabilityWindow = Date.now() - lastPositivePlaybackAtRef.current < 12000;
-          if (withinStabilityWindow) {
+          const hasActivePending = Boolean(pending);
+          if (withinStabilityWindow && (hasActivePending || liveStatus.is_playing)) {
             merged.is_playing = true;
             merged.cur_music = String(
               merged.cur_music ||
