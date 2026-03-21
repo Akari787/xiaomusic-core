@@ -440,6 +440,31 @@ function playbackSnapshotKey(did: string): string {
   return `xm_playback_snapshot_${did}`;
 }
 
+type PlaybackSnapshot = {
+  song?: string;
+  started_at?: number;
+  duration?: number;
+};
+
+function loadPlaybackSnapshot(did: string): PlaybackSnapshot | null {
+  if (!did) {
+    return null;
+  }
+  try {
+    const raw = localStorage.getItem(playbackSnapshotKey(did));
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as PlaybackSnapshot;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 function volumeStorageKey(did: string): string {
   return `xm_volume_${did}`;
 }
@@ -1136,6 +1161,36 @@ export function HomePage() {
     localPlaybackDurationRef.current = 0;
     localPlaybackSongRef.current = "";
     const remembered = loadRememberedPlayingSong(activeDid);
+    const snapshot = loadPlaybackSnapshot(activeDid);
+    if (snapshot) {
+      const restoredSong = String(snapshot.song || "").trim();
+      const restoredStartedAt = Number(snapshot.started_at) || 0;
+      const restoredDuration = Number(snapshot.duration) || 0;
+      const snapshotFresh = restoredStartedAt > 0 && Date.now() - restoredStartedAt < 12000;
+      if (restoredSong) {
+        if (snapshotFresh) {
+          setLocalPlaybackSong(restoredSong);
+          setLocalPlaybackStartedAt(restoredStartedAt);
+          setLocalPlaybackDuration(restoredDuration);
+          localPlaybackSongRef.current = restoredSong;
+          localPlaybackStartedAtRef.current = restoredStartedAt;
+          localPlaybackDurationRef.current = restoredDuration;
+          statusRef.current = {
+            is_playing: true,
+            cur_music: restoredSong,
+            offset: 0,
+            duration: restoredDuration,
+          };
+          lastPositivePlaybackAtRef.current = restoredStartedAt;
+        } else {
+          statusRef.current = {
+            ...statusRef.current,
+            is_playing: true,
+            cur_music: restoredSong,
+          };
+        }
+      }
+    }
     setVolume(loadRememberedVolume(activeDid));
     setRememberedPlayingSong(remembered);
     rememberedPlayingSongRef.current = remembered;
