@@ -1645,3 +1645,109 @@ async def test_ensure_logged_in_respects_backoff_when_not_need_login(auth_manage
     with pytest.raises(RuntimeError) as exc_info:
         await auth_manager.ensure_logged_in(force=True, reason="ut-backoff-preserved")
     assert "relogin backoff active" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_keepalive_proactive_recovery_succeeds_and_resets_streak(auth_manager, monkeypatch):
+    """Fix D: when keepalive enters degraded mode, proactive recovery should fire,
+    succeed, reset _keepalive_fail_streak to 0, and exit degraded.
+
+    Starting from _keepalive_degraded=True, streak=3: proactive recovery fires,
+    succeeds, resets streak to 0, exits degraded."""
+
+    call_ctxs = []
+
+    async def _sleep(delay):
+        raise asyncio.CancelledError()
+
+    async def _ensure(force=False, reason="", prefer_refresh=False):
+        return True
+
+    async def _mina_call(method, *args, **kwargs):
+        ctx = kwargs.get("ctx", "")
+        call_ctxs.append(ctx)
+        if ctx == "keepalive-proactive-recover":
+            return []
+        raise RuntimeError("401 unauthorized")
+
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    auth_manager.ensure_logged_in = _ensure
+    auth_manager.mina_call = _mina_call
+    auth_manager._keepalive_degraded = True
+    auth_manager._keepalive_fail_streak = 3
+
+    with pytest.raises(asyncio.CancelledError):
+        await auth_manager.keepalive_loop(interval_sec=7)
+
+    assert "keepalive-proactive-recover" in call_ctxs
+    assert auth_manager._keepalive_degraded is False
+    assert auth_manager._keepalive_fail_streak == 0
+
+
+@pytest.mark.asyncio
+async def test_keepalive_proactive_recovery_respects_cooldown(auth_manager, monkeypatch):
+    """Fix D: when _keepalive_recovery_cooldown_ts is in the future,
+    proactive recovery must be skipped and the default interval sleep is used.
+
+    Flow: already degraded + cooldown active → no proactive attempt this tick."""
+
+    sleep_delays = []
+    ensure_calls = []
+
+    async def _sleep(delay):
+        sleep_delays.append(delay)
+        raise asyncio.CancelledError()
+
+    async def _ensure(force=False, reason="", prefer_refresh=False):
+        ensure_calls.append((force, reason))
+        return True
+
+    async def _mina_call(method, *args, **kwargs):
+        return []
+
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    auth_manager.ensure_logged_in = _ensure
+    auth_manager.mina_call = _mina_call
+    auth_manager._keepalive_degraded = True
+    auth_manager._keepalive_fail_streak = 3
+    auth_manager._keepalive_recovery_cooldown_ts = time.time() + 300
+
+    with pytest.raises(asyncio.CancelledError):
+        await auth_manager.keepalive_loop(interval_sec=7)
+
+    assert all(force is False for force, _ in ensure_calls)
+    assert sleep_delays == [7]
+
+
+@pytest.mark.asyncio
+async def test_keepalive_proactive_recovery_fails_and_sets_cooldown(auth_manager, monkeypatch):
+    """Fix D: when proactive recovery fails, _keepalive_recovery_cooldown_ts must
+    be set to prevent immediate re-trigger."""
+
+    ensure_calls = []
+    mina_call_count = {"n": 0}
+
+    async def _sleep(delay):
+        raise asyncio.CancelledError()
+
+    async def _ensure(force=False, reason="", prefer_refresh=False):
+        ensure_calls.append((force, reason))
+        return False
+
+    async def _mina_call(method, *args, **kwargs):
+        mina_call_count["n"] += 1
+        raise RuntimeError("401 unauthorized")
+
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    auth_manager.ensure_logged_in = _ensure
+    auth_manager.mina_call = _mina_call
+    auth_manager._keepalive_degraded = True
+    auth_manager._keepalive_fail_streak = 3
+
+    with pytest.raises(asyncio.CancelledError):
+        await auth_manager.keepalive_loop(interval_sec=7)
+
+    proactive_forces = [f for f, r in ensure_calls if "proactive" in r]
+    assert proactive_forces == [True]
+    assert auth_manager._keepalive_recovery_cooldown_ts > time.time()
+    assert auth_manager._keepalive_degraded is True

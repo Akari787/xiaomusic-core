@@ -183,6 +183,7 @@ class AuthManager:
         self._next_relogin_allowed_ts = 0.0
         self._keepalive_fail_streak = 0
         self._keepalive_degraded = False
+        self._keepalive_recovery_cooldown_ts = 0.0
         self._last_refresh_ts = 0.0
         self._last_refresh_error = ""
         self._auth_mode = "healthy"
@@ -2674,6 +2675,33 @@ class AuthManager:
                 if not self._keepalive_degraded:
                     self.log.warning("auth keepalive enter degraded mode")
                     self._keepalive_degraded = True
+                now = time.time()
+                cooldown_sec = 60
+                if now >= self._keepalive_recovery_cooldown_ts:
+                    self.log.warning(
+                        "auth keepalive proactive_recovery trigger_reason=degraded_cooldown_elapsed "
+                        "cooldown_sec=%d",
+                        cooldown_sec,
+                    )
+                    try:
+                        await self.ensure_logged_in(
+                            force=True,
+                            reason="keepalive_proactive_recovery",
+                            prefer_refresh=True,
+                        )
+                        await self.mina_call("device_list", retry=0, ctx="keepalive-proactive-recover")
+                        self.log.info("auth keepalive proactive_recovery result=success")
+                        self._keepalive_degraded = False
+                        self._keepalive_fail_streak = 0
+                        self._keepalive_recovery_cooldown_ts = 0.0
+                        await asyncio.sleep(interval_sec)
+                        continue
+                    except Exception as proactive_err:
+                        self.log.warning(
+                            "auth keepalive proactive_recovery result=failed reason=%s",
+                            proactive_err,
+                        )
+                        self._keepalive_recovery_cooldown_ts = now + cooldown_sec
                 await asyncio.sleep(max(interval_sec, 300))
 
     def mark_session_invalid(self, reason=""):
