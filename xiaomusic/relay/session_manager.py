@@ -1,11 +1,15 @@
-"""In-memory relay session lifecycle manager."""
+"""In-memory relay session lifecycle manager.
+
+sid (relay session id): unique identifier for a relay session.
+New sids use the format rs_<high-entropy-token> (rs_ prefix + secrets.token_urlsafe(16)).
+"""
 
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import UTC, datetime
 from threading import Lock
-from uuid import uuid4
 
 from xiaomusic.relay.contracts import SESSION_STATES, Session
 
@@ -34,7 +38,7 @@ class StreamSessionManager:
 
     def create_session(self, input_url: str, stream_url: str = "", source_url: str = "") -> Session:
         with self._lock:
-            sid = f"s_{uuid4().hex[:12]}"
+            sid = f"rs_{secrets.token_urlsafe(16)}"
             now = _now_iso()
             now_ts = int(datetime.now(UTC).timestamp())
             session = Session(
