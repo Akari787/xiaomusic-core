@@ -74,7 +74,7 @@ class RelayRuntime:
         return f"http://127.0.0.1:{self.stream_port}/stream/{sid}"
 
     def _external_stream_url(self, sid: str) -> str:
-        return f"{self._public_base()}/network_audio/stream/{sid}"
+        return f"{self._public_base()}/relay/stream/{sid}"
 
     async def play_and_cast(self, did: str, url: str, *, no_cache: bool = False) -> dict:
         self.sweep_idle_sessions()

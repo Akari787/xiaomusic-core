@@ -1,8 +1,4 @@
-"""Legacy alias router: /network_audio/* paths are deprecated, use /relay/* instead.
-
-This module reuses handler logic from relay router for backward compatibility only.
-New code must not add routes here.
-"""
+"""Relay session stream workflow routes (formal paths)."""
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -13,18 +9,18 @@ from xiaomusic.api.runtime_provider import get_runtime
 router = APIRouter()
 
 
-@router.get("/network_audio/healthz")
-async def network_audio_healthz():
+@router.get("/relay/healthz")
+async def relay_healthz():
     return api_response.ok(get_runtime().healthz(), contract="raw")
 
 
-@router.get("/network_audio/sessions")
-async def network_audio_sessions():
+@router.get("/relay/sessions")
+async def relay_sessions():
     return api_response.ok(get_runtime().sessions(), contract="raw")
 
 
-@router.get("/network_audio/stream/{sid}")
-async def network_audio_stream(sid: str):
+@router.get("/relay/stream/{sid}")
+async def relay_stream(sid: str):
     try:
         generator = get_runtime().stream_chunks(sid)
     except KeyError:
