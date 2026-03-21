@@ -546,6 +546,7 @@ export function HomePage() {
   const [localPlaybackSong, setLocalPlaybackSong] = useState<string>("");
   const [rememberedPlayingSong, setRememberedPlayingSong] = useState<string>("");
   const activeDidRef = useRef<string>(activeDid);
+  const refreshRestoreUntilRef = useRef<number>(0);
   const statusRef = useRef<PlayingInfo>({});
   const localPlaybackStartedAtRef = useRef<number>(0);
   const localPlaybackDurationRef = useRef<number>(0);
@@ -1007,6 +1008,8 @@ export function HomePage() {
       );
 
       let resolvedOffset = Math.max(prevOffset, elapsed);
+      let isSongSwitchBoundary = false;
+      
       if (mergedHasOffset && mergedOffsetRaw > 0) {
         resolvedOffset = Math.floor(mergedOffsetRaw);
       } else if (mergedHasOffset && mergedOffsetRaw === 0) {
@@ -1015,6 +1018,7 @@ export function HomePage() {
         const atBoundary = prevDuration > 0 && prevOffset >= Math.max(0, prevDuration - 5);
         if (songChanged || durationChanged || atBoundary) {
           resolvedOffset = 0;
+          isSongSwitchBoundary = true;
         }
       }
 
@@ -1026,10 +1030,20 @@ export function HomePage() {
         resolvedOffset = mergedHasOffset && mergedOffsetRaw === 0 ? 0 : Math.min(resolvedOffset, resolvedDuration);
       }
 
+      // Determine resolved song: only use fallback if NOT in song switch boundary
+      let resolvedSong = mergedSong;
+      if (!resolvedSong && !isSongSwitchBoundary) {
+        resolvedSong = prev.cur_music || fallbackSong || "";
+      }
+      // If still empty and in refresh restore window, allow snapshot/remembered recovery
+      if (!resolvedSong && Date.now() < refreshRestoreUntilRef.current) {
+        resolvedSong = fallbackSong || "";
+      }
+
       return {
         ...prev,
         ...merged,
-        cur_music: String(merged.cur_music || prev.cur_music || fallbackSong || ""),
+        cur_music: resolvedSong,
         duration: resolvedDuration,
         offset: resolvedOffset,
       };
@@ -1093,22 +1107,27 @@ export function HomePage() {
           }
         }
         // When is_playing=true but cur_music is empty, try to restore from snapshot
+        // ONLY during refresh restore window (avoid locking old title during song switch)
         if (merged.is_playing && !String(merged.cur_music || "").trim()) {
-          const snapshot = loadPlaybackSnapshot(did);
-          if (snapshot && snapshot.song) {
-            const restoredSong = String(snapshot.song || "").trim();
-            merged.cur_music = restoredSong;
-            // Also try to restore duration if not provided
-            if (!merged.duration && snapshot.duration) {
-              merged.duration = snapshot.duration;
+          // Only restore if within refresh restore window
+          if (Date.now() < refreshRestoreUntilRef.current) {
+            const snapshot = loadPlaybackSnapshot(did);
+            if (snapshot && snapshot.song) {
+              const restoredSong = String(snapshot.song || "").trim();
+              merged.cur_music = restoredSong;
+              // Also try to restore duration if not provided
+              if (!merged.duration && snapshot.duration) {
+                merged.duration = snapshot.duration;
+              }
+            } else if (localPlaybackSongRef.current) {
+              // Fallback to local playback state
+              merged.cur_music = localPlaybackSongRef.current;
+            } else if (rememberedPlayingSongRef.current) {
+              // Fallback to remembered playing song
+              merged.cur_music = rememberedPlayingSongRef.current;
             }
-          } else if (localPlaybackSongRef.current) {
-            // Fallback to local playback state
-            merged.cur_music = localPlaybackSongRef.current;
-          } else if (rememberedPlayingSongRef.current) {
-            // Fallback to remembered playing song
-            merged.cur_music = rememberedPlayingSongRef.current;
           }
+          // If still empty after window check, leave it empty (wait for backend to provide new title)
         }
 
         if (merged.is_playing && String(merged.cur_music || "").trim()) {
@@ -1194,11 +1213,15 @@ export function HomePage() {
       setRememberedPlayingSong("");
       rememberedPlayingSongRef.current = "";
       lastAutoSyncedPlayingSongRef.current = "";
+      refreshRestoreUntilRef.current = 0;
       return;
     }
     lastAutoSyncedPlayingSongRef.current = "";
     const remembered = loadRememberedPlayingSong(activeDid);
     const snapshot = loadPlaybackSnapshot(activeDid);
+    
+    // Set refresh restore window (10 seconds)
+    refreshRestoreUntilRef.current = Date.now() + 10000;
     
     if (snapshot && snapshot.song) {
       const restoredSong = String(snapshot.song || "").trim();
