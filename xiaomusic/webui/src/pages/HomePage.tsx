@@ -459,7 +459,22 @@ function loadPlaybackSnapshot(did: string): PlaybackSnapshot | null {
     if (!parsed || typeof parsed !== "object") {
       return null;
     }
-    return parsed;
+    // Validate song: must be non-empty string
+    const song = String(parsed.song || "").trim();
+    if (!song) {
+      return null;
+    }
+    // Validate started_at: must be finite number >= 0
+    const startedAt = Number(parsed.started_at);
+    if (!Number.isFinite(startedAt) || startedAt < 0) {
+      return null;
+    }
+    // Validate duration: must be finite number >= 0 (can be 0)
+    const duration = Number(parsed.duration);
+    if (!Number.isFinite(duration) || duration < 0) {
+      return null;
+    }
+    return { song, started_at: startedAt, duration };
   } catch {
     return null;
   }
@@ -1199,20 +1214,26 @@ export function HomePage() {
           localPlaybackSongRef.current = restoredSong;
           localPlaybackStartedAtRef.current = restoredStartedAt;
           localPlaybackDurationRef.current = restoredDuration;
-          statusRef.current = {
+          const freshStatus = {
             is_playing: true,
             cur_music: restoredSong,
             offset: 0,
             duration: restoredDuration,
           };
+          statusRef.current = freshStatus;
+          // Also update React state to show song immediately on page refresh
+          setStatus(freshStatus);
           lastPositivePlaybackAtRef.current = restoredStartedAt;
         } else {
           // Snapshot is stale but still show the song name
-          statusRef.current = {
+          const staleStatus = {
             ...statusRef.current,
             is_playing: true,
             cur_music: restoredSong,
           };
+          statusRef.current = staleStatus;
+          // Also update React state to show song immediately on page refresh
+          setStatus(staleStatus);
         }
       }
     } else {
