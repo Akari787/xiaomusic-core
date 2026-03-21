@@ -1449,7 +1449,7 @@ export function HomePage() {
       const out = await v1SetPlayMode(activeDid, nextMode);
       if (isApiOk(out)) {
         setMessage(`已切换为${PLAY_MODES[next].label}`);
-        await Promise.allSettled([loadStatus(activeDid), loadSettingData()]);
+        void loadSettingData();
         return;
       }
       setPlayModeIndex(prev);
