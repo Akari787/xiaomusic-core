@@ -1112,7 +1112,27 @@ export function HomePage() {
             localPlaybackDurationRef.current = newDuration;
           }
         }
+        const incomingSong = String(merged.cur_music || "").trim();
+        const isConfirmedIncomingTitle =
+          awaitingTrackTitleRef.current &&
+          incomingSong !== "" &&
+          incomingSong !== lastConfirmedSongRef.current;
         if (isLatestStatusRequest(requestSeq, did)) {
+          if (isConfirmedIncomingTitle) {
+            awaitingTrackTitleRef.current = false;
+            lastConfirmedSongRef.current = incomingSong;
+            setRememberedPlayingSong(incomingSong);
+            rememberedPlayingSongRef.current = incomingSong;
+            setLocalPlaybackSong(incomingSong);
+            localPlaybackSongRef.current = incomingSong;
+            const finalStatus = {
+              ...merged,
+              cur_music: incomingSong,
+              is_playing: true,
+            };
+            setStatus(finalStatus);
+            return finalStatus;
+          }
           if (pending && pending.did === did) {
             if (merged.is_playing) {
               pendingPlayRef.current = null;
