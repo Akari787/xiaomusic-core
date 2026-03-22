@@ -23,7 +23,9 @@ class MinaTransport(Transport):
     def __init__(self, xiaomusic: Any) -> None:
         self._xiaomusic = xiaomusic
 
-    async def play_url(self, device_id: str, prepared: PreparedStream) -> dict[str, Any]:
+    async def play_url(
+        self, device_id: str, prepared: PreparedStream
+    ) -> dict[str, Any]:
         start = time.perf_counter()
         try:
             ret = await self._xiaomusic.play_url(did=device_id, arg1=prepared.final_url)
@@ -108,6 +110,18 @@ class MinaTransport(Transport):
                 int((time.perf_counter() - start) * 1000),
                 device_id,
             )
+            if player.event_bus is not None:
+                try:
+                    status_info = await player.get_player_status()
+                    if int(status_info.get("status", 0) or 0) == 1:
+                        player.is_playing = True
+                    else:
+                        player.is_playing = False
+                    from xiaomusic.events import PLAYER_STATE_CHANGED
+
+                    player.event_bus.publish(PLAYER_STATE_CHANGED, device_id=device_id)
+                except Exception:
+                    pass
             return {"ret": "OK"}
         except Exception:
             LOG.warning(

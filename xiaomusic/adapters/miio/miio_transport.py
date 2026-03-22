@@ -25,7 +25,9 @@ class MiioTransport(Transport):
     def __init__(self, xiaomusic: Any) -> None:
         self._xiaomusic = xiaomusic
 
-    async def play_url(self, device_id: str, prepared: PreparedStream) -> dict[str, Any]:
+    async def play_url(
+        self, device_id: str, prepared: PreparedStream
+    ) -> dict[str, Any]:
         _ = (device_id, prepared)
         LOG.warning(
             "transport_action action=play_url success=false latency_ms=0 device_id=%s",
@@ -100,6 +102,18 @@ class MiioTransport(Transport):
                 int((time.perf_counter() - start) * 1000),
                 device_id,
             )
+            if player.event_bus is not None:
+                try:
+                    status_info = await player.get_player_status()
+                    if int(status_info.get("status", 0) or 0) == 1:
+                        player.is_playing = True
+                    else:
+                        player.is_playing = False
+                    from xiaomusic.events import PLAYER_STATE_CHANGED
+
+                    player.event_bus.publish(PLAYER_STATE_CHANGED, device_id=device_id)
+                except Exception:
+                    pass
             return {"ret": "OK"}
         except Exception:
             LOG.warning(

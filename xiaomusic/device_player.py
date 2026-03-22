@@ -27,7 +27,7 @@ from xiaomusic.const import (
     PLAY_TYPE_SIN,
     TTS_COMMAND,
 )
-from xiaomusic.events import DEVICE_CONFIG_CHANGED
+from xiaomusic.events import DEVICE_CONFIG_CHANGED, PLAYER_STATE_CHANGED
 from xiaomusic.utils.file_utils import chmodfile
 from xiaomusic.utils.text_utils import custom_sort_key, list2str
 from xiaomusic.download_result import DownloadResult
@@ -602,6 +602,9 @@ class XiaoMusicDevice:
         # 记录歌曲开始播放的时间
         self._start_time = time.time()
         self._paused_time = 0
+
+        if self.event_bus:
+            self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.device_id)
 
         sec = await self.xiaomusic.music_library.get_music_duration(name)
         # 存储真实歌曲时长
@@ -1266,6 +1269,8 @@ class XiaoMusicDevice:
         await self.cancel_group_next_timer()
         await self.group_force_stop_xiaoai()
         self.log.info("stop now")
+        if self.event_bus:
+            self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.device_id)
 
     async def pause(self):
         """暂停播放并使旧计时器失效。"""

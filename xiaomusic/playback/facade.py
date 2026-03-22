@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import time
 from dataclasses import asdict, is_dataclass
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
 from xiaomusic.adapters.mina import MinaTransport
@@ -17,6 +19,9 @@ from xiaomusic.core.errors import DeviceNotFoundError, InvalidRequestError
 from xiaomusic.core.models import MediaRequest, PlayOptions
 from xiaomusic.core.source import SourceRegistry
 from xiaomusic.core.transport import TransportPolicy, TransportRouter
+
+if TYPE_CHECKING:
+    pass
 
 
 class PlaybackFacade:
@@ -543,7 +548,6 @@ class PlaybackFacade:
         # 不依赖 cur_music 非空，只要 context_id 或 current_index 可用就生成
         track_key = f"{context_id or 'default'}:{current_index if current_index is not None else -1}:{cur_music or ''}"
         # 使用简单的哈希生成稳定 ID，不使用随机值
-        import hashlib
 
         current_track_id = hashlib.md5(track_key.encode()).hexdigest()[:16]
 
@@ -560,3 +564,323 @@ class PlaybackFacade:
             "context_name": context_name,
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
         }
+
+    async def build_player_state_snapshot(self, device_id: str) -> dict[str, Any]:
+        """Unified authoritative player state snapshot builder.
+
+        All state output paths (GET /player/state, GET /player/stream SSE)
+        MUST call this method exclusively. No other state assembly is allowed.
+        """
+        did = self._validate_device_id(device_id)
+        if not bool(getattr(self.xiaomusic, "did_exist", lambda _did: False)(did)):
+            raise DeviceNotFoundError("device not found")
+
+        snapshot_at_ms = int(time.time() * 1000)
+        device_player = None
+        try:
+            device_player = getattr(
+                getattr(self.xiaomusic, "device_manager", None), "devices", {}
+            ).get(did)
+        except Exception:
+            device_player = None
+
+        is_playing = bool(getattr(self.xiaomusic, "isplaying", lambda _did: False)(did))
+        raw_offset, raw_duration = getattr(
+            self.xiaomusic, "get_offset_duration", lambda _did: (0, 0)
+        )(did)
+        offset_s = float(raw_offset or 0)
+        duration_s = float(raw_duration or 0)
+
+        raw_status: dict[str, Any] = {}
+        try:
+            out = await self.xiaomusic.get_player_status(did=did)
+            if isinstance(out, dict):
+                raw_status = out
+        except Exception:
+            raw_status = {}
+
+        if int(raw_status.get("status", 0) or 0) == 1:
+            is_playing = True
+
+        transport_state = self._derive_transport_state(
+            device_player, is_playing, raw_status
+        )
+
+        track_title = ""
+        track_artist: str | None = None
+        track_album: str | None = None
+        track_source: str | None = None
+        position_ms = 0
+        duration_ms = 0
+
+        if is_playing or transport_state in {"paused", "stopped"}:
+            if is_playing:
+                detail = raw_status.get("play_song_detail")
+                if isinstance(detail, dict):
+                    track_title = str(
+                        detail.get("audio_name")
+                        or detail.get("title")
+                        or detail.get("name")
+                        or ""
+                    )
+                    if not track_title:
+                        track_title = str(
+                            getattr(self.xiaomusic, "playingmusic", lambda _did: "")(
+                                did
+                            )
+                            or ""
+                        )
+
+                    artist = detail.get("artist") or detail.get("singer")
+                    if artist:
+                        track_artist = str(artist)
+                    album = detail.get("album")
+                    if album:
+                        track_album = str(album)
+                    source = detail.get("source")
+                    if source:
+                        track_source = str(source)
+
+                    try:
+                        detail_pos = float(detail.get("position") or 0)
+                    except Exception:
+                        detail_pos = 0.0
+                    try:
+                        detail_dur = float(detail.get("duration") or 0)
+                    except Exception:
+                        detail_dur = 0.0
+
+                    if detail_pos > 0 and offset_s <= 0:
+                        offset_s = (
+                            detail_pos / 1000.0 if detail_pos > 10000 else detail_pos
+                        )
+                    if detail_dur > 0 and duration_s <= 0:
+                        duration_s = (
+                            detail_dur / 1000.0 if detail_dur > 10000 else detail_dur
+                        )
+                else:
+                    track_title = str(
+                        getattr(self.xiaomusic, "playingmusic", lambda _did: "")(did)
+                        or ""
+                    )
+
+            if not track_title and device_player and transport_state != "idle":
+                try:
+                    cur_idx = getattr(device_player, "_current_index", -1)
+                    play_list = getattr(device_player, "_play_list", [])
+                    if (
+                        cur_idx >= 0
+                        and isinstance(play_list, list)
+                        and cur_idx < len(play_list)
+                    ):
+                        track_title = str(play_list[cur_idx] or "")
+                except Exception:
+                    pass
+
+        position_ms = max(0, int(offset_s * 1000))
+        duration_ms = max(0, int(duration_s * 1000))
+        if duration_ms > 0:
+            position_ms = min(position_ms, duration_ms)
+
+        context_obj: dict[str, Any] | None = None
+        cur_playlist = ""
+        try:
+            cur_playlist = str(
+                getattr(self.xiaomusic, "get_cur_play_list", lambda _did: "")(did) or ""
+            )
+        except Exception:
+            cur_playlist = ""
+
+        current_index: int | None = None
+        if device_player:
+            try:
+                real_index = getattr(device_player, "_current_index", -1)
+                if real_index >= 0:
+                    current_index = real_index
+            except (ValueError, AttributeError):
+                pass
+
+            if current_index is None and track_title:
+                try:
+                    play_list = getattr(device_player, "_play_list", [])
+                    if play_list and track_title in play_list:
+                        current_index = play_list.index(track_title)
+                except (ValueError, AttributeError):
+                    pass
+
+        if cur_playlist or current_index is not None:
+            context_obj = {
+                "id": cur_playlist or "default",
+                "name": cur_playlist or "播放列表",
+                "current_index": current_index,
+            }
+
+        play_session_id = ""
+        if device_player:
+            try:
+                sid = getattr(device_player, "_play_session_id", 0)
+                play_session_id = f"sess_{sid}"
+            except (ValueError, AttributeError):
+                play_session_id = ""
+
+        track_id = ""
+        if track_title or current_index is not None or cur_playlist:
+            track_key = (
+                f"{cur_playlist or 'default'}:"
+                f"{current_index if current_index is not None else -1}:"
+                f"{track_title or ''}"
+            )
+            track_id = hashlib.md5(track_key.encode()).hexdigest()[:16]
+
+        track_obj: dict[str, Any] | None = None
+        if transport_state not in {"idle"} and (track_title or track_id):
+            track_obj = {
+                "id": track_id,
+                "title": track_title,
+            }
+            if track_artist is not None:
+                track_obj["artist"] = track_artist
+            if track_album is not None:
+                track_obj["album"] = track_album
+            if track_source is not None:
+                track_obj["source"] = track_source
+
+        snapshot_key = self._make_snapshot_key(
+            device_id=did,
+            transport_state=transport_state,
+            track_id=track_id,
+            play_session_id=play_session_id,
+            context_id=cur_playlist,
+            current_index=current_index,
+            position_ms=position_ms,
+            duration_ms=duration_ms,
+        )
+
+        revision = self._compute_revision(did, snapshot_key)
+
+        return {
+            "device_id": did,
+            "revision": revision,
+            "play_session_id": play_session_id,
+            "transport_state": transport_state,
+            "track": track_obj,
+            "context": context_obj,
+            "position_ms": position_ms,
+            "duration_ms": duration_ms,
+            "snapshot_at_ms": snapshot_at_ms,
+        }
+
+    def _derive_transport_state(
+        self,
+        device_player: Any,
+        is_playing: bool,
+        raw_status: dict[str, Any],
+    ) -> str:
+        """Derive authoritative transport_state from device internals."""
+        if device_player is None:
+            if is_playing:
+                return "playing"
+            return "idle"
+
+        try:
+            play_fail_cnt = getattr(device_player, "_play_failed_cnt", 0)
+            degraded = getattr(device_player, "_degraded", False)
+        except (ValueError, AttributeError):
+            play_fail_cnt = 0
+            degraded = False
+
+        if degraded or play_fail_cnt >= 3:
+            return "error"
+
+        if is_playing:
+            try:
+                last_cmd = getattr(device_player, "_last_cmd", "") or ""
+            except (ValueError, AttributeError):
+                last_cmd = ""
+            if last_cmd in {"stop"}:
+                return "switching"
+            return "playing"
+
+        try:
+            last_cmd = getattr(device_player, "_last_cmd", "") or ""
+        except (ValueError, AttributeError):
+            last_cmd = ""
+
+        if last_cmd == "stop":
+            return "stopped"
+
+        if last_cmd == "pause":
+            return "paused"
+
+        try:
+            next_timer = getattr(device_player, "_next_timer", None)
+            current_index = getattr(device_player, "_current_index", -1)
+            play_list = getattr(device_player, "_play_list", [])
+            cur_music = getattr(device_player, "get_cur_music", lambda: "")()
+            if callable(cur_music):
+                cur_music = cur_music() or ""
+            if next_timer is not None:
+                return "switching"
+            if (
+                current_index >= 0
+                and isinstance(play_list, list)
+                and current_index < len(play_list)
+            ):
+                next_name = play_list[current_index] or ""
+                if next_name and next_name != cur_music:
+                    return "switching"
+        except Exception:
+            pass
+
+        if last_cmd in {"play", "playlocal", "play_next", "play_prev", "playmusic"}:
+            return "starting"
+
+        return "idle"
+
+    def _make_snapshot_key(
+        self,
+        device_id: str,
+        transport_state: str,
+        track_id: str,
+        play_session_id: str,
+        context_id: str,
+        current_index: int | None,
+        position_ms: int,
+        duration_ms: int,
+    ) -> str:
+        """Build a deterministic key that captures all externally-visible state.
+
+        This key is used for revision deduplication: when the key hasn't changed,
+        the revision stays the same.
+        """
+        return "|".join(
+            str(x)
+            for x in [
+                device_id,
+                transport_state,
+                track_id,
+                play_session_id,
+                context_id,
+                current_index,
+                position_ms,
+                duration_ms,
+            ]
+        )
+
+    def _compute_revision(self, device_id: str, snapshot_key: str) -> int:
+        """Increment revision only when snapshot key changes."""
+        if not hasattr(self, "_revision_state"):
+            self._revision_state: dict[str, dict[str, Any]] = {}
+
+        if device_id not in self._revision_state:
+            self._revision_state[device_id] = {
+                "revision": 0,
+                "last_key": "",
+            }
+
+        state = self._revision_state[device_id]
+        if state["last_key"] != snapshot_key:
+            state["revision"] += 1
+            state["last_key"] = snapshot_key
+
+        return state["revision"]

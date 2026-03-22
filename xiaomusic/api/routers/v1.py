@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import StreamingResponse
 
 from xiaomusic import __version__
 from xiaomusic.api.api_error import ApiError
@@ -979,18 +982,28 @@ async def api_v1_player_state(
 ):
     rid = _next_request_id(request_id)
     try:
-        out = await _get_facade().player_state(device_id=device_id, request_id=rid)
+        snapshot = await _get_facade().build_player_state_snapshot(device_id=device_id)
         data = {
-            DEVICE_ID: str(out.get(DEVICE_ID, device_id)),
-            "is_playing": bool(out.get("is_playing", False)),
-            "cur_music": str(out.get("cur_music", "") or ""),
-            "offset": max(0, int(out.get("offset", 0) or 0)),
-            "duration": max(0, int(out.get("duration", 0) or 0)),
-            "current_track_id": str(out.get("current_track_id", "") or ""),
-            "current_index": out.get("current_index"),
-            "context_type": out.get("context_type"),
-            "context_id": out.get("context_id"),
-            "context_name": out.get("context_name"),
+            DEVICE_ID: str(snapshot.get("device_id", device_id)),
+            "revision": int(snapshot.get("revision", 0)),
+            "play_session_id": str(snapshot.get("play_session_id") or ""),
+            "transport_state": str(snapshot.get("transport_state") or "idle"),
+            "track": snapshot.get("track"),
+            "context": snapshot.get("context"),
+            "position_ms": int(snapshot.get("position_ms", 0)),
+            "duration_ms": int(snapshot.get("duration_ms", 0)),
+            "snapshot_at_ms": int(snapshot.get("snapshot_at_ms", 0)),
+            "is_playing": bool(snapshot.get("transport_state") == "playing"),
+            "cur_music": str((snapshot.get("track") or {}).get("title", "") or ""),
+            "offset": max(0, int((snapshot.get("position_ms", 0) or 0) / 1000)),
+            "duration": max(0, int((snapshot.get("duration_ms", 0) or 0) / 1000)),
+            "current_track_id": str((snapshot.get("track") or {}).get("id", "") or ""),
+            "current_index": ((snapshot.get("context") or {}).get("current_index")),
+            "context_type": (
+                "playlist" if (snapshot.get("context") or {}).get("id") else None
+            ),
+            "context_id": (snapshot.get("context") or {}).get("id"),
+            "context_name": (snapshot.get("context") or {}).get("name"),
         }
         return _api_ok(data, request_id=rid)
     except Exception as exc:
@@ -1001,3 +1014,134 @@ async def api_v1_player_state(
             default_stage="system",
             default_message="player state query failed",
         )
+
+
+_player_stream_subscribers: dict[str, asyncio.Queue] = {}
+_player_stream_sub_lock = asyncio.Lock()
+
+
+async def _push_player_state_event(device_id: str) -> None:
+    """Push current player state to all subscribers of this device."""
+    from xiaomusic.events import PLAYER_STATE_CHANGED
+
+    facade = _get_facade()
+    try:
+        snapshot = await facade.build_player_state_snapshot(device_id)
+    except Exception:
+        return
+    payload = json.dumps(snapshot, ensure_ascii=False)
+    event = (
+        f"event: player_state\nid: {snapshot.get('revision', 0)}\ndata: {payload}\n\n"
+    )
+    event_bytes = event.encode("utf-8")
+    async with _player_stream_sub_lock:
+        queue = _player_stream_subscribers.get(device_id)
+        if queue is not None:
+            try:
+                queue.put_nowait(event_bytes)
+            except Exception:
+                pass
+
+
+@router.get("/api/v1/player/stream")
+async def api_v1_player_stream(
+    request: Request,
+    device_id: str = Query(..., min_length=1),
+):
+    xm = _get_xiaomusic()
+    if not xm.did_exist(device_id):
+        return _api_response(
+            40004,
+            "device not found",
+            {"error_code": "E_DEVICE_NOT_FOUND", "stage": "request"},
+            uuid4().hex[:16],
+        )
+
+    xiaomusic_obj = _get_xiaomusic()
+    event_bus = getattr(xiaomusic_obj, "event_bus", None)
+
+    q: asyncio.Queue[bytes] = asyncio.Queue()
+
+    async with _player_stream_sub_lock:
+        if device_id in _player_stream_subscribers:
+            old_q = _player_stream_subscribers.pop(device_id)
+            while not old_q.empty():
+                try:
+                    old_q.get_nowait()
+                except Exception:
+                    break
+        _player_stream_subscribers[device_id] = q
+
+    async def _remove_sub(did: str):
+        async with _player_stream_sub_lock:
+            _player_stream_subscribers.pop(did, None)
+
+    async def on_state_changed(**kwargs):
+        await _push_player_state_event(device_id)
+
+    if event_bus is not None:
+        from xiaomusic.events import PLAYER_STATE_CHANGED
+
+        try:
+            event_bus.subscribe(PLAYER_STATE_CHANGED, on_state_changed)
+        except Exception:
+            pass
+
+    async def stream_closed():
+        if event_bus is not None:
+            from xiaomusic.events import PLAYER_STATE_CHANGED
+
+            try:
+                event_bus.unsubscribe(PLAYER_STATE_CHANGED, on_state_changed)
+            except Exception:
+                pass
+        await _remove_sub(device_id)
+
+    async def event_generator():
+        try:
+            facade = _get_facade()
+            snapshot = await facade.build_player_state_snapshot(device_id)
+            revision = snapshot.get("revision", 0)
+            payload = json.dumps(snapshot, ensure_ascii=False)
+            initial = (
+                f"retry: 5000\n\n"
+                f"event: player_state\n"
+                f"id: {revision}\n"
+                f"data: {payload}\n\n"
+            )
+            yield initial.encode("utf-8")
+
+            last_heartbeat_ts = asyncio.get_event_loop().time()
+            heartbeat_interval = 15.0
+
+            while True:
+                try:
+                    timeout = max(
+                        0.1,
+                        heartbeat_interval
+                        - (asyncio.get_event_loop().time() - last_heartbeat_ts),
+                    )
+                    raw_bytes = await asyncio.wait_for(q.get(), timeout=timeout)
+                    last_heartbeat_ts = asyncio.get_event_loop().time()
+                    yield raw_bytes
+                except asyncio.TimeoutError:
+                    now = asyncio.get_event_loop().time()
+                    if now - last_heartbeat_ts >= heartbeat_interval:
+                        yield b": heartbeat\n\n"
+                        last_heartbeat_ts = now
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    break
+        finally:
+            await stream_closed()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

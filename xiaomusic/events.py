@@ -8,6 +8,7 @@ from collections.abc import Callable
 # 事件类型常量
 CONFIG_CHANGED = "config_changed"
 DEVICE_CONFIG_CHANGED = "device_config_changed"
+PLAYER_STATE_CHANGED = "player_state_changed"
 
 
 class EventBus:
