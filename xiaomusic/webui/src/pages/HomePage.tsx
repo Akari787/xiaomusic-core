@@ -526,6 +526,7 @@ export function HomePage() {
   const statusPollInFlightRef = useRef<boolean>(false);
   const pendingPlayRef = useRef<{ did: string; song: string; expiresAt: number } | null>(null);
   const themeFileInputRef = useRef<HTMLInputElement | null>(null);
+  const userStoppedRef = useRef<boolean>(false);
 
   const {
     selectedThemeId,
@@ -569,7 +570,7 @@ export function HomePage() {
     const duration = Math.max(0, Math.floor(Number(status.duration || 0)));
     let offset = Math.max(0, Math.floor(Number(status.offset || 0)));
     if (duration > 0) {
-      const maybeMilliseconds = offset > duration * 100 && Math.floor(offset / 1000) <= duration + 30;
+      const maybeMilliseconds = duration > 0 && offset > duration * 100 && Math.floor(offset / 1000) <= duration + 30;
       if (maybeMilliseconds) {
         offset = Math.floor(offset / 1000);
       }
@@ -599,6 +600,7 @@ export function HomePage() {
       (Date.now() < refreshRestoreUntilRef.current && localSongFresh && !awaitingTrackTitleRef.current
         ? localPlaybackSong
         : "") ||
+      (awaitingTrackTitleRef.current ? rememberedPlayingSong : "") ||
       "",
   ).trim();
   const playbackText = status.is_playing ? `正在播放：${currentMusicName || "未知歌曲"}` : "空闲";
@@ -1039,8 +1041,9 @@ export function HomePage() {
           const liveStatus = statusRef.current;
           const withinStabilityWindow = Date.now() - lastPositivePlaybackAtRef.current < 12000;
           const hasActivePending = Boolean(pending);
-          if (withinStabilityWindow && (hasActivePending || liveStatus.is_playing)) {
+          if (withinStabilityWindow && !userStoppedRef.current && (hasActivePending || liveStatus.is_playing)) {
             merged.is_playing = true;
+            userStoppedRef.current = false;
             merged.duration =
               Number(merged.duration || 0) ||
               Number(liveStatus.duration || 0) ||
@@ -1060,6 +1063,7 @@ export function HomePage() {
         if (awaitingTrackTitleRef.current) {
           if (mergedSong && mergedSong !== lastConfirmedSongRef.current) {
             awaitingTrackTitleRef.current = false;
+            lastConfirmedSongRef.current = mergedSong;
           } else {
             merged.cur_music = "";
           }
@@ -2178,6 +2182,7 @@ export function HomePage() {
                       return;
                     }
                     triggerFastPolling();
+                    userStoppedRef.current = true;
                     const out = await v1Stop(activeDid);
                     if (isApiOk(out)) {
                       stopSuppressUntilRef.current = Date.now() + 6000;
