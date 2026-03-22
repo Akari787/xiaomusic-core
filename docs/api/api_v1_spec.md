@@ -1035,8 +1035,8 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 字段来源说明：
 
-- `current_track_id`：使用 `context_id + cur_music` 的 MD5 哈希（前16位）生成，保证同一首歌稳定不变
-- `current_index`：来自 `device_player._play_list.index(cur_music)`
+- `current_track_id`：使用 `context_id + current_index + cur_music` 的 MD5 哈希（前16位）生成，保证同一首歌稳定不变，且同名歌曲重复出现时也能区分
+- `current_index`：优先使用设备播放器内部的真实索引字段 `_current_index`，兜底时使用 `play_list.index(cur_music)`
 - `context_*`：来自 `get_cur_play_list()` 获取的播放列表名称
 
 响应示例：
