@@ -82,6 +82,7 @@ class XiaoMusicDevice:
         self._play_session_id = 0
 
         self._play_list = []
+        self._current_index = -1  # 当前歌曲在播放列表中的索引
 
         # 关机定时器
         self._stop_timer = None
@@ -117,9 +118,17 @@ class XiaoMusicDevice:
         # Safety net: if timer was lost/cancelled and track is far beyond expected
         # duration, try one guarded auto-next recovery.
         should_check_autonext = False
-        if duration > 0.1 and self.device.play_type != PLAY_TYPE_SIN and self._last_cmd not in {"stop", "pause"}:
-            overdue_without_timer = self._next_timer is None and offset >= duration + 15.0
-            near_end_with_timer = self._next_timer is not None and offset >= max(duration - 1.0, duration * 0.9)
+        if (
+            duration > 0.1
+            and self.device.play_type != PLAY_TYPE_SIN
+            and self._last_cmd not in {"stop", "pause"}
+        ):
+            overdue_without_timer = (
+                self._next_timer is None and offset >= duration + 15.0
+            )
+            near_end_with_timer = self._next_timer is not None and offset >= max(
+                duration - 1.0, duration * 0.9
+            )
             should_check_autonext = overdue_without_timer or near_end_with_timer
 
         if should_check_autonext:
@@ -161,7 +170,13 @@ class XiaoMusicDevice:
         """Best-effort parse duration from player_get_status payload."""
         if not isinstance(info, dict):
             return 0.0
-        for key in ("duration", "duration_ms", "media_duration", "audio_duration", "total_duration"):
+        for key in (
+            "duration",
+            "duration_ms",
+            "media_duration",
+            "audio_duration",
+            "total_duration",
+        ):
             val = info.get(key)
             if val is None:
                 continue
@@ -194,10 +209,14 @@ class XiaoMusicDevice:
                         # If original duration probe failed at play start, timer was not set.
                         # Rebuild a next-track timer once duration becomes known.
                         cur_offset, _ = self.get_offset_duration()
-                        remaining = d - max(cur_offset, 0.0) + float(self.config.delay_sec)
+                        remaining = (
+                            d - max(cur_offset, 0.0) + float(self.config.delay_sec)
+                        )
                         if remaining > 0.1:
                             await self.set_next_music_timeout(remaining)
-                        self.log.info("duration_probe_success name=%s duration=%.3fs", name, d)
+                        self.log.info(
+                            "duration_probe_success name=%s duration=%.3fs", name, d
+                        )
                         return
                 except Exception as e:
                     self.log.debug("duration_probe_retry name=%s err=%s", name, e)
@@ -477,6 +496,11 @@ class XiaoMusicDevice:
         self.device.cur_music = name
         self.device.playlist2music[self.device.cur_playlist] = name
         cur_playlist = self.device.cur_playlist
+        # 更新当前索引
+        try:
+            self._current_index = self._play_list.index(name)
+        except ValueError:
+            self._current_index = -1
         self.log.info(f"cur_music {self.get_cur_music()}")
         url, origin_url = await self.xiaomusic.music_library.get_music_url(name)
         await self.group_force_stop_xiaoai()
@@ -506,8 +530,14 @@ class XiaoMusicDevice:
                 if strategy is not None:
                     proxy_url = strategy.build_proxy_url(origin_url, name=name)
                 else:
-                    proxy_url = self.xiaomusic.music_library.get_proxy_url(origin_url, name=name)
-                self.log.info("Jellyfin direct failed (%s), retry via proxy: %s", reason, proxy_url)
+                    proxy_url = self.xiaomusic.music_library.get_proxy_url(
+                        origin_url, name=name
+                    )
+                self.log.info(
+                    "Jellyfin direct failed (%s), retry via proxy: %s",
+                    reason,
+                    proxy_url,
+                )
                 await self.group_force_stop_xiaoai()
                 results2 = await self.group_player_play(proxy_url, name)
                 if all(ele is None for ele in results2):
@@ -538,10 +568,14 @@ class XiaoMusicDevice:
                     url = proxy_url
                     results = ["proxy"]
                 else:
-                    await self._handle_play_failure(name=name, sid=sid, reason="player_play_failed")
+                    await self._handle_play_failure(
+                        name=name, sid=sid, reason="player_play_failed"
+                    )
                     return
             else:
-                await self._handle_play_failure(name=name, sid=sid, reason="player_play_failed")
+                await self._handle_play_failure(
+                    name=name, sid=sid, reason="player_play_failed"
+                )
                 return
             # Proxy fallback succeeded; continue with the normal success path.
 
@@ -1111,7 +1145,9 @@ class XiaoMusicDevice:
 
         logger = getattr(self, "log", None)
         if logger is not None:
-            logger.info("播放 %s 失败. reason=%s cnt=%d", name, reason, self._play_failed_cnt)
+            logger.info(
+                "播放 %s 失败. reason=%s cnt=%d", name, reason, self._play_failed_cnt
+            )
 
         # Exponential backoff, capped.
         delay = min(1.0 * (2 ** max(self._play_failed_cnt - 1, 0)), 8.0)

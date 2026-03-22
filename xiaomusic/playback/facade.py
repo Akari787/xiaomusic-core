@@ -505,18 +505,29 @@ class PlaybackFacade:
         except Exception:
             device_player = None
 
-        if device_player and cur_music:
+        if device_player:
+            # 优先使用设备播放器内部的真实当前索引字段
             try:
-                play_list = getattr(device_player, "_play_list", [])
-                if play_list and cur_music in play_list:
-                    current_index = play_list.index(cur_music)
+                real_index = getattr(device_player, "_current_index", -1)
+                if real_index >= 0:
+                    current_index = real_index
             except (ValueError, AttributeError):
                 pass
 
+            # 如果没有真实索引，使用兜底方案
+            if current_index is None and cur_music:
+                try:
+                    play_list = getattr(device_player, "_play_list", [])
+                    if play_list and cur_music in play_list:
+                        current_index = play_list.index(cur_music)
+                except (ValueError, AttributeError):
+                    pass
+
         # 生成 current_track_id
-        # 使用 context_id + cur_music 的组合作为稳定标识
+        # 使用 context_id + current_index + cur_music 的组合作为稳定标识
+        # 这样即使同名歌曲重复出现，track identity 也能变化
         if cur_music:
-            track_key = f"{context_id or 'default'}:{cur_music}"
+            track_key = f"{context_id or 'default'}:{current_index or -1}:{cur_music}"
             # 使用简单的哈希生成稳定 ID，不使用随机值
             import hashlib
 
