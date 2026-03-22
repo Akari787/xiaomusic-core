@@ -1013,7 +1013,14 @@ export function HomePage() {
           awaitingTrackTitleRef.current &&
           mergedSong !== "" &&
           mergedSong !== lastConfirmedSongRef.current;
-        const shouldEnterBoundaryWaiting = isBoundary && !confirmedNewTitleArriving;
+        // 禁止对"已确认新 track"重复 reset
+        const shouldSuppressBoundaryReset =
+          awaitingTrackTitleRef.current &&
+          mergedTrackId &&
+          prevTrackId &&
+          mergedTrackId === prevTrackId;
+        const shouldEnterBoundaryWaiting =
+          isBoundary && !confirmedNewTitleArriving && !shouldSuppressBoundaryReset;
         if (shouldEnterBoundaryWaiting) {
           resolvedOffset = 0;
           resetLocalPlayback = true;
@@ -1129,11 +1136,15 @@ export function HomePage() {
 
         // Waiting 中的三段式处理
         if (awaitingTrackTitleRef.current) {
-          // 情况1: 标题未到达 - 继续 waiting
-          if (!titleConfirmed) {
+          // 情况1: track identity 已确认，标题未到达 - 稳定等待阶段
+          if (trackIdentityConfirmed && !titleConfirmed) {
+            merged.cur_music = "";
+            // 不退出 waiting，不 reset，保持新 track 的 status
+          } else if (!titleConfirmed) {
+            // 情况2: track identity 未确认，标题未到达 - 继续 waiting
             merged.cur_music = "";
           } else {
-            // 情况2: 标题已到达 - 一次性确认并提交
+            // 情况3: 标题已到达 - 一次性确认并提交
             awaitingTrackTitleRef.current = false;
             lastConfirmedSongRef.current = mergedSong;
             setRememberedPlayingSong(mergedSong);
