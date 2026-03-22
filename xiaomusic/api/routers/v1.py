@@ -7,8 +7,8 @@ from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from xiaomusic import __version__
 from xiaomusic.api.api_error import ApiError
@@ -1051,9 +1051,9 @@ async def api_v1_player_stream(
     xm = _get_xiaomusic()
     if not xm.did_exist(device_id):
         rid = uuid4().hex[:16]
-        raise HTTPException(
+        return JSONResponse(
             status_code=404,
-            detail=_api_response(
+            content=_api_response(
                 40004,
                 "device not found",
                 {"error_code": "E_DEVICE_NOT_FOUND", "stage": "request"},
