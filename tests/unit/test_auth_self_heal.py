@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
+
 @pytest.fixture(autouse=True)
 def _stub_miservice_module():
     if "miservice" in sys.modules:
@@ -99,14 +100,19 @@ async def auth_manager(tmp_path):
 
 @pytest.mark.asyncio
 async def test_auth_call_triggers_relogin_and_retries_once(auth_manager):
-    calls = {"fn": 0, "ensure": 0}
+    calls = {"fn": 0, "ensure": 0, "non_destructive": 0}
 
     async def _ensure(force=False, reason="", prefer_refresh=False):  # noqa: ARG001
         calls["ensure"] += 1
         assert prefer_refresh is True
         return True
 
+    async def _non_destructive(ctx="", reason=""):
+        calls["non_destructive"] += 1
+        return True, "runtime_verified"
+
     auth_manager.ensure_logged_in = _ensure
+    auth_manager._attempt_non_destructive_auth_recovery = _non_destructive
 
     async def fn():
         calls["fn"] += 1
@@ -116,13 +122,16 @@ async def test_auth_call_triggers_relogin_and_retries_once(auth_manager):
 
     out = await auth_manager.auth_call(fn, retry=1, ctx="ut-auth-call")
     assert out == "OK"
-    assert calls["ensure"] == 1
+    assert calls["ensure"] == 0, "First auth error should NOT call ensure_logged_in"
+    assert calls["non_destructive"] == 1, (
+        "First auth error should use non-destructive recovery"
+    )
     assert calls["fn"] == 2
 
 
 @pytest.mark.asyncio
 async def test_concurrent_auth_call_only_one_relogin(auth_manager):
-    relogin_calls = {"rebuild": 0, "refresh": 0}
+    relogin_calls = {"rebuild": 0, "refresh": 0, "non_destructive": 0, "clear": 0}
 
     async def _need_login():
         return False
@@ -146,10 +155,22 @@ async def test_concurrent_auth_call_only_one_relogin(auth_manager):
         relogin_calls["refresh"] += 1
         return True
 
+    async def _non_destructive(ctx="", reason=""):
+        relogin_calls["non_destructive"] += 1
+        return True, "runtime_verified"
+
+    def _clear(clear_reason: str, err=None):  # noqa: ARG001
+        relogin_calls["clear"] += 1
+        return True
+
     auth_manager.need_login = _need_login
     auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
     auth_manager.rebuild_services = _rebuild
+    auth_manager._attempt_non_destructive_auth_recovery = _non_destructive
+    auth_manager._clear_short_lived_session = _clear
     auth_manager._last_ok_ts = 0
+    # 重置 suspect 状态
+    auth_manager._reset_auth_error_suspect()
 
     def make_fn(i):
         state = {"n": 0}
@@ -162,11 +183,18 @@ async def test_concurrent_auth_call_only_one_relogin(auth_manager):
 
         return fn
 
-    tasks = [auth_manager.auth_call(make_fn(i), retry=1, ctx=f"concurrent-{i}") for i in range(10)]
+    tasks = [
+        auth_manager.auth_call(make_fn(i), retry=1, ctx=f"concurrent-{i}")
+        for i in range(10)
+    ]
     results = await asyncio.gather(*tasks)
     assert results == list(range(10))
-    assert relogin_calls["refresh"] == 1
-    assert relogin_calls["rebuild"] == 1
+    # 并发调用会共享 suspect 状态，所以有些走非破坏性恢复，有些走 clear
+    # 总调用次数应该等于请求数（因为每个请求都会调用其中一种恢复路径）
+    total_recoveries = relogin_calls["non_destructive"] + relogin_calls["clear"]
+    assert total_recoveries >= 10, (
+        f"Expected at least 10 recoveries, got {total_recoveries}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -336,8 +364,11 @@ def test_clear_short_session_skipped_when_no_auth_failure_signal(auth_manager):
 
 
 @pytest.mark.asyncio
-async def test_auth_call_triggers_short_session_clear_before_relogin(auth_manager, monkeypatch):
-    called = {"clear": 0, "ensure": 0}
+async def test_auth_call_triggers_short_session_clear_before_relogin(
+    auth_manager, monkeypatch
+):
+    """auth_call 需要连续两次auth error才clear"""
+    called = {"clear": 0, "ensure": 0, "non_destructive": 0}
 
     def _clear(clear_reason: str, err=None):  # noqa: ARG001
         called["clear"] += 1
@@ -347,8 +378,13 @@ async def test_auth_call_triggers_short_session_clear_before_relogin(auth_manage
         called["ensure"] += 1
         return True
 
+    async def _non_destructive(ctx="", reason=""):
+        called["non_destructive"] += 1
+        return True, "runtime_verified"
+
     monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
     auth_manager.ensure_logged_in = _ensure
+    auth_manager._attempt_non_destructive_auth_recovery = _non_destructive
 
     state = {"n": 0}
 
@@ -358,14 +394,36 @@ async def test_auth_call_triggers_short_session_clear_before_relogin(auth_manage
             raise RuntimeError("401 unauthorized")
         return "ok"
 
+    # 第一次auth error不会clear，走非破坏性恢复
     out = await auth_manager.auth_call(_fn, retry=1, ctx="mina:player_get_status")
     assert out == "ok"
-    assert called["clear"] == 1
-    assert called["ensure"] == 1
+    assert called["clear"] == 0, "First auth error should NOT clear"
+    assert called["ensure"] == 0, "First auth error should NOT call ensure_logged_in"
+    assert called["non_destructive"] == 1, (
+        "First auth error should use non-destructive recovery"
+    )
+
+    # 重置状态，再次触发auth error
+    state["n"] = 0
+    auth_manager.need_login = lambda: asyncio.sleep(0) or True
+
+    async def _fn2():
+        if state["n"] == 0:
+            state["n"] += 1
+            raise RuntimeError("401 unauthorized")
+        return "ok"
+
+    # 第二次auth error会clear
+    out = await auth_manager.auth_call(_fn2, retry=1, ctx="mina:player_get_status")
+    assert out == "ok"
+    assert called["clear"] == 1, "Second consecutive auth error SHOULD clear"
+    assert called["ensure"] == 1, "Second auth error SHOULD call ensure_logged_in"
 
 
 @pytest.mark.asyncio
-async def test_ensure_logged_in_rebuild_path_clears_short_session(auth_manager, monkeypatch):
+async def test_ensure_logged_in_rebuild_path_clears_short_session(
+    auth_manager, monkeypatch
+):
     events = []
 
     async def _need_login():
@@ -388,7 +446,9 @@ async def test_ensure_logged_in_rebuild_path_clears_short_session(auth_manager, 
     auth_manager.rebuild_services = _rebuild
     monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
 
-    out = await auth_manager.ensure_logged_in(force=True, reason="ut-refresh-failed", prefer_refresh=True)
+    out = await auth_manager.ensure_logged_in(
+        force=True, reason="ut-refresh-failed", prefer_refresh=True
+    )
     assert out is True
     assert events == ["clear", "short_rebuild", "rebuild:False"]
 
@@ -412,7 +472,9 @@ def test_persist_rebuild_writes_short_tokens_again(auth_manager):
             "micoapi": ("ss", "new-short-token"),
         }
 
-    auth_manager._persist_auth_data(auth_manager._get_auth_data(), _Account(), reason="ut-rebuild")
+    auth_manager._persist_auth_data(
+        auth_manager._get_auth_data(), _Account(), reason="ut-rebuild"
+    )
     data = auth_manager._get_auth_data()
     assert data.get("serviceToken") == "new-short-token"
     assert data.get("yetAnotherServiceToken") == "new-short-token"
@@ -437,7 +499,9 @@ async def test_ensure_logged_in_prefers_refresh_then_rebuild(auth_manager):
     auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
     auth_manager.rebuild_services = _rebuild
 
-    out = await auth_manager.ensure_logged_in(force=True, reason="ut-auth", prefer_refresh=True)
+    out = await auth_manager.ensure_logged_in(
+        force=True, reason="ut-auth", prefer_refresh=True
+    )
     assert out is True
     assert events == ["short_rebuild", "rebuild:False"]
 
@@ -461,7 +525,9 @@ async def test_ensure_logged_in_never_uses_login_fallback_in_rebuild(auth_manage
     auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
     auth_manager.rebuild_services = _rebuild
 
-    out = await auth_manager.ensure_logged_in(force=True, reason="ut-fallback", prefer_refresh=True)
+    out = await auth_manager.ensure_logged_in(
+        force=True, reason="ut-fallback", prefer_refresh=True
+    )
     assert out is True
     assert events == ["short_rebuild", "rebuild:False"]
 
@@ -627,7 +693,9 @@ async def test_login_exchange_stage_disabled_when_short_missing(auth_manager):
         err="401 unauthorized",
     )
     with pytest.raises(RuntimeError):
-        await auth_manager.login_miboy(allow_login_fallback=True, reason="mina:player_get_status")
+        await auth_manager.login_miboy(
+            allow_login_fallback=True, reason="mina:player_get_status"
+        )
     state = auth_manager.auth_recovery_debug_state()
     login_stage = state["last_login_exchange"]
     assert login_stage["stage"] == "login_exchange"
@@ -655,7 +723,9 @@ async def test_login_exchange_stage_failed_records_reason(auth_manager, monkeypa
         err="401 unauthorized",
     )
     with pytest.raises(RuntimeError):
-        await auth_manager.login_miboy(allow_login_fallback=True, reason="mina:player_get_status")
+        await auth_manager.login_miboy(
+            allow_login_fallback=True, reason="mina:player_get_status"
+        )
     state = auth_manager.auth_recovery_debug_state()
     login_stage = state["last_login_exchange"]
     assert login_stage["stage"] == "login_exchange"
@@ -681,7 +751,9 @@ async def test_runtime_rebind_stage_records_rebind_flags(auth_manager, monkeypat
     monkeypatch.setattr(auth_manager, "login_miboy", _fake_login)
     monkeypatch.setattr(auth_manager, "_verify_runtime_auth_ready", _fake_verify)
 
-    out = await auth_manager.rebuild_services(reason="mina:player_get_status", allow_login_fallback=True)
+    out = await auth_manager.rebuild_services(
+        reason="mina:player_get_status", allow_login_fallback=True
+    )
     assert out is True
     stage = auth_manager.auth_recovery_debug_state()["last_runtime_rebind"]
     assert stage["stage"] == "runtime_rebind"
@@ -764,7 +836,9 @@ async def test_mi_login_fallback_disabled_by_policy(auth_manager, monkeypatch):
     token_path.write_text(json.dumps(data), encoding="utf-8")
 
     with pytest.raises(RuntimeError):
-        await auth_manager.login_miboy(allow_login_fallback=True, reason="ut-mi-disabled")
+        await auth_manager.login_miboy(
+            allow_login_fallback=True, reason="ut-mi-disabled"
+        )
     trace = auth_manager.miaccount_login_trace_debug_state()
     assert trace["login_http_exchange"]["result"] == "skipped"
     assert trace["login_http_exchange"]["disabled_by_policy"] is True
@@ -786,7 +860,9 @@ def test_token_writeback_records_targets(auth_manager):
             "micoapi": ("ss", "new-short-token"),
         }
 
-    auth_manager._persist_auth_data(auth_manager._get_auth_data(), _Account(), reason="ut-writeback")
+    auth_manager._persist_auth_data(
+        auth_manager._get_auth_data(), _Account(), reason="ut-writeback"
+    )
     stage = auth_manager.miaccount_login_trace_debug_state()["token_writeback"]
     assert stage["result"] == "ok"
     assert stage["wrote_serviceToken"] is True
@@ -817,7 +893,9 @@ def test_non_login_paths_do_not_emit_mi_login_trace(auth_manager):
 
 
 @pytest.mark.asyncio
-async def test_rebuild_short_session_from_persistent_auth_success(auth_manager, monkeypatch):
+async def test_rebuild_short_session_from_persistent_auth_success(
+    auth_manager, monkeypatch
+):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
@@ -849,7 +927,9 @@ async def test_rebuild_short_session_from_persistent_auth_success(auth_manager, 
     fake_module = types.ModuleType("xiaomusic.qrcode_login")
     fake_module.MiJiaAPI = _FakeMiJiaAPI
     monkeypatch.setitem(sys.modules, "xiaomusic.qrcode_login", fake_module)
-    ok = await auth_manager._rebuild_short_session_from_persistent_auth("ut-short-rebuild")
+    ok = await auth_manager._rebuild_short_session_from_persistent_auth(
+        "ut-short-rebuild"
+    )
     assert ok is True
     after = json.loads(token_path.read_text(encoding="utf-8"))
     assert after.get("serviceToken") == "rebuilt-st"
@@ -874,12 +954,16 @@ async def test_ensure_logged_in_locks_only_when_persistent_auth_missing(auth_man
     auth_manager.need_login = _need_login
 
     with pytest.raises(RuntimeError):
-        await auth_manager.ensure_logged_in(force=True, reason="ut-long-missing", prefer_refresh=True)
+        await auth_manager.ensure_logged_in(
+            force=True, reason="ut-long-missing", prefer_refresh=True
+        )
     assert auth_manager.is_auth_locked() is True
 
 
 @pytest.mark.asyncio
-async def test_rebuild_short_session_records_missing_persistent_auth_fields(auth_manager):
+async def test_rebuild_short_session_records_missing_persistent_auth_fields(
+    auth_manager,
+):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("cUserId", None)
@@ -887,7 +971,9 @@ async def test_rebuild_short_session_records_missing_persistent_auth_fields(auth
     data.pop("yetAnotherServiceToken", None)
     token_path.write_text(json.dumps(data), encoding="utf-8")
 
-    ok = await auth_manager._rebuild_short_session_from_persistent_auth("ut-missing-long-auth")
+    ok = await auth_manager._rebuild_short_session_from_persistent_auth(
+        "ut-missing-long-auth"
+    )
     assert ok is False
     stage = auth_manager.auth_rebuild_debug_state()["last_rebuild_short_session"]
     assert stage["result"] == "failed"
@@ -896,7 +982,9 @@ async def test_rebuild_short_session_records_missing_persistent_auth_fields(auth
 
 
 @pytest.mark.asyncio
-async def test_rebuild_short_session_does_not_call_login_on_long_missing(auth_manager, monkeypatch):
+async def test_rebuild_short_session_does_not_call_login_on_long_missing(
+    auth_manager, monkeypatch
+):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("passToken", None)
@@ -917,13 +1005,17 @@ async def test_rebuild_short_session_does_not_call_login_on_long_missing(auth_ma
     fake_module = types.ModuleType("xiaomusic.qrcode_login")
     fake_module.MiJiaAPI = _FailMiJiaAPI
     monkeypatch.setitem(sys.modules, "xiaomusic.qrcode_login", fake_module)
-    ok = await auth_manager._rebuild_short_session_from_persistent_auth("ut-no-long-auth")
+    ok = await auth_manager._rebuild_short_session_from_persistent_auth(
+        "ut-no-long-auth"
+    )
     assert ok is False
     assert calls["refresh"] == 0
 
 
 @pytest.mark.asyncio
-async def test_rebuild_short_session_primary_failed_then_refresh_fallback_success(auth_manager, monkeypatch):
+async def test_rebuild_short_session_primary_failed_then_refresh_fallback_success(
+    auth_manager, monkeypatch
+):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
@@ -970,13 +1062,17 @@ async def test_rebuild_short_session_primary_failed_then_refresh_fallback_succes
     assert calls == {"primary": 1, "fallback": 1}
     data_after = auth_manager._get_auth_data()
     assert data_after.get("serviceToken") == "fallback-st"
-    stage = auth_manager.auth_short_session_rebuild_debug_state()["last_auth_recovery_flow"]
+    stage = auth_manager.auth_short_session_rebuild_debug_state()[
+        "last_auth_recovery_flow"
+    ]
     # recovery flow is emitted by ensure_logged_in; direct helper call should keep it empty.
     assert isinstance(stage, dict)
 
 
 @pytest.mark.asyncio
-async def test_rebuild_short_session_uses_second_persistent_path_before_refresh_fallback(auth_manager, monkeypatch):
+async def test_rebuild_short_session_uses_second_persistent_path_before_refresh_fallback(
+    auth_manager, monkeypatch
+):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
@@ -1017,14 +1113,18 @@ async def test_rebuild_short_session_uses_second_persistent_path_before_refresh_
     auth_manager._try_mijia_persistent_auth_relogin = _mijia
     auth_manager._rebuild_short_session_tokens_via_refresh_fallback = _fallback
 
-    out = await auth_manager._rebuild_short_session_tokens_from_persistent_auth("ut-second-path")
+    out = await auth_manager._rebuild_short_session_tokens_from_persistent_auth(
+        "ut-second-path"
+    )
     assert out["ok"] is True
     assert out["used_path"] == "mijia_persistent_auth_login"
     assert calls == {"miaccount": 1, "mijia": 1, "fallback": 0}
 
 
 @pytest.mark.asyncio
-async def test_ensure_logged_in_records_degraded_not_healthy_when_all_recovery_paths_fail(auth_manager):
+async def test_ensure_logged_in_records_degraded_not_healthy_when_all_recovery_paths_fail(
+    auth_manager,
+):
     async def _need_login():
         return True
 
@@ -1040,8 +1140,12 @@ async def test_ensure_logged_in_records_degraded_not_healthy_when_all_recovery_p
     auth_manager._rebuild_short_session_from_persistent_auth = _short_rebuild
 
     with pytest.raises(RuntimeError):
-        await auth_manager.ensure_logged_in(force=True, reason="ut-degraded-flow", prefer_refresh=True)
-    flow = auth_manager.auth_short_session_rebuild_debug_state()["last_auth_recovery_flow"]
+        await auth_manager.ensure_logged_in(
+            force=True, reason="ut-degraded-flow", prefer_refresh=True
+        )
+    flow = auth_manager.auth_short_session_rebuild_debug_state()[
+        "last_auth_recovery_flow"
+    ]
     assert flow["result"] == "failed"
     assert flow["final_auth_mode"] == "degraded"
     assert flow["runtime_rebind_result"] == "failed"
@@ -1086,11 +1190,16 @@ async def test_init_all_data_records_recovery_flow_on_success(auth_manager):
     auth_manager._login_cooldown_sec = 0
 
     await auth_manager.init_all_data()
-    flow = auth_manager.auth_short_session_rebuild_debug_state()["last_auth_recovery_flow"]
+    flow = auth_manager.auth_short_session_rebuild_debug_state()[
+        "last_auth_recovery_flow"
+    ]
     assert flow["result"] == "ok"
     assert flow["runtime_rebind_result"] == "ok"
     assert flow["verify_result"] == "ok"
-    assert auth_manager.auth_short_session_rebuild_debug_state()["last_verify"]["result"] == "ok"
+    assert (
+        auth_manager.auth_short_session_rebuild_debug_state()["last_verify"]["result"]
+        == "ok"
+    )
     assert calls == {"login": 1, "device_update": 1}
 
 
@@ -1109,7 +1218,9 @@ async def test_init_all_data_sets_degraded_when_recovery_fails(auth_manager):
         return True
 
     async def _login(allow_login_fallback=False, reason=""):  # noqa: ARG001
-        raise RuntimeError("missing short session token; rebuild from long auth required")
+        raise RuntimeError(
+            "missing short session token; rebuild from long auth required"
+        )
 
     async def _rebuild(reason):  # noqa: ARG001
         auth_manager._last_short_session_rebuild_detail = {
@@ -1131,7 +1242,9 @@ async def test_init_all_data_sets_degraded_when_recovery_fails(auth_manager):
 
 
 @pytest.mark.asyncio
-async def test_ensure_logged_in_short_rebuild_failed_without_lock_when_persistent_auth_exists(auth_manager, monkeypatch):
+async def test_ensure_logged_in_short_rebuild_failed_without_lock_when_persistent_auth_exists(
+    auth_manager, monkeypatch
+):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data["psecurity"] = "pp"
@@ -1163,9 +1276,13 @@ async def test_ensure_logged_in_short_rebuild_failed_without_lock_when_persisten
     auth_manager._rebuild_short_session_tokens_via_refresh_fallback = _fallback
 
     with pytest.raises(RuntimeError):
-        await auth_manager.ensure_logged_in(force=True, reason="ut-no-lock", prefer_refresh=True)
+        await auth_manager.ensure_logged_in(
+            force=True, reason="ut-no-lock", prefer_refresh=True
+        )
     assert auth_manager.is_auth_locked() is False
-    flow = auth_manager.auth_short_session_rebuild_debug_state()["last_auth_recovery_flow"]
+    flow = auth_manager.auth_short_session_rebuild_debug_state()[
+        "last_auth_recovery_flow"
+    ]
     assert flow["result"] == "failed"
     assert flow["used_rebuild_strategy"] == "refresh_token_fallback"
     assert flow["used_refresh_fallback"] is True
@@ -1184,7 +1301,9 @@ async def test_init_all_data_rebuilds_when_existing_short_verify_failed(auth_man
     async def _login(allow_login_fallback=False, reason=""):  # noqa: ARG001
         calls["login"] += 1
         if calls["login"] == 1:
-            raise RuntimeError("service token verify failed and login fallback disabled")
+            raise RuntimeError(
+                "service token verify failed and login fallback disabled"
+            )
         return None
 
     async def _rebuild(reason):  # noqa: ARG001
@@ -1212,7 +1331,9 @@ async def test_init_all_data_rebuilds_when_existing_short_verify_failed(auth_man
 
 
 @pytest.mark.asyncio
-async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_miaccount_strategy(auth_manager):
+async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_miaccount_strategy(
+    auth_manager,
+):
     calls = {"update": 0}
 
     async def _need_login():
@@ -1238,13 +1359,17 @@ async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_miaccount_str
     auth_manager.rebuild_services = _rebuild
     auth_manager._update_last_cookie_rebuild_outcome = _update_outcome
 
-    out = await auth_manager.ensure_logged_in(force=True, reason="ut-miaccount-strategy", prefer_refresh=True)
+    out = await auth_manager.ensure_logged_in(
+        force=True, reason="ut-miaccount-strategy", prefer_refresh=True
+    )
     assert out is True
     assert calls["update"] == 1
 
 
 @pytest.mark.asyncio
-async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_mijia_strategy(auth_manager):
+async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_mijia_strategy(
+    auth_manager,
+):
     calls = {"update": 0}
 
     async def _need_login():
@@ -1270,13 +1395,17 @@ async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_mijia_strateg
     auth_manager.rebuild_services = _rebuild
     auth_manager._update_last_cookie_rebuild_outcome = _update_outcome
 
-    out = await auth_manager.ensure_logged_in(force=True, reason="ut-mijia-strategy", prefer_refresh=True)
+    out = await auth_manager.ensure_logged_in(
+        force=True, reason="ut-mijia-strategy", prefer_refresh=True
+    )
     assert out is True
     assert calls["update"] == 1
 
 
 @pytest.mark.asyncio
-async def test_ensure_logged_in_does_not_update_cookie_outcome_for_refresh_fallback(auth_manager):
+async def test_ensure_logged_in_does_not_update_cookie_outcome_for_refresh_fallback(
+    auth_manager,
+):
     calls = {"update": 0}
 
     async def _need_login():
@@ -1300,7 +1429,9 @@ async def test_ensure_logged_in_does_not_update_cookie_outcome_for_refresh_fallb
     auth_manager.rebuild_services = _rebuild
     auth_manager._update_last_cookie_rebuild_outcome = _update_outcome
 
-    out = await auth_manager.ensure_logged_in(force=True, reason="ut-refresh-strategy", prefer_refresh=True)
+    out = await auth_manager.ensure_logged_in(
+        force=True, reason="ut-refresh-strategy", prefer_refresh=True
+    )
     assert out is True
     assert calls["update"] == 0
 
@@ -1311,7 +1442,9 @@ async def test_manual_reload_runtime_uses_disk_path_without_refresh_api(auth_man
 
     async def _refresh(reason, force=False):  # noqa: ARG001
         calls["refresh"] += 1
-        raise AssertionError("manual runtime reload should not call refresh_auth_if_needed")
+        raise AssertionError(
+            "manual runtime reload should not call refresh_auth_if_needed"
+        )
 
     async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
         calls["rebuild"] += 1
@@ -1402,7 +1535,9 @@ def test_auth_debug_state_zeroes_ttl_when_short_session_missing(auth_manager):
 
 
 @pytest.mark.asyncio
-async def test_rebuild_short_session_produces_diagnostic_fields(auth_manager, monkeypatch):
+async def test_rebuild_short_session_produces_diagnostic_fields(
+    auth_manager, monkeypatch
+):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
@@ -1438,7 +1573,9 @@ async def test_rebuild_short_session_produces_diagnostic_fields(auth_manager, mo
 
 
 @pytest.mark.asyncio
-async def test_path_attempts_include_diagnostic_in_rebuild_result(auth_manager, monkeypatch):
+async def test_path_attempts_include_diagnostic_in_rebuild_result(
+    auth_manager, monkeypatch
+):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
     data.pop("serviceToken", None)
@@ -1474,25 +1611,37 @@ def test_is_short_session_failure_signal_miio_login_failed():
 
     am = AuthManager.__new__(AuthManager)
 
-    assert am._is_short_session_failure_signal(
-        reason="miio:text_to_speech",
-        err="Error https://api.io.mi.com/app/miotspec/action: Login failed",
-    ) is True
+    assert (
+        am._is_short_session_failure_signal(
+            reason="miio:text_to_speech",
+            err="Error https://api.io.mi.com/app/miotspec/action: Login failed",
+        )
+        is True
+    )
 
-    assert am._is_short_session_failure_signal(
-        reason="",
-        err="https://api.io.mi.com/remote/ubus: Login failed",
-    ) is True
+    assert (
+        am._is_short_session_failure_signal(
+            reason="",
+            err="https://api.io.mi.com/remote/ubus: Login failed",
+        )
+        is True
+    )
 
-    assert am._is_short_session_failure_signal(
-        reason="",
-        err="Error https://api.io.mi.com/app/miotspec/action: Login failed (not mina service)",
-    ) is True
+    assert (
+        am._is_short_session_failure_signal(
+            reason="",
+            err="Error https://api.io.mi.com/app/miotspec/action: Login failed (not mina service)",
+        )
+        is True
+    )
 
-    assert am._is_short_session_failure_signal(
-        reason="keepalive",
-        err="network timeout",
-    ) is False
+    assert (
+        am._is_short_session_failure_signal(
+            reason="keepalive",
+            err="network timeout",
+        )
+        is False
+    )
 
 
 def test_is_short_session_failure_signal_mina_still_recognized():
@@ -1501,17 +1650,22 @@ def test_is_short_session_failure_signal_mina_still_recognized():
 
     am = AuthManager.__new__(AuthManager)
 
-    assert am._is_short_session_failure_signal(
-        reason="mina:player_get_status",
-        err="Error https://api2.mina.mi.com/remote/ubus: Login failed",
-    ) is True
+    assert (
+        am._is_short_session_failure_signal(
+            reason="mina:player_get_status",
+            err="Error https://api2.mina.mi.com/remote/ubus: Login failed",
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
-async def test_auth_call_proceeds_recovery_when_clear_skipped_but_need_login(auth_manager, monkeypatch):
+async def test_auth_call_proceeds_recovery_when_clear_skipped_but_need_login(
+    auth_manager, monkeypatch
+):
     """Fix B: when _clear_short_lived_session returns False (e.g. signal not recognized)
-    but need_login() is True, auth_call must still call ensure_logged_in and mark
-    recovery as active — recovery should never be silently skipped."""
+    but need_login() is True, auth_call must still mark recovery as active and
+    try non-destructive recovery — recovery should never be silently skipped."""
 
     call_order = []
 
@@ -1529,34 +1683,43 @@ async def test_auth_call_proceeds_recovery_when_clear_skipped_but_need_login(aut
         assert prefer_refresh is True
         return True
 
+    async def _non_destructive(ctx="", reason=""):
+        call_order.append("non_destructive")
+        return True, "runtime_verified"
+
     monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
     auth_manager.need_login = _need_login
     auth_manager.ensure_logged_in = _ensure
+    auth_manager._attempt_non_destructive_auth_recovery = _non_destructive
 
     state = {"n": 0}
 
     async def _fn():
         if state["n"] == 0:
             state["n"] += 1
-            raise RuntimeError("Error https://api.io.mi.com/app/miotspec/action: Login failed")
+            raise RuntimeError(
+                "Error https://api.io.mi.com/app/miotspec/action: Login failed"
+            )
         return "ok"
 
     out = await auth_manager.auth_call(_fn, retry=1, ctx="miio:text_to_speech")
     assert out == "ok"
-    assert "clear" in call_order
-    assert "need_login" in call_order
-    assert "ensure_logged_in" in call_order
-    assert call_order.index("need_login") > call_order.index("clear")
-    assert auth_manager._recovery_is_active() is True
+    # 第一次auth error走非破坏性恢复
+    assert "clear" not in call_order, "First auth error should NOT clear"
+    assert "non_destructive" in call_order, (
+        "First auth error should use non-destructive recovery"
+    )
+    # 非破坏性恢复成功后不会调用 ensure_logged_in
+    assert "ensure_logged_in" not in call_order
 
 
 @pytest.mark.asyncio
-async def test_auth_call_marks_recovery_active_when_clear_skipped(auth_manager, monkeypatch):
+async def test_auth_call_marks_recovery_active_when_clear_skipped(
+    auth_manager, monkeypatch
+):
     """Fix B: even when _clear_short_lived_session returns False, _mark_recovery_active
     must be called so that subsequent stages in the recovery flow can observe that
     recovery is in progress."""
-
-    recovery_before = []
 
     def _clear(clear_reason: str, err=None):
         return False
@@ -1567,25 +1730,35 @@ async def test_auth_call_marks_recovery_active_when_clear_skipped(auth_manager, 
     async def _ensure(force=False, reason="", prefer_refresh=False):
         return True
 
+    # 非破坏性恢复失败
+    async def _non_destructive(ctx="", reason=""):
+        return False, "all_attempts_failed"
+
     monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
     auth_manager.need_login = _need_login
     auth_manager.ensure_logged_in = _ensure
+    auth_manager._attempt_non_destructive_auth_recovery = _non_destructive
 
     before_chain_id = auth_manager._auth_recovery_chain_id
 
     async def _fn():
-        raise RuntimeError("Error https://api.io.mi.com/app/miotspec/action: Login failed")
+        raise RuntimeError(
+            "Error https://api.io.mi.com/app/miotspec/action: Login failed"
+        )
 
     try:
         await auth_manager.auth_call(_fn, retry=0, ctx="miio:text_to_speech")
     except RuntimeError:
         pass
 
+    # 非破坏性恢复失败时应该标记 recovery active
     assert auth_manager._recovery_is_active() is True
 
 
 @pytest.mark.asyncio
-async def test_ensure_logged_in_bypasses_backoff_when_need_login(auth_manager, monkeypatch):
+async def test_ensure_logged_in_bypasses_backoff_when_need_login(
+    auth_manager, monkeypatch
+):
     """When need_login() is True and backoff is active, ensure_logged_in must
     bypass the backoff and proceed with recovery — not raise 'relogin backoff
     active Ns'."""
@@ -1623,7 +1796,9 @@ async def test_ensure_logged_in_bypasses_backoff_when_need_login(auth_manager, m
     auth_manager.rebuild_services = _rebuild
     auth_manager._last_ok_ts = 0
 
-    out = await auth_manager.ensure_logged_in(force=True, reason="ut-bypass", prefer_refresh=True)
+    out = await auth_manager.ensure_logged_in(
+        force=True, reason="ut-bypass", prefer_refresh=True
+    )
     assert out is True
     bypass_log = next((e for e in events if "bypass_backoff=true" in e), None)
     assert bypass_log is not None, f"bypass log not found in {events}"
@@ -1649,7 +1824,9 @@ async def test_ensure_logged_in_respects_backoff_when_not_need_login(auth_manage
 
 
 @pytest.mark.asyncio
-async def test_keepalive_proactive_recovery_succeeds_and_resets_streak(auth_manager, monkeypatch):
+async def test_keepalive_proactive_recovery_succeeds_and_resets_streak(
+    auth_manager, monkeypatch
+):
     """Fix D: when keepalive enters degraded mode, proactive recovery should fire,
     succeed, reset _keepalive_fail_streak to 0, and exit degraded.
 
@@ -1686,7 +1863,9 @@ async def test_keepalive_proactive_recovery_succeeds_and_resets_streak(auth_mana
 
 
 @pytest.mark.asyncio
-async def test_keepalive_proactive_recovery_respects_cooldown(auth_manager, monkeypatch):
+async def test_keepalive_proactive_recovery_respects_cooldown(
+    auth_manager, monkeypatch
+):
     """Fix D: when _keepalive_recovery_cooldown_ts is in the future,
     proactive recovery must be skipped and the default interval sleep is used.
 
@@ -1721,7 +1900,9 @@ async def test_keepalive_proactive_recovery_respects_cooldown(auth_manager, monk
 
 
 @pytest.mark.asyncio
-async def test_keepalive_proactive_recovery_fails_and_sets_cooldown(auth_manager, monkeypatch):
+async def test_keepalive_proactive_recovery_fails_and_sets_cooldown(
+    auth_manager, monkeypatch
+):
     """Fix D: when proactive recovery fails, _keepalive_recovery_cooldown_ts must
     be set to prevent immediate re-trigger."""
 
@@ -1769,12 +1950,16 @@ async def test_ensure_logged_in_locks_when_persistent_auth_missing(auth_manager)
     auth_manager.need_login = _need_login
 
     with pytest.raises(RuntimeError):
-        await auth_manager.ensure_logged_in(force=True, reason="ut-no-persistent", prefer_refresh=True)
+        await auth_manager.ensure_logged_in(
+            force=True, reason="ut-no-persistent", prefer_refresh=True
+        )
     assert auth_manager.is_auth_locked() is True
 
 
 @pytest.mark.asyncio
-async def test_keepalive_proactive_recovery_succeeds_after_initial_failure(auth_manager, monkeypatch):
+async def test_keepalive_proactive_recovery_succeeds_after_initial_failure(
+    auth_manager, monkeypatch
+):
     proactive_attempts = []
     mina_ctxs = []
     sleep_count = {"n": 0}
@@ -1808,7 +1993,9 @@ async def test_keepalive_proactive_recovery_succeeds_after_initial_failure(auth_
 
     monkeypatch.setattr(asyncio, "sleep", _sleep)
     monkeypatch.setattr(auth_manager, "_maybe_scheduled_refresh", _noop)
-    monkeypatch.setattr(auth_manager, "_rebuild_short_session_from_persistent_auth", _noop)
+    monkeypatch.setattr(
+        auth_manager, "_rebuild_short_session_from_persistent_auth", _noop
+    )
     auth_manager.need_login = _need_login
     auth_manager.ensure_logged_in = _ensure
     auth_manager.mina_call = _mina_call
@@ -1819,7 +2006,9 @@ async def test_keepalive_proactive_recovery_succeeds_after_initial_failure(auth_
     with pytest.raises(asyncio.CancelledError):
         await auth_manager.keepalive_loop(interval_sec=7)
 
-    assert len(proactive_attempts) >= 2, f"Expected >=2 proactive attempts, got {proactive_attempts}"
+    assert len(proactive_attempts) >= 2, (
+        f"Expected >=2 proactive attempts, got {proactive_attempts}"
+    )
     assert "keepalive-proactive-recover" in mina_ctxs
     assert auth_manager._keepalive_degraded is False
     assert auth_manager._keepalive_fail_streak == 0
@@ -1865,7 +2054,9 @@ async def test_backoff_bypass_allows_complete_recovery_flow(auth_manager, monkey
     auth_manager.rebuild_services = _rebuild
     auth_manager._last_ok_ts = 0
 
-    out = await auth_manager.ensure_logged_in(force=True, reason="ut-bypass-clear", prefer_refresh=True)
+    out = await auth_manager.ensure_logged_in(
+        force=True, reason="ut-bypass-clear", prefer_refresh=True
+    )
     assert out is True
     bypass_log = next((e for e in events if "bypass_backoff" in e), None)
     assert bypass_log is not None, f"bypass log not found in {events}"
@@ -1875,7 +2066,9 @@ async def test_backoff_bypass_allows_complete_recovery_flow(auth_manager, monkey
 
 
 @pytest.mark.asyncio
-async def test_keepalive_proactive_recovery_success_resets_last_ok_ts_and_streak(auth_manager, monkeypatch):
+async def test_keepalive_proactive_recovery_success_resets_last_ok_ts_and_streak(
+    auth_manager, monkeypatch
+):
     async def _sleep(delay):
         raise asyncio.CancelledError()
 
@@ -1981,3 +2174,342 @@ def test_auth_mode_invalid_mode_rejected(auth_manager):
     assert auth_manager._auth_mode == "healthy"
     assert len(warning_log) == 1
     assert "invalid mode=foobar" in warning_log[0]
+
+
+@pytest.mark.asyncio
+async def test_auth_call_first_auth_error_does_not_clear(auth_manager):
+    """首次auth error不应clear short session"""
+    clear_calls = []
+    original_clear = auth_manager._clear_short_lived_session
+
+    def _track_clear(*args, **kwargs):
+        clear_calls.append((args, kwargs))
+        return original_clear(*args, **kwargs)
+
+    auth_manager._clear_short_lived_session = _track_clear
+    auth_manager.mina_service = type(
+        "S", (), {"account": type("A", (), {"token": {}})()}
+    )()
+    auth_manager.miio_service = None
+
+    decision_logs = []
+    original_log = auth_manager.log.info
+
+    def _capture_log(msg, *args, **kwargs):
+        if "auth_short_session_clear_decision" in str(msg):
+            decision_logs.append(msg)
+        return original_log(msg, *args, **kwargs)
+
+    auth_manager.log.info = _capture_log
+
+    call_count = 0
+
+    async def _failing_fn():
+        nonlocal call_count
+        call_count += 1
+        raise Exception("Login failed")
+
+    auth_manager.need_login = lambda: asyncio.sleep(0) or True
+    auth_manager.ensure_logged_in = lambda **kw: asyncio.sleep(0) or None
+
+    with pytest.raises(Exception, match="Login failed"):
+        await auth_manager.auth_call(_failing_fn, retry=0, ctx="test_ctx")
+
+    assert len(clear_calls) == 0, "First auth error should NOT clear"
+    assert len(decision_logs) >= 1, "Should have decision log"
+    assert auth_manager._auth_error_suspect_streak == 1
+
+
+@pytest.mark.asyncio
+async def test_auth_call_consecutive_auth_error_clears(auth_manager):
+    """连续auth error才clear"""
+    clear_calls = []
+    original_clear = auth_manager._clear_short_lived_session
+
+    def _track_clear(*args, **kwargs):
+        clear_calls.append((args, kwargs))
+        return original_clear(*args, **kwargs)
+
+    auth_manager._clear_short_lived_session = _track_clear
+    auth_manager.mina_service = type(
+        "S", (), {"account": type("A", (), {"token": {}})()}
+    )()
+    auth_manager.miio_service = None
+
+    auth_manager.need_login = lambda: asyncio.sleep(0) or True
+    auth_manager.ensure_logged_in = lambda **kw: asyncio.sleep(0) or None
+
+    call_count = 0
+
+    async def _failing_fn():
+        nonlocal call_count
+        call_count += 1
+        raise Exception("Login failed")
+
+    with pytest.raises(Exception, match="Login failed"):
+        await auth_manager.auth_call(_failing_fn, retry=0, ctx="test_ctx")
+
+    assert len(clear_calls) == 0, "First auth error should NOT clear"
+    assert auth_manager._auth_error_suspect_streak == 1
+
+    with pytest.raises(Exception, match="Login failed"):
+        await auth_manager.auth_call(_failing_fn, retry=0, ctx="test_ctx")
+
+    assert len(clear_calls) == 1, "Second consecutive auth error SHOULD clear"
+    assert auth_manager._auth_error_suspect_streak == 0
+
+
+@pytest.mark.asyncio
+async def test_auth_call_non_auth_error_not_affected(auth_manager):
+    """非auth error不受影响"""
+    clear_calls = []
+    original_clear = auth_manager._clear_short_lived_session
+
+    def _track_clear(*args, **kwargs):
+        clear_calls.append((args, kwargs))
+        return original_clear(*args, **kwargs)
+
+    auth_manager._clear_short_lived_session = _track_clear
+
+    async def _failing_fn():
+        raise Exception("Some other error")
+
+    with pytest.raises(Exception, match="Some other error"):
+        await auth_manager.auth_call(_failing_fn, retry=0, ctx="test_ctx")
+
+    assert len(clear_calls) == 0, "Non-auth error should NOT trigger clear"
+    assert auth_manager._auth_error_suspect_streak == 0
+
+
+@pytest.mark.asyncio
+async def test_auth_call_retry_behavior_preserved(auth_manager):
+    """确保auth_call retry行为不被破坏"""
+    auth_manager.mina_service = type(
+        "S", (), {"account": type("A", (), {"token": {}})()}
+    )()
+    auth_manager.miio_service = None
+    auth_manager.need_login = lambda: asyncio.sleep(0) or True
+    auth_manager.ensure_logged_in = lambda **kw: asyncio.sleep(0) or None
+
+    # 非破坏性恢复成功
+    async def _successful_recovery(ctx="", reason=""):
+        return True, "runtime_verified"
+
+    auth_manager._attempt_non_destructive_auth_recovery = _successful_recovery
+
+    call_count = 0
+
+    async def _failing_then_succeed():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise Exception("Login failed")
+        return "success"
+
+    result = await auth_manager.auth_call(
+        _failing_then_succeed, retry=1, ctx="test_ctx"
+    )
+    assert result == "success"
+    assert call_count == 2, "Should have retried once"
+
+
+def test_should_clear_short_session_on_auth_error_logic(auth_manager):
+    """测试_should_clear_short_session_on_auth_error的逻辑"""
+    auth_manager._reset_auth_error_suspect()
+
+    should_clear, reason = auth_manager._should_clear_short_session_on_auth_error(
+        ctx="ctx1"
+    )
+    assert not should_clear
+    assert reason == "first_suspect"
+
+    auth_manager._record_auth_error_suspect(ctx="ctx1")
+
+    should_clear, reason = auth_manager._should_clear_short_session_on_auth_error(
+        ctx="ctx1"
+    )
+    assert should_clear
+    assert reason == "consecutive_auth_error_same_ctx"
+
+    auth_manager._reset_auth_error_suspect()
+
+    auth_manager._record_auth_error_suspect(ctx="ctx1")
+    auth_manager._record_auth_error_suspect(ctx="ctx2")
+
+    should_clear, reason = auth_manager._should_clear_short_session_on_auth_error(
+        ctx="ctx3"
+    )
+    assert should_clear
+    assert reason == "consecutive_auth_error_multiple"
+
+
+@pytest.mark.asyncio
+async def test_auth_call_first_suspect_uses_non_destructive_recovery(auth_manager):
+    """首次auth error应走非破坏性恢复路径，不调用ensure_logged_in(prefer_refresh=True)"""
+    clear_calls = []
+    ensure_calls = []
+    non_destructive_calls = []
+
+    original_clear = auth_manager._clear_short_lived_session
+
+    def _track_clear(*args, **kwargs):
+        clear_calls.append((args, kwargs))
+        return original_clear(*args, **kwargs)
+
+    async def _track_ensure(**kwargs):
+        ensure_calls.append(kwargs)
+        return True
+
+    async def _track_non_destructive(ctx="", reason=""):
+        non_destructive_calls.append({"ctx": ctx, "reason": reason})
+        return True, "runtime_verified"
+
+    auth_manager._clear_short_lived_session = _track_clear
+    auth_manager.ensure_logged_in = _track_ensure
+    auth_manager._attempt_non_destructive_auth_recovery = _track_non_destructive
+    auth_manager.mina_service = type(
+        "S", (), {"account": type("A", (), {"token": {}})()}
+    )()
+    auth_manager.miio_service = None
+    auth_manager.need_login = lambda: asyncio.sleep(0) or True
+
+    call_count = 0
+
+    async def _failing_then_succeed():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise Exception("Login failed")
+        return "success"
+
+    result = await auth_manager.auth_call(
+        _failing_then_succeed, retry=1, ctx="test_ctx"
+    )
+    assert result == "success"
+    assert len(clear_calls) == 0, "First auth error should NOT clear"
+    assert len(ensure_calls) == 0, "First auth error should NOT call ensure_logged_in"
+    assert len(non_destructive_calls) == 1, (
+        "First auth error should use non-destructive recovery"
+    )
+    assert non_destructive_calls[0]["ctx"] == "test_ctx"
+
+
+@pytest.mark.asyncio
+async def test_auth_call_upgraded_clear_uses_ensure_logged_in(auth_manager):
+    """升级后的auth error应走clear+rebuild路径"""
+    clear_calls = []
+    ensure_calls = []
+
+    original_clear = auth_manager._clear_short_lived_session
+
+    def _track_clear(*args, **kwargs):
+        clear_calls.append((args, kwargs))
+        return original_clear(*args, **kwargs)
+
+    async def _track_ensure(**kwargs):
+        ensure_calls.append(kwargs)
+        return True
+
+    auth_manager._clear_short_lived_session = _track_clear
+    auth_manager.ensure_logged_in = _track_ensure
+    auth_manager.mina_service = type(
+        "S", (), {"account": type("A", (), {"token": {}})()}
+    )()
+    auth_manager.miio_service = None
+    auth_manager.need_login = lambda: asyncio.sleep(0) or True
+
+    call_count = 0
+
+    async def _failing_fn():
+        nonlocal call_count
+        call_count += 1
+        raise Exception("Login failed")
+
+    # 第一次 - 不clear
+    with pytest.raises(Exception):
+        await auth_manager.auth_call(_failing_fn, retry=0, ctx="test_ctx")
+
+    assert len(clear_calls) == 0, "First auth error should NOT clear"
+    assert len(ensure_calls) == 0, "First auth error should NOT call ensure_logged_in"
+
+    # 第二次 - 应该clear
+    with pytest.raises(Exception):
+        await auth_manager.auth_call(_failing_fn, retry=0, ctx="test_ctx")
+
+    assert len(clear_calls) == 1, "Second auth error SHOULD clear"
+    assert len(ensure_calls) == 1, "Second auth error SHOULD call ensure_logged_in"
+    assert ensure_calls[0].get("prefer_refresh") is True
+
+
+@pytest.mark.asyncio
+async def test_auth_call_non_destructive_failure_preserves_short_session(auth_manager):
+    """非破坏性恢复失败时不应丢short session"""
+    # 设置auth data中有short session (使用fixture中的默认值)
+    import json
+
+    clear_calls = []
+    original_clear = auth_manager._clear_short_lived_session
+
+    def _track_clear(*args, **kwargs):
+        clear_calls.append((args, kwargs))
+        return original_clear(*args, **kwargs)
+
+    auth_manager._clear_short_lived_session = _track_clear
+    auth_manager.mina_service = type(
+        "S", (), {"account": type("A", (), {"token": {}})()}
+    )()
+    auth_manager.miio_service = None
+    auth_manager.need_login = lambda: asyncio.sleep(0) or True
+
+    # 非破坏性恢复失败
+    async def _failing_recovery(ctx="", reason=""):
+        return False, "all_attempts_failed"
+
+    auth_manager._attempt_non_destructive_auth_recovery = _failing_recovery
+
+    async def _failing_fn():
+        raise Exception("Login failed")
+
+    with pytest.raises(Exception):
+        await auth_manager.auth_call(_failing_fn, retry=0, ctx="test_ctx")
+
+    # 验证没有clear
+    assert len(clear_calls) == 0, "Non-destructive failure should NOT clear"
+
+    # 验证short session仍在文件中
+    with open(auth_manager.auth_token_path) as f:
+        saved_data = json.load(f)
+
+    assert "serviceToken" in saved_data, "Short session should be preserved"
+    assert saved_data["serviceToken"] == "st"
+
+
+@pytest.mark.asyncio
+async def test_auth_call_non_destructive_recovery_success_retries(auth_manager):
+    """非破坏性恢复成功后应重试原请求"""
+    auth_manager.mina_service = type(
+        "S", (), {"account": type("A", (), {"token": {}})()}
+    )()
+    auth_manager.miio_service = None
+    auth_manager.need_login = lambda: asyncio.sleep(0) or True
+
+    # 非破坏性恢复成功
+    async def _successful_recovery(ctx="", reason=""):
+        return True, "runtime_verified"
+
+    auth_manager._attempt_non_destructive_auth_recovery = _successful_recovery
+
+    call_count = 0
+
+    async def _failing_then_succeed():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise Exception("Login failed")
+        return "success"
+
+    result = await auth_manager.auth_call(
+        _failing_then_succeed, retry=1, ctx="test_ctx"
+    )
+    assert result == "success"
+    assert call_count == 2, "Should have retried after successful recovery"

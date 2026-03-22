@@ -233,6 +233,12 @@ class AuthManager:
         self._hf_auth_fail_streak: dict[str, int] = {}
         self._hf_cooldown_until_ts: dict[str, float] = {}
 
+        # auth_call short session clear 决策状态
+        self._auth_error_suspect_streak: int = 0
+        self._last_auth_error_suspect_ts: float = 0.0
+        self._last_auth_error_suspect_ctx: str = ""
+        self._auth_error_suspect_window_sec: int = 30
+
         # 当前设备DID（用于设备ID更新）
         self._cur_did = None
         self.device_id = get_random(16).upper()
@@ -253,7 +259,11 @@ class AuthManager:
     def _iso_utc(ts: float | int | None) -> str | None:
         if not ts:
             return None
-        return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        return (
+            datetime.fromtimestamp(float(ts), tz=timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
 
     @staticmethod
     def _parse_num(raw: Any) -> float | None:
@@ -303,7 +313,9 @@ class AuthManager:
             return "none"
         return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:8]
 
-    def _sync_auth_ttl(self, auth_data: dict[str, Any] | None = None, login_at_ts: float | None = None) -> None:
+    def _sync_auth_ttl(
+        self, auth_data: dict[str, Any] | None = None, login_at_ts: float | None = None
+    ) -> None:
         data = auth_data if isinstance(auth_data, dict) else self._get_auth_data()
         save_ms = int((data or {}).get("saveTime") or 0)
         if login_at_ts is not None:
@@ -393,7 +405,9 @@ class AuthManager:
             return "refresh_failed"
         return "other"
 
-    def _auth_presence_snapshot(self, data: dict[str, Any] | None = None) -> dict[str, bool]:
+    def _auth_presence_snapshot(
+        self, data: dict[str, Any] | None = None
+    ) -> dict[str, bool]:
         payload = data if isinstance(data, dict) else self._get_auth_data()
         return {
             "has_passToken": bool(payload.get("passToken")),
@@ -405,7 +419,9 @@ class AuthManager:
 
     def _short_session_fingerprint(self, data: dict[str, Any] | None = None) -> str:
         payload = data if isinstance(data, dict) else self._get_auth_data()
-        st = str(payload.get("yetAnotherServiceToken") or payload.get("serviceToken") or "")
+        st = str(
+            payload.get("yetAnotherServiceToken") or payload.get("serviceToken") or ""
+        )
         ss = str(payload.get("ssecurity") or "")
         if not st and not ss:
             return "none"
@@ -470,17 +486,26 @@ class AuthManager:
 
     def auth_short_session_rebuild_debug_state(self) -> dict[str, Any]:
         return {
-            "last_short_session_rebuild": deepcopy(self._auth_rebuild_state.get("last_rebuild_short_session", {})),
-            "last_persistent_auth_relogin": deepcopy(self._auth_cookie_rebuild_state.get("last_persistent_auth_relogin", {})),
-            "last_runtime_rebind": deepcopy(self._auth_rebuild_state.get("last_runtime_rebind", {})),
+            "last_short_session_rebuild": deepcopy(
+                self._auth_rebuild_state.get("last_rebuild_short_session", {})
+            ),
+            "last_persistent_auth_relogin": deepcopy(
+                self._auth_cookie_rebuild_state.get("last_persistent_auth_relogin", {})
+            ),
+            "last_runtime_rebind": deepcopy(
+                self._auth_rebuild_state.get("last_runtime_rebind", {})
+            ),
             "last_verify": deepcopy(self._auth_rebuild_state.get("last_verify", {})),
-            "last_auth_recovery_flow": deepcopy(self._auth_cookie_rebuild_state.get("last_auth_recovery_flow", {})),
-            "last_locked_transition": deepcopy(self._auth_cookie_rebuild_state.get("last_locked_transition", {})),
+            "last_auth_recovery_flow": deepcopy(
+                self._auth_cookie_rebuild_state.get("last_auth_recovery_flow", {})
+            ),
+            "last_locked_transition": deepcopy(
+                self._auth_cookie_rebuild_state.get("last_locked_transition", {})
+            ),
         }
 
     def auth_runtime_reload_debug_state(self) -> dict[str, Any]:
         return deepcopy(self._auth_runtime_reload_state)
-
 
     def _emit_auth_short_session_rebuild(
         self,
@@ -539,7 +564,14 @@ class AuthManager:
 
     @staticmethod
     def _missing_persistent_auth_fields(data: dict[str, Any]) -> list[str]:
-        required = ("passToken", "psecurity", "ssecurity", "userId", "cUserId", "deviceId")
+        required = (
+            "passToken",
+            "psecurity",
+            "ssecurity",
+            "userId",
+            "cUserId",
+            "deviceId",
+        )
         return [k for k in required if not str(data.get(k) or "").strip()]
 
     @classmethod
@@ -621,7 +653,9 @@ class AuthManager:
         relogin_payload = dict(payload)
         relogin_payload["event"] = "auth_persistent_auth_relogin"
         relogin_payload["stage"] = "rebuild_short_session_via_persistent_auth_login"
-        self.log.info(json.dumps(relogin_payload, ensure_ascii=False, separators=(",", ":")))
+        self.log.info(
+            json.dumps(relogin_payload, ensure_ascii=False, separators=(",", ":"))
+        )
         self._auth_cookie_rebuild_state["last_persistent_auth_relogin"] = dict(payload)
 
     def _emit_auth_recovery_flow(
@@ -661,7 +695,9 @@ class AuthManager:
         self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
         self._auth_cookie_rebuild_state["last_auth_recovery_flow"] = dict(payload)
 
-    def _update_last_cookie_rebuild_outcome(self, *, runtime_rebind_result: str, verify_result: str) -> None:
+    def _update_last_cookie_rebuild_outcome(
+        self, *, runtime_rebind_result: str, verify_result: str
+    ) -> None:
         last = self._auth_cookie_rebuild_state.get("last_persistent_auth_relogin", {})
         if not isinstance(last, dict) or not last:
             return
@@ -732,7 +768,9 @@ class AuthManager:
                 "used_path": "miaccount_persistent_auth_login",
             }
 
-        service_login_url = f"https://account.xiaomi.com/pass/serviceLogin?_json=true&sid={sid}"
+        service_login_url = (
+            f"https://account.xiaomi.com/pass/serviceLogin?_json=true&sid={sid}"
+        )
         service_login_host = "account.xiaomi.com"
         mi_account = MiAccount(
             self.mi_session,
@@ -754,7 +792,14 @@ class AuthManager:
             failed_reason: str
             is_network = any(
                 kw in exc_text.lower()
-                for kw in ("timeout", "connection", "dns", "network", "refused", "reset")
+                for kw in (
+                    "timeout",
+                    "connection",
+                    "dns",
+                    "network",
+                    "refused",
+                    "reset",
+                )
             )
             if is_network:
                 error_code = "service_login_network_failed"
@@ -763,8 +808,13 @@ class AuthManager:
                 error_code = "service_login_http_failed"
                 failed_reason = "service_login_request_failed"
             import re as _re
-            http_status_match = _re.search(r"status[=:\s]+([45]\d{2})", exc_text, _re.IGNORECASE)
-            service_login_http_status = int(http_status_match.group(1)) if http_status_match else None
+
+            http_status_match = _re.search(
+                r"status[=:\s]+([45]\d{2})", exc_text, _re.IGNORECASE
+            )
+            service_login_http_status = (
+                int(http_status_match.group(1)) if http_status_match else None
+            )
             return {
                 "ok": False,
                 "error_code": error_code,
@@ -817,7 +867,8 @@ class AuthManager:
                 "ok": False,
                 "error_code": "service_login_not_authorized",
                 "failed_reason": "service_login_code_not_zero",
-                "error_message": service_login_desc[:200] or f"serviceLogin returned code={service_login_code}",
+                "error_message": service_login_desc[:200]
+                or f"serviceLogin returned code={service_login_code}",
                 "http_stage": "serviceLogin",
                 "writeback_target": "none",
                 "sid": sid,
@@ -866,20 +917,30 @@ class AuthManager:
         redirect_host = ""
         try:
             from urllib.parse import urlparse as _urlparse
+
             parsed = _urlparse(location)
             redirect_host = parsed.netloc
         except Exception:
             pass
 
         try:
-            service_token = await mi_account._securityTokenService(location, nonce, ssecurity)
+            service_token = await mi_account._securityTokenService(
+                location, nonce, ssecurity
+            )
         except Exception as e:
             exc_text = str(e)
             error_code = "security_token_service_failed"
             failed_reason = "security_token_service_exception"
             is_network = any(
                 kw in exc_text.lower()
-                for kw in ("timeout", "connection", "dns", "network", "refused", "reset")
+                for kw in (
+                    "timeout",
+                    "connection",
+                    "dns",
+                    "network",
+                    "refused",
+                    "reset",
+                )
             )
             is_401_403 = any(
                 kw in exc_text.lower()
@@ -943,7 +1004,9 @@ class AuthManager:
 
         merged = deepcopy(before)
         merged["serviceToken"] = service_token
-        merged["yetAnotherServiceToken"] = merged.get("yetAnotherServiceToken") or service_token
+        merged["yetAnotherServiceToken"] = (
+            merged.get("yetAnotherServiceToken") or service_token
+        )
         if ssecurity:
             merged["ssecurity"] = ssecurity
         merged["saveTime"] = int(time.time() * 1000)
@@ -1013,11 +1076,23 @@ class AuthManager:
         }
 
     @staticmethod
-    def _missing_runtime_reload_fields(data: dict[str, Any]) -> tuple[list[str], list[str]]:
-        required_long = ("passToken", "psecurity", "ssecurity", "userId", "cUserId", "deviceId")
+    def _missing_runtime_reload_fields(
+        data: dict[str, Any],
+    ) -> tuple[list[str], list[str]]:
+        required_long = (
+            "passToken",
+            "psecurity",
+            "ssecurity",
+            "userId",
+            "cUserId",
+            "deviceId",
+        )
         missing_long = [k for k in required_long if not str(data.get(k) or "").strip()]
         missing_short: list[str] = []
-        if not (str(data.get("serviceToken") or "").strip() or str(data.get("yetAnotherServiceToken") or "").strip()):
+        if not (
+            str(data.get("serviceToken") or "").strip()
+            or str(data.get("yetAnotherServiceToken") or "").strip()
+        ):
             missing_short.append("serviceToken|yetAnotherServiceToken")
         return missing_long, missing_short
 
@@ -1059,7 +1134,9 @@ class AuthManager:
         self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
         self._auth_runtime_reload_state["last_reload_runtime"] = dict(payload)
 
-    async def _rebuild_service_cookies_from_persistent_auth(self, reason: str, sid: str = "micoapi") -> dict[str, Any]:
+    async def _rebuild_service_cookies_from_persistent_auth(
+        self, reason: str, sid: str = "micoapi"
+    ) -> dict[str, Any]:
         """Rebuild short-lived service cookies from long-lived auth fields.
 
         This method writes cookies/tokens to disk (auth.json/token_store) only.
@@ -1148,11 +1225,21 @@ class AuthManager:
             return snap
 
         try:
-            ret = await self._try_miaccount_persistent_auth_relogin(before=before, reason=reason, sid=sid)
-            path_attempts.append(_attempt_snapshot("miaccount_persistent_auth_login", ret))
-            if (not ret.get("ok")) and str(ret.get("error_code") or "") != "missing_persistent_auth_fields":
-                relogin_ret = await self._try_mijia_persistent_auth_relogin(auth_dir=auth_dir, sid=sid)
-                path_attempts.append(_attempt_snapshot("mijia_persistent_auth_login", relogin_ret))
+            ret = await self._try_miaccount_persistent_auth_relogin(
+                before=before, reason=reason, sid=sid
+            )
+            path_attempts.append(
+                _attempt_snapshot("miaccount_persistent_auth_login", ret)
+            )
+            if (not ret.get("ok")) and str(
+                ret.get("error_code") or ""
+            ) != "missing_persistent_auth_fields":
+                relogin_ret = await self._try_mijia_persistent_auth_relogin(
+                    auth_dir=auth_dir, sid=sid
+                )
+                path_attempts.append(
+                    _attempt_snapshot("mijia_persistent_auth_login", relogin_ret)
+                )
                 if relogin_ret.get("ok") or not ret.get("ok"):
                     ret = relogin_ret
             if self.token_store is not None:
@@ -1167,7 +1254,9 @@ class AuthManager:
                 "writeback_target": "none",
                 "sid": sid,
             }
-            path_attempts.append(_attempt_snapshot("miaccount_persistent_auth_login", ret))
+            path_attempts.append(
+                _attempt_snapshot("miaccount_persistent_auth_login", ret)
+            )
 
         after = self._get_auth_data()
         has_service_after = bool(after.get("serviceToken"))
@@ -1193,12 +1282,18 @@ class AuthManager:
             has_service_after=has_service_after,
             has_yast_before=has_yast_before,
             has_yast_after=has_yast_after,
-            writeback_target=str(ret.get("writeback_target") or ("auth_json" if ok else "none")),
+            writeback_target=str(
+                ret.get("writeback_target") or ("auth_json" if ok else "none")
+            ),
             runtime_rebind_result="pending" if ok else "skipped",
             rebuild_source="persistent_auth",
-            error_code=str(ret.get("error_code") or ("" if ok else "service_token_not_written")),
+            error_code=str(
+                ret.get("error_code") or ("" if ok else "service_token_not_written")
+            ),
             error_message=str(ret.get("error_message") or ""),
-            failed_reason=str(ret.get("failed_reason") or ("" if ok else "service_token_not_written")),
+            failed_reason=str(
+                ret.get("failed_reason") or ("" if ok else "service_token_not_written")
+            ),
         )
 
         ret_diagnostic = ret.get("diagnostic") if isinstance(ret, dict) else None
@@ -1215,12 +1310,18 @@ class AuthManager:
             has_service_after=has_service_after,
             has_yast_before=has_yast_before,
             has_yast_after=has_yast_after,
-            writeback_target=str(ret.get("writeback_target") or ("auth_json" if ok else "none")),
+            writeback_target=str(
+                ret.get("writeback_target") or ("auth_json" if ok else "none")
+            ),
             runtime_rebind_result="pending" if ok else "skipped",
             verify_result="pending" if ok else "skipped",
-            error_code=str(ret.get("error_code") or ("" if ok else "service_token_not_written")),
+            error_code=str(
+                ret.get("error_code") or ("" if ok else "service_token_not_written")
+            ),
             error_message=str(ret.get("error_message") or ""),
-            failed_reason=str(ret.get("failed_reason") or ("" if ok else "service_token_not_written")),
+            failed_reason=str(
+                ret.get("failed_reason") or ("" if ok else "service_token_not_written")
+            ),
             presence=presence,
             path_attempts=path_attempts,
             diagnostic=ret_diagnostic,
@@ -1229,16 +1330,22 @@ class AuthManager:
             "ok": ok,
             "error_code": str(ret.get("error_code") or ""),
             "error_message": str(ret.get("error_message") or ""),
-            "failed_reason": str(ret.get("failed_reason") or ("" if ok else "service_token_not_written")),
+            "failed_reason": str(
+                ret.get("failed_reason") or ("" if ok else "service_token_not_written")
+            ),
             "used_path": str(ret.get("used_path") or "relogin_with_persistent_auth"),
             "sid": str(ret.get("sid") or sid),
             "http_stage": str(ret.get("http_stage") or "serviceLogin"),
-            "writeback_target": str(ret.get("writeback_target") or ("auth_json" if ok else "none")),
+            "writeback_target": str(
+                ret.get("writeback_target") or ("auth_json" if ok else "none")
+            ),
             "path_attempts": path_attempts,
             "diagnostic": ret_diagnostic,
         }
 
-    async def _rebuild_short_session_tokens_via_refresh_fallback(self, reason: str) -> dict[str, Any]:
+    async def _rebuild_short_session_tokens_via_refresh_fallback(
+        self, reason: str
+    ) -> dict[str, Any]:
         mode_before = self._auth_mode
         if self.token_store is not None:
             self.token_store.reload_from_disk()
@@ -1284,22 +1391,30 @@ class AuthManager:
             has_service_after=has_service_after,
             has_yast_before=has_yast_before,
             has_yast_after=has_yast_after,
-            writeback_target="auth_json" if (has_service_after or has_yast_after) else "none",
+            writeback_target="auth_json"
+            if (has_service_after or has_yast_after)
+            else "none",
             runtime_rebind_result="pending" if ok else "skipped",
             rebuild_source="persistent_auth",
             error_code=error_code,
             error_message=error_message,
-            failed_reason="" if ok else ("refresh_failed" if error_code else "short_token_not_written"),
+            failed_reason=""
+            if ok
+            else ("refresh_failed" if error_code else "short_token_not_written"),
         )
         return {
             "ok": ok,
             "error_code": error_code,
             "error_message": error_message,
-            "failed_reason": "" if ok else ("refresh_failed" if error_code else "short_token_not_written"),
+            "failed_reason": ""
+            if ok
+            else ("refresh_failed" if error_code else "short_token_not_written"),
             "used_path": "refresh_token_fallback",
         }
 
-    async def _rebuild_short_session_tokens_from_persistent_auth(self, reason: str) -> dict[str, Any]:
+    async def _rebuild_short_session_tokens_from_persistent_auth(
+        self, reason: str
+    ) -> dict[str, Any]:
         """Backward-compatible wrapper: primary relogin + refresh fallback."""
         primary = await self._rebuild_service_cookies_from_persistent_auth(reason)
         if primary.get("ok"):
@@ -1323,16 +1438,24 @@ class AuthManager:
     @staticmethod
     def _parse_login_error(err: Exception | str | None) -> dict[str, str]:
         text = str(err or "")
-        code_match = re.search(r"code\s*[:=]\s*['\"]?(\d{3,6})", text, flags=re.IGNORECASE)
-        desc_match = re.search(r"description\s*[:=]\s*['\"]([^'\"\n\r]+)", text, flags=re.IGNORECASE)
+        code_match = re.search(
+            r"code\s*[:=]\s*['\"]?(\d{3,6})", text, flags=re.IGNORECASE
+        )
+        desc_match = re.search(
+            r"description\s*[:=]\s*['\"]([^'\"\n\r]+)", text, flags=re.IGNORECASE
+        )
         status_match = re.search(r"status\s*(\d{3})", text, flags=re.IGNORECASE)
         url_match = re.search(r"https?://([^/\s]+)(/[^\s:]+)?", text)
         return {
             "login_http_status": status_match.group(1) if status_match else "",
             "resp_code": code_match.group(1) if code_match else "",
-            "resp_desc": (desc_match.group(1) if desc_match else text[:120]).replace("\n", " "),
+            "resp_desc": (desc_match.group(1) if desc_match else text[:120]).replace(
+                "\n", " "
+            ),
             "callback_host": url_match.group(1) if url_match else "",
-            "request_path": url_match.group(2) if url_match and url_match.group(2) else "",
+            "request_path": url_match.group(2)
+            if url_match and url_match.group(2)
+            else "",
         }
 
     def _mi_login_input_snapshot(self, account: Any) -> dict[str, Any]:
@@ -1356,7 +1479,9 @@ class AuthManager:
             "has_deviceId": bool(isinstance(token, dict) and token.get("deviceId")),
             "has_serviceToken": bool(service_token),
             "has_yetAnotherServiceToken": bool(yet_another),
-            "passToken_len": self._masked_len(token.get("passToken") if isinstance(token, dict) else ""),
+            "passToken_len": self._masked_len(
+                token.get("passToken") if isinstance(token, dict) else ""
+            ),
             "serviceToken_len": self._masked_len(service_token),
             "yetAnotherServiceToken_len": self._masked_len(yet_another),
             "token_dict_is_none": token is None,
@@ -1421,8 +1546,247 @@ class AuthManager:
             },
         )
 
+    def _should_clear_short_session_on_auth_error(
+        self, ctx: str = "", err: Exception | str | None = None
+    ) -> tuple[bool, str]:
+        """判断是否应该在auth_call中清空short session
+
+        Returns:
+            tuple[bool, str]: (是否应该clear, 决策原因)
+        """
+        now = time.time()
+        time_since_last = (
+            now - self._last_auth_error_suspect_ts
+            if self._last_auth_error_suspect_ts > 0
+            else float("inf")
+        )
+
+        # 同一ctx短时间内连续错误，升级为clear
+        if (
+            self._last_auth_error_suspect_ctx == ctx
+            and ctx
+            and time_since_last < self._auth_error_suspect_window_sec
+            and self._auth_error_suspect_streak >= 1
+        ):
+            return True, "consecutive_auth_error_same_ctx"
+
+        # 不同ctx但在窗口内连续错误，也升级为clear
+        if (
+            time_since_last < self._auth_error_suspect_window_sec
+            and self._auth_error_suspect_streak >= 2
+        ):
+            return True, "consecutive_auth_error_multiple"
+
+        # 第一次或窗口外的错误，只记录suspect
+        return False, "first_suspect"
+
+    def _record_auth_error_suspect(self, ctx: str = "") -> None:
+        """记录一次auth error suspect"""
+        now = time.time()
+        time_since_last = (
+            now - self._last_auth_error_suspect_ts
+            if self._last_auth_error_suspect_ts > 0
+            else float("inf")
+        )
+
+        # 如果超过窗口时间，重置streak
+        if time_since_last >= self._auth_error_suspect_window_sec:
+            self._auth_error_suspect_streak = 1
+        else:
+            self._auth_error_suspect_streak += 1
+
+        self._last_auth_error_suspect_ts = now
+        self._last_auth_error_suspect_ctx = ctx or ""
+
+    def _reset_auth_error_suspect(self) -> None:
+        """重置auth error suspect状态"""
+        self._auth_error_suspect_streak = 0
+        self._last_auth_error_suspect_ts = 0.0
+        self._last_auth_error_suspect_ctx = ""
+
+    def _emit_auth_short_session_clear_decision(
+        self,
+        *,
+        ctx: str,
+        auth_error_detected: bool,
+        clear_executed: bool,
+        clear_reason: str,
+        decision_reason: str,
+        streak: int,
+        err: str = "",
+    ) -> None:
+        """发送short session clear决策日志"""
+        payload = {
+            "event": "auth_short_session_clear_decision",
+            "auth_session_id": self._auth_session_id(),
+            "ctx": ctx or "",
+            "auth_error_detected": auth_error_detected,
+            "clear_executed": clear_executed,
+            "clear_reason": clear_reason or "",
+            "decision_reason": decision_reason or "",
+            "streak": streak,
+        }
+        if err:
+            payload["error"] = str(err)[:200]
+        self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+
+    async def _attempt_non_destructive_auth_recovery(
+        self, ctx: str = "", reason: str = ""
+    ) -> tuple[bool, str]:
+        """尝试非破坏性认证恢复
+
+        只做轻量级恢复，不 clear short session，不 mark_session_invalid。
+        用于首次 auth error suspect 时的保守恢复策略。
+
+        Returns:
+            tuple[bool, str]: (是否成功, 结果描述)
+        """
+        recovery_reason = reason or ctx or "auth_error_suspect"
+        auth_session_id = self._auth_session_id()
+
+        # 发送开始日志
+        payload_start = {
+            "event": "auth_non_destructive_recovery",
+            "stage": "start",
+            "auth_session_id": auth_session_id,
+            "ctx": ctx or "",
+            "reason": recovery_reason,
+            "has_short_session": bool(
+                self._get_auth_data().get("serviceToken")
+                or self._get_auth_data().get("yetAnotherServiceToken")
+            ),
+        }
+        self.log.info(
+            json.dumps(payload_start, ensure_ascii=False, separators=(",", ":"))
+        )
+
+        try:
+            # 步骤 1: 重新加载 token_store，确保 runtime 有最新数据
+            if self.token_store is not None:
+                try:
+                    self.token_store.load()
+                except Exception:
+                    pass
+
+            # 步骤 2: 检查 short session 是否存在
+            auth_data = self._get_auth_data()
+            has_short_session = bool(
+                auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
+            )
+
+            if not has_short_session:
+                payload_fail = {
+                    "event": "auth_non_destructive_recovery",
+                    "stage": "complete",
+                    "auth_session_id": auth_session_id,
+                    "ctx": ctx or "",
+                    "result": "failed",
+                    "reason": "no_short_session",
+                    "detail": "short session not found in auth data",
+                }
+                self.log.info(
+                    json.dumps(payload_fail, ensure_ascii=False, separators=(",", ":"))
+                )
+                return False, "no_short_session"
+
+            # 步骤 3: 尝试验证 runtime（不修改任何状态）
+            try:
+                ready = await self._verify_runtime_auth_ready()
+                if ready:
+                    payload_ok = {
+                        "event": "auth_non_destructive_recovery",
+                        "stage": "complete",
+                        "auth_session_id": auth_session_id,
+                        "ctx": ctx or "",
+                        "result": "success",
+                        "reason": "runtime_verified",
+                        "detail": "runtime auth still valid",
+                    }
+                    self.log.info(
+                        json.dumps(
+                            payload_ok, ensure_ascii=False, separators=(",", ":")
+                        )
+                    )
+                    return True, "runtime_verified"
+            except Exception as verify_err:
+                # 验证失败，但不表示 short session 无效，可能是临时问题
+                pass
+
+            # 步骤 4: 尝试重新绑定 runtime service（不 clear）
+            try:
+                if self.mina_service is not None:
+                    account = getattr(self.mina_service, "account", None)
+                    if account is not None:
+                        token = getattr(account, "token", None)
+                        if isinstance(token, dict):
+                            # 尝试从 auth_data 重新注入 micoapi token
+                            service_token = auth_data.get("serviceToken", "")
+                            yet_another = auth_data.get("yetAnotherServiceToken", "")
+                            if service_token or yet_another:
+                                token["micoapi"] = {
+                                    "serviceToken": service_token,
+                                    "yetAnotherServiceToken": yet_another,
+                                    "ssecurity": auth_data.get("ssecurity", ""),
+                                }
+                                # 再次验证
+                                ready = await self._verify_runtime_auth_ready()
+                                if ready:
+                                    payload_rebind = {
+                                        "event": "auth_non_destructive_recovery",
+                                        "stage": "complete",
+                                        "auth_session_id": auth_session_id,
+                                        "ctx": ctx or "",
+                                        "result": "success",
+                                        "reason": "runtime_rebound",
+                                        "detail": "runtime rebound and verified",
+                                    }
+                                    self.log.info(
+                                        json.dumps(
+                                            payload_rebind,
+                                            ensure_ascii=False,
+                                            separators=(",", ":"),
+                                        )
+                                    )
+                                    return True, "runtime_rebound"
+            except Exception:
+                pass
+
+            # 所有非破坏性尝试都失败
+            payload_fail_final = {
+                "event": "auth_non_destructive_recovery",
+                "stage": "complete",
+                "auth_session_id": auth_session_id,
+                "ctx": ctx or "",
+                "result": "failed",
+                "reason": "all_attempts_failed",
+                "detail": "non-destructive recovery attempts exhausted",
+            }
+            self.log.info(
+                json.dumps(
+                    payload_fail_final, ensure_ascii=False, separators=(",", ":")
+                )
+            )
+            return False, "all_attempts_failed"
+
+        except Exception as e:
+            payload_err = {
+                "event": "auth_non_destructive_recovery",
+                "stage": "complete",
+                "auth_session_id": auth_session_id,
+                "ctx": ctx or "",
+                "result": "error",
+                "reason": "exception",
+                "detail": f"{type(e).__name__}: {e}",
+            }
+            self.log.info(
+                json.dumps(payload_err, ensure_ascii=False, separators=(",", ":"))
+            )
+            return False, f"exception:{type(e).__name__}"
+
     @staticmethod
-    def _is_short_session_failure_signal(reason: str = "", err: Exception | str | None = None) -> bool:
+    def _is_short_session_failure_signal(
+        reason: str = "", err: Exception | str | None = None
+    ) -> bool:
         text = f"{reason or ''} {err or ''}".lower()
         if "70016" in text:
             return True
@@ -1436,7 +1800,9 @@ class AuthManager:
             return True
         return False
 
-    def _clear_short_lived_session(self, clear_reason: str, err: Exception | str | None = None) -> bool:
+    def _clear_short_lived_session(
+        self, clear_reason: str, err: Exception | str | None = None
+    ) -> bool:
         mode_before = self._auth_mode
         summarized_reason = self._short_reason(f"{clear_reason} {err or ''}")
         if not self._is_short_session_failure_signal(clear_reason, err):
@@ -1484,7 +1850,9 @@ class AuthManager:
                         removed_keys.append(key)
 
                 if self.token_store is not None:
-                    self.token_store.update(data, reason=f"clear_short_session:{clear_reason}")
+                    self.token_store.update(
+                        data, reason=f"clear_short_session:{clear_reason}"
+                    )
                     self.token_store.flush()
                     wrote_back = True
                 else:
@@ -1497,7 +1865,9 @@ class AuthManager:
                 reason=clear_reason,
                 action="clear_short_session",
                 result="success",
-                err=",".join(sorted(set(removed_keys))) if removed_keys else "no_short_fields_present",
+                err=",".join(sorted(set(removed_keys)))
+                if removed_keys
+                else "no_short_fields_present",
             )
             self._emit_auth_state(
                 auth_step="clear_short_session",
@@ -1566,10 +1936,14 @@ class AuthManager:
         )
         return {
             "auth_mode": self._auth_mode,
-            "last_auth_mode_transition": getattr(self, "_last_auth_mode_transition", {}),
+            "last_auth_mode_transition": getattr(
+                self, "_last_auth_mode_transition", {}
+            ),
             "login_at": self._iso_utc(self._auth_login_at_ts),
             "expires_at": self._iso_utc(self._auth_expires_at_ts),
-            "ttl_remaining_seconds": self._ttl_remaining_seconds() if short_session_available else 0,
+            "ttl_remaining_seconds": self._ttl_remaining_seconds()
+            if short_session_available
+            else 0,
             "last_refresh_trigger": self._last_refresh_trigger,
             "last_auth_error": self._last_auth_error,
             "persistent_auth_available": self._has_persistent_auth_fields(auth_data),
@@ -1598,7 +1972,9 @@ class AuthManager:
         )
         self._record_last_auth_mode_transition(from_mode, to_mode, reason)
 
-    def _record_last_auth_mode_transition(self, from_mode: str, to_mode: str, reason: str) -> None:
+    def _record_last_auth_mode_transition(
+        self, from_mode: str, to_mode: str, reason: str
+    ) -> None:
         if not hasattr(self, "_last_auth_mode_transition"):
             self._last_auth_mode_transition = {}
         self._last_auth_mode_transition["from"] = from_mode
@@ -1677,7 +2053,9 @@ class AuthManager:
 
     @property
     def _hf_min_interval_sec(self) -> int:
-        return max(1, int(getattr(self.config, "mina_high_freq_min_interval_seconds", 8)))
+        return max(
+            1, int(getattr(self.config, "mina_high_freq_min_interval_seconds", 8))
+        )
 
     @property
     def _hf_auth_fail_threshold(self) -> int:
@@ -1689,7 +2067,9 @@ class AuthManager:
 
     @property
     def _refresh_interval_hours(self) -> float:
-        return max(0.01, float(getattr(self.config, "auth_refresh_interval_hours", 6.0)))
+        return max(
+            0.01, float(getattr(self.config, "auth_refresh_interval_hours", 6.0))
+        )
 
     @property
     def _refresh_threshold(self) -> float:
@@ -1698,7 +2078,9 @@ class AuthManager:
 
     @property
     def _refresh_min_interval_sec(self) -> int:
-        mins = max(1, int(getattr(self.config, "auth_refresh_min_interval_minutes", 30)))
+        mins = max(
+            1, int(getattr(self.config, "auth_refresh_min_interval_minutes", 30))
+        )
         return mins * 60
 
     def is_auth_error(self, exc=None, resp=None, body=None) -> bool:
@@ -1731,22 +2113,38 @@ class AuthManager:
                 auth_data = self._get_auth_data()
                 used_rebuild_strategy = "none"
                 used_refresh_fallback = False
-                if not auth_data.get("serviceToken") and not auth_data.get("yetAnotherServiceToken"):
-                    rebuilt = await self._rebuild_short_session_from_persistent_auth("init_all_data")
+                if not auth_data.get("serviceToken") and not auth_data.get(
+                    "yetAnotherServiceToken"
+                ):
+                    rebuilt = await self._rebuild_short_session_from_persistent_auth(
+                        "init_all_data"
+                    )
                     rebuild_detail = dict(self._last_short_session_rebuild_detail or {})
-                    used_rebuild_strategy = str(rebuild_detail.get("used_path") or "none")
-                    used_refresh_fallback = bool(used_rebuild_strategy == "refresh_token_fallback")
-                    if rebuilt and self._is_persistent_auth_login_strategy(used_rebuild_strategy):
+                    used_rebuild_strategy = str(
+                        rebuild_detail.get("used_path") or "none"
+                    )
+                    used_refresh_fallback = bool(
+                        used_rebuild_strategy == "refresh_token_fallback"
+                    )
+                    if rebuilt and self._is_persistent_auth_login_strategy(
+                        used_rebuild_strategy
+                    ):
                         self._update_last_cookie_rebuild_outcome(
                             runtime_rebind_result="pending",
                             verify_result="pending",
                         )
                 try:
-                    await self.login_miboy(allow_login_fallback=False, reason="init_all_data")
+                    await self.login_miboy(
+                        allow_login_fallback=False, reason="init_all_data"
+                    )
                     if used_rebuild_strategy != "none":
-                        self._record_runtime_rebind_state(result="ok", reason="init_all_data")
+                        self._record_runtime_rebind_state(
+                            result="ok", reason="init_all_data"
+                        )
                         self._record_verify_state(result="ok", reason="init_all_data")
-                        if self._is_persistent_auth_login_strategy(used_rebuild_strategy):
+                        if self._is_persistent_auth_login_strategy(
+                            used_rebuild_strategy
+                        ):
                             self._update_last_cookie_rebuild_outcome(
                                 runtime_rebind_result="ok",
                                 verify_result="ok",
@@ -1754,7 +2152,9 @@ class AuthManager:
                         self._emit_auth_recovery_flow(
                             result="ok",
                             initial_state="short_session_missing",
-                            persistent_auth_available=self._has_persistent_auth_fields(self._get_auth_data()),
+                            persistent_auth_available=self._has_persistent_auth_fields(
+                                self._get_auth_data()
+                            ),
                             existing_short_session_valid=False,
                             used_rebuild_strategy=used_rebuild_strategy,
                             used_refresh_fallback=used_refresh_fallback,
@@ -1777,13 +2177,21 @@ class AuthManager:
                         clear_reason="init_all_data_verify_failed",
                         err=login_err,
                     )
-                    rebuilt = await self._rebuild_short_session_from_persistent_auth("init_all_data_verify_failed")
+                    rebuilt = await self._rebuild_short_session_from_persistent_auth(
+                        "init_all_data_verify_failed"
+                    )
                     rebuild_detail = dict(self._last_short_session_rebuild_detail or {})
-                    used_rebuild_strategy = str(rebuild_detail.get("used_path") or "none")
-                    used_refresh_fallback = bool(used_rebuild_strategy == "refresh_token_fallback")
+                    used_rebuild_strategy = str(
+                        rebuild_detail.get("used_path") or "none"
+                    )
+                    used_refresh_fallback = bool(
+                        used_rebuild_strategy == "refresh_token_fallback"
+                    )
                     if not rebuilt:
                         self._last_auth_error = "missing short session token; rebuild from long auth required"
-                        self._transition_auth_mode("degraded", reason="init_all_data_verify_failed")
+                        self._transition_auth_mode(
+                            "degraded", reason="init_all_data_verify_failed"
+                        )
                         self._record_runtime_rebind_state(
                             result="failed",
                             reason="init_all_data_verify_failed",
@@ -1799,7 +2207,9 @@ class AuthManager:
                         self._emit_auth_recovery_flow(
                             result="failed",
                             initial_state="short_session_missing",
-                            persistent_auth_available=self._has_persistent_auth_fields(self._get_auth_data()),
+                            persistent_auth_available=self._has_persistent_auth_fields(
+                                self._get_auth_data()
+                            ),
                             existing_short_session_valid=False,
                             used_rebuild_strategy=used_rebuild_strategy,
                             used_refresh_fallback=used_refresh_fallback,
@@ -1812,9 +2222,15 @@ class AuthManager:
                             error_message=str(login_err),
                         )
                         raise
-                    await self.login_miboy(allow_login_fallback=False, reason="init_all_data_verify_failed")
-                    self._record_runtime_rebind_state(result="ok", reason="init_all_data_verify_failed")
-                    self._record_verify_state(result="ok", reason="init_all_data_verify_failed")
+                    await self.login_miboy(
+                        allow_login_fallback=False, reason="init_all_data_verify_failed"
+                    )
+                    self._record_runtime_rebind_state(
+                        result="ok", reason="init_all_data_verify_failed"
+                    )
+                    self._record_verify_state(
+                        result="ok", reason="init_all_data_verify_failed"
+                    )
                     if self._is_persistent_auth_login_strategy(used_rebuild_strategy):
                         self._update_last_cookie_rebuild_outcome(
                             runtime_rebind_result="ok",
@@ -1823,7 +2239,9 @@ class AuthManager:
                     self._emit_auth_recovery_flow(
                         result="ok",
                         initial_state="short_session_missing",
-                        persistent_auth_available=self._has_persistent_auth_fields(self._get_auth_data()),
+                        persistent_auth_available=self._has_persistent_auth_fields(
+                            self._get_auth_data()
+                        ),
                         existing_short_session_valid=False,
                         used_rebuild_strategy=used_rebuild_strategy,
                         used_refresh_fallback=used_refresh_fallback,
@@ -1963,7 +2381,9 @@ class AuthManager:
             )
             return False
 
-    async def rebuild_services(self, reason: str, allow_login_fallback: bool = False) -> bool:
+    async def rebuild_services(
+        self, reason: str, allow_login_fallback: bool = False
+    ) -> bool:
         mode_before = self._auth_mode
         if allow_login_fallback:
             self._emit_mi_login_trace(
@@ -2040,19 +2460,27 @@ class AuthManager:
                 extra={
                     "auth_session_id_before": before_session,
                     "auth_session_id_after": after_session,
-                    "runtime_instance_rebuilt": bool(before_mina_id != after_mina_id and after_mina_id != 0),
+                    "runtime_instance_rebuilt": bool(
+                        before_mina_id != after_mina_id and after_mina_id != 0
+                    ),
                     "mina_service_rebound": bool(after_mina_id != 0),
                     "token_source": token_source,
                 },
             )
         return ready
 
-    async def refresh_auth_if_needed(self, reason: str, force: bool = False) -> dict[str, Any]:
+    async def refresh_auth_if_needed(
+        self, reason: str, force: bool = False
+    ) -> dict[str, Any]:
         mode_before = self._auth_mode
         trigger = self._refresh_trigger_from_reason(reason)
         self._last_refresh_trigger = trigger
         now = time.time()
-        if not force and self._last_refresh_ts and (now - self._last_refresh_ts) < self._refresh_min_interval_sec:
+        if (
+            not force
+            and self._last_refresh_ts
+            and (now - self._last_refresh_ts) < self._refresh_min_interval_sec
+        ):
             self._emit_auth_state(
                 auth_step="refresh",
                 auth_result="refresh_failed",
@@ -2098,7 +2526,9 @@ class AuthManager:
                 and st
                 and after_save_ms >= before_save_ms
             )
-            refresh_rotated = bool(before_pass and after_pass and before_pass != after_pass)
+            refresh_rotated = bool(
+                before_pass and after_pass and before_pass != after_pass
+            )
             self._sync_auth_ttl(after)
 
             self._last_refresh_ts = time.time()
@@ -2151,7 +2581,9 @@ class AuthManager:
                 "fallback_allowed": fallback_allowed,
             }
 
-    async def manual_reload_runtime(self, reason: str = "manual_refresh_runtime") -> dict[str, Any]:
+    async def manual_reload_runtime(
+        self, reason: str = "manual_refresh_runtime"
+    ) -> dict[str, Any]:
         async with self._relogin_lock:
             token_store_reloaded = False
             disk_has_service = False
@@ -2175,12 +2607,16 @@ class AuthManager:
                 token_loaded = bool(auth_data)
                 disk_has_service = bool(auth_data.get("serviceToken"))
                 disk_has_yast = bool(auth_data.get("yetAnotherServiceToken"))
-                missing_long, missing_short = self._missing_runtime_reload_fields(auth_data)
+                missing_long, missing_short = self._missing_runtime_reload_fields(
+                    auth_data
+                )
                 missing = missing_long + missing_short
                 if missing:
                     if missing_long:
                         error_code = "missing_long_lived_auth_fields"
-                        last_error = f"missing long-lived auth fields: {','.join(missing_long)}"
+                        last_error = (
+                            f"missing long-lived auth fields: {','.join(missing_long)}"
+                        )
                     else:
                         error_code = "short_session_missing_for_runtime_reload"
                         last_error = "short session tokens missing; runtime reload cannot proceed without short session"
@@ -2215,9 +2651,15 @@ class AuthManager:
                         "missing_long_lived_fields": missing_long,
                         "missing_short_session_fields": missing_short,
                         "timestamps": {
-                            "saveTime": int(self._token_save_ts() * 1000) if self._token_save_ts() else None,
-                            "last_ok_ts": int(self._last_ok_ts * 1000) if self._last_ok_ts else None,
-                            "last_refresh_ts": int(self._last_refresh_ts * 1000) if self._last_refresh_ts else None,
+                            "saveTime": int(self._token_save_ts() * 1000)
+                            if self._token_save_ts()
+                            else None,
+                            "last_ok_ts": int(self._last_ok_ts * 1000)
+                            if self._last_ok_ts
+                            else None,
+                            "last_refresh_ts": int(self._last_refresh_ts * 1000)
+                            if self._last_refresh_ts
+                            else None,
                         },
                     }
 
@@ -2227,7 +2669,9 @@ class AuthManager:
                 )
                 mina_rebuilt = self.mina_service is not None
                 miio_rebuilt = self.miio_service is not None
-                runtime_seed_has_service = bool(self._short_session_fingerprint() != "none")
+                runtime_seed_has_service = bool(
+                    self._short_session_fingerprint() != "none"
+                )
 
                 if runtime_auth_ready:
                     await self.device_manager.update_device_info(self)
@@ -2276,9 +2720,15 @@ class AuthManager:
                 "last_error": last_error or None,
                 "error_code": error_code,
                 "timestamps": {
-                    "saveTime": int(self._token_save_ts() * 1000) if self._token_save_ts() else None,
-                    "last_ok_ts": int(self._last_ok_ts * 1000) if self._last_ok_ts else None,
-                    "last_refresh_ts": int(self._last_refresh_ts * 1000) if self._last_refresh_ts else None,
+                    "saveTime": int(self._token_save_ts() * 1000)
+                    if self._token_save_ts()
+                    else None,
+                    "last_ok_ts": int(self._last_ok_ts * 1000)
+                    if self._last_ok_ts
+                    else None,
+                    "last_refresh_ts": int(self._last_refresh_ts * 1000)
+                    if self._last_refresh_ts
+                    else None,
                 },
             }
 
@@ -2299,7 +2749,10 @@ class AuthManager:
 
     async def _maybe_scheduled_refresh(self) -> None:
         now = time.time()
-        if self._last_refresh_ts and (now - self._last_refresh_ts) < self._refresh_min_interval_sec:
+        if (
+            self._last_refresh_ts
+            and (now - self._last_refresh_ts) < self._refresh_min_interval_sec
+        ):
             return
         save_ts = self._token_save_ts()
         if not save_ts:
@@ -2343,10 +2796,17 @@ class AuthManager:
 
             if self._is_auth_locked():
                 wait_sec = int(self._auth_locked_until_ts - now)
-                raise RuntimeError(f"auth locked, manual relogin required ({wait_sec}s)")
+                raise RuntimeError(
+                    f"auth locked, manual relogin required ({wait_sec}s)"
+                )
 
             need = await self.need_login()
-            if force and not need and self._last_ok_ts and (now - self._last_ok_ts < 30):
+            if (
+                force
+                and not need
+                and self._last_ok_ts
+                and (now - self._last_ok_ts < 30)
+            ):
                 return False
 
             if not force and not need:
@@ -2363,13 +2823,17 @@ class AuthManager:
                     raise RuntimeError(f"relogin backoff active {wait_sec}s")
 
             if reason:
-                self.log.warning(f"ensure_logged_in start reason={reason} force={force}")
+                self.log.warning(
+                    f"ensure_logged_in start reason={reason} force={force}"
+                )
 
             recovery_flow_ctx: dict[str, Any] = {
                 "used_rebuild_strategy": "none",
                 "used_refresh_fallback": False,
                 "existing_short_session_valid": False,
-                "persistent_auth_available": self._has_persistent_auth_fields(self._get_auth_data()),
+                "persistent_auth_available": self._has_persistent_auth_fields(
+                    self._get_auth_data()
+                ),
                 "flow_emitted": False,
             }
 
@@ -2377,9 +2841,12 @@ class AuthManager:
                 if prefer_refresh:
                     auth_before = self._get_auth_data()
                     existing_short_valid = bool(
-                        auth_before.get("serviceToken") or auth_before.get("yetAnotherServiceToken")
+                        auth_before.get("serviceToken")
+                        or auth_before.get("yetAnotherServiceToken")
                     )
-                    persistent_auth_available = self._has_persistent_auth_fields(auth_before)
+                    persistent_auth_available = self._has_persistent_auth_fields(
+                        auth_before
+                    )
                     used_rebuild_strategy = "none"
                     used_refresh_fallback = False
                     entered_manual_login = False
@@ -2394,19 +2861,36 @@ class AuthManager:
                         clear_reason=f"auth_recovery:{reason or 'auth_error'}",
                         err=reason or "auth_error",
                     )
-                    rebuilt = await self._rebuild_short_session_from_persistent_auth(reason or "auth_error")
+                    rebuilt = await self._rebuild_short_session_from_persistent_auth(
+                        reason or "auth_error"
+                    )
                     rebuild_detail = dict(self._last_short_session_rebuild_detail or {})
-                    used_rebuild_strategy = str(rebuild_detail.get("used_path") or "none")
-                    used_refresh_fallback = bool(used_rebuild_strategy == "refresh_token_fallback")
-                    entered_manual_login = str(rebuild_detail.get("error_code") or "") == "missing_persistent_auth_fields"
+                    used_rebuild_strategy = str(
+                        rebuild_detail.get("used_path") or "none"
+                    )
+                    used_refresh_fallback = bool(
+                        used_rebuild_strategy == "refresh_token_fallback"
+                    )
+                    entered_manual_login = (
+                        str(rebuild_detail.get("error_code") or "")
+                        == "missing_persistent_auth_fields"
+                    )
                     recovery_flow_ctx["used_rebuild_strategy"] = used_rebuild_strategy
                     recovery_flow_ctx["used_refresh_fallback"] = used_refresh_fallback
 
                     if not rebuilt:
-                        err_code = "manual_login_required" if entered_manual_login else "short_session_rebuild_failed"
+                        err_code = (
+                            "manual_login_required"
+                            if entered_manual_login
+                            else "short_session_rebuild_failed"
+                        )
                         err_msg = "short session rebuild failed"
-                        final_mode = "locked" if not persistent_auth_available else "degraded"
-                        self._transition_auth_mode(final_mode, reason=reason or "ensure_logged_in")
+                        final_mode = (
+                            "locked" if not persistent_auth_available else "degraded"
+                        )
+                        self._transition_auth_mode(
+                            final_mode, reason=reason or "ensure_logged_in"
+                        )
                         self._record_runtime_rebind_state(
                             result="failed",
                             reason=reason or "auth_error",
@@ -2445,10 +2929,14 @@ class AuthManager:
                         result="ok" if ready else "failed",
                         reason=reason or "auth_error",
                         error_code="" if ready else "runtime_rebind_failed",
-                        error_message="" if ready else "rebuild after short session rebuild failed",
+                        error_message=""
+                        if ready
+                        else "rebuild after short session rebuild failed",
                     )
                     if not ready:
-                        if self._is_persistent_auth_login_strategy(used_rebuild_strategy):
+                        if self._is_persistent_auth_login_strategy(
+                            used_rebuild_strategy
+                        ):
                             self._update_last_cookie_rebuild_outcome(
                                 runtime_rebind_result="failed",
                                 verify_result="failed",
@@ -2459,7 +2947,9 @@ class AuthManager:
                             error_code="runtime_rebind_failed",
                             error_message="rebuild after short session rebuild failed",
                         )
-                        self._transition_auth_mode("degraded", reason=reason or "ensure_logged_in")
+                        self._transition_auth_mode(
+                            "degraded", reason=reason or "ensure_logged_in"
+                        )
                         self._emit_auth_recovery_flow(
                             result="failed",
                             initial_state="short_session_missing",
@@ -2477,7 +2967,9 @@ class AuthManager:
                         )
                         recovery_flow_ctx["flow_emitted"] = True
                         raise RuntimeError("rebuild after short session rebuild failed")
-                    self._record_verify_state(result="ok", reason=reason or "ensure_logged_in")
+                    self._record_verify_state(
+                        result="ok", reason=reason or "ensure_logged_in"
+                    )
                     self._emit_auth_recovery_flow(
                         result="ok",
                         initial_state="short_session_missing",
@@ -2501,22 +2993,32 @@ class AuthManager:
                     self.mark_session_invalid(reason or "ensure_logged_in")
                     await self.init_all_data()
                     if await self.need_login():
-                        raise RuntimeError("relogin completed but service still unavailable")
-                self._record_verify_state(result="ok", reason=reason or "ensure_logged_in")
+                        raise RuntimeError(
+                            "relogin completed but service still unavailable"
+                        )
+                self._record_verify_state(
+                    result="ok", reason=reason or "ensure_logged_in"
+                )
                 self._last_ok_ts = time.time()
                 self._relogin_fail_streak = 0
                 self._next_relogin_allowed_ts = 0.0
                 self._auth_locked_until_ts = 0.0
                 self._auth_lock_reason = ""
-                self._transition_auth_mode("healthy", reason=reason or "ensure_logged_in")
+                self._transition_auth_mode(
+                    "healthy", reason=reason or "ensure_logged_in"
+                )
                 self.log.info("ensure_logged_in success")
                 return True
             except Exception as e:
                 self._relogin_fail_streak += 1
                 delay = min(30 * (2 ** max(self._relogin_fail_streak - 1, 0)), 300)
                 self._next_relogin_allowed_ts = time.time() + delay
-                self._transition_auth_mode("degraded", reason=reason or "ensure_logged_in")
-                persistent_auth_ok = self._has_persistent_auth_fields(self._get_auth_data())
+                self._transition_auth_mode(
+                    "degraded", reason=reason or "ensure_logged_in"
+                )
+                persistent_auth_ok = self._has_persistent_auth_fields(
+                    self._get_auth_data()
+                )
                 if not persistent_auth_ok:
                     self._enter_auth_lock(reason=reason or str(e))
                 if prefer_refresh and not recovery_flow_ctx.get("flow_emitted"):
@@ -2536,10 +3038,18 @@ class AuthManager:
                     self._emit_auth_recovery_flow(
                         result="failed",
                         initial_state="short_session_missing",
-                        persistent_auth_available=bool(recovery_flow_ctx.get("persistent_auth_available")),
-                        existing_short_session_valid=bool(recovery_flow_ctx.get("existing_short_session_valid")),
-                        used_rebuild_strategy=str(recovery_flow_ctx.get("used_rebuild_strategy") or "none"),
-                        used_refresh_fallback=bool(recovery_flow_ctx.get("used_refresh_fallback")),
+                        persistent_auth_available=bool(
+                            recovery_flow_ctx.get("persistent_auth_available")
+                        ),
+                        existing_short_session_valid=bool(
+                            recovery_flow_ctx.get("existing_short_session_valid")
+                        ),
+                        used_rebuild_strategy=str(
+                            recovery_flow_ctx.get("used_rebuild_strategy") or "none"
+                        ),
+                        used_refresh_fallback=bool(
+                            recovery_flow_ctx.get("used_refresh_fallback")
+                        ),
                         runtime_rebind_result="failed",
                         verify_result="failed",
                         entered_manual_login=not persistent_auth_ok,
@@ -2579,20 +3089,75 @@ class AuthManager:
                 result="fail",
                 err=f"{type(e).__name__}:{e}",
             )
-            cleared = self._clear_short_lived_session(
-                clear_reason=ctx or "auth_error",
-                err=e,
+
+            # 判断是否应该clear short session
+            should_clear, decision_reason = (
+                self._should_clear_short_session_on_auth_error(ctx=ctx, err=e)
             )
-            if not cleared and await self.need_login():
-                self._mark_recovery_active(f"auth_call:{ctx or 'unknown'}")
-            await self.ensure_logged_in(
-                force=True,
-                reason=ctx or str(e),
-                prefer_refresh=True,
-            )
-            if retry <= 0:
-                raise
-            return await fn()
+
+            if should_clear:
+                # 走 clear + rebuild 路径
+                cleared = self._clear_short_lived_session(
+                    clear_reason=ctx or "auth_error",
+                    err=e,
+                )
+                self._emit_auth_short_session_clear_decision(
+                    ctx=ctx,
+                    auth_error_detected=True,
+                    clear_executed=cleared,
+                    clear_reason=ctx or "auth_error",
+                    decision_reason=decision_reason,
+                    streak=self._auth_error_suspect_streak,
+                    err=str(e),
+                )
+                # clear后重置suspect状态
+                self._reset_auth_error_suspect()
+
+                if not cleared and await self.need_login():
+                    self._mark_recovery_active(f"auth_call:{ctx or 'unknown'}")
+                await self.ensure_logged_in(
+                    force=True,
+                    reason=ctx or str(e),
+                    prefer_refresh=True,
+                )
+                if retry <= 0:
+                    raise
+                return await fn()
+            else:
+                # 走非破坏性恢复路径
+                self._record_auth_error_suspect(ctx=ctx)
+                self._emit_auth_short_session_clear_decision(
+                    ctx=ctx,
+                    auth_error_detected=True,
+                    clear_executed=False,
+                    clear_reason="",
+                    decision_reason=decision_reason,
+                    streak=self._auth_error_suspect_streak,
+                    err=str(e),
+                )
+
+                # 尝试非破坏性恢复
+                (
+                    recovery_ok,
+                    recovery_detail,
+                ) = await self._attempt_non_destructive_auth_recovery(
+                    ctx=ctx, reason=str(e)
+                )
+
+                if recovery_ok:
+                    # 恢复成功，直接重试原请求
+                    if retry <= 0:
+                        raise
+                    return await fn()
+                else:
+                    # 非破坏性恢复失败，标记 recovery active
+                    if await self.need_login():
+                        self._mark_recovery_active(
+                            f"auth_call_non_destructive_failed:{ctx or 'unknown'}"
+                        )
+                    # 不调用 ensure_logged_in(prefer_refresh=True)，避免隐式 clear
+                    # 直接抛出错误，让调用者决定后续处理
+                    raise
 
     async def mina_call(self, method_name: str, *args, retry=1, ctx="", **kwargs):
         step = "keepalive" if "keepalive" in str(ctx or "").lower() else "mina_call"
@@ -2607,7 +3172,9 @@ class AuthManager:
                 )
                 self._emit_auth_state(
                     auth_step=step,
-                    auth_result="network_error" if skip_reason == "rate_limited" else "locked",
+                    auth_result="network_error"
+                    if skip_reason == "rate_limited"
+                    else "locked",
                     auth_mode_before=mode_before,
                     auth_mode_after=self._auth_mode,
                     err=skip_reason,
@@ -2621,7 +3188,9 @@ class AuthManager:
             return await method(*args, **kwargs)
 
         try:
-            ret = await self.auth_call(_call, retry=retry, ctx=f"mina:{method_name}:{ctx}")
+            ret = await self.auth_call(
+                _call, retry=retry, ctx=f"mina:{method_name}:{ctx}"
+            )
             if self._is_high_freq_request(method_name, ctx):
                 self._record_high_freq_success(method_name)
             self._emit_auth_state(
@@ -2639,7 +3208,9 @@ class AuthManager:
                 auth_mode_after=self._auth_mode,
                 err=str(e),
             )
-            if self._is_high_freq_request(method_name, ctx) and is_auth_error_strict(exc=e):
+            if self._is_high_freq_request(method_name, ctx) and is_auth_error_strict(
+                exc=e
+            ):
                 self._record_high_freq_auth_failure(method_name)
                 return self._degraded_high_freq_result(method_name)
             raise
@@ -2680,16 +3251,22 @@ class AuthManager:
                             reason="keepalive_auto_recover",
                             prefer_refresh=True,
                         )
-                        await self.mina_call("device_list", retry=0, ctx="keepalive-auto-recover")
+                        await self.mina_call(
+                            "device_list", retry=0, ctx="keepalive-auto-recover"
+                        )
                         self._keepalive_fail_streak = 0
                         if self._keepalive_degraded:
-                            self.log.info("auth keepalive recovered from degraded state")
+                            self.log.info(
+                                "auth keepalive recovered from degraded state"
+                            )
                             self._keepalive_degraded = False
                         self.log.info("auth keepalive auto-recover success")
                         await asyncio.sleep(interval_sec)
                         continue
                     except Exception as recover_err:
-                        self.log.warning("auth keepalive auto-recover failed: %s", recover_err)
+                        self.log.warning(
+                            "auth keepalive auto-recover failed: %s", recover_err
+                        )
 
                 if self._keepalive_fail_streak < 3:
                     delay = min(30 * (2 ** (self._keepalive_fail_streak - 1)), 120)
@@ -2713,8 +3290,12 @@ class AuthManager:
                             reason="keepalive_proactive_recovery",
                             prefer_refresh=True,
                         )
-                        await self.mina_call("device_list", retry=0, ctx="keepalive-proactive-recover")
-                        self.log.info("auth keepalive proactive_recovery result=success")
+                        await self.mina_call(
+                            "device_list", retry=0, ctx="keepalive-proactive-recover"
+                        )
+                        self.log.info(
+                            "auth keepalive proactive_recovery result=success"
+                        )
                         self._last_ok_ts = time.time()
                         self._keepalive_degraded = False
                         self._keepalive_fail_streak = 0
@@ -2776,9 +3357,9 @@ class AuthManager:
 
             # If auth token file already contains micoapi serviceToken, inject it into MiAccount
             # to avoid triggering MiAccount.login() (which may require captcha).
-            auth_service_token = auth_data.get("yetAnotherServiceToken") or auth_data.get(
-                "serviceToken"
-            )
+            auth_service_token = auth_data.get(
+                "yetAnotherServiceToken"
+            ) or auth_data.get("serviceToken")
             auth_ssecurity = auth_data.get("ssecurity")
             if auth_service_token and auth_ssecurity:
                 try:
@@ -2827,7 +3408,9 @@ class AuthManager:
                         err=f"{type(verify_err).__name__}:{verify_err}",
                     )
                     if not allow_login_fallback:
-                        raise RuntimeError("service token verify failed and login fallback disabled")
+                        raise RuntimeError(
+                            "service token verify failed and login fallback disabled"
+                        )
                     self._clear_short_lived_session(
                         clear_reason=f"verify_service_token_failed:{reason or 'login_verify'}",
                         err=verify_err,
@@ -2867,7 +3450,9 @@ class AuthManager:
                             "disabled_by_policy": True,
                         },
                     )
-                    raise RuntimeError("service token verify failed and auto login fallback disabled")
+                    raise RuntimeError(
+                        "service token verify failed and auto login fallback disabled"
+                    )
             else:
                 self._auth_log(
                     reason=reason or "auth_error",
@@ -2904,12 +3489,16 @@ class AuthManager:
                         "disabled_by_policy": True,
                     },
                 )
-                raise RuntimeError("missing short session token; rebuild from long auth required")
+                raise RuntimeError(
+                    "missing short session token; rebuild from long auth required"
+                )
 
             if login_exchange_called and self._recovery_is_active():
                 after_data_for_exchange = self._get_auth_data()
                 after_service = str(after_data_for_exchange.get("serviceToken") or "")
-                after_yast = str(after_data_for_exchange.get("yetAnotherServiceToken") or "")
+                after_yast = str(
+                    after_data_for_exchange.get("yetAnotherServiceToken") or ""
+                )
                 after_ssecurity = str(after_data_for_exchange.get("ssecurity") or "")
                 self._emit_recovery_stage(
                     stage="login_exchange",
@@ -2922,9 +3511,15 @@ class AuthManager:
                         "login_http_status": "",
                         "login_error_code": "",
                         "login_error_message": "",
-                        "token_changed_serviceToken": bool(after_service and after_service != before_service),
-                        "token_changed_yetAnotherServiceToken": bool(after_yast and after_yast != before_yast),
-                        "token_changed_ssecurity": bool(after_ssecurity and after_ssecurity != before_ssecurity),
+                        "token_changed_serviceToken": bool(
+                            after_service and after_service != before_service
+                        ),
+                        "token_changed_yetAnotherServiceToken": bool(
+                            after_yast and after_yast != before_yast
+                        ),
+                        "token_changed_ssecurity": bool(
+                            after_ssecurity and after_ssecurity != before_ssecurity
+                        ),
                     },
                 )
 
@@ -2956,8 +3551,12 @@ class AuthManager:
                         "parsed_yetAnotherServiceToken": parsed_yast,
                         "parsed_ssecurity": parsed_ssec,
                         "parsed_from": "unknown",
-                        "parse_error_type": "" if parse_result == "ok" else "missing_short_tokens",
-                        "parse_error_message": "" if parse_result == "ok" else "no short token parsed from account token",
+                        "parse_error_type": ""
+                        if parse_result == "ok"
+                        else "missing_short_tokens",
+                        "parse_error_message": ""
+                        if parse_result == "ok"
+                        else "no short token parsed from account token",
                     },
                 )
             else:
@@ -2997,10 +3596,14 @@ class AuthManager:
                         clear_reason=f"runtime_verify_failed:{reason or 'login_verify'}",
                         err=verify_err,
                     )
-                    raise RuntimeError(f"runtime verify after login failed: {verify_err}")
+                    raise RuntimeError(
+                        f"runtime verify after login failed: {verify_err}"
+                    )
 
             self.login_acount = account_name
-            self._persist_auth_data(auth_data=auth_data, mi_account=mi_account, reason="login")
+            self._persist_auth_data(
+                auth_data=auth_data, mi_account=mi_account, reason="login"
+            )
             self._sync_auth_ttl(login_at_ts=time.time())
             after_short_fp = self._short_session_fingerprint(self._get_auth_data())
             # token 落盘后再计算签名，避免 mtime 变化导致运行时一直被判定为 need_login。
@@ -3023,7 +3626,11 @@ class AuthManager:
                 auth_mode_after=self._auth_mode,
             )
             if self._recovery_is_active():
-                token_source = "new" if after_short_fp != before_short_fp and after_short_fp != "none" else "old"
+                token_source = (
+                    "new"
+                    if after_short_fp != before_short_fp and after_short_fp != "none"
+                    else "old"
+                )
                 self._emit_recovery_stage(
                     stage="runtime_rebind",
                     result="ok",
@@ -3051,7 +3658,9 @@ class AuthManager:
                         "login_http_status": "",
                         "login_error_code": "",
                         "login_error_message": "",
-                        "token_changed_serviceToken": bool(after_short_fp != before_short_fp),
+                        "token_changed_serviceToken": bool(
+                            after_short_fp != before_short_fp
+                        ),
                         "token_changed_yetAnotherServiceToken": False,
                         "token_changed_ssecurity": False,
                     },
@@ -3067,9 +3676,15 @@ class AuthManager:
                 auth_mode_before=mode_before,
                 auth_mode_after=self._auth_mode,
                 extra={
-                    "runtime_seed_has_serviceToken": bool(acct_after.get("serviceToken") or mico_st_after),
-                    "runtime_seed_has_yetAnotherServiceToken": bool(acct_after.get("yetAnotherServiceToken") or mico_st_after),
-                    "runtime_seed_has_ssecurity": bool(acct_after.get("ssecurity") or mico_ssec_after),
+                    "runtime_seed_has_serviceToken": bool(
+                        acct_after.get("serviceToken") or mico_st_after
+                    ),
+                    "runtime_seed_has_yetAnotherServiceToken": bool(
+                        acct_after.get("yetAnotherServiceToken") or mico_st_after
+                    ),
+                    "runtime_seed_has_ssecurity": bool(
+                        acct_after.get("ssecurity") or mico_ssec_after
+                    ),
                     "runtime_seed_source": "mi_account.token",
                 },
             )
@@ -3236,7 +3851,9 @@ class AuthManager:
             if user_data.get("serviceToken"):
                 token_payload["serviceToken"] = user_data.get("serviceToken")
             if user_data.get("yetAnotherServiceToken"):
-                token_payload["yetAnotherServiceToken"] = user_data.get("yetAnotherServiceToken")
+                token_payload["yetAnotherServiceToken"] = user_data.get(
+                    "yetAnotherServiceToken"
+                )
             account.token = token_payload
         else:
             return
@@ -3306,8 +3923,12 @@ class AuthManager:
                 "wrote_yetAnotherServiceToken": wrote_yast,
                 "wrote_target": "both",
                 "token_store_flush": "yes",
-                "auth_json_has_serviceToken_after": bool(after_data.get("serviceToken")),
-                "auth_json_has_yetAnotherServiceToken_after": bool(after_data.get("yetAnotherServiceToken")),
+                "auth_json_has_serviceToken_after": bool(
+                    after_data.get("serviceToken")
+                ),
+                "auth_json_has_yetAnotherServiceToken_after": bool(
+                    after_data.get("yetAnotherServiceToken")
+                ),
             },
         )
 
@@ -3347,7 +3968,9 @@ class AuthManager:
                 service_token=service_token,
                 user_id=auth_data.get("userId"),
             )
-            cookie_string += f"; cUserId={c_user_id}; yetAnotherServiceToken={service_token}"
+            cookie_string += (
+                f"; cUserId={c_user_id}; yetAnotherServiceToken={service_token}"
+            )
             return parse_cookie_string(cookie_string)
 
         if not os.path.exists(self.mi_token_home):
@@ -3379,6 +4002,8 @@ class AuthManager:
                 service_token=service_token,
                 user_id=user_id,
             )
-            cookie_string += f"; cUserId={c_user_id}; yetAnotherServiceToken={service_token}"
+            cookie_string += (
+                f"; cUserId={c_user_id}; yetAnotherServiceToken={service_token}"
+            )
             return parse_cookie_string_to_dict(cookie_string)
         return {}
