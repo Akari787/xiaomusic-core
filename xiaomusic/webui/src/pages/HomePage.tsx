@@ -1102,12 +1102,53 @@ export function HomePage() {
           }
         }
         const mergedSong = String(merged.cur_music || "").trim();
+        const prevConfirmedSong = String(lastConfirmedSongRef.current || "").trim();
+
+        // 计算 track identity / queue facts
+        const incomingTrackId = String(merged.current_track_id || "").trim();
+        const liveTrackId = String(statusRef.current.current_track_id || "").trim();
+        const incomingContextName = String(merged.context_name || "").trim();
+        const liveContextName = String(statusRef.current.context_name || "").trim();
+        const incomingIndex = merged.current_index;
+        const liveIndex = statusRef.current.current_index;
+
+        // 是否已确认新曲目身份
+        const trackIdentityConfirmed =
+          (incomingTrackId && liveTrackId && incomingTrackId !== liveTrackId) ||
+          (incomingContextName &&
+            liveContextName &&
+            incomingContextName === liveContextName &&
+            incomingIndex !== null &&
+            incomingIndex !== undefined &&
+            liveIndex !== null &&
+            liveIndex !== undefined &&
+            incomingIndex !== liveIndex);
+
+        // 是否标题已确认到达
+        const titleConfirmed = mergedSong !== "" && mergedSong !== prevConfirmedSong;
+
+        // Waiting 中的三段式处理
         if (awaitingTrackTitleRef.current) {
-          if (mergedSong && mergedSong !== lastConfirmedSongRef.current) {
+          // 情况1: 标题未到达 - 继续 waiting
+          if (!titleConfirmed) {
+            merged.cur_music = "";
+          } else {
+            // 情况2: 标题已到达 - 一次性确认并提交
             awaitingTrackTitleRef.current = false;
             lastConfirmedSongRef.current = mergedSong;
-          } else {
-            merged.cur_music = "";
+            setRememberedPlayingSong(mergedSong);
+            rememberedPlayingSongRef.current = mergedSong;
+            setLocalPlaybackSong(mergedSong);
+            localPlaybackSongRef.current = mergedSong;
+            const finalStatus = {
+              ...merged,
+              cur_music: mergedSong,
+              is_playing: true,
+            };
+            if (isLatestStatusRequest(requestSeq, did)) {
+              setStatus(finalStatus);
+              return finalStatus;
+            }
           }
         } else if (pending && pending.did === did) {
           const pendingSong = String(pending.song || "").trim();
@@ -1148,27 +1189,7 @@ export function HomePage() {
             localPlaybackDurationRef.current = newDuration;
           }
         }
-        const incomingSong = String(merged.cur_music || "").trim();
-        const isConfirmedIncomingTitle =
-          awaitingTrackTitleRef.current &&
-          incomingSong !== "" &&
-          incomingSong !== lastConfirmedSongRef.current;
         if (isLatestStatusRequest(requestSeq, did)) {
-          if (isConfirmedIncomingTitle) {
-            awaitingTrackTitleRef.current = false;
-            lastConfirmedSongRef.current = incomingSong;
-            setRememberedPlayingSong(incomingSong);
-            rememberedPlayingSongRef.current = incomingSong;
-            setLocalPlaybackSong(incomingSong);
-            localPlaybackSongRef.current = incomingSong;
-            const finalStatus = {
-              ...merged,
-              cur_music: incomingSong,
-              is_playing: true,
-            };
-            setStatus(finalStatus);
-            return finalStatus;
-          }
           if (pending && pending.did === did) {
             if (merged.is_playing) {
               pendingPlayRef.current = null;
