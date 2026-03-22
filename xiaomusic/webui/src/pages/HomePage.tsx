@@ -972,9 +972,7 @@ export function HomePage() {
         const atBoundary = prevDuration > 0 && prevOffset >= Math.max(0, prevDuration - 5);
         if (songChanged || durationChanged || atBoundary) {
           resolvedOffset = 0;
-          if (!mergedSong) {
-            resetLocalPlayback = true;
-          }
+          resetLocalPlayback = true;
         }
       }
 
