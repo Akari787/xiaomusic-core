@@ -469,6 +469,11 @@ class PlaybackFacade:
                     offset = detail_pos / 1000.0 if detail_pos > 10000 else detail_pos
                 if detail_dur > 0 and duration <= 0:
                     duration = detail_dur / 1000.0 if detail_dur > 10000 else detail_dur
+            else:
+                # detail 不存在时，尝试从 playingmusic 获取
+                cur_music = str(
+                    getattr(self.xiaomusic, "playingmusic", lambda _did: "")(did) or ""
+                )
 
         safe_offset = max(0, int(offset))
         safe_duration = max(0, int(duration))
@@ -523,15 +528,24 @@ class PlaybackFacade:
                 except (ValueError, AttributeError):
                     pass
 
+        # 为 cur_music 增加最终兜底
+        # 当 is_playing 为 true 但 cur_music 为空时，从 _play_list[current_index] 获取
+        if is_playing and not cur_music and device_player and current_index is not None:
+            try:
+                play_list = getattr(device_player, "_play_list", [])
+                if play_list and current_index >= 0 and current_index < len(play_list):
+                    cur_music = str(play_list[current_index] or "")
+            except (ValueError, AttributeError, IndexError):
+                pass
+
         # 生成 current_track_id
         # 使用 context_id + current_index + cur_music 的组合作为稳定标识
-        # 这样即使同名歌曲重复出现，track identity 也能变化
-        if cur_music:
-            track_key = f"{context_id or 'default'}:{current_index or -1}:{cur_music}"
-            # 使用简单的哈希生成稳定 ID，不使用随机值
-            import hashlib
+        # 不依赖 cur_music 非空，只要 context_id 或 current_index 可用就生成
+        track_key = f"{context_id or 'default'}:{current_index if current_index is not None else -1}:{cur_music or ''}"
+        # 使用简单的哈希生成稳定 ID，不使用随机值
+        import hashlib
 
-            current_track_id = hashlib.md5(track_key.encode()).hexdigest()[:16]
+        current_track_id = hashlib.md5(track_key.encode()).hexdigest()[:16]
 
         return {
             "device_id": did,
