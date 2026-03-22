@@ -55,6 +55,11 @@ type PlayingInfo = {
   cur_playlist?: string;
   offset?: number;
   duration?: number;
+  current_track_id?: string;
+  current_index?: number | null;
+  context_type?: string | null;
+  context_id?: string | null;
+  context_name?: string | null;
 };
 
 type OnlineSearchItem = {
@@ -964,15 +969,47 @@ export function HomePage() {
         Math.floor((Date.now() - Number(localPlaybackStartedAtRef.current || 0)) / 1000),
       );
 
+      // 优先级1: 使用 current_track_id 判断切歌
+      const prevTrackId = String(prev.current_track_id || "").trim();
+      const mergedTrackId = String(merged.current_track_id || "").trim();
+      const trackIdChanged = Boolean(
+        mergedTrackId && prevTrackId && mergedTrackId !== prevTrackId
+      );
+
+      // 优先级2: 使用 current_index + context_id 判断切歌
+      const prevIndex = prev.current_index;
+      const mergedIndex = merged.current_index;
+      const prevContextId = String(prev.context_id || "").trim();
+      const mergedContextId = String(merged.context_id || "").trim();
+      const sameContext = Boolean(
+        mergedContextId && prevContextId && mergedContextId === prevContextId
+      );
+      const indexChanged = Boolean(
+        sameContext &&
+        mergedIndex !== null && mergedIndex !== undefined &&
+        prevIndex !== null && prevIndex !== undefined &&
+        mergedIndex !== prevIndex
+      );
+      const contextChanged = Boolean(
+        mergedContextId && prevContextId && mergedContextId !== prevContextId
+      );
+
+      // 优先级3: 旧 heuristic (兜底)
+      const songChangedByHeuristic = Boolean(mergedSong && prevSong && mergedSong !== prevSong);
+      const durationChanged = mergedHasDuration && Math.abs(Math.floor(mergedDurationRaw) - prevDuration) >= 8;
+      const atBoundary = prevDuration > 0 && prevOffset >= Math.max(0, prevDuration - 5);
+
+      // 综合判断: track_id > index > context > heuristic
+      const songChanged = trackIdChanged || indexChanged || contextChanged || songChangedByHeuristic;
+
       let resolvedOffset = Math.max(prevOffset, elapsed);
       let resetLocalPlayback = false;
       if (mergedHasOffset && mergedOffsetRaw > 0) {
         resolvedOffset = Math.floor(mergedOffsetRaw);
       } else if (mergedHasOffset && mergedOffsetRaw === 0) {
-        const songChanged = Boolean(mergedSong && prevSong && mergedSong !== prevSong);
-        const durationChanged = mergedHasDuration && Math.abs(Math.floor(mergedDurationRaw) - prevDuration) >= 8;
-        const atBoundary = prevDuration > 0 && prevOffset >= Math.max(0, prevDuration - 5);
-        const isBoundary = songChanged || durationChanged || atBoundary;
+        // 如果 track_id 已变化，这是确认的新曲目，不要再进入 boundary
+        const trackIdConfirmedArriving = trackIdChanged && mergedTrackId !== "";
+        const isBoundary = !trackIdConfirmedArriving && (songChanged || durationChanged || atBoundary);
         const confirmedNewTitleArriving =
           awaitingTrackTitleRef.current &&
           mergedSong !== "" &&
@@ -1271,16 +1308,57 @@ export function HomePage() {
     setMusic((prev) => (prev && songs.includes(prev) ? prev : songs[0]));
   }, [songs]);
 
+  // 自动同步下拉框: 优先按 context_name + current_index，再按标题搜索
   useEffect(() => {
     if (!status.is_playing) {
-      return;
-    }
-    if (awaitingTrackTitleRef.current) {
       return;
     }
     if (!Object.keys(playlists).length) {
       return;
     }
+
+    // 优先级1: 按 context_name + current_index 同步
+    const contextName = String(status.context_name || "").trim();
+    const currentIndex = status.current_index;
+    if (contextName && currentIndex !== null && currentIndex !== undefined && currentIndex >= 0) {
+      const contextSongs = playlists[contextName] || [];
+      if (currentIndex < contextSongs.length) {
+        const songAtIndex = contextSongs[currentIndex];
+        if (songAtIndex) {
+          if (playlist !== contextName) {
+            setPlaylist(contextName);
+          }
+          if (music !== songAtIndex) {
+            setMusic(songAtIndex);
+          }
+          lastAutoSyncedPlayingSongRef.current = songAtIndex;
+          return;
+        }
+      }
+    }
+
+    // 优先级2: waiting 期间也允许同步 index
+    if (awaitingTrackTitleRef.current) {
+      if (contextName && currentIndex !== null && currentIndex !== undefined && currentIndex >= 0) {
+        const contextSongs = playlists[contextName] || [];
+        if (currentIndex < contextSongs.length) {
+          const songAtIndex = contextSongs[currentIndex];
+          if (songAtIndex) {
+            if (playlist !== contextName) {
+              setPlaylist(contextName);
+            }
+            if (music !== songAtIndex) {
+              setMusic(songAtIndex);
+            }
+            lastAutoSyncedPlayingSongRef.current = songAtIndex;
+            return;
+          }
+        }
+      }
+      return;
+    }
+
+    // 优先级3: 按标题搜索 (兜底)
     const playingName = String(status.cur_music || "").trim();
     if (!playingName) {
       lastAutoSyncedPlayingSongRef.current = "";
@@ -1312,6 +1390,8 @@ export function HomePage() {
   }, [
     status.is_playing,
     status.cur_music,
+    status.current_index,
+    status.context_name,
     playlists,
     playlist,
     music,
