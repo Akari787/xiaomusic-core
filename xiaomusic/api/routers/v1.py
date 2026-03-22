@@ -9,7 +9,13 @@ from fastapi import APIRouter, Query
 
 from xiaomusic import __version__
 from xiaomusic.api.api_error import ApiError
-from xiaomusic.constants.api_fields import DEVICE_ID, OPTIONS, QUERY, REQUEST_ID, SOURCE_HINT
+from xiaomusic.constants.api_fields import (
+    DEVICE_ID,
+    OPTIONS,
+    QUERY,
+    REQUEST_ID,
+    SOURCE_HINT,
+)
 from xiaomusic.api.models import (
     ApiResponse,
     ControlRequest,
@@ -64,15 +70,21 @@ def _next_request_id(raw: str | None = None) -> str:
     return str(raw or uuid4().hex[:16])
 
 
-def _api_response(code: int, message: str, data: dict[str, Any], request_id: str) -> dict[str, Any]:
-    return ApiResponse(code=int(code), message=str(message), data=data, request_id=str(request_id)).model_dump()
+def _api_response(
+    code: int, message: str, data: dict[str, Any], request_id: str
+) -> dict[str, Any]:
+    return ApiResponse(
+        code=int(code), message=str(message), data=data, request_id=str(request_id)
+    ).model_dump()
 
 
 def _api_ok(data: dict[str, Any], request_id: str) -> dict[str, Any]:
     return _api_response(0, "ok", data, request_id)
 
 
-def _bad_request(request_id: str, message: str, *, field: str = "", allowed: list[str] | None = None) -> ApiError:
+def _bad_request(
+    request_id: str, message: str, *, field: str = "", allowed: list[str] | None = None
+) -> ApiError:
     data: dict[str, Any] = {"error_code": "E_INVALID_REQUEST", "stage": "request"}
     if field:
         data["field"] = field
@@ -95,7 +107,9 @@ def _require_device(device_id: str, request_id: str):
 
 def _map_api_exception(exc: Exception, request_id: str) -> dict[str, Any]:
     if isinstance(exc, ApiError):
-        return _api_response(exc.code, exc.message, exc.data, str(exc.request_id or request_id))
+        return _api_response(
+            exc.code, exc.message, exc.data, str(exc.request_id or request_id)
+        )
     if isinstance(exc, InvalidRequestError):
         return _api_response(
             40001,
@@ -171,7 +185,17 @@ def _map_structured_endpoint_exception(
     default_stage: str,
     default_message: str,
 ) -> dict[str, Any]:
-    if isinstance(exc, (ApiError, InvalidRequestError, SourceResolveError, DeliveryPrepareError, TransportError, DeviceNotFoundError)):
+    if isinstance(
+        exc,
+        (
+            ApiError,
+            InvalidRequestError,
+            SourceResolveError,
+            DeliveryPrepareError,
+            TransportError,
+            DeviceNotFoundError,
+        ),
+    ):
         return _map_api_exception(exc, request_id)
     return _api_response(
         10000,
@@ -203,7 +227,9 @@ def _map_public_endpoint_exception(
 
 
 def _normalize_device(device: dict[str, Any]) -> dict[str, Any]:
-    device_id = str(device.get("miotDID") or device.get("did") or device.get("deviceID") or "")
+    device_id = str(
+        device.get("miotDID") or device.get("did") or device.get("deviceID") or ""
+    )
     return {
         DEVICE_ID: device_id,
         "name": str(device.get("name") or device.get("alias") or ""),
@@ -234,17 +260,30 @@ async def _settings_snapshot(include_devices: bool) -> dict[str, Any]:
         ts = getattr(xm, "token_store", None)
         token = ts.get() if ts is not None else {}
         st = token.get("serviceToken") or token.get("yetAnotherServiceToken")
-        token_available = bool(token.get("userId") and token.get("passToken") and token.get("ssecurity") and st)
+        token_available = bool(
+            token.get("userId")
+            and token.get("passToken")
+            and token.get("ssecurity")
+            and st
+        )
     except Exception:
         token_available = False
     config_data["auth_token_available"] = token_available
     config_data["auth_runtime_ready"] = await _runtime_auth_ready_v1()
 
-    device_ids = [part.strip() for part in str(config_data.get("mi_did") or "").split(",") if part.strip()]
+    device_ids = [
+        part.strip()
+        for part in str(config_data.get("mi_did") or "").split(",")
+        if part.strip()
+    ]
     devices: list[dict[str, Any]] = []
     if include_devices:
         raw_devices = await xm.getalldevices()
-        devices = [_normalize_device(item) for item in (raw_devices or []) if isinstance(item, dict)]
+        devices = [
+            _normalize_device(item)
+            for item in (raw_devices or [])
+            if isinstance(item, dict)
+        ]
 
     return {
         "settings": config_data,
@@ -329,7 +368,9 @@ async def api_v1_control_stop(data: ControlRequest):
     request_id = _next_request_id(data.request_id)
     try:
         out = await _get_facade().stop(data.device_id, request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
+        return _api_ok(
+            {k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id
+        )
     except Exception as exc:
         return _map_public_endpoint_exception(
             exc,
@@ -345,7 +386,9 @@ async def api_v1_control_pause(data: ControlRequest):
     request_id = _next_request_id(data.request_id)
     try:
         out = await _get_facade().pause(data.device_id, request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
+        return _api_ok(
+            {k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id
+        )
     except Exception as exc:
         return _map_public_endpoint_exception(
             exc,
@@ -361,7 +404,9 @@ async def api_v1_control_resume(data: ControlRequest):
     request_id = _next_request_id(data.request_id)
     try:
         out = await _get_facade().resume(data.device_id, request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
+        return _api_ok(
+            {k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id
+        )
     except Exception as exc:
         return _map_public_endpoint_exception(
             exc,
@@ -377,7 +422,9 @@ async def api_v1_control_tts(data: TtsRequest):
     request_id = _next_request_id(data.request_id)
     try:
         out = await _get_facade().tts(data.device_id, data.text, request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
+        return _api_ok(
+            {k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id
+        )
     except Exception as exc:
         return _map_public_endpoint_exception(
             exc,
@@ -392,8 +439,12 @@ async def api_v1_control_tts(data: TtsRequest):
 async def api_v1_control_volume(data: VolumeRequest):
     request_id = _next_request_id(data.request_id)
     try:
-        out = await _get_facade().set_volume(data.device_id, int(data.volume), request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
+        out = await _get_facade().set_volume(
+            data.device_id, int(data.volume), request_id=request_id
+        )
+        return _api_ok(
+            {k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id
+        )
     except Exception as exc:
         return _map_public_endpoint_exception(
             exc,
@@ -409,7 +460,9 @@ async def api_v1_control_probe(data: ControlRequest):
     request_id = _next_request_id(data.request_id)
     try:
         out = await _get_facade().probe(data.device_id, request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
+        return _api_ok(
+            {k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id
+        )
     except Exception as exc:
         return _map_public_endpoint_exception(
             exc,
@@ -425,7 +478,11 @@ async def api_v1_devices():
     request_id = _next_request_id(None)
     try:
         devices = await _get_xiaomusic().getalldevices()
-        rows = [_normalize_device(item) for item in (devices or []) if isinstance(item, dict)]
+        rows = [
+            _normalize_device(item)
+            for item in (devices or [])
+            if isinstance(item, dict)
+        ]
         return _api_ok({"devices": rows}, request_id=request_id)
     except Exception as exc:
         return _map_structured_endpoint_exception(
@@ -480,7 +537,9 @@ async def api_v1_system_settings_save(data: SystemSettingsSaveRequest):
     rid = _next_request_id(data.request_id)
     try:
         settings = dict(data.settings or {})
-        settings["mi_did"] = ",".join([str(item).strip() for item in data.device_ids if str(item).strip()])
+        settings["mi_did"] = ",".join(
+            [str(item).strip() for item in data.device_ids if str(item).strip()]
+        )
 
         config_obj = _get_xiaomusic().getconfig()
         if settings.get("httpauth_password") in {"******", ""}:
@@ -639,8 +698,12 @@ async def api_v1_debug_auth_runtime_reload_state():
 async def api_v1_control_previous(data: ControlRequest):
     request_id = _next_request_id(data.request_id)
     try:
-        out = await _get_facade().previous(device_id=data.device_id, request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
+        out = await _get_facade().previous(
+            device_id=data.device_id, request_id=request_id
+        )
+        return _api_ok(
+            {k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id
+        )
     except Exception as exc:
         return _map_public_endpoint_exception(
             exc,
@@ -656,7 +719,9 @@ async def api_v1_control_next(data: ControlRequest):
     request_id = _next_request_id(data.request_id)
     try:
         out = await _get_facade().next(device_id=data.device_id, request_id=request_id)
-        return _api_ok({k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id)
+        return _api_ok(
+            {k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id
+        )
     except Exception as exc:
         return _map_public_endpoint_exception(
             exc,
@@ -682,7 +747,10 @@ async def api_v1_control_play_mode(data: PlayModeRequest):
         xm = _require_device(data.device_id, request_id)
         handler = getattr(xm, _PLAY_MODE_HANDLERS[play_mode])
         await handler(did=data.device_id, dotts=False, refresh_playlist=False)
-        return _api_ok({"status": "ok", DEVICE_ID: data.device_id, "play_mode": play_mode}, request_id=request_id)
+        return _api_ok(
+            {"status": "ok", DEVICE_ID: data.device_id, "play_mode": play_mode},
+            request_id=request_id,
+        )
     except Exception as exc:
         return _map_structured_endpoint_exception(
             exc,
@@ -775,7 +843,10 @@ async def api_v1_library_playlists(request_id: str | None = None):
     rid = _next_request_id(request_id)
     try:
         playlists = _get_xiaomusic().music_library.get_music_list()
-        return _api_ok({"playlists": playlists if isinstance(playlists, dict) else {}}, request_id=rid)
+        return _api_ok(
+            {"playlists": playlists if isinstance(playlists, dict) else {}},
+            request_id=rid,
+        )
     except Exception as exc:
         return _map_structured_endpoint_exception(
             exc,
@@ -787,7 +858,9 @@ async def api_v1_library_playlists(request_id: str | None = None):
 
 
 @router.get("/api/v1/library/music-info")
-async def api_v1_library_music_info(name: str = Query(""), request_id: str | None = None):
+async def api_v1_library_music_info(
+    name: str = Query(""), request_id: str | None = None
+):
     rid = _next_request_id(request_id)
     try:
         music_name = str(name or "").strip()
@@ -901,7 +974,9 @@ async def api_v1_debug_auth_short_session_rebuild_state():
 
 
 @router.get("/api/v1/player/state")
-async def api_v1_player_state(device_id: str = Query(..., min_length=1), request_id: str | None = None):
+async def api_v1_player_state(
+    device_id: str = Query(..., min_length=1), request_id: str | None = None
+):
     rid = _next_request_id(request_id)
     try:
         out = await _get_facade().player_state(device_id=device_id, request_id=rid)
@@ -911,6 +986,11 @@ async def api_v1_player_state(device_id: str = Query(..., min_length=1), request
             "cur_music": str(out.get("cur_music", "") or ""),
             "offset": max(0, int(out.get("offset", 0) or 0)),
             "duration": max(0, int(out.get("duration", 0) or 0)),
+            "current_track_id": str(out.get("current_track_id", "") or ""),
+            "current_index": out.get("current_index"),
+            "context_type": out.get("context_type"),
+            "context_id": out.get("context_id"),
+            "context_name": out.get("context_name"),
         }
         return _api_ok(data, request_id=rid)
     except Exception as exc:

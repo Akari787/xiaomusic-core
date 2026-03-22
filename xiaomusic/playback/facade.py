@@ -22,7 +22,9 @@ from xiaomusic.core.transport import TransportPolicy, TransportRouter
 class PlaybackFacade:
     """Keep API layer thin while exposing stable runtime methods."""
 
-    def __init__(self, xiaomusic, runtime_provider: Callable[[], Any] | None = None) -> None:
+    def __init__(
+        self, xiaomusic, runtime_provider: Callable[[], Any] | None = None
+    ) -> None:
         self.xiaomusic = xiaomusic
         self._runtime_provider = runtime_provider
         self._core_coordinator: PlaybackCoordinator | None = None
@@ -32,12 +34,18 @@ class PlaybackFacade:
             return self._core_coordinator
 
         source_registry = SourceRegistry()
-        register_default_source_plugins(source_registry, self.xiaomusic, runtime_provider=self._runtime_provider)
+        register_default_source_plugins(
+            source_registry, self.xiaomusic, runtime_provider=self._runtime_provider
+        )
         device_registry = DeviceRegistry(self.xiaomusic)
         proxy_builder: Callable[[str, str], str] | None = None
-        raw_proxy_builder = getattr(getattr(self.xiaomusic, "music_library", None), "get_proxy_url", None)
+        raw_proxy_builder = getattr(
+            getattr(self.xiaomusic, "music_library", None), "get_proxy_url", None
+        )
         if callable(raw_proxy_builder):
-            proxy_builder = lambda origin_url, title: str(raw_proxy_builder(origin_url, name=title))
+            proxy_builder = lambda origin_url, title: str(
+                raw_proxy_builder(origin_url, name=title)
+            )
         delivery_adapter = DeliveryAdapter(proxy_url_builder=proxy_builder)
         router = TransportRouter(policy=TransportPolicy())
         router.register_transport(MinaTransport(self.xiaomusic))
@@ -82,11 +90,17 @@ class PlaybackFacade:
 
     @staticmethod
     def _playlist_context(options: PlayOptions, query: str) -> tuple[str, str] | None:
-        context_hint = options.context_hint if isinstance(options.context_hint, dict) else {}
-        payload = options.source_payload if isinstance(options.source_payload, dict) else {}
-        context_type = str(
-            context_hint.get("context_type") or payload.get("context_type") or ""
-        ).strip().lower()
+        context_hint = (
+            options.context_hint if isinstance(options.context_hint, dict) else {}
+        )
+        payload = (
+            options.source_payload if isinstance(options.source_payload, dict) else {}
+        )
+        context_type = (
+            str(context_hint.get("context_type") or payload.get("context_type") or "")
+            .strip()
+            .lower()
+        )
         playlist_name = str(
             context_hint.get("context_name")
             or context_hint.get("context_id")
@@ -118,7 +132,9 @@ class PlaybackFacade:
             raise DeviceNotFoundError("device not found")
 
         playlist_context = (
-            self._playlist_context(opts, q) if normalized_hint == "local_library" else None
+            self._playlist_context(opts, q)
+            if normalized_hint == "local_library"
+            else None
         )
         if playlist_context is not None:
             request_id_value = str(request_id or uuid4().hex[:16])
@@ -175,8 +191,12 @@ class PlaybackFacade:
         resolved = result["resolved_media"]
         dispatch = result["dispatch"]
         outcome = result.get("outcome")
-        accepted = bool(getattr(outcome, "accepted", False)) if outcome is not None else False
-        started = bool(getattr(outcome, "started", False)) if outcome is not None else False
+        accepted = (
+            bool(getattr(outcome, "accepted", False)) if outcome is not None else False
+        )
+        started = (
+            bool(getattr(outcome, "started", False)) if outcome is not None else False
+        )
         verify_result = "ok" if started else "failed"
         self._record_playback_capability_verify(
             result=verify_result,
@@ -216,7 +236,11 @@ class PlaybackFacade:
         error_message: str = "",
     ) -> None:
         auth_manager = getattr(self.xiaomusic, "auth_manager", None)
-        recorder = getattr(auth_manager, "record_playback_capability_verify", None) if auth_manager else None
+        recorder = (
+            getattr(auth_manager, "record_playback_capability_verify", None)
+            if auth_manager
+            else None
+        )
         if callable(recorder):
             recorder(
                 result=result,
@@ -262,7 +286,9 @@ class PlaybackFacade:
             "extra": {},
         }
 
-    async def stop(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+    async def stop(
+        self, device_id: str, request_id: str | None = None
+    ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         result = await self._core().stop(did)
         return {
@@ -273,7 +299,9 @@ class PlaybackFacade:
             "extra": {"dispatch": result["dispatch"].data},
         }
 
-    async def previous(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+    async def previous(
+        self, device_id: str, request_id: str | None = None
+    ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         result = await self._core().previous(did)
         return {
@@ -285,7 +313,9 @@ class PlaybackFacade:
             "extra": {"dispatch": result["dispatch"].data},
         }
 
-    async def next(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+    async def next(
+        self, device_id: str, request_id: str | None = None
+    ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         result = await self._core().next(did)
         return {
@@ -297,7 +327,9 @@ class PlaybackFacade:
             "extra": {"dispatch": result["dispatch"].data},
         }
 
-    async def pause(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+    async def pause(
+        self, device_id: str, request_id: str | None = None
+    ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         result = await self._core().pause(did)
         return {
@@ -308,7 +340,9 @@ class PlaybackFacade:
             "extra": {"dispatch": result["dispatch"].data},
         }
 
-    async def resume(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+    async def resume(
+        self, device_id: str, request_id: str | None = None
+    ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         result = await self._core().resume(did)
         return {
@@ -319,7 +353,9 @@ class PlaybackFacade:
             "extra": {"dispatch": result["dispatch"].data},
         }
 
-    async def tts(self, device_id: str, text: str, request_id: str | None = None) -> dict[str, Any]:
+    async def tts(
+        self, device_id: str, text: str, request_id: str | None = None
+    ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         content = str(text or "").strip()
         if not content:
@@ -352,7 +388,9 @@ class PlaybackFacade:
             "extra": {"volume": level, "dispatch": result["dispatch"].data},
         }
 
-    async def probe(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+    async def probe(
+        self, device_id: str, request_id: str | None = None
+    ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         result = await self._core().probe(did)
         reachability = result.get("reachability")
@@ -361,7 +399,10 @@ class PlaybackFacade:
             DEVICE_ID: did,
             "transport": result["transport"],
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
-            "reachable": bool(getattr(reachability, "local_reachable", False) or getattr(reachability, "cloud_reachable", False)),
+            "reachable": bool(
+                getattr(reachability, "local_reachable", False)
+                or getattr(reachability, "cloud_reachable", False)
+            ),
             "extra": {
                 "dispatch": result["dispatch"].data,
                 "reachability": {
@@ -373,14 +414,18 @@ class PlaybackFacade:
             },
         }
 
-    async def player_state(self, device_id: str, request_id: str | None = None) -> dict[str, Any]:
+    async def player_state(
+        self, device_id: str, request_id: str | None = None
+    ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         if not bool(getattr(self.xiaomusic, "did_exist", lambda _did: False)(did)):
             raise DeviceNotFoundError("device not found")
 
         is_playing = bool(getattr(self.xiaomusic, "isplaying", lambda _did: False)(did))
         cur_music = ""
-        raw_offset, raw_duration = getattr(self.xiaomusic, "get_offset_duration", lambda _did: (0, 0))(did)
+        raw_offset, raw_duration = getattr(
+            self.xiaomusic, "get_offset_duration", lambda _did: (0, 0)
+        )(did)
         offset = float(raw_offset or 0)
         duration = float(raw_duration or 0)
 
@@ -399,12 +444,18 @@ class PlaybackFacade:
             detail = raw_status.get("play_song_detail")
             if isinstance(detail, dict):
                 song_title = str(
-                    detail.get("audio_name") or detail.get("title") or detail.get("name") or ""
+                    detail.get("audio_name")
+                    or detail.get("title")
+                    or detail.get("name")
+                    or ""
                 )
                 if song_title:
                     cur_music = song_title
                 else:
-                    cur_music = str(getattr(self.xiaomusic, "playingmusic", lambda _did: "")(did) or "")
+                    cur_music = str(
+                        getattr(self.xiaomusic, "playingmusic", lambda _did: "")(did)
+                        or ""
+                    )
                 try:
                     detail_pos = float(detail.get("position") or 0)
                 except Exception:
@@ -424,11 +475,63 @@ class PlaybackFacade:
         if safe_duration > 0:
             safe_offset = min(safe_offset, safe_duration)
 
+        # 获取播放上下文信息
+        context_type = None
+        context_id = None
+        context_name = None
+        current_index = None
+        current_track_id = ""
+
+        # 获取当前播放列表名称
+        cur_playlist = ""
+        try:
+            cur_playlist = str(
+                getattr(self.xiaomusic, "get_cur_play_list", lambda _did: "")(did) or ""
+            )
+        except Exception:
+            cur_playlist = ""
+
+        if cur_playlist:
+            context_type = "playlist"
+            context_id = cur_playlist
+            context_name = cur_playlist
+
+        # 获取当前歌曲在播放列表中的索引
+        device_player = None
+        try:
+            device_player = getattr(
+                getattr(self.xiaomusic, "device_manager", None), "devices", {}
+            ).get(did)
+        except Exception:
+            device_player = None
+
+        if device_player and cur_music:
+            try:
+                play_list = getattr(device_player, "_play_list", [])
+                if play_list and cur_music in play_list:
+                    current_index = play_list.index(cur_music)
+            except (ValueError, AttributeError):
+                pass
+
+        # 生成 current_track_id
+        # 使用 context_id + cur_music 的组合作为稳定标识
+        if cur_music:
+            track_key = f"{context_id or 'default'}:{cur_music}"
+            # 使用简单的哈希生成稳定 ID，不使用随机值
+            import hashlib
+
+            current_track_id = hashlib.md5(track_key.encode()).hexdigest()[:16]
+
         return {
             "device_id": did,
             "is_playing": bool(is_playing),
             "cur_music": cur_music,
             "offset": safe_offset,
             "duration": safe_duration,
+            "current_track_id": current_track_id,
+            "current_index": current_index,
+            "context_type": context_type,
+            "context_id": context_id,
+            "context_name": context_name,
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
         }

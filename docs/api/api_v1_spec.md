@@ -609,7 +609,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 | `GET /api/v1/system/status` | C | 只读查询 / 聚合路径 | `data.status`, `data.version`, `data.devices_count` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `GET /api/v1/system/settings` | C | system 设置查询路径 | `data.settings`, `data.device_ids`, `data.devices` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `GET /api/v1/search/online` | C | 搜索查询路径 | `data.items`, `data.total` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
-| `GET /api/v1/player/state` | C | 只读状态聚合路径 | `data.device_id`, `data.is_playing`, `data.cur_music`, `data.offset`, `data.duration` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `GET /api/v1/player/state` | C | 只读状态聚合路径 | `data.device_id`, `data.is_playing`, `data.cur_music`, `data.offset`, `data.duration`, `data.current_track_id`, `data.current_index`, `data.context_type`, `data.context_id`, `data.context_name` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 
 ---
 
@@ -1022,6 +1022,16 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.cur_music: string`
 - `data.offset: number`
 - `data.duration: number`
+- `data.current_track_id: string` - 当前曲目的稳定标识，用于可靠判断切歌
+- `data.current_index: number | null` - 当前曲目在播放队列中的位置索引
+- `data.context_type: string | null` - 播放上下文类型（如 "playlist"）
+- `data.context_id: string | null` - 播放上下文标识
+- `data.context_name: string | null` - 播放上下文名称
+
+字段语义说明：
+
+- `current_track_id`：稳定标识当前曲目身份，同一首歌在同一次连续播放期间保持稳定，切到下一首后必须变化。不依赖展示标题文本。
+- `current_index/context_*`：反映当前播放上下文与队列位置，用于 WebUI / HA / 第三方调用方做稳定状态同步。
 
 约束：
 

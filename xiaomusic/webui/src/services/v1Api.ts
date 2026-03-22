@@ -58,6 +58,11 @@ export interface PlayerStateData {
   cur_music?: string;
   offset?: number;
   duration?: number;
+  current_track_id?: string;
+  current_index?: number | null;
+  context_type?: string | null;
+  context_id?: string | null;
+  context_name?: string | null;
 }
 
 export type PlayMode = "one" | "all" | "random" | "single" | "sequence";

@@ -55,6 +55,11 @@ type PlayingInfo = {
   cur_playlist?: string;
   offset?: number;
   duration?: number;
+  current_track_id?: string;
+  current_index?: number | null;
+  context_type?: string | null;
+  context_id?: string | null;
+  context_name?: string | null;
 };
 
 type OnlineSearchItem = {
@@ -964,12 +969,20 @@ export function HomePage() {
         Math.floor((Date.now() - Number(localPlaybackStartedAtRef.current || 0)) / 1000),
       );
 
+      // 优先使用 current_track_id 判断切歌
+      const prevTrackId = String(prev.current_track_id || "").trim();
+      const mergedTrackId = String(merged.current_track_id || "").trim();
+      const trackIdChanged = Boolean(
+        mergedTrackId && prevTrackId && mergedTrackId !== prevTrackId
+      );
+
       let resolvedOffset = Math.max(prevOffset, elapsed);
       let resetLocalPlayback = false;
       if (mergedHasOffset && mergedOffsetRaw > 0) {
         resolvedOffset = Math.floor(mergedOffsetRaw);
       } else if (mergedHasOffset && mergedOffsetRaw === 0) {
-        const songChanged = Boolean(mergedSong && prevSong && mergedSong !== prevSong);
+        // 优先使用 track_id 变化判断切歌，其次才用旧 heuristic
+        const songChanged = trackIdChanged || Boolean(mergedSong && prevSong && mergedSong !== prevSong);
         const durationChanged = mergedHasDuration && Math.abs(Math.floor(mergedDurationRaw) - prevDuration) >= 8;
         const atBoundary = prevDuration > 0 && prevOffset >= Math.max(0, prevDuration - 5);
         const isBoundary = songChanged || durationChanged || atBoundary;
