@@ -972,7 +972,13 @@ export function HomePage() {
         const songChanged = Boolean(mergedSong && prevSong && mergedSong !== prevSong);
         const durationChanged = mergedHasDuration && Math.abs(Math.floor(mergedDurationRaw) - prevDuration) >= 8;
         const atBoundary = prevDuration > 0 && prevOffset >= Math.max(0, prevDuration - 5);
-        if (songChanged || durationChanged || atBoundary) {
+        const isBoundary = songChanged || durationChanged || atBoundary;
+        const confirmedNewTitleArriving =
+          awaitingTrackTitleRef.current &&
+          mergedSong !== "" &&
+          mergedSong !== lastConfirmedSongRef.current;
+        const shouldEnterBoundaryWaiting = isBoundary && !confirmedNewTitleArriving;
+        if (shouldEnterBoundaryWaiting) {
           resolvedOffset = 0;
           resetLocalPlayback = true;
         }
