@@ -516,6 +516,9 @@ export function HomePage() {
   const stopSuppressUntilRef = useRef<number>(0);
   const refreshRestoreUntilRef = useRef<number>(0);
   const lastAutoSyncedPlayingSongRef = useRef<string>("");
+  const awaitingTrackTitleRef = useRef<boolean>(false);
+  const lastConfirmedSongRef = useRef<string>("");
+  const lastBoundaryAtRef = useRef<number>(0);
   const statusRequestSeqRef = useRef<number>(0);
   const activeActionSeqRef = useRef<number>(0);
   const fastPollUntilRef = useRef<number>(0);
@@ -590,8 +593,12 @@ export function HomePage() {
     localPlaybackStartedAt > 0 && Date.now() - Number(localPlaybackStartedAt || 0) < 12000;
   const currentMusicName = String(
     status.cur_music ||
-      (Date.now() < refreshRestoreUntilRef.current && status.is_playing ? rememberedPlayingSong : "") ||
-      (Date.now() < refreshRestoreUntilRef.current && localSongFresh ? localPlaybackSong : "") ||
+      (Date.now() < refreshRestoreUntilRef.current && status.is_playing && !awaitingTrackTitleRef.current
+        ? rememberedPlayingSong
+        : "") ||
+      (Date.now() < refreshRestoreUntilRef.current && localSongFresh && !awaitingTrackTitleRef.current
+        ? localPlaybackSong
+        : "") ||
       "",
   ).trim();
   const playbackText = status.is_playing ? `正在播放：${currentMusicName || "未知歌曲"}` : "空闲";
@@ -939,6 +946,7 @@ export function HomePage() {
       (value) => ({ status: "fulfilled" as const, value }),
       (reason) => ({ status: "rejected" as const, reason }),
     );
+    const pending = pendingPlayRef.current;
 
     const mergePlayingViewState = (prev: PlayingInfo, merged: PlayingInfo, fallbackSong: string): PlayingInfo => {
       const mergedOffsetRaw = Number(merged.offset);
@@ -979,14 +987,23 @@ export function HomePage() {
       }
 
       if (resetLocalPlayback) {
-        localPlaybackStartedAtRef.current = Date.now();
+        const now = Date.now();
+        localPlaybackStartedAtRef.current = now;
         localPlaybackSongRef.current = "";
+        awaitingTrackTitleRef.current = true;
+        lastConfirmedSongRef.current = prevSong;
+        lastBoundaryAtRef.current = now;
+        setLocalPlaybackStartedAt(now);
+        setLocalPlaybackDuration(0);
+        setLocalPlaybackSong("");
       }
 
       return {
         ...prev,
         ...merged,
-        cur_music: resetLocalPlayback ? "" : String(merged.cur_music || prev.cur_music || fallbackSong || ""),
+        cur_music: resetLocalPlayback
+          ? ""
+          : String(merged.cur_music || ""),
         duration: resolvedDuration,
         offset: resolvedOffset,
       };
@@ -1005,7 +1022,6 @@ export function HomePage() {
         }
       } else {
         const next = (envelope.data || {}) as PlayingInfo;
-        const pending = pendingPlayRef.current;
         let merged: PlayingInfo = {
           ...next,
           is_playing: Boolean(next.is_playing),
@@ -1027,13 +1043,6 @@ export function HomePage() {
           const hasActivePending = Boolean(pending);
           if (withinStabilityWindow && (hasActivePending || liveStatus.is_playing)) {
             merged.is_playing = true;
-            merged.cur_music = String(
-              merged.cur_music ||
-                liveStatus.cur_music ||
-                localPlaybackSongRef.current ||
-                rememberedPlayingSongRef.current ||
-                "",
-            );
             merged.duration =
               Number(merged.duration || 0) ||
               Number(liveStatus.duration || 0) ||
@@ -1049,11 +1058,25 @@ export function HomePage() {
               );
           }
         }
+        const mergedSong = String(merged.cur_music || "").trim();
+        if (awaitingTrackTitleRef.current) {
+          if (mergedSong && mergedSong !== lastConfirmedSongRef.current) {
+            awaitingTrackTitleRef.current = false;
+          } else {
+            merged.cur_music = "";
+          }
+        } else if (pending && pending.did === did) {
+          const pendingSong = String(pending.song || "").trim();
+          if (pendingSong && pendingSong !== lastConfirmedSongRef.current) {
+            merged.cur_music = pendingSong;
+            lastConfirmedSongRef.current = pendingSong;
+          }
+        }
         if (merged.is_playing && !String(merged.cur_music || "").trim()) {
           merged.cur_music = "";
         }
 
-        if (merged.is_playing && String(merged.cur_music || "").trim()) {
+        if (merged.is_playing && String(merged.cur_music || "").trim() && !awaitingTrackTitleRef.current) {
           const remembered = String(merged.cur_music || "").trim();
           saveRememberedPlayingSong(did, remembered);
           setRememberedPlayingSong(remembered);
@@ -1121,7 +1144,6 @@ export function HomePage() {
         return merged;
       }
     }
-    refreshRestoreUntilRef.current = Date.now() + 12000;
     return null;
   }
 
@@ -1137,9 +1159,13 @@ export function HomePage() {
       setRememberedPlayingSong("");
       rememberedPlayingSongRef.current = "";
       lastAutoSyncedPlayingSongRef.current = "";
+      awaitingTrackTitleRef.current = false;
+      lastConfirmedSongRef.current = "";
       return;
     }
     lastAutoSyncedPlayingSongRef.current = "";
+    awaitingTrackTitleRef.current = false;
+    lastConfirmedSongRef.current = "";
     setLocalPlaybackStartedAt(0);
     setLocalPlaybackDuration(0);
     setLocalPlaybackSong("");
@@ -1221,6 +1247,9 @@ export function HomePage() {
     if (!status.is_playing) {
       return;
     }
+    if (awaitingTrackTitleRef.current) {
+      return;
+    }
     if (!Object.keys(playlists).length) {
       return;
     }
@@ -1258,6 +1287,7 @@ export function HomePage() {
     playlists,
     playlist,
     music,
+    awaitingTrackTitleRef,
   ]);
 
   function requireDid(): boolean {
@@ -2154,6 +2184,8 @@ export function HomePage() {
                     if (isApiOk(out)) {
                       stopSuppressUntilRef.current = Date.now() + 6000;
                       pendingPlayRef.current = null;
+                      awaitingTrackTitleRef.current = false;
+                      lastConfirmedSongRef.current = "";
                       setLocalPlaybackStartedAt(0);
                       setLocalPlaybackDuration(0);
                       setLocalPlaybackSong("");
