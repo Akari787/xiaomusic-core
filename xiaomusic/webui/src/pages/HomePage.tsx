@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import {
   addFavorite as v1AddFavorite,
@@ -10,6 +10,7 @@ import {
   getSystemSettings,
   getSystemStatus,
   getPlayerState,
+  getPlayerStreamUrl,
   isApiOk,
   libraryRefresh as v1LibraryRefresh,
   next as v1Next,
@@ -26,6 +27,7 @@ import {
   type ApiEnvelope,
   type PlayMode,
   type PlayerStateData,
+  type TransportState,
 } from "../services/v1Api";
 import { fetchAuthStatus, logoutAuth as logoutAuthRequest, reloadAuthRuntime } from "../services/auth";
 import {
@@ -46,20 +48,6 @@ type Device = {
   hardware?: string;
   name?: string;
   alias?: string;
-};
-
-type PlayingInfo = {
-  ret?: string;
-  is_playing?: boolean;
-  cur_music?: string;
-  cur_playlist?: string;
-  offset?: number;
-  duration?: number;
-  current_track_id?: string;
-  current_index?: number | null;
-  context_type?: string | null;
-  context_id?: string | null;
-  context_name?: string | null;
 };
 
 type OnlineSearchItem = {
@@ -261,6 +249,50 @@ const ADVANCED_TABS: Array<{ key: string; label: string; fields: SettingField[] 
   },
 ];
 
+const EMPTY_SERVER_STATE: PlayerStateData = {
+  device_id: "",
+  revision: -1,
+  play_session_id: "",
+  transport_state: "idle" as TransportState,
+  track: null,
+  context: null,
+  position_ms: 0,
+  duration_ms: 0,
+  snapshot_at_ms: 0,
+};
+
+type UiState = {
+  connectionStatus: "connected" | "reconnecting" | "fallback_polling";
+  initializing: boolean;
+  switchingHint: boolean;
+  progressInterpolation: {
+    baseMs: number;
+    startedAt: number;
+  } | null;
+};
+
+const EMPTY_UI_STATE: UiState = {
+  connectionStatus: "reconnecting",
+  initializing: true,
+  switchingHint: false,
+  progressInterpolation: null,
+};
+
+type ServerStateAction =
+  | { type: "APPLY_SNAPSHOT"; snapshot: PlayerStateData }
+  | { type: "RESET" };
+
+function serverStateReducer(_state: PlayerStateData, action: ServerStateAction): PlayerStateData {
+  switch (action.type) {
+    case "APPLY_SNAPSHOT":
+      return action.snapshot;
+    case "RESET":
+      return EMPTY_SERVER_STATE;
+    default:
+      return _state;
+  }
+}
+
 function resolveDisplayName(d: Device): string {
   return d.alias || d.name || d.did || d.deviceID || d.miotDID || "未知设备";
 }
@@ -441,10 +473,6 @@ function removeLocal(key: string): void {
   }
 }
 
-function playbackSnapshotKey(did: string): string {
-  return `xm_playback_snapshot_${did}`;
-}
-
 function volumeStorageKey(did: string): string {
   return `xm_volume_${did}`;
 }
@@ -465,6 +493,224 @@ function saveRememberedVolume(did: string, volume: number): void {
   saveLocal(volumeStorageKey(did), String(next));
 }
 
+function useProgressInterpolation(serverState: PlayerStateData, uiState: UiState): {
+  currentPositionMs: number;
+  progress: number;
+} {
+  const [currentPositionMs, setCurrentPositionMs] = useState<number>(() => serverState.position_ms);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (timerRef.current !== null) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    if (serverState.transport_state !== "playing") {
+      setCurrentPositionMs(serverState.position_ms);
+      return;
+    }
+
+    const snapshotAt = serverState.snapshot_at_ms;
+    const basePosition = serverState.position_ms;
+    const startedAt = Date.now();
+
+    setCurrentPositionMs(basePosition);
+
+    timerRef.current = window.setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      const newPosition = basePosition + elapsed;
+      setCurrentPositionMs(newPosition);
+    }, 250);
+
+    return () => {
+      if (timerRef.current !== null) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [
+    serverState.transport_state,
+    serverState.position_ms,
+    serverState.snapshot_at_ms,
+    serverState.play_session_id,
+  ]);
+
+  const progress = useMemo(() => {
+    if (serverState.duration_ms <= 0) {
+      return 0;
+    }
+    return Math.max(0, Math.min(100, (currentPositionMs / serverState.duration_ms) * 100));
+  }, [currentPositionMs, serverState.duration_ms]);
+
+  return { currentPositionMs, progress };
+}
+
+function usePlayerStream(
+  deviceId: string,
+  onSnapshot: (snapshot: PlayerStateData) => void,
+  onConnectionStatusChange: (status: UiState["connectionStatus"]) => void,
+) {
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const pollingIntervalRef = useRef<number | null>(null);
+  const lastAppliedRevisionRef = useRef<number>(-1);
+  const statusRequestSeqRef = useRef<number>(0);
+  const isPollingRef = useRef<boolean>(false);
+  const activeDidRef = useRef<string>("");
+
+  const stopPolling = useMemo(() => {
+    return () => {
+      if (pollingIntervalRef.current !== null) {
+        window.clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      if (reconnectTimeoutRef.current !== null) {
+        window.clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      isPollingRef.current = false;
+    };
+  }, []);
+
+  const applySnapshot = useMemo(
+    () =>
+      (snapshot: PlayerStateData): boolean => {
+        if (snapshot.revision <= lastAppliedRevisionRef.current) {
+          if (lastAppliedRevisionRef.current > 0 && snapshot.revision < lastAppliedRevisionRef.current * 0.1) {
+            lastAppliedRevisionRef.current = -1;
+          } else {
+            return false;
+          }
+        }
+        lastAppliedRevisionRef.current = snapshot.revision;
+        onSnapshot(snapshot);
+        return true;
+      },
+    [onSnapshot],
+  );
+
+  const startPolling = useMemo(
+    () => {
+      let cancelled = false;
+
+      const pollOnce = async () => {
+        if (cancelled || !activeDidRef.current) return;
+        if (isPollingRef.current) return;
+
+        isPollingRef.current = true;
+        const requestSeq = statusRequestSeqRef.current + 1;
+        statusRequestSeqRef.current = requestSeq;
+        const currentDeviceId = activeDidRef.current;
+
+        try {
+          const out = await getPlayerState(currentDeviceId);
+          if (cancelled || currentDeviceId !== activeDidRef.current) {
+            isPollingRef.current = false;
+            return;
+          }
+          if (!isApiOk(out)) {
+            isPollingRef.current = false;
+            return;
+          }
+          const data = out.data || EMPTY_SERVER_STATE;
+          applySnapshot(data);
+        } catch {
+          // ignore errors during fallback polling
+        } finally {
+          isPollingRef.current = false;
+        }
+      };
+
+      return () => {
+        cancelled = true;
+        stopPolling();
+        onConnectionStatusChange("fallback_polling");
+
+        pollingIntervalRef.current = window.setInterval(pollOnce, 3000);
+      };
+    },
+    [applySnapshot, onConnectionStatusChange, stopPolling],
+  );
+
+  const connect = useMemo(
+    () => {
+      let cancelled = false;
+
+      return () => {
+        if (cancelled) return;
+        stopPolling();
+
+        if (!deviceId) {
+          onConnectionStatusChange("reconnecting");
+          return;
+        }
+
+        activeDidRef.current = deviceId;
+        lastAppliedRevisionRef.current = -1;
+
+        const url = getPlayerStreamUrl(deviceId);
+        const es = new EventSource(url);
+        eventSourceRef.current = es;
+
+        es.onopen = () => {
+          if (cancelled || es !== eventSourceRef.current) return;
+          onConnectionStatusChange("connected");
+        };
+
+        es.onerror = () => {
+          if (cancelled || es !== eventSourceRef.current) return;
+
+          es.close();
+          eventSourceRef.current = null;
+          onConnectionStatusChange("reconnecting");
+
+          reconnectTimeoutRef.current = window.setTimeout(() => {
+            if (cancelled || es !== eventSourceRef.current) return;
+            if (activeDidRef.current === deviceId) {
+              startPolling();
+            }
+          }, 3000);
+        };
+
+        es.addEventListener("player_state", (event: MessageEvent) => {
+          if (cancelled || es !== eventSourceRef.current) return;
+          try {
+            const snapshot = JSON.parse(event.data) as PlayerStateData;
+            applySnapshot(snapshot);
+          } catch {
+            // ignore parse errors
+          }
+        });
+
+        es.addEventListener("stream_error", (event: MessageEvent) => {
+          if (cancelled || es !== eventSourceRef.current) return;
+          try {
+            const errorData = JSON.parse(event.data) as { error_code?: string };
+            if (errorData.error_code === "E_AUTH_EXPIRED") {
+              // handle auth refresh if needed
+            }
+          } catch {
+            // ignore parse errors
+          }
+        });
+      };
+    },
+    [applySnapshot, onConnectionStatusChange, startPolling, stopPolling],
+  );
+
+  useEffect(() => {
+    connect();
+    return () => {
+      stopPolling();
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }, [connect, stopPolling]);
+}
+
 export function HomePage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [activeDid, setActiveDid] = useState<string>(() => loadLocal("xm_ui_active_did"));
@@ -472,7 +718,6 @@ export function HomePage() {
   const [playlist, setPlaylist] = useState<string>(() => loadLocal("xm_ui_playlist"));
   const [music, setMusic] = useState<string>(() => loadLocal("xm_ui_music"));
   const [volume, setVolume] = useState<number>(50);
-  const [status, setStatus] = useState<PlayingInfo>({});
   const [message, setMessage] = useState<string>("");
   const [version, setVersion] = useState<string>("");
   const [playModeIndex, setPlayModeIndex] = useState<number>(2);
@@ -506,128 +751,60 @@ export function HomePage() {
   const [qrcodeExpireAt, setQrcodeExpireAt] = useState<number>(0);
   const [qrcodeRemain, setQrcodeRemain] = useState<number>(0);
   const [pullAskEnabled, setPullAskEnabled] = useState<boolean>(false);
-  const [localPlaybackStartedAt, setLocalPlaybackStartedAt] = useState<number>(0);
-  const [localPlaybackDuration, setLocalPlaybackDuration] = useState<number>(0);
-  const [localPlaybackSong, setLocalPlaybackSong] = useState<string>("");
-  const [rememberedPlayingSong, setRememberedPlayingSong] = useState<string>("");
+
+  const [serverState, dispatchServerState] = useReducer(serverStateReducer, EMPTY_SERVER_STATE);
+  const [uiState, setUiState] = useState<UiState>(EMPTY_UI_STATE);
+  const serverStateRef = useRef<PlayerStateData>(EMPTY_SERVER_STATE);
+  const uiStateRef = useRef<UiState>(EMPTY_UI_STATE);
+  const prevPlaySessionRef = useRef<string>("");
+  const prevTransportStateRef = useRef<TransportState>("idle");
+  const rememberedSongRef = useRef<string>("");
   const activeDidRef = useRef<string>(activeDid);
-  const statusRef = useRef<PlayingInfo>({});
-  const localPlaybackStartedAtRef = useRef<number>(0);
-  const localPlaybackDurationRef = useRef<number>(0);
-  const localPlaybackSongRef = useRef<string>("");
-  const rememberedPlayingSongRef = useRef<string>("");
   const publicBaseMigratedRef = useRef<boolean>(false);
-  const lastPositivePlaybackAtRef = useRef<number>(0);
-  const stopSuppressUntilRef = useRef<number>(0);
-  const refreshRestoreUntilRef = useRef<number>(0);
-  const lastAutoSyncedPlayingSongRef = useRef<string>("");
-  const awaitingTrackTitleRef = useRef<boolean>(false);
-  const lastConfirmedSongRef = useRef<string>("");
-  const lastBoundaryAtRef = useRef<number>(0);
   const statusRequestSeqRef = useRef<number>(0);
-  const activeActionSeqRef = useRef<number>(0);
-  const fastPollUntilRef = useRef<number>(0);
-  const lastStatusPollAtRef = useRef<number>(0);
-  const statusPollInFlightRef = useRef<boolean>(false);
-  const pendingPlayRef = useRef<{ did: string; song: string; expiresAt: number } | null>(null);
   const themeFileInputRef = useRef<HTMLInputElement | null>(null);
-  const userStoppedRef = useRef<boolean>(false);
 
-  const {
-    selectedThemeId,
-    activeLayout,
-    customThemes,
-    setTheme,
-    uploadThemePackage,
-    validationError,
-  } = useTheme();
+  const { currentPositionMs, progress } = useProgressInterpolation(serverState, uiState);
 
-  const songs = useMemo(() => playlists[playlist] || [], [playlists, playlist]);
-  const filteredSongs = useMemo(() => {
-    const key = soundscapeFilter.trim().toLowerCase();
-    if (!key) {
-      return songs;
+  const handleSnapshot = (snapshot: PlayerStateData) => {
+    const prevState = serverStateRef.current;
+    const prevSessionId = prevState.play_session_id;
+    const newSessionId = snapshot.play_session_id;
+
+    if (newSessionId !== prevSessionId) {
+      prevPlaySessionRef.current = prevSessionId;
+      setUiState((prev) => ({
+        ...prev,
+        switchingHint: true,
+        progressInterpolation: { baseMs: 0, startedAt: Date.now() },
+      }));
     }
-    return songs.filter((name) => name.toLowerCase().includes(key));
-  }, [songs, soundscapeFilter]);
-  const authLoggedIn = Boolean(authStatus.token_valid);
-  const authReady = Boolean(authStatus.runtime_auth_ready);
-  const authInProgress = Boolean(authStatus.login_in_progress);
-  const authStatusLabel = authReady ? "已登录" : authLoggedIn ? "登录待恢复" : "未登录";
-  const authStatusClass = authReady ? "ok" : "warn";
-  const autoDetectedBaseUrl = useMemo(() => browserOriginBaseUrl(), []);
-  const effectivePublicBaseUrl = useMemo(() => {
-    const manual = normalizeBaseUrlInput(settingData.public_base_url);
-    if (manual) {
-      return manual;
-    }
-    const legacy = legacyBaseUrl(settingData.hostname, settingData.public_port);
-    return legacy || autoDetectedBaseUrl;
-  }, [settingData.public_base_url, settingData.hostname, settingData.public_port, autoDetectedBaseUrl]);
-  const themeSelectOptions = useMemo(
-    () => [
-      ...BUILT_IN_THEME_OPTIONS,
-      ...customThemes.map((t) => ({ value: t.id, label: t.name })),
-    ],
-    [customThemes],
-  );
-  const { safeOffset, safeDuration } = useMemo(() => {
-    const duration = Math.max(0, Math.floor(Number(status.duration || 0)));
-    let offset = Math.max(0, Math.floor(Number(status.offset || 0)));
-    if (duration > 0) {
-      const maybeMilliseconds = duration > 0 && offset > duration * 100 && Math.floor(offset / 1000) <= duration + 30;
-      if (maybeMilliseconds) {
-        offset = Math.floor(offset / 1000);
+
+    if (snapshot.transport_state === "playing") {
+      if (snapshot.track?.title) {
+        saveRememberedPlayingSong(snapshot.device_id, snapshot.track.title);
+        rememberedSongRef.current = snapshot.track.title;
       }
-      if (offset > duration + 30) {
-        const elapsed = localPlaybackStartedAt
-          ? Math.max(0, Math.floor((Date.now() - localPlaybackStartedAt) / 1000))
-          : 0;
-        offset = elapsed > 0 ? Math.min(elapsed, duration) : Math.min(offset, duration);
-      }
+      setUiState((prev) => ({
+        ...prev,
+        switchingHint: false,
+      }));
     }
-    return { safeOffset: offset, safeDuration: duration };
-  }, [status.duration, status.offset, localPlaybackStartedAt]);
-  const progress = useMemo(() => {
-    if (!safeDuration) {
-      return 0;
-    }
-    return Math.max(0, Math.min(100, (safeOffset / safeDuration) * 100));
-  }, [safeDuration, safeOffset]);
-  const isSoundscapeLayout = activeLayout === "soundscape";
-  const localSongFresh =
-    localPlaybackStartedAt > 0 && Date.now() - Number(localPlaybackStartedAt || 0) < 12000;
-  const currentMusicName = String(
-    status.cur_music ||
-      (Date.now() < refreshRestoreUntilRef.current && status.is_playing && !awaitingTrackTitleRef.current
-        ? rememberedPlayingSong
-        : "") ||
-      (Date.now() < refreshRestoreUntilRef.current && localSongFresh && !awaitingTrackTitleRef.current
-        ? localPlaybackSong
-        : "") ||
-      "",
-  ).trim();
-  const playbackText = status.is_playing ? `正在播放：${currentMusicName || "未知歌曲"}` : "空闲";
+
+    serverStateRef.current = snapshot;
+    dispatchServerState({ type: "APPLY_SNAPSHOT", snapshot });
+    setUiState((prev) => ({ ...prev, initializing: false }));
+  };
+
+  const handleConnectionStatusChange = (status: UiState["connectionStatus"]) => {
+    setUiState((prev) => ({ ...prev, connectionStatus: status }));
+  };
+
+  usePlayerStream(activeDid, handleSnapshot, handleConnectionStatusChange);
 
   useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
-
-  useEffect(() => {
-    localPlaybackStartedAtRef.current = localPlaybackStartedAt;
-  }, [localPlaybackStartedAt]);
-
-  useEffect(() => {
-    localPlaybackDurationRef.current = localPlaybackDuration;
-  }, [localPlaybackDuration]);
-
-  useEffect(() => {
-    localPlaybackSongRef.current = localPlaybackSong;
-  }, [localPlaybackSong]);
-
-  useEffect(() => {
-    rememberedPlayingSongRef.current = rememberedPlayingSong;
-  }, [rememberedPlayingSong]);
+    uiStateRef.current = uiState;
+  }, [uiState]);
 
   useEffect(() => {
     if (activeDid) {
@@ -705,6 +882,74 @@ export function HomePage() {
       void loadDevices();
     }
   }, [authStatus.runtime_auth_ready, authStatus.login_in_progress]);
+
+  const songs = useMemo(() => playlists[playlist] || [], [playlists, playlist]);
+  const filteredSongs = useMemo(() => {
+    const key = soundscapeFilter.trim().toLowerCase();
+    if (!key) {
+      return songs;
+    }
+    return songs.filter((name) => name.toLowerCase().includes(key));
+  }, [songs, soundscapeFilter]);
+  const authLoggedIn = Boolean(authStatus.token_valid);
+  const authReady = Boolean(authStatus.runtime_auth_ready);
+  const authInProgress = Boolean(authStatus.login_in_progress);
+  const authStatusLabel = authReady ? "已登录" : authLoggedIn ? "登录待恢复" : "未登录";
+  const authStatusClass = authReady ? "ok" : "warn";
+  const { selectedThemeId, activeLayout, customThemes, setTheme, uploadThemePackage, validationError } =
+    useTheme();
+
+  const isSoundscapeLayout = activeLayout === "soundscape";
+
+  const autoDetectedBaseUrl = useMemo(() => browserOriginBaseUrl(), []);
+  const effectivePublicBaseUrl = useMemo(() => {
+    const manual = normalizeBaseUrlInput(settingData.public_base_url);
+    if (manual) {
+      return manual;
+    }
+    const legacy = legacyBaseUrl(settingData.hostname, settingData.public_port);
+    return legacy || autoDetectedBaseUrl;
+  }, [settingData.public_base_url, settingData.hostname, settingData.public_port, autoDetectedBaseUrl]);
+  const themeSelectOptions = useMemo(
+    () => [
+      ...BUILT_IN_THEME_OPTIONS,
+      ...customThemes.map((t) => ({ value: t.id, label: t.name })),
+    ],
+    [customThemes],
+  );
+
+  const currentMusicName = useMemo(() => {
+    if (serverState.track?.title) {
+      return serverState.track.title;
+    }
+    if (uiState.initializing && rememberedSongRef.current) {
+      return rememberedSongRef.current;
+    }
+    return "";
+  }, [serverState.track?.title, uiState.initializing]);
+
+  const playbackText = useMemo(() => {
+    switch (serverState.transport_state) {
+      case "playing":
+        return `正在播放：${currentMusicName || "未知歌曲"}`;
+      case "paused":
+        return `已暂停：${currentMusicName || "未知歌曲"}`;
+      case "starting":
+        return "正在加载...";
+      case "switching":
+        return `正在切换：${currentMusicName || "未知歌曲"}`;
+      case "stopped":
+        return `已停止：${currentMusicName || ""}`;
+      case "error":
+        return "播放出错";
+      case "idle":
+      default:
+        return "空闲";
+    }
+  }, [serverState.transport_state, currentMusicName]);
+
+  const safeOffsetSec = Math.max(0, currentPositionMs / 1000);
+  const safeDurationSec = Math.max(0, serverState.duration_ms / 1000);
 
   async function tryResolveDid(device: Device): Promise<string> {
     const candidates = deviceCandidates(device);
@@ -886,363 +1131,6 @@ export function HomePage() {
     }
   }
 
-  function isLatestStatusRequest(seq: number, did: string): boolean {
-    return seq === statusRequestSeqRef.current && activeDidRef.current === did;
-  }
-
-  function beginActionSync(): number {
-    const next = activeActionSeqRef.current + 1;
-    activeActionSeqRef.current = next;
-    return next;
-  }
-
-  function isActionSyncCurrent(seq: number): boolean {
-    return activeActionSeqRef.current === seq;
-  }
-
-  function finishActionSync(seq: number): void {
-    if (activeActionSeqRef.current === seq) {
-      activeActionSeqRef.current = 0;
-    }
-  }
-
-  function triggerFastPolling(windowMs = 6000): void {
-    fastPollUntilRef.current = Math.max(fastPollUntilRef.current, Date.now() + windowMs);
-  }
-
-  function currentStatusPollIntervalMs(): number {
-    return Date.now() < fastPollUntilRef.current ? 350 : 1000;
-  }
-
-  async function waitForPlayerState(
-    did: string,
-    actionSeq: number,
-    matcher: (state: PlayingInfo) => boolean,
-    attempts = 8,
-    delayMs = 500,
-  ): Promise<PlayingInfo | null> {
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      if (!isActionSyncCurrent(actionSeq) || activeDidRef.current !== did) {
-        return null;
-      }
-      const current = await loadStatus(did);
-      if (!isActionSyncCurrent(actionSeq) || activeDidRef.current !== did) {
-        return null;
-      }
-      if (current && matcher(current)) {
-        return current;
-      }
-      if (attempt < attempts - 1) {
-        await new Promise<void>((resolve) => {
-          window.setTimeout(resolve, delayMs);
-        });
-      }
-    }
-    return null;
-  }
-
-  async function loadStatus(did: string): Promise<PlayingInfo | null> {
-    if (!did) {
-      return null;
-    }
-    lastStatusPollAtRef.current = Date.now();
-    const requestSeq = statusRequestSeqRef.current + 1;
-    statusRequestSeqRef.current = requestSeq;
-    const stateResp = await Promise.resolve(getPlayerState(did)).then(
-      (value) => ({ status: "fulfilled" as const, value }),
-      (reason) => ({ status: "rejected" as const, reason }),
-    );
-    const pending = pendingPlayRef.current;
-
-    const mergePlayingViewState = (prev: PlayingInfo, merged: PlayingInfo, fallbackSong: string): PlayingInfo => {
-      const mergedOffsetRaw = Number(merged.offset);
-      const mergedHasOffset = Number.isFinite(mergedOffsetRaw) && mergedOffsetRaw >= 0;
-      const mergedDurationRaw = Number(merged.duration);
-      const mergedHasDuration = Number.isFinite(mergedDurationRaw) && mergedDurationRaw > 0;
-      const mergedSong = String(merged.cur_music || "").trim();
-      const prevSong = String(prev.cur_music || "").trim();
-      const prevOffset = Math.max(0, Number(prev.offset || 0));
-      const prevDuration = Math.max(0, Number(prev.duration || 0));
-      const elapsed = Math.max(
-        0,
-        Math.floor((Date.now() - Number(localPlaybackStartedAtRef.current || 0)) / 1000),
-      );
-
-      // 优先级1: 使用 current_track_id 判断切歌
-      const prevTrackId = String(prev.current_track_id || "").trim();
-      const mergedTrackId = String(merged.current_track_id || "").trim();
-      const trackIdChanged = Boolean(
-        mergedTrackId && prevTrackId && mergedTrackId !== prevTrackId
-      );
-
-      // 优先级2: 使用 current_index + context_id 判断切歌
-      const prevIndex = prev.current_index;
-      const mergedIndex = merged.current_index;
-      const prevContextId = String(prev.context_id || "").trim();
-      const mergedContextId = String(merged.context_id || "").trim();
-      const sameContext = Boolean(
-        mergedContextId && prevContextId && mergedContextId === prevContextId
-      );
-      const indexChanged = Boolean(
-        sameContext &&
-        mergedIndex !== null && mergedIndex !== undefined &&
-        prevIndex !== null && prevIndex !== undefined &&
-        mergedIndex !== prevIndex
-      );
-      const contextChanged = Boolean(
-        mergedContextId && prevContextId && mergedContextId !== prevContextId
-      );
-
-      // 优先级3: 旧 heuristic (兜底)
-      const songChangedByHeuristic = Boolean(mergedSong && prevSong && mergedSong !== prevSong);
-      const durationChanged = mergedHasDuration && Math.abs(Math.floor(mergedDurationRaw) - prevDuration) >= 8;
-      const atBoundary = prevDuration > 0 && prevOffset >= Math.max(0, prevDuration - 5);
-
-      // 综合判断: track_id > index > context > heuristic
-      const songChanged = trackIdChanged || indexChanged || contextChanged || songChangedByHeuristic;
-
-      let resolvedOffset = Math.max(prevOffset, elapsed);
-      let resetLocalPlayback = false;
-      if (mergedHasOffset && mergedOffsetRaw > 0) {
-        resolvedOffset = Math.floor(mergedOffsetRaw);
-      } else if (mergedHasOffset && mergedOffsetRaw === 0) {
-        // 如果 track_id 已变化，这是确认的新曲目，不要再进入 boundary
-        const trackIdConfirmedArriving = trackIdChanged && mergedTrackId !== "";
-        const isBoundary = !trackIdConfirmedArriving && (songChanged || durationChanged || atBoundary);
-        const confirmedNewTitleArriving =
-          awaitingTrackTitleRef.current &&
-          mergedSong !== "" &&
-          mergedSong !== lastConfirmedSongRef.current;
-        // 禁止对"已确认新 track"重复 reset
-        const shouldSuppressBoundaryReset =
-          awaitingTrackTitleRef.current &&
-          mergedTrackId &&
-          prevTrackId &&
-          mergedTrackId === prevTrackId;
-        const shouldEnterBoundaryWaiting =
-          isBoundary && !confirmedNewTitleArriving && !shouldSuppressBoundaryReset;
-        if (shouldEnterBoundaryWaiting) {
-          resolvedOffset = 0;
-          resetLocalPlayback = true;
-        }
-      }
-
-      const resolvedDuration = mergedHasDuration
-        ? Math.floor(mergedDurationRaw)
-        : Math.max(prevDuration, Number(localPlaybackDurationRef.current || 0));
-
-      if (resolvedDuration > 0 && resolvedOffset > resolvedDuration + 5) {
-        resolvedOffset = mergedHasOffset && mergedOffsetRaw === 0 ? 0 : Math.min(resolvedOffset, resolvedDuration);
-      }
-
-      if (resetLocalPlayback) {
-        const now = Date.now();
-        localPlaybackStartedAtRef.current = now;
-        localPlaybackSongRef.current = "";
-        awaitingTrackTitleRef.current = true;
-        lastConfirmedSongRef.current = prevSong;
-        lastBoundaryAtRef.current = now;
-        setLocalPlaybackStartedAt(now);
-        setLocalPlaybackDuration(0);
-        setLocalPlaybackSong("");
-      }
-
-      return {
-        ...prev,
-        ...merged,
-        cur_music: resetLocalPlayback
-          ? ""
-          : String(merged.cur_music || ""),
-        duration: resolvedDuration,
-        offset: resolvedOffset,
-      };
-    };
-
-    if (stateResp.status === "fulfilled") {
-      const envelope = stateResp.value as ApiEnvelope<PlayerStateData>;
-      if (!isApiOk(envelope)) {
-        if (Number(envelope.code || -1) === 40004) {
-          const owner = devices.find((d) => deviceCandidates(d).includes(did));
-          const preferred = owner ? preferredDidFromDevice(owner) : "";
-          if (preferred && preferred !== did) {
-            setActiveDid(preferred);
-            saveLocal("xm_ui_active_did", preferred);
-          }
-        }
-      } else {
-        const next = (envelope.data || {}) as PlayingInfo;
-        let merged: PlayingInfo = {
-          ...next,
-          is_playing: Boolean(next.is_playing),
-          offset: Math.max(0, Number(next.offset || 0)),
-          duration: Math.max(0, Number(next.duration || 0)),
-        };
-        if (Date.now() < stopSuppressUntilRef.current) {
-          merged = {
-            ...merged,
-            is_playing: false,
-            offset: 0,
-          };
-        }
-        if (merged.is_playing) {
-          lastPositivePlaybackAtRef.current = Date.now();
-        } else {
-          const liveStatus = statusRef.current;
-          const withinStabilityWindow = Date.now() - lastPositivePlaybackAtRef.current < 12000;
-          const hasActivePending = Boolean(pending);
-          if (withinStabilityWindow && !userStoppedRef.current && (hasActivePending || liveStatus.is_playing)) {
-            merged.is_playing = true;
-            userStoppedRef.current = false;
-            merged.duration =
-              Number(merged.duration || 0) ||
-              Number(liveStatus.duration || 0) ||
-              localPlaybackDurationRef.current;
-            merged.offset =
-              Number(merged.offset || 0) ||
-              Number(liveStatus.offset || 0) ||
-              Math.max(
-                0,
-                Math.floor(
-                  (Date.now() - Number(localPlaybackStartedAtRef.current || 0)) / 1000,
-                ),
-              );
-          }
-        }
-        const mergedSong = String(merged.cur_music || "").trim();
-        const prevConfirmedSong = String(lastConfirmedSongRef.current || "").trim();
-
-        // 计算 track identity / queue facts
-        const incomingTrackId = String(merged.current_track_id || "").trim();
-        const liveTrackId = String(statusRef.current.current_track_id || "").trim();
-        const incomingContextName = String(merged.context_name || "").trim();
-        const liveContextName = String(statusRef.current.context_name || "").trim();
-        const incomingIndex = merged.current_index;
-        const liveIndex = statusRef.current.current_index;
-
-        // 是否已确认新曲目身份
-        const trackIdentityConfirmed =
-          (incomingTrackId && liveTrackId && incomingTrackId !== liveTrackId) ||
-          (incomingContextName &&
-            liveContextName &&
-            incomingContextName === liveContextName &&
-            incomingIndex !== null &&
-            incomingIndex !== undefined &&
-            liveIndex !== null &&
-            liveIndex !== undefined &&
-            incomingIndex !== liveIndex);
-
-        // 是否标题已确认到达
-        const titleConfirmed = mergedSong !== "" && mergedSong !== prevConfirmedSong;
-
-        // Waiting 中的三段式处理
-        if (awaitingTrackTitleRef.current) {
-          // 情况1: track identity 已确认，标题未到达 - 稳定等待阶段
-          if (trackIdentityConfirmed && !titleConfirmed) {
-            merged.cur_music = "";
-            // 不退出 waiting，不 reset，保持新 track 的 status
-          } else if (!titleConfirmed) {
-            // 情况2: track identity 未确认，标题未到达 - 继续 waiting
-            merged.cur_music = "";
-          } else {
-            // 情况3: 标题已到达 - 一次性确认并提交
-            awaitingTrackTitleRef.current = false;
-            lastConfirmedSongRef.current = mergedSong;
-            setRememberedPlayingSong(mergedSong);
-            rememberedPlayingSongRef.current = mergedSong;
-            setLocalPlaybackSong(mergedSong);
-            localPlaybackSongRef.current = mergedSong;
-            const finalStatus = {
-              ...merged,
-              cur_music: mergedSong,
-              is_playing: true,
-            };
-            if (isLatestStatusRequest(requestSeq, did)) {
-              setStatus(finalStatus);
-              return finalStatus;
-            }
-          }
-        } else if (pending && pending.did === did) {
-          const pendingSong = String(pending.song || "").trim();
-          if (pendingSong && pendingSong !== lastConfirmedSongRef.current) {
-            merged.cur_music = pendingSong;
-            lastConfirmedSongRef.current = pendingSong;
-          }
-        }
-        if (merged.is_playing && !String(merged.cur_music || "").trim()) {
-          merged.cur_music = "";
-        }
-
-        if (merged.is_playing && String(merged.cur_music || "").trim() && !awaitingTrackTitleRef.current) {
-          const remembered = String(merged.cur_music || "").trim();
-          saveRememberedPlayingSong(did, remembered);
-          setRememberedPlayingSong(remembered);
-          rememberedPlayingSongRef.current = remembered;
-          const startedAtFromOffset = Math.max(
-            0,
-            Date.now() - Math.max(0, Math.floor(Number(merged.offset || 0))) * 1000,
-          );
-          saveLocal(
-            playbackSnapshotKey(did),
-            JSON.stringify({
-              song: remembered,
-              started_at: startedAtFromOffset || Date.now(),
-              duration: Math.max(0, Math.floor(Number(merged.duration || 0))),
-            }),
-          );
-          if (remembered && remembered !== localPlaybackSongRef.current) {
-            const newStartedAt = startedAtFromOffset || Date.now();
-            const newDuration = Math.max(0, Math.floor(Number(merged.duration || 0)));
-            setLocalPlaybackSong(remembered);
-            setLocalPlaybackStartedAt(newStartedAt);
-            setLocalPlaybackDuration(newDuration);
-            localPlaybackSongRef.current = remembered;
-            localPlaybackStartedAtRef.current = newStartedAt;
-            localPlaybackDurationRef.current = newDuration;
-          }
-        }
-        if (isLatestStatusRequest(requestSeq, did)) {
-          if (pending && pending.did === did) {
-            if (merged.is_playing) {
-              pendingPlayRef.current = null;
-              setStatus((prev) => mergePlayingViewState(prev, merged, pending.song));
-            } else if (Date.now() < pending.expiresAt) {
-              setStatus((prev) => ({ ...mergePlayingViewState(prev, merged, pending.song), is_playing: true }));
-            } else {
-              pendingPlayRef.current = null;
-              if (!merged.is_playing) {
-                setLocalPlaybackStartedAt(0);
-                setLocalPlaybackDuration(0);
-                setLocalPlaybackSong("");
-                localPlaybackStartedAtRef.current = 0;
-                localPlaybackDurationRef.current = 0;
-                localPlaybackSongRef.current = "";
-                removeLocal(playbackSnapshotKey(did));
-              }
-              setStatus(merged);
-            }
-          } else {
-            if (merged.is_playing) {
-              setStatus((prev) => mergePlayingViewState(prev, merged, ""));
-            } else {
-              setLocalPlaybackStartedAt(0);
-              setLocalPlaybackDuration(0);
-              setLocalPlaybackSong("");
-              localPlaybackStartedAtRef.current = 0;
-              localPlaybackDurationRef.current = 0;
-              localPlaybackSongRef.current = "";
-              removeLocal(playbackSnapshotKey(did));
-              setStatus(merged);
-            }
-          }
-        } else {
-          return merged;
-        }
-        return merged;
-      }
-    }
-    return null;
-  }
-
   useEffect(() => {
     void (async () => {
       await Promise.allSettled([loadVersion(), loadAuthStatus(), loadSettingData(), loadPlaylists()]);
@@ -1252,84 +1140,19 @@ export function HomePage() {
 
   useEffect(() => {
     if (!activeDid) {
-      setRememberedPlayingSong("");
-      rememberedPlayingSongRef.current = "";
-      lastAutoSyncedPlayingSongRef.current = "";
-      awaitingTrackTitleRef.current = false;
-      lastConfirmedSongRef.current = "";
+      dispatchServerState({ type: "RESET" });
+      setUiState(EMPTY_UI_STATE);
+      serverStateRef.current = EMPTY_SERVER_STATE;
+      rememberedSongRef.current = "";
+      prevPlaySessionRef.current = "";
       return;
     }
-    lastAutoSyncedPlayingSongRef.current = "";
-    awaitingTrackTitleRef.current = false;
-    lastConfirmedSongRef.current = "";
-    setLocalPlaybackStartedAt(0);
-    setLocalPlaybackDuration(0);
-    setLocalPlaybackSong("");
-    localPlaybackStartedAtRef.current = 0;
-    localPlaybackDurationRef.current = 0;
-    localPlaybackSongRef.current = "";
-    const remembered = loadRememberedPlayingSong(activeDid);
-    setVolume(loadRememberedVolume(activeDid));
-    setRememberedPlayingSong(remembered);
-    rememberedPlayingSongRef.current = remembered;
-    fastPollUntilRef.current = Date.now() + 4000;
-    refreshRestoreUntilRef.current = Date.now() + 12000;
-    void loadStatus(activeDid);
-    const timer = window.setInterval(() => {
-      const now = Date.now();
-      const intervalMs = currentStatusPollIntervalMs();
-      if (statusPollInFlightRef.current) {
-        return;
-      }
-      if (now - lastStatusPollAtRef.current < intervalMs) {
-        return;
-      }
-      statusPollInFlightRef.current = true;
-      Promise.resolve()
-        .then(() => loadStatus(activeDid))
-        .finally(() => {
-          statusPollInFlightRef.current = false;
-        });
-    }, 250);
-    return () => window.clearInterval(timer);
-  }, [activeDid]);
 
-  useEffect(() => {
-    if (!localPlaybackStartedAt) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      setStatus((prev) => {
-        if (!prev.is_playing) {
-          return prev;
-        }
-        const elapsed = Math.max(0, (Date.now() - localPlaybackStartedAt) / 1000);
-        const currentOffset = Number(prev.offset || 0);
-        const currentDuration = Number(prev.duration || 0);
-        const offsetLooksReasonable =
-          currentOffset > 0 &&
-          ((currentDuration > 0 && currentOffset <= currentDuration + 30) ||
-            (currentDuration <= 0 && currentOffset < 24 * 3600));
-        const nextOffset = offsetLooksReasonable ? Math.max(currentOffset, elapsed) : elapsed;
-        const nextDuration = Number(prev.duration || 0) > 0 ? Number(prev.duration || 0) : localPlaybackDuration;
-        const nextMusic = String(prev.cur_music || "").trim();
-        if (
-          Math.abs(nextOffset - Number(prev.offset || 0)) < 0.15 &&
-          nextDuration === Number(prev.duration || 0) &&
-          nextMusic === String(prev.cur_music || "")
-        ) {
-          return prev;
-        }
-        return {
-          ...prev,
-          offset: nextOffset,
-          duration: nextDuration,
-          cur_music: nextMusic,
-        };
-      });
-    }, 250);
-    return () => window.clearInterval(timer);
-  }, [localPlaybackStartedAt, localPlaybackDuration, localPlaybackSong]);
+    const remembered = loadRememberedPlayingSong(activeDid);
+    rememberedSongRef.current = remembered;
+    setVolume(loadRememberedVolume(activeDid));
+    setUiState((prev) => ({ ...prev, initializing: true }));
+  }, [activeDid]);
 
   useEffect(() => {
     if (!songs.length) {
@@ -1339,95 +1162,60 @@ export function HomePage() {
     setMusic((prev) => (prev && songs.includes(prev) ? prev : songs[0]));
   }, [songs]);
 
-  // 自动同步下拉框: 优先按 context_name + current_index，再按标题搜索
   useEffect(() => {
-    if (!status.is_playing) {
+    if (serverState.transport_state !== "playing") {
+      return;
+    }
+    if (!serverState.track?.id) {
       return;
     }
     if (!Object.keys(playlists).length) {
       return;
     }
 
-    // 优先级1: 按 context_name + current_index 同步
-    const contextName = String(status.context_name || "").trim();
-    const currentIndex = status.current_index;
-    if (contextName && currentIndex !== null && currentIndex !== undefined && currentIndex >= 0) {
-      const contextSongs = playlists[contextName] || [];
-      if (currentIndex < contextSongs.length) {
-        const songAtIndex = contextSongs[currentIndex];
+    const currentTrackId = serverState.track.id;
+    const currentContext = serverState.context;
+
+    if (currentContext?.id && currentContext.current_index !== null && currentContext.current_index !== undefined) {
+      const contextSongs = playlists[currentContext.name] || [];
+      const index = currentContext.current_index;
+      if (index >= 0 && index < contextSongs.length) {
+        const songAtIndex = contextSongs[index];
         if (songAtIndex) {
-          if (playlist !== contextName) {
-            setPlaylist(contextName);
+          if (playlist !== currentContext.name) {
+            setPlaylist(currentContext.name);
           }
           if (music !== songAtIndex) {
             setMusic(songAtIndex);
           }
-          lastAutoSyncedPlayingSongRef.current = songAtIndex;
           return;
         }
       }
     }
 
-    // 优先级2: waiting 期间也允许同步 index
-    if (awaitingTrackTitleRef.current) {
-      if (contextName && currentIndex !== null && currentIndex !== undefined && currentIndex >= 0) {
-        const contextSongs = playlists[contextName] || [];
-        if (currentIndex < contextSongs.length) {
-          const songAtIndex = contextSongs[currentIndex];
-          if (songAtIndex) {
-            if (playlist !== contextName) {
-              setPlaylist(contextName);
-            }
-            if (music !== songAtIndex) {
-              setMusic(songAtIndex);
-            }
-            lastAutoSyncedPlayingSongRef.current = songAtIndex;
-            return;
-          }
-        }
-      }
-      return;
+    const matchedPlaylist = Object.keys(playlists).find((name) => {
+      return false;
+    });
+    if (matchedPlaylist && music !== serverState.track.title) {
+      setPlaylist(matchedPlaylist);
+      setMusic(serverState.track.title || "");
     }
-
-    // 优先级3: 按标题搜索 (兜底)
-    const playingName = String(status.cur_music || "").trim();
-    if (!playingName) {
-      lastAutoSyncedPlayingSongRef.current = "";
-      return;
-    }
-    if (playingName === lastAutoSyncedPlayingSongRef.current) {
-      return;
-    }
-    const currentListSongs = playlists[playlist] || [];
-    if (currentListSongs.includes(playingName)) {
-      if (music !== playingName) {
-        setMusic(playingName);
-      }
-      lastAutoSyncedPlayingSongRef.current = playingName;
-      return;
-    }
-    const matchedPlaylist = Object.keys(playlists).find((name) => (playlists[name] || []).includes(playingName));
-    if (matchedPlaylist) {
-      if (playlist !== matchedPlaylist) {
-        setPlaylist(matchedPlaylist);
-      }
-      if (music !== playingName) {
-        setMusic(playingName);
-      }
-      lastAutoSyncedPlayingSongRef.current = playingName;
-      return;
-    }
-    lastAutoSyncedPlayingSongRef.current = playingName;
   }, [
-    status.is_playing,
-    status.cur_music,
-    status.current_index,
-    status.context_name,
+    serverState.track?.id,
+    serverState.context,
+    serverState.transport_state,
     playlists,
     playlist,
     music,
-    awaitingTrackTitleRef,
   ]);
+
+  useEffect(() => {
+    const devices = (settingData.devices || {}) as Record<string, { play_type?: number }>;
+    const mode = devices?.[activeDid]?.play_type;
+    if (typeof mode === "number" && mode >= 0 && mode < PLAY_MODES.length) {
+      setPlayModeIndex(mode);
+    }
+  }, [activeDid, settingData]);
 
   function requireDid(): boolean {
     if (activeDid) {
@@ -1441,50 +1229,18 @@ export function HomePage() {
     if (!requireDid()) {
       return;
     }
-    const actionSeq = beginActionSync();
     const did = activeDid;
-    const baselineSong = String(statusRef.current.cur_music || "").trim();
-    const baselineOffset = Math.max(0, Number(statusRef.current.offset || 0));
-    const baselineDuration = Math.max(0, Number(statusRef.current.duration || 0));
-
-    const hasTrackSwitched = (): boolean => {
-      const nowSong = String(statusRef.current.cur_music || "").trim();
-      const nowOffset = Math.max(0, Number(statusRef.current.offset || 0));
-      const nowDuration = Math.max(0, Number(statusRef.current.duration || 0));
-      if (baselineSong && nowSong && nowSong !== baselineSong) {
-        return true;
-      }
-      if (baselineDuration > 0 && nowDuration > 0 && Math.abs(nowDuration - baselineDuration) >= 8 && nowOffset <= 5) {
-        return true;
-      }
-      if (baselineDuration > 0 && baselineOffset >= Math.max(0, baselineDuration - 5) && nowOffset <= 3) {
-        return true;
-      }
-      if (baselineOffset > 20 && nowOffset + 15 < baselineOffset) {
-        return true;
-      }
-      return false;
-    };
-
-    triggerFastPolling();
     setMessage(`${okText}，正在同步播放信息...`);
     try {
       const out = action === "previous" ? await v1Previous(did) : await v1Next(did);
       if (isApiOk(out)) {
-        const synced = await waitForPlayerState(did, actionSeq, hasTrackSwitched, 14, 450);
-        if (synced && hasTrackSwitched()) {
-          setMessage(okText);
-        } else {
-          setMessage(`${okText}，设备已执行，页面状态已刷新`);
-          await loadStatus(did);
-        }
+        setMessage(okText);
         return;
       }
       const err = apiErrorInfo(out);
       setMessage(err.message || "执行失败");
-      await loadStatus(did);
-    } finally {
-      finishActionSync(actionSeq);
+    } catch {
+      setMessage("执行失败");
     }
   }
 
@@ -1492,20 +1248,17 @@ export function HomePage() {
     if (!requireDid()) {
       return;
     }
-    const actionSeq = beginActionSync();
     const deviceId = activeDid;
     const picked = String(songName || "").trim() || String(songs[0] || "").trim();
     if (!picked) {
-      finishActionSync(actionSeq);
       setMessage("当前歌单为空，请先刷新歌单或切换列表");
       return;
     }
     setMusic(picked);
-    triggerFastPolling();
     setMessage(`正在切换到 ${picked}...`);
     try {
       const info = await getLibraryMusicInfo(picked);
-      const infoDuration = isApiOk(info) ? Number(info.data.duration_seconds || 0) : 0;
+      void info;
       const playResp = await v1Play({
         device_id: deviceId,
         query: picked,
@@ -1528,84 +1281,14 @@ export function HomePage() {
       });
 
       if (isApiOk(playResp)) {
-        stopSuppressUntilRef.current = 0;
-        const startedAt = Date.now();
-        pendingPlayRef.current = {
-          did: deviceId,
-          song: picked,
-          expiresAt: startedAt + 15000,
-        };
-        setStatus((prev) => ({
-          ...prev,
-          is_playing: true,
-          cur_music: picked,
-          offset: 0,
-          duration: infoDuration > 0 ? infoDuration : Number(prev.duration || 0),
-        }));
-        saveRememberedPlayingSong(deviceId, picked);
-        setRememberedPlayingSong(picked);
-        rememberedPlayingSongRef.current = picked;
-        setLocalPlaybackSong(picked);
-        localPlaybackSongRef.current = picked;
-        setLocalPlaybackStartedAt(startedAt);
-        localPlaybackStartedAtRef.current = startedAt;
-        setLocalPlaybackDuration(infoDuration > 0 ? infoDuration : 0);
-        localPlaybackDurationRef.current = infoDuration > 0 ? infoDuration : 0;
-        lastPositivePlaybackAtRef.current = startedAt;
-        saveLocal(
-          playbackSnapshotKey(deviceId),
-          JSON.stringify({
-            song: picked,
-            started_at: startedAt,
-            duration: infoDuration > 0 ? Math.floor(infoDuration) : 0,
-          }),
-        );
-        const synced = await waitForPlayerState(
-          deviceId,
-          actionSeq,
-          (state) => {
-            if (!state.is_playing && !pendingPlayRef.current) {
-              return false;
-            }
-            const current = String(state.cur_music || "").trim();
-            return !current || current === picked;
-          },
-          16,
-          400,
-        );
-        if (synced) {
-          const syncedStartedAt = Math.max(0, Date.now() - Math.max(0, Math.floor(Number(synced.offset || 0))) * 1000);
-          setLocalPlaybackStartedAt(syncedStartedAt);
-          localPlaybackStartedAtRef.current = syncedStartedAt;
-          setLocalPlaybackDuration(infoDuration > 0 ? infoDuration : Math.max(0, Number(synced.duration || 0)));
-          localPlaybackDurationRef.current = infoDuration > 0 ? infoDuration : Math.max(0, Number(synced.duration || 0));
-          lastPositivePlaybackAtRef.current = Date.now();
-          saveLocal(
-            playbackSnapshotKey(deviceId),
-            JSON.stringify({
-              song: picked,
-              started_at: syncedStartedAt,
-              duration: infoDuration > 0 ? Math.floor(infoDuration) : Math.max(0, Math.floor(Number(synced.duration || 0))),
-            }),
-          );
-          setMessage(`已发送播放《${picked}》`);
-        } else {
-          setMessage(`播放指令已发送，正在等待设备切换到 ${picked}`);
-          await loadStatus(deviceId);
-        }
+        setMessage(`已发送播放《${picked}》`);
       } else {
-        pendingPlayRef.current = null;
         const err = apiErrorInfo(playResp);
         setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`);
-        await loadStatus(deviceId);
       }
     } catch (err) {
-      pendingPlayRef.current = null;
       const reason = err instanceof Error ? err.message : String(err || "未知错误");
       setMessage(`播放失败：${reason}`);
-      await loadStatus(deviceId);
-    } finally {
-      finishActionSync(actionSeq);
     }
   }
 
@@ -1652,7 +1335,6 @@ export function HomePage() {
         return;
       }
 
-      triggerFastPolling();
       const out = await v1Play({
         device_id: activeDid,
         query: url,
@@ -1711,7 +1393,7 @@ export function HomePage() {
     if (!requireDid()) {
       return;
     }
-    const musicName = String(status.cur_music || music || "").trim();
+    const musicName = String(serverState.track?.title || music || "").trim();
     if (!musicName) {
       setMessage("当前没有可收藏的歌曲");
       return;
@@ -1757,7 +1439,6 @@ export function HomePage() {
       setMessage("选中结果缺少歌曲名");
       return;
     }
-    triggerFastPolling();
     const out = await v1Play({
       device_id: activeDid,
       query: title,
@@ -1767,7 +1448,6 @@ export function HomePage() {
     if (isApiOk(out)) {
       setMessage("已发送播放");
       setShowSearch(false);
-      await loadStatus(activeDid);
     } else {
       const err = apiErrorInfo(out);
       setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`);
@@ -1867,14 +1547,6 @@ export function HomePage() {
     await loadDevices();
     await loadPlaylists();
   }
-
-  useEffect(() => {
-    const devices = (settingData.devices || {}) as Record<string, { play_type?: number }>;
-    const mode = devices?.[activeDid]?.play_type;
-    if (typeof mode === "number" && mode >= 0 && mode < PLAY_MODES.length) {
-      setPlayModeIndex(mode);
-    }
-  }, [activeDid, settingData]);
 
   async function togglePullAsk() {
     const next = !pullAskEnabled;
@@ -2187,7 +1859,7 @@ export function HomePage() {
             </div>
 
             <div className="soundscape-dock-right">
-              {formatTime(safeOffset)} / {formatTime(safeDuration)}
+              {formatTime(safeOffsetSec)} / {formatTime(safeDurationSec)}
             </div>
           </footer>
         </div>
@@ -2275,13 +1947,13 @@ export function HomePage() {
             <progress className="progress" id="progress" value={progress} max={100}></progress>
             <div className="time-info">
               <span className="current-time" id="current-time">
-                {formatTime(safeOffset)}
+                {formatTime(safeOffsetSec)}
               </span>
               <div className="current-song" id="playering-music">
                 {playbackText}
               </div>
               <span className="duration" id="duration">
-                {formatTime(safeDuration)}
+                {formatTime(safeDurationSec)}
               </span>
             </div>
           </div>
@@ -2318,37 +1990,13 @@ export function HomePage() {
                     if (!requireDid()) {
                       return;
                     }
-                    triggerFastPolling();
-                    userStoppedRef.current = true;
                     const out = await v1Stop(activeDid);
                     if (isApiOk(out)) {
-                      stopSuppressUntilRef.current = Date.now() + 6000;
-                      pendingPlayRef.current = null;
-                      awaitingTrackTitleRef.current = false;
-                      lastConfirmedSongRef.current = "";
-                      setLocalPlaybackStartedAt(0);
-                      setLocalPlaybackDuration(0);
-                      setLocalPlaybackSong("");
-                      localPlaybackStartedAtRef.current = 0;
-                      localPlaybackDurationRef.current = 0;
-                      localPlaybackSongRef.current = "";
-                      lastPositivePlaybackAtRef.current = 0;
-                      removeLocal(playbackSnapshotKey(activeDid));
-                      setStatus((prev) => ({
-                        ...prev,
-                        is_playing: false,
-                        offset: 0,
-                      }));
+                      setMessage("已停止");
+                    } else {
+                      const err = apiErrorInfo(out);
+                      setMessage(`停止失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`);
                     }
-                    setMessage(
-                      isApiOk(out)
-                        ? "已停止"
-                        : (() => {
-                            const err = apiErrorInfo(out);
-                            return `停止失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`;
-                          })(),
-                    );
-                    await loadStatus(activeDid);
                   })()
                 }
                 className="control-button device-enable"
@@ -2521,7 +2169,6 @@ export function HomePage() {
                 const err = apiErrorInfo(out);
                 setMessage(err.message || err.errorCode || "音量设置失败");
               }
-              await loadStatus(activeDid);
             })()
           }
           onTouchEnd={() =>
@@ -2537,7 +2184,6 @@ export function HomePage() {
                 const err = apiErrorInfo(out);
                 setMessage(err.message || err.errorCode || "音量设置失败");
               }
-              await loadStatus(activeDid);
             })()
           }
         />

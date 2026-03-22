@@ -52,16 +52,52 @@ export interface ControlData {
   error_code?: string;
 }
 
+export interface PlayerStateTrack {
+  id: string;
+  title: string;
+  artist?: string;
+  album?: string;
+  source?: string;
+}
+
+export interface PlayerStateContext {
+  id: string;
+  name: string;
+  current_index: number | null;
+}
+
+export type TransportState = "idle" | "starting" | "switching" | "playing" | "paused" | "stopped" | "error";
+
 export interface PlayerStateData {
-  device_id?: string;
+  // 新规范字段
+  device_id: string;
+  revision: number;
+  play_session_id: string;
+  transport_state: TransportState;
+  track: PlayerStateTrack | null;
+  context: PlayerStateContext | null;
+  position_ms: number;
+  duration_ms: number;
+  snapshot_at_ms: number;
+
+  // 兼容旧字段（deprecated，新代码不得读取）
+  /** @deprecated 改读 transport_state */
   is_playing?: boolean;
+  /** @deprecated 改读 track?.title */
   cur_music?: string;
+  /** @deprecated 改读 position_ms */
   offset?: number;
+  /** @deprecated 改读 duration_ms */
   duration?: number;
+  /** @deprecated 改读 track?.id */
   current_track_id?: string;
+  /** @deprecated 改读 context?.current_index */
   current_index?: number | null;
+  /** @deprecated 改读 context?.id */
   context_type?: string | null;
+  /** @deprecated 改读 context?.id */
   context_id?: string | null;
+  /** @deprecated 改读 context?.name */
   context_name?: string | null;
 }
 
@@ -365,4 +401,8 @@ export async function updateSystemSettingItem(
 
 export async function getPlayerState(deviceId: string): Promise<ApiEnvelope<PlayerStateData>> {
   return await safeGet<PlayerStateData>(`/api/v1/player/state?device_id=${encodeURIComponent(deviceId)}`);
+}
+
+export function getPlayerStreamUrl(deviceId: string): string {
+  return `/api/v1/player/stream?device_id=${encodeURIComponent(deviceId)}`;
 }
