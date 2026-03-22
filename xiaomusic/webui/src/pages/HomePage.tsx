@@ -440,46 +440,6 @@ function playbackSnapshotKey(did: string): string {
   return `xm_playback_snapshot_${did}`;
 }
 
-type PlaybackSnapshot = {
-  song?: string;
-  started_at?: number;
-  duration?: number;
-};
-
-function loadPlaybackSnapshot(did: string): PlaybackSnapshot | null {
-  if (!did) {
-    return null;
-  }
-  try {
-    const raw = localStorage.getItem(playbackSnapshotKey(did));
-    if (!raw) {
-      return null;
-    }
-    const parsed = JSON.parse(raw) as PlaybackSnapshot;
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-    // Validate song: must be non-empty string
-    const song = String(parsed.song || "").trim();
-    if (!song) {
-      return null;
-    }
-    // Validate started_at: must be finite number >= 0
-    const startedAt = Number(parsed.started_at);
-    if (!Number.isFinite(startedAt) || startedAt < 0) {
-      return null;
-    }
-    // Validate duration: must be finite number >= 0 (can be 0)
-    const duration = Number(parsed.duration);
-    if (!Number.isFinite(duration) || duration < 0) {
-      return null;
-    }
-    return { song, started_at: startedAt, duration };
-  } catch {
-    return null;
-  }
-}
-
 function volumeStorageKey(did: string): string {
   return `xm_volume_${did}`;
 }
@@ -546,7 +506,6 @@ export function HomePage() {
   const [localPlaybackSong, setLocalPlaybackSong] = useState<string>("");
   const [rememberedPlayingSong, setRememberedPlayingSong] = useState<string>("");
   const activeDidRef = useRef<string>(activeDid);
-  const refreshRestoreUntilRef = useRef<number>(0);
   const statusRef = useRef<PlayingInfo>({});
   const localPlaybackStartedAtRef = useRef<number>(0);
   const localPlaybackDurationRef = useRef<number>(0);
@@ -555,6 +514,7 @@ export function HomePage() {
   const publicBaseMigratedRef = useRef<boolean>(false);
   const lastPositivePlaybackAtRef = useRef<number>(0);
   const stopSuppressUntilRef = useRef<number>(0);
+  const refreshRestoreUntilRef = useRef<number>(0);
   const lastAutoSyncedPlayingSongRef = useRef<string>("");
   const statusRequestSeqRef = useRef<number>(0);
   const activeActionSeqRef = useRef<number>(0);
@@ -628,23 +588,10 @@ export function HomePage() {
   const isSoundscapeLayout = activeLayout === "soundscape";
   const localSongFresh =
     localPlaybackStartedAt > 0 && Date.now() - Number(localPlaybackStartedAt || 0) < 12000;
-  
-  // Helper function to get snapshot song for fallback display
-  const getSnapshotSongForDisplay = (): string => {
-    if (!activeDid) return "";
-    const snapshot = loadPlaybackSnapshot(activeDid);
-    if (snapshot && snapshot.song) {
-      return String(snapshot.song || "").trim();
-    }
-    return "";
-  };
-  
-  const snapshotSong = status.is_playing ? getSnapshotSongForDisplay() : "";
   const currentMusicName = String(
     status.cur_music ||
-      snapshotSong ||
-      (status.is_playing ? rememberedPlayingSong : "") ||
-      (localSongFresh ? localPlaybackSong : "") ||
+      (Date.now() < refreshRestoreUntilRef.current && status.is_playing ? rememberedPlayingSong : "") ||
+      (Date.now() < refreshRestoreUntilRef.current && localSongFresh ? localPlaybackSong : "") ||
       "",
   ).trim();
   const playbackText = status.is_playing ? `正在播放：${currentMusicName || "未知歌曲"}` : "空闲";
@@ -1008,8 +955,7 @@ export function HomePage() {
       );
 
       let resolvedOffset = Math.max(prevOffset, elapsed);
-      let isSongSwitchBoundary = false;
-      
+      let resetLocalPlayback = false;
       if (mergedHasOffset && mergedOffsetRaw > 0) {
         resolvedOffset = Math.floor(mergedOffsetRaw);
       } else if (mergedHasOffset && mergedOffsetRaw === 0) {
@@ -1018,7 +964,9 @@ export function HomePage() {
         const atBoundary = prevDuration > 0 && prevOffset >= Math.max(0, prevDuration - 5);
         if (songChanged || durationChanged || atBoundary) {
           resolvedOffset = 0;
-          isSongSwitchBoundary = true;
+          if (!mergedSong) {
+            resetLocalPlayback = true;
+          }
         }
       }
 
@@ -1030,20 +978,15 @@ export function HomePage() {
         resolvedOffset = mergedHasOffset && mergedOffsetRaw === 0 ? 0 : Math.min(resolvedOffset, resolvedDuration);
       }
 
-      // Determine resolved song: only use fallback if NOT in song switch boundary
-      let resolvedSong = mergedSong;
-      if (!resolvedSong && !isSongSwitchBoundary) {
-        resolvedSong = prev.cur_music || fallbackSong || "";
-      }
-      // If still empty and in refresh restore window, allow snapshot/remembered recovery
-      if (!resolvedSong && Date.now() < refreshRestoreUntilRef.current) {
-        resolvedSong = fallbackSong || "";
+      if (resetLocalPlayback) {
+        localPlaybackStartedAtRef.current = Date.now();
+        localPlaybackSongRef.current = "";
       }
 
       return {
         ...prev,
         ...merged,
-        cur_music: resolvedSong,
+        cur_music: resetLocalPlayback ? "" : String(merged.cur_music || prev.cur_music || fallbackSong || ""),
         duration: resolvedDuration,
         offset: resolvedOffset,
       };
@@ -1106,28 +1049,8 @@ export function HomePage() {
               );
           }
         }
-        // When is_playing=true but cur_music is empty, try to restore from snapshot
-        // ONLY during refresh restore window (avoid locking old title during song switch)
         if (merged.is_playing && !String(merged.cur_music || "").trim()) {
-          // Only restore if within refresh restore window
-          if (Date.now() < refreshRestoreUntilRef.current) {
-            const snapshot = loadPlaybackSnapshot(did);
-            if (snapshot && snapshot.song) {
-              const restoredSong = String(snapshot.song || "").trim();
-              merged.cur_music = restoredSong;
-              // Also try to restore duration if not provided
-              if (!merged.duration && snapshot.duration) {
-                merged.duration = snapshot.duration;
-              }
-            } else if (localPlaybackSongRef.current) {
-              // Fallback to local playback state
-              merged.cur_music = localPlaybackSongRef.current;
-            } else if (rememberedPlayingSongRef.current) {
-              // Fallback to remembered playing song
-              merged.cur_music = rememberedPlayingSongRef.current;
-            }
-          }
-          // If still empty after window check, leave it empty (wait for backend to provide new title)
+          merged.cur_music = "";
         }
 
         if (merged.is_playing && String(merged.cur_music || "").trim()) {
@@ -1180,7 +1103,7 @@ export function HomePage() {
             }
           } else {
             if (merged.is_playing) {
-              setStatus((prev) => mergePlayingViewState(prev, merged, localPlaybackSongRef.current));
+              setStatus((prev) => mergePlayingViewState(prev, merged, ""));
             } else {
               setLocalPlaybackStartedAt(0);
               setLocalPlaybackDuration(0);
@@ -1198,6 +1121,7 @@ export function HomePage() {
         return merged;
       }
     }
+    refreshRestoreUntilRef.current = Date.now() + 12000;
     return null;
   }
 
@@ -1213,66 +1137,21 @@ export function HomePage() {
       setRememberedPlayingSong("");
       rememberedPlayingSongRef.current = "";
       lastAutoSyncedPlayingSongRef.current = "";
-      refreshRestoreUntilRef.current = 0;
       return;
     }
     lastAutoSyncedPlayingSongRef.current = "";
+    setLocalPlaybackStartedAt(0);
+    setLocalPlaybackDuration(0);
+    setLocalPlaybackSong("");
+    localPlaybackStartedAtRef.current = 0;
+    localPlaybackDurationRef.current = 0;
+    localPlaybackSongRef.current = "";
     const remembered = loadRememberedPlayingSong(activeDid);
-    const snapshot = loadPlaybackSnapshot(activeDid);
-    
-    // Set refresh restore window (10 seconds)
-    refreshRestoreUntilRef.current = Date.now() + 10000;
-    
-    if (snapshot && snapshot.song) {
-      const restoredSong = String(snapshot.song || "").trim();
-      const restoredStartedAt = Number(snapshot.started_at) || 0;
-      const restoredDuration = Number(snapshot.duration) || 0;
-      const snapshotFresh = restoredStartedAt > 0 && Date.now() - restoredStartedAt < 12000;
-      
-      if (restoredSong) {
-        if (snapshotFresh) {
-          setLocalPlaybackSong(restoredSong);
-          setLocalPlaybackStartedAt(restoredStartedAt);
-          setLocalPlaybackDuration(restoredDuration);
-          localPlaybackSongRef.current = restoredSong;
-          localPlaybackStartedAtRef.current = restoredStartedAt;
-          localPlaybackDurationRef.current = restoredDuration;
-          const freshStatus = {
-            is_playing: true,
-            cur_music: restoredSong,
-            offset: 0,
-            duration: restoredDuration,
-          };
-          statusRef.current = freshStatus;
-          // Also update React state to show song immediately on page refresh
-          setStatus(freshStatus);
-          lastPositivePlaybackAtRef.current = restoredStartedAt;
-        } else {
-          // Snapshot is stale but still show the song name
-          const staleStatus = {
-            ...statusRef.current,
-            is_playing: true,
-            cur_music: restoredSong,
-          };
-          statusRef.current = staleStatus;
-          // Also update React state to show song immediately on page refresh
-          setStatus(staleStatus);
-        }
-      }
-    } else {
-      // No snapshot found, reset local playback state
-      setLocalPlaybackStartedAt(0);
-      setLocalPlaybackDuration(0);
-      setLocalPlaybackSong("");
-      localPlaybackStartedAtRef.current = 0;
-      localPlaybackDurationRef.current = 0;
-      localPlaybackSongRef.current = "";
-    }
-    
     setVolume(loadRememberedVolume(activeDid));
     setRememberedPlayingSong(remembered);
     rememberedPlayingSongRef.current = remembered;
     fastPollUntilRef.current = Date.now() + 4000;
+    refreshRestoreUntilRef.current = Date.now() + 12000;
     void loadStatus(activeDid);
     const timer = window.setInterval(() => {
       const now = Date.now();
@@ -1311,7 +1190,7 @@ export function HomePage() {
             (currentDuration <= 0 && currentOffset < 24 * 3600));
         const nextOffset = offsetLooksReasonable ? Math.max(currentOffset, elapsed) : elapsed;
         const nextDuration = Number(prev.duration || 0) > 0 ? Number(prev.duration || 0) : localPlaybackDuration;
-        const nextMusic = String(prev.cur_music || "").trim() || localPlaybackSong;
+        const nextMusic = String(prev.cur_music || "").trim();
         if (
           Math.abs(nextOffset - Number(prev.offset || 0)) < 0.15 &&
           nextDuration === Number(prev.duration || 0) &&
@@ -1345,8 +1224,9 @@ export function HomePage() {
     if (!Object.keys(playlists).length) {
       return;
     }
-    const playingName = String(status.cur_music || rememberedPlayingSong || localPlaybackSong || "").trim();
+    const playingName = String(status.cur_music || "").trim();
     if (!playingName) {
+      lastAutoSyncedPlayingSongRef.current = "";
       return;
     }
     if (playingName === lastAutoSyncedPlayingSongRef.current) {
@@ -1375,8 +1255,6 @@ export function HomePage() {
   }, [
     status.is_playing,
     status.cur_music,
-    rememberedPlayingSong,
-    localPlaybackSong,
     playlists,
     playlist,
     music,
@@ -2284,9 +2162,6 @@ export function HomePage() {
                       localPlaybackSongRef.current = "";
                       lastPositivePlaybackAtRef.current = 0;
                       removeLocal(playbackSnapshotKey(activeDid));
-                      // Also clear remembered playing song when stopping
-                      setRememberedPlayingSong("");
-                      rememberedPlayingSongRef.current = "";
                       setStatus((prev) => ({
                         ...prev,
                         is_playing: false,
