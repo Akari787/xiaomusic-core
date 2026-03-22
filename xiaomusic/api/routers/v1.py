@@ -1050,11 +1050,11 @@ async def api_v1_player_stream(
 ):
     xm = _get_xiaomusic()
     if not xm.did_exist(device_id):
-        return _api_response(
-            40004,
-            "device not found",
-            {"error_code": "E_DEVICE_NOT_FOUND", "stage": "request"},
-            uuid4().hex[:16],
+        raise ApiError(
+            code=40004,
+            message="device not found",
+            data={"error_code": "E_DEVICE_NOT_FOUND", "stage": "request"},
+            request_id=uuid4().hex[:16],
         )
 
     xiaomusic_obj = _get_xiaomusic()
