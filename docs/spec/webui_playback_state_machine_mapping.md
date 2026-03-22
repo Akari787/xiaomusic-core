@@ -1,865 +1,655 @@
-# WebUI 播放状态机实现映射清单
-版本：基于 `Akari787/xiaomusic-core` `1be171a`  
-状态：实现映射清单 / 开发对照文档  
-建议归档位置：`docs/spec/webui_playback_state_machine_mapping.md`
+# WebUI 播放状态机实现映射清单（重构版）
+
+版本：v2.0
+状态：重构对照文档
+最后更新：2026-03-22
+适用范围：`xiaomusic/webui/src/pages/HomePage.tsx`、`xiaomusic/webui/src/services/v1Api.ts`
 
 ---
 
-## 1. 文档目的
+## 1. 文档定位
 
-本文档不是新的产品规范，而是把前一份《WebUI 播放状态机规范》映射回当前实现，回答三个问题：
+本文档是实现映射文档，不是规范文档。
 
-1. 当前 `HomePage.tsx` 里每一段核心逻辑对应状态机的哪一部分
-2. 哪些实现已经接近规范，哪些实现仍然偏离规范
-3. 后续如果要修复自动切歌标题问题，应该优先修改哪些位置
+本文档的目的是将当前 `HomePage.tsx` 的具体实现结构，与新消费型状态机规范（`docs/spec/webui_playback_state_machine_spec.md`，以下简称"状态机规范"）建立一一对应关系，明确指导代码重构的方向与顺序。
 
----
+本文档回答三个问题：
 
-## 2. 相关文件
+1. 当前 `HomePage.tsx` 中的每个关键变量、函数、数据流，在新规范下属于哪种处置方式（删除 / 改造 / 保留）？
+2. 新规范要求的结构（`serverState`、`uiState`、SSE handler、revision gate 等）如何与现有代码对应落地？
+3. 数据流如何从"轮询 → 本地合并"改为"SSE → revision check → serverState → render"？
 
-主实现文件：
+本文档不定义字段语义，字段语义以投影规范（`docs/spec/player_state_projection_spec.md`）为准。
 
-- `xiaomusic/webui/src/pages/HomePage.tsx`
+相关规范文件：
 
-相关接口消费文件：
-
-- `xiaomusic/webui/src/services/v1Api.ts`
-
-相关契约文档：
-
-- `docs/api/api_v1_spec.md`
-- `docs/spec/playback_coordinator_interface.md`
+- `docs/spec/webui_playback_state_machine_spec.md`（消费型状态机规范，本文档的上位规范）
+- `docs/spec/player_state_projection_spec.md`（投影规范）
+- `docs/spec/player_stream_sse_spec.md`（SSE 规范）
+- `docs/api/api_v1_spec.md`（API v1 契约）
 
 ---
 
-## 3. 后端输入契约与前端消费边界
+## 2. 旧模型结构识别
 
-### 3.1 `GET /api/v1/player/state` 的前端最小依赖
+本章逐一说明当前 `HomePage.tsx` 中属于旧推测型模型的关键构件，包括其原职责、导致的问题，以及新规范下的处置方式。
 
-当前前端 `v1Api.ts` 中 `PlayerStateData` 只依赖以下字段：
+### 2.1 `mergePlayingViewState()`
 
-- `device_id?: string`
-- `is_playing?: boolean`
-- `cur_music?: string`
-- `offset?: number`
-- `duration?: number`
+**原职责**
 
-这与 `docs/api/api_v1_spec.md` 中对 `GET /api/v1/player/state` 的最小正式字段定义一致。  
-因此，前端播放状态机应被视为：
+在 `loadStatus()` 内部定义，负责将后端轮询原始值（`offset`、`duration`、`cur_music`）与本地状态合并为最终展示值。包含：切歌边界检测（基于 `trackIdChanged`、`indexChanged`、`songChangedByHeuristic`、`atBoundary`）、进度推算（基于 `elapsed` = `Date.now() - localPlaybackStartedAtRef`）、标题等待进入逻辑（设置 `awaitingTrackTitleRef`、`lastConfirmedSongRef`）。
 
-> 在最小后端输入（is_playing / cur_music / offset / duration）之上做展示侧状态收敛。
+**导致的问题**
 
-### 3.2 与 Playback Coordinator 文档的关系
+- 这个函数承担了"状态合并"、"边界检测"、"标题确认"三个不同职责，逻辑高度耦合。
+- 边界检测依赖 `offset` 回退、`duration` 突变、`cur_music` 变化等启发式信号，在网络抖动或后端延迟时容易误判。
+- `mergePlayingViewState()` 是本地推测的核心，与"服务端是唯一权威来源"的新模型根本冲突。
 
-`docs/spec/playback_coordinator_interface.md` 主要约束的是后端统一播放协调层，包括：
+**新规范处置：删除**
 
-- 解析结果结构
-- 适配器职责
-- 框架职责
-
-它没有定义 WebUI 如何处理：
-
-- 页面刷新恢复
-- 轮询与本地计时器的并行收敛
-- 自动切歌时的标题确认问题
-
-因此，WebUI 播放状态机规范与本文档补的是前端展示层，而不是替代后端协调契约。
+新模型中，切歌边界由 `play_session_id` 变化直接提供，不再需要启发式边界检测。`offset`/`duration`/`cur_music` 字段已被 `position_ms`/`duration_ms`/`track.title` 取代。此函数整体删除，其中合法的部分（进度插值辅助）由独立的进度插值逻辑承接。
 
 ---
 
-## 4. 状态机视角下的实现分区
+### 2.2 `lastPositivePlaybackAtRef` + `stopSuppressUntilRef` 稳定性窗口
 
-当前 `HomePage.tsx` 可以按状态机职责拆成 8 个实现分区。
+**原职责**
 
-### 4.1 基础显示与选择状态
+- `lastPositivePlaybackAtRef`：记录最后一次 `is_playing=true` 的时刻，用于在后端短暂返回 `is_playing=false` 时，维持前端认为"仍在播放中"的状态（稳定性窗口 12 秒）。
+- `stopSuppressUntilRef`：停止操作后短时间内抑制后端返回的"仍在播放"状态，避免 UI 回弹。
 
-对应状态机层：**UI Context**
+**导致的问题**
 
-主要 state：
+- 稳定性窗口维持播放态时，会同时保留旧 `cur_music` 并写回 `merged.cur_music`，这是切歌后旧标题"复活"最关键的污染源。
+- 稳定性窗口掩盖了后端真实状态，导致前端无法准确感知 `transport_state` 的变化。
 
-- `activeDid`
-- `playlist`
-- `music`
-- `volume`
-- `showSearch`
-- `showTimer`
-- `showPlaylink`
-- `showVolume`
-- `showSettings`
+**新规范处置：删除**
 
-职责：
-
-- 维护当前页面选择
-- 决定控制目标设备
-- 决定当前歌单 / 当前歌曲下拉框选中项
-- 控制各种弹层显示
-
-状态机关系：
-
-- 这些状态不等于真实播放状态
-- 它们属于 UI 上下文，不应反向决定“当前确实正在播放哪首歌”
-
-实现风险：
-
-- 当前 `music` 会被“自动同步逻辑”反向更新，因此它既是用户选择状态，也是播放展示状态的影子，容易被污染
+新模型中，`transport_state` 由服务端维护，前端直接消费，不再需要前端自行抑制抖动。`transport_state == "switching"` 是切歌中的正式状态，`transport_state == "playing"` 是播放中的权威状态，两者均不需要前端稳定性补偿。
 
 ---
 
-### 4.2 后端聚合播放状态
+### 2.3 `rememberedPlayingSong` / `rememberedPlayingSongRef` 及相关函数
 
-对应状态机层：**Remote Snapshot**
+**原职责**
 
-主要 state：
+- `rememberedPlayingSong`：React state，存储前端记忆的"最后已确认歌曲名"，通过 localStorage 持久化（`loadRememberedPlayingSong` / `saveRememberedPlayingSong`）。
+- 在 `currentMusicName` 的派生计算中作为 fallback，在 `refreshRestoreUntilRef` 窗口内或 `status.cur_music` 为空时填充标题显示。
+- 在切歌确认逻辑中被写入（`setRememberedPlayingSong(mergedSong)`），用于后续恢复。
 
-- `status`
+**导致的问题**
 
-字段：
+- `rememberedPlayingSong` 在多个地方被写入（`loadStatus` 中的 `awaitingTitle` 结束时、稳定播放时、`playSongByName` 中），写入时机不统一，容易在切歌过渡期写入错误值。
+- 作为 `currentMusicName` 的 fallback，它在轮询失败、切歌中、刷新恢复等场景下都可能被误用为"当前正确标题"。
+- 这是前端"拥有播放真相"的典型表现，与新规范直接冲突。
 
-- `status.is_playing`
-- `status.cur_music`
-- `status.offset`
-- `status.duration`
+**新规范处置：限制职责至初始化过渡**
 
-职责：
-
-- 承接 `getPlayerState()` 的后端轮询结果
-- 经过前端合并后成为最终展示值
-
-状态机关系：
-
-- 它不是纯后端原样值
-- 它是状态机对外展示的“聚合视图”
-
-实现风险：
-
-- `status.cur_music` 当前仍被前端旧值 fallback 污染
-- `status` 同时承担“事实层”和“展示层”的职责，耦合较高
+`rememberedPlayingSong` 只允许在 `uiState.initializing = true` 期间（页面首次加载、首次快照到达前）用于过渡展示。一旦首次 `serverState` 到达，立即让位，不再参与任何状态逻辑。`currentMusicName` 的计算逻辑必须以 `serverState.track.title` 为唯一来源，不得保留对 `rememberedPlayingSong` 的 fallback 引用（初始化窗口除外）。
 
 ---
 
-### 4.3 本地播放补偿层
+### 2.4 `localPlaybackStartedAt` / `localPlaybackDuration` / `localPlaybackSong` 及对应 Ref
 
-对应状态机层：**Local Progress Projection**
+**原职责**
 
-主要 state / ref：
+- `localPlaybackStartedAt`：本地记录播放开始时刻，用于在轮询间隙推算 `elapsed = (Date.now() - startedAt) / 1000`，推进进度条。
+- `localPlaybackDuration`：本地记录当前曲目时长，在后端 `duration` 缺失时维持进度条比例。
+- `localPlaybackSong`：本地记录最近一次确认的歌曲名，在 `currentMusicName` 中作为辅助 fallback。
+- 三者都有对应的 Ref（`localPlaybackStartedAtRef` 等）用于在计时器 effect 中访问最新值而不触发重渲染。
 
-- `localPlaybackStartedAt`
-- `localPlaybackDuration`
-- `localPlaybackSong`
-- `localPlaybackStartedAtRef`
-- `localPlaybackDurationRef`
-- `localPlaybackSongRef`
+**导致的问题**
 
-职责：
+- `localPlaybackSong` 参与了 `currentMusicName` 的 fallback 计算，使得本地缓存歌名可能在切歌过渡期被展示为"当前歌曲"。
+- `localPlaybackStartedAt` 在 boundary 检测时被重置，但 state 与 ref 有时不同步，导致进度和标题出现分叉。
+- 整套机制在新模型下不再需要，进度插值应完全基于 `position_ms + snapshot_at_ms`。
 
-- 在轮询间隙内推进进度条
-- 在后端 offset 不稳定时推导 elapsed
-- 在部分情况下参与歌曲名兜底
+**新规范处置：`localPlaybackSong` 删除，其余降级为进度插值辅助**
 
-状态机关系：
-
-- 它应只负责“时间轴连续性”
-- 不应成为歌曲标题真值来源
-
-当前实现映射：
-
-- `safeOffset / safeDuration` 计算
-- 本地 250ms 计时器 effect
-- `mergePlayingViewState()` 中对 elapsed 的使用
-
-实现风险：
-
-- 当前实现中 `localPlaybackSong` 仍然可能越权参与标题显示
-- boundary 时 ref 和 state 不一致会导致进度与标题分叉
+- `localPlaybackSong` 和 `localPlaybackSongRef`：删除，不得再参与任何标题展示逻辑。
+- `localPlaybackStartedAt` / `localPlaybackStartedAtRef`：改造为单纯记录 `serverState.snapshot_at_ms` 的本地副本，用于进度插值，不再承担边界检测信号职责。
+- `localPlaybackDuration` / `localPlaybackDurationRef`：改造为单纯记录 `serverState.duration_ms / 1000` 的本地副本，不再承担兜底职责。
 
 ---
 
-### 4.4 页面刷新恢复层
+### 2.5 `pendingPlayRef`
 
-对应状态机层：**Refresh Recovery Window**
+**原职责**
 
-主要 state / ref：
+- 记录用户手动点播的"待确认播放"信息（`{ did, song, expiresAt }`）。
+- 在 `loadStatus()` 中，若后端尚未返回新状态，使用 `pendingPlayRef.current.song` 填充 `merged.cur_music`，实现乐观更新。
 
-- `rememberedPlayingSong`
-- `rememberedPlayingSongRef`
-- `refreshRestoreUntilRef`
+**导致的问题**
 
-职责：
+- `pendingPlayRef` 机制只覆盖手动点播，不覆盖自动切歌，导致两种切歌路径处理不一致。
+- 在新模型下，播放命令（`POST /api/v1/play`）不承诺立即状态，状态变化由 SSE 推送，乐观更新不再必要。
 
-- 刷新页面或切换设备后，在短窗口内避免播放标题空白
-- 从 localStorage 恢复最近一次确认歌曲名
+**新规范处置：删除**
 
-状态机关系：
-
-- 这是“页面恢复”特有状态
-- 不能用于自动切歌过渡态
-
-当前实现映射：
-
-- `loadRememberedPlayingSong(activeDid)`
-- `currentMusicName` 中的恢复窗口 fallback
-- `activeDid` effect 中 `refreshRestoreUntilRef.current = Date.now() + 12000`
-
-实现风险：
-
-- 当前普通轮询失败也会重开该窗口
-- 导致恢复逻辑越权进入正常播放态与切歌态
+手动点播发出后，前端展示"加载中"状态（通过 `transport_state == "starting"` 的 SSE 事件驱动，或通过 `uiState.initializing` 短暂标记），等待 SSE 推送新的 `player_state` 事件。不再需要前端自行维持乐观标题。
 
 ---
 
-### 4.5 用户动作同步层
+### 2.6 `refreshRestoreUntilRef` 及恢复窗口逻辑
 
-对应状态机层：**Action Sync / Pending Dispatch**
+**原职责**
 
-主要 ref：
+- 在设备切换或页面初始化后，短时间（12 秒）内允许 `currentMusicName` 从 `rememberedPlayingSong` / `localPlaybackSong` 读取歌名。
+- 通过 `refreshRestoreUntilRef.current = Date.now() + 12000` 开启，时间到期自动关闭。
 
-- `statusRequestSeqRef`
-- `activeActionSeqRef`
-- `pendingPlayRef`
-- `fastPollUntilRef`
-- `lastStatusPollAtRef`
-- `statusPollInFlightRef`
+**导致的问题**
 
-职责：
+- 当前实现中，普通轮询失败也可能重新触发恢复窗口，导致恢复逻辑越权进入正常播放态和切歌态。
+- 12 秒窗口过长，可能覆盖多次自动切歌周期。
 
-- 区分普通轮询与动作后的快速收敛阶段
-- 避免过期轮询覆盖当前状态
-- 在播放指令刚发出时保留一个 pending 播放期
+**新规范处置：改造为 `uiState.initializing`**
 
-状态机关系：
-
-- 对应“用户动作后等待状态收敛”这段过渡态
-- 是 play / next / previous 之后的前端同步机制
-
-当前实现映射：
-
-- `beginActionSync()`
-- `finishActionSync()`
-- `isLatestStatusRequest()`
-- `waitForPlayerState()`
-- `triggerFastPolling()`
-
-实现风险：
-
-- `pendingPlayRef` 更偏向“手动点播”
-- 自动切歌时没有对应的“标题待确认”状态，造成自动切歌标题问题缺口
+恢复窗口概念保留，但改造为 `uiState.initializing` 标记：仅在页面首次加载或设备切换后的"首次快照到达前"期间为 true，首次 `serverState` 到达后立即清除。`uiState.initializing` 期间允许展示 `rememberedPlayingSong`（从 localStorage 读取的上次播放歌名）。轮询失败不得重新打开此标记。
 
 ---
 
-### 4.6 稳定性补偿层
+### 2.7 `awaitingTrackTitleRef` + `lastConfirmedSongRef` + `lastBoundaryAtRef`
 
-对应状态机层：**Playback Stability Window**
+**原职责**
 
-主要 ref：
+- `awaitingTrackTitleRef`：标记当前是否处于"切歌边界已触发、新标题待确认"状态。
+- `lastConfirmedSongRef`：记录上一首已确认的歌曲名，用于拒绝旧标题回流（`mergedSong !== lastConfirmedSongRef.current` 才接受新标题）。
+- `lastBoundaryAtRef`：记录边界发生时刻，辅助调试。
 
-- `lastPositivePlaybackAtRef`
-- `stopSuppressUntilRef`
+**导致的问题**
 
-职责：
+- 这三个 ref 是对旧模型缺陷的补丁：因为没有 `play_session_id`，只能靠这些辅助标记来模拟切歌边界管理。
+- 它们的写入分散在 `mergePlayingViewState`、`loadStatus` 的多个分支中，状态转换逻辑复杂且容易出错。
 
-- 避免后端一两拍异常把播放态立刻打断
-- 停止后短时间抑制误判为正在播放
+**新规范处置：删除，职责由 `play_session_id` 取代**
 
-状态机关系：
-
-- 它只应稳定 `is_playing / offset / duration`
-- 不应承担标题确认职责
-
-当前实现映射：
-
-- `Date.now() < stopSuppressUntilRef.current`
-- `Date.now() - lastPositivePlaybackAtRef.current < 12000`
-
-实现风险：
-
-- 当前实现中稳定窗口仍会把旧歌名灌回 `merged.cur_music`
-- 这是歌曲名错误最关键的污染源之一
+新模型中，`play_session_id` 变化直接标志切歌边界，`track.id` 提供稳定曲目身份，`transport_state` 表达切歌中的过渡状态。`awaitingTrackTitleRef`、`lastConfirmedSongRef`、`lastBoundaryAtRef` 所模拟的能力已由服务端显式提供，不再需要前端自行维护。
 
 ---
 
-### 4.7 自动同步 UI 选择层
+### 2.8 `statusRequestSeqRef` + `activeActionSeqRef` + `fastPollUntilRef` + 轮询频率控制
 
-对应状态机层：**Playback → UI Selection Sync**
+**原职责**
 
-主要 ref：
+- `statusRequestSeqRef`：请求序列号，用于丢弃过期的轮询响应（慢请求保护）。
+- `activeActionSeqRef`：动作序列号，用于区分用户动作前后的轮询。
+- `fastPollUntilRef`：动作触发后短时间内加速轮询（350ms 间隔），等待状态收敛。
+- `lastStatusPollAtRef` / `statusPollInFlightRef`：防重入保护。
 
-- `lastAutoSyncedPlayingSongRef`
+**导致的问题**
 
-职责：
+- 整套机制是为了弥补"轮询延迟 → 状态收敛慢"问题而建立的，在 SSE 主通道下不再需要。
 
-- 当 `status.cur_music` 变化时，自动把下拉框同步到当前播放歌曲
-- 保持 `playlist / music` 与当前播放一致
+**新规范处置：删除轮询频率控制部分，保留慢请求保护语义**
 
-状态机关系：
-
-- 它只能消费“已确认的当前歌曲”
-- 不能倒过来决定当前歌曲真值
-
-当前实现映射：
-
-- `status.is_playing` 相关 effect
-- `playingName = String(status.cur_music || "").trim()`
-
-实现风险：
-
-- 当前它默认相信 `status.cur_music` 已可靠
-- 如果 `status.cur_music` 被旧值污染，下拉框也会被同步错
-- 如果 `status.cur_music` 长时间为空，下拉框会停在上一首
+- `fastPollUntilRef` + 动态轮询间隔：删除，SSE 是推送模型，不需要加速轮询。
+- `statusRequestSeqRef`（慢请求丢弃）：降级保留，仅用于降级轮询期间（SSE 断线时）的慢请求保护。SSE handler 本身不需要此机制（SSE 是单向推送，无并发请求竞争问题）。
+- `statusPollInFlightRef`：仅在降级轮询期间保留，防止降级轮询请求重入。
 
 ---
 
-### 4.8 最终展示层
+### 2.9 `currentMusicName` 派生计算
 
-对应状态机层：**Rendered Playback View**
+**原职责**
 
-主要派生值：
+`currentMusicName` 是渲染层的派生值，当前计算逻辑为：
 
-- `safeOffset`
-- `safeDuration`
-- `progress`
-- `currentMusicName`
-- `playbackText`
+```
+status.cur_music
+|| (refreshRestoreWindow && is_playing && !awaitingTitle ? rememberedPlayingSong : "")
+|| (refreshRestoreWindow && localSongFresh && !awaitingTitle ? localPlaybackSong : "")
+|| ""
+```
 
-职责：
+包含了三层 fallback：后端值 → remembered → local。
 
-- 面向界面渲染
-- 生成进度条、播放文案、当前歌曲显示
+**导致的问题**
 
-状态机关系：
+- render 层承担了事实修复职责，这违反了"展示层只消费已收敛状态"的原则。
+- 三层 fallback 链使得歌名来源不清晰，任何一层写入脏值都会污染展示。
 
-- 它应只消费已经收敛后的展示状态
-- 不应该再承担二次“事实修复”的职责
+**新规范处置：改造为单一来源**
 
-实现风险：
+```
+serverState.track?.title || (uiState.initializing ? rememberedPlayingSong : "")
+```
 
-- 当前 `currentMusicName` 仍混合了：
-  - `status.cur_music`
-  - `rememberedPlayingSong`
-  - `localPlaybackSong`
-- 这会把恢复逻辑继续带到渲染层
+非初始化期间：直接读取 `serverState.track.title`，为空时展示占位符，不读取任何本地缓存。初始化期间（`uiState.initializing = true`）：允许展示 `rememberedPlayingSong` 作为过渡。
 
 ---
 
-## 5. 按状态机阶段映射当前实现
+### 2.10 `playSongByName()` + `switchTrack()` 的乐观更新逻辑
 
-下面把“规范状态机阶段”逐一映射到当前代码。
+**原职责**
 
----
+- `playSongByName()`：手动点播，在命令发出后立即乐观更新 `status.cur_music` 为目标歌名，同时写入 `pendingPlayRef`，等待轮询确认。
+- `switchTrack()`：上一首/下一首，发出命令后通过 baseline 对比等待切歌确认。
 
-### 5.1 Idle（空闲）
+**导致的问题**
 
-定义：
+- 乐观更新写入本地 `status`，当 SSE 推送实际状态时会产生冲突。
+- `playSongByName()` 的乐观路径与自动切歌路径处理不一致（后者没有 pending 机制）。
 
-- 没有正在播放
-- `status.is_playing = false`
+**新规范处置：移除乐观更新，改为 `uiState` 过渡标记**
 
-当前实现来源：
-
-- 后端 `getPlayerState()` 返回 `is_playing = false`
-- 或用户点击停止后前端主动写入 `setStatus(prev => ({...prev, is_playing:false, offset:0}))`
-
-当前关键代码区域：
-
-- 停止按钮点击处理
-- `loadStatus()` 中非播放态分支
-
-当前行为：
-
-- 清空本地播放补偿状态
-- 清空 `localPlayback*`
-- 移除 snapshot
-
-风险：
-
-- 如果稳定窗口误触发，Idle 可能被重新提升成播放态
+命令发出后，不再乐观写入 `serverState`。可在 `uiState` 中标记"命令已发出，等待 SSE 确认"，用于展示"加载中"状态。SSE 推送新的 `player_state` 事件（`transport_state == "starting"` 或 `transport_state == "playing"` 且 `play_session_id` 变化）到达后，清除过渡标记，以 `serverState` 为准渲染。
 
 ---
 
-### 5.2 RefreshRecovering（刷新恢复中）
+## 3. 新结构设计
 
-定义：
+本章定义新规范下的实现结构，以及其与现有代码的对应关系。
 
-- 页面初次载入或切换设备后
-- 短时间允许 remembered/local fallback 辅助显示
+### 3.1 `serverState` store
 
-当前实现标记：
+**职责**：存储来自服务端的完整权威播放状态快照，是所有播放相关 UI 渲染的唯一数据来源。
 
-- `refreshRestoreUntilRef.current > Date.now()`
+**在现有代码中的对应**：替换现有的 `status` state（`PlayingInfo` 类型），但结构完全不同。
 
-进入条件：
+**新结构要求**：
 
-- `activeDid` 变化时
-- 页面初始化后首次进入设备状态轮询时
+`serverState` 的类型应完全对应投影规范第 5 节的字段模型，包含：`device_id`、`revision`、`play_session_id`、`transport_state`、`track`（含 `id`、`title`）、`context`（含 `id`、`name`、`current_index`）、`position_ms`、`duration_ms`、`snapshot_at_ms`。
 
-退出条件：
+**更新规则**：
 
-- 时间窗口到期
-- 或真实播放状态收敛成功
+- `serverState` 只能通过 SSE handler 或降级轮询 handler 写入，不得有其他写入路径。
+- 写入前必须通过 revision gate（见 3.3 节）。
+- 写入时必须替换整个 `serverState` 对象（不得做字段级 merge）。
 
-当前行为：
+**与 `v1Api.ts` 的关系**：
 
-- `currentMusicName` 可从 remembered/local 恢复
-
-风险：
-
-- 当前轮询失败也会重新进入这一态，边界不清晰
+`PlayerStateData` 接口需要升级，增加新字段（`revision`、`play_session_id`、`transport_state`、`track`、`context`、`position_ms`、`duration_ms`、`snapshot_at_ms`），并将旧字段（`is_playing`、`cur_music`、`offset`、`duration`）标记为兼容字段，新代码不得读取旧字段。
 
 ---
 
-### 5.3 PendingPlay（手动点播待收敛）
+### 3.2 `uiState` store
 
-定义：
+**职责**：存储纯 UI 辅助状态，不代表任何播放事实，不参与播放状态判断。
 
-- 用户刚点了播放
-- 后端状态还未稳定刷新到当前页面
+**合法内容**（对应状态机规范第 3.2 节）：
 
-当前实现标记：
+| 字段 | 类型 | 说明 | 对应旧实现 |
+|---|---|---|---|
+| `connectionStatus` | `"connected" \| "reconnecting" \| "fallback_polling"` | SSE 连接状态 | 新增，无对应 |
+| `initializing` | `boolean` | 首次快照尚未到达 | 替换 `refreshRestoreUntilRef` 窗口逻辑 |
+| `switchingHint` | `boolean` | 切歌过渡动画标记 | 替换旧 `awaitingTrackTitleRef` 的展示侧职责 |
+| `progressInterpolation` | `{ baseMs: number, startedAt: number } \| null` | 进度插值基准 | 替换 `localPlaybackStartedAt` 的进度推算职责 |
 
-- `pendingPlayRef.current !== null`
-
-进入条件：
-
-- `playSongByName()` 调用 `v1Play()` 成功后设置 pending
-
-退出条件：
-
-- 后续轮询命中 `merged.is_playing`
-- 或 pending 超时
-
-当前行为：
-
-- 先乐观更新 `status`
-- 允许页面立即显示该歌曲
-- 等待真实轮询结果接管
-
-优点：
-
-- 手动点播体验较好
-
-局限：
-
-- 这套 pending 机制没有覆盖“自动切歌待确认标题”
+`uiState` 的写入不受 revision gate 约束，可以独立更新。
 
 ---
 
-### 5.4 PlayingStable（播放稳定）
+### 3.3 SSE handler
 
-定义：
+**职责**：建立并维护 `GET /api/v1/player/stream` 的 SSE 连接，接收 `player_state` 事件，将快照数据写入 `serverState`（经 revision gate）。
 
-- 正在播放
-- 当前歌曲标题和进度已稳定
+**在现有代码中的对应**：无对应。当前 `HomePage.tsx` 没有 SSE 连接逻辑，全部通过 `loadStatus()` 轮询。
 
-当前实现标记：
+**实现位置建议**：建议抽取为独立的自定义 hook（`usePlayerStream`），在 `HomePage` 挂载时初始化，在 `activeDid` 变化时重新连接。
 
-- `status.is_playing = true`
-- `status.cur_music` 非空
-- 本地计时器正在推进 offset
-- 自动同步已把 UI 选择项同步到当前歌曲
+**SSE handler 的职责范围**：
 
-当前行为：
-
-- 进度条由轮询 + 本地计时器共同维护
-- `rememberedPlayingSong` 会在这里更新
-- `localPlaybackSong` 会在这里更新
-
-风险：
-
-- 标题稳定后写 remembered/local 是合理的
-- 但如果“未真正稳定”时也写入 remembered/local，会反向污染后续状态
+- 建立 `EventSource` 连接，参数为 `device_id=<activeDid>`。
+- 监听 `player_state` 事件，解析 `event.data` 为状态快照对象。
+- 将快照对象送入 revision gate，通过后写入 `serverState`，触发 session switch handler（见 3.5 节）。
+- 监听连接状态（`onopen`、`onerror`），更新 `uiState.connectionStatus`。
+- 连接断开时启动降级轮询（见 3.4 节）。
+- 重连成功后停止降级轮询，重置 `uiState.connectionStatus = "connected"`。
 
 ---
 
-### 5.5 BoundaryDetected（检测到切歌边界）
+### 3.4 revision gate
 
-定义：
+**职责**：对收到的每一份状态快照执行 `revision` 去重检查，决定是否应用到 `serverState`。
 
-- 上一首结束 / 手动切歌 / 条件变化表明当前歌曲可能已切换
+**在现有代码中的对应**：`statusRequestSeqRef` + `isLatestStatusRequest()` 承担了部分"丢弃过期响应"的职责，但逻辑不同（旧逻辑基于请求序列号，新逻辑基于 `revision`）。
 
-当前实现位置：
+**实现规则**（对应状态机规范第 6 节）：
 
-- `mergePlayingViewState()`
+- 维护 `lastAppliedRevision`，初始值为 `-1`。
+- 收到快照时，若 `snapshot.revision > lastAppliedRevision`，更新 `lastAppliedRevision` 并应用快照。
+- 若 `snapshot.revision <= lastAppliedRevision`，丢弃快照。
+- 服务端重启场景（`revision` 从 0 重新开始）：检测到 `revision` 显著回退（例如小于 `lastAppliedRevision` 的 10%）时，重置 `lastAppliedRevision = -1`，接受新快照。
 
-当前判据：
-
-- `mergedSong !== prevSong`
-- `durationChanged`
-- `atBoundary`
-
-当前行为：
-
-- `resolvedOffset = 0`
-- 部分场景下 `resetLocalPlayback = true`
-
-问题：
-
-- 当前 boundary 检测已经有了
-- 但 boundary 后没有进入独立的“标题待确认”状态
-- 所以只是“发现边界”，没有“管理边界后生命周期”
+**实现位置建议**：可作为 SSE handler hook 内部的辅助函数，或抽取为独立的 `applySnapshot(snapshot)` 函数供 SSE handler 和降级轮询共同调用。
 
 ---
 
-### 5.6 AwaitingTitle（等待新标题确认）
+### 3.5 session switch handler
 
-规范定义：
+**职责**：检测 `serverState.play_session_id` 变化，触发全套 UI 切换动作。
 
-- 已经识别到切歌边界
-- 进度条属于下一首
-- 但新标题尚未被可靠确认
+**在现有代码中的对应**：分散在 `mergePlayingViewState` 的 boundary 检测、`lastAutoSyncedPlayingSongRef` 的更新、进度条重置等多处，无统一入口。
 
-当前实现状态：
+**触发条件**：`serverState` 被 revision gate 应用后，若新 `play_session_id` 不等于旧 `play_session_id`，则触发 session switch。
 
-- **缺失**
+**session switch handler 的职责**（对应状态机规范第 7.1 节）：
 
-当前代码表现出的替代性行为：
-
-- 有时把 `cur_music` 清空，于是 UI 显示“未知歌曲”
-- 有时又通过稳定窗口 / prev fallback / remembered fallback 显示旧标题
-
-结论：
-
-- 这是当前实现与规范之间最大的缺口
-- 也是“切歌后歌曲名显示未知歌曲或上一首”的根因
+- 重置 `uiState.progressInterpolation`（进度归零）。
+- 标记 `uiState.switchingHint = true`（触发切歌过渡动画）。
+- 触发歌单选中项重定位（以新 `serverState.track.id` 为依据）。
+- 若新 `transport_state == "playing"`，清除 `uiState.switchingHint`。
 
 ---
 
-### 5.7 TitleConfirmed（新标题已确认）
+## 4. 数据流重构
 
-规范定义：
+### 4.1 旧数据流
 
-- 后端返回一个可靠的新标题
-- 前端确认它不是旧标题回流
-- 允许更新 remembered/local
-- 允许同步 playlist/music
+```
+定时器触发（350ms~1000ms）
+  → GET /api/v1/player/state（HTTP 轮询）
+  → 响应到达
+  → isLatestStatusRequest() 序列号检查
+  → mergePlayingViewState()（本地合并：边界检测 + 进度推算 + 标题确认）
+  → stability window 稳定性补偿
+  → pending 乐观更新覆盖
+  → setStatus()（写入 React state）
+  → currentMusicName（三层 fallback 派生）
+  → 渲染
+  
+本地计时器（250ms）
+  → 独立推进 offset（基于 localPlaybackStartedAt）
+  → 通过 safeOffset/safeDuration 影响进度条渲染
+```
 
-当前实现状态：
+### 4.2 新数据流
 
-- **未独立建模**
-- 当前相当于“只要 `merged.cur_music` 非空，就直接当作已确认”
+```
+SSE 连接（持久，GET /api/v1/player/stream）
+  → 服务端推送 player_state 事件
+  → 解析 event.data 为状态快照
+  → revision gate：snapshot.revision > lastAppliedRevision?
+      否 → 丢弃，结束
+      是 → 更新 lastAppliedRevision
+  → 检测 play_session_id 是否变化
+      是 → session switch handler（进度归零、选中项重定位、切歌动画）
+  → 更新 serverState（整体替换）
+  → 渲染（基于 serverState 字段直接映射）
+  
+进度插值定时器（60fps 或 250ms，仅在 transport_state == "playing" 时运行）
+  → 基于 serverState.position_ms + serverState.snapshot_at_ms 计算插值进度
+  → 仅更新 uiState.progressInterpolation，不写 serverState
+  → 渲染进度条（基于 progressInterpolation）
+  
+降级轮询（仅在 SSE 断线时运行，间隔 ≥ 3s）
+  → GET /api/v1/player/state
+  → 同上：revision gate → session switch handler → 更新 serverState
+  → SSE 重连成功后立即停止
+```
 
-问题：
+### 4.3 数据流关键约束
 
-- 没有防旧标题回流机制
-- 没有防空标题长期停留机制
-- 没有“确认”与“展示”分层
-
----
-
-## 6. 当前代码块到状态机职责的逐段映射
-
-本节给出更细的实现映射清单，便于后续实际改代码时逐点核对。
-
----
-
-### 6.1 设备切换 effect
-
-代码职责：
-
-- 重置本地播放状态
-- 读取 remembered song
-- 打开恢复窗口
-- 启动轮询
-
-对应状态机：
-
-- `Idle -> RefreshRecovering`
-- 或 `DeviceChanged -> RefreshRecovering`
-
-规范符合度：
-
-- 基本合理
-
-需要收紧的点：
-
-- 只应在切设备 / 首次加载时打开恢复窗口
-- 不应被普通轮询失败重新触发
-
----
-
-### 6.2 `loadStatus()`
-
-代码职责：
-
-- 拉取远端状态
-- 做展示态合并
-- 处理稳定窗口
-- 处理 pendingPlay
-- 更新 remembered/local
-- 最终写入 `status`
-
-对应状态机：
-
-- `RefreshRecovering`
-- `PendingPlay`
-- `PlayingStable`
-- `BoundaryDetected`
-- （当前缺失）`AwaitingTitle`
-- `Idle`
-
-规范符合度：
-
-- 是实现核心
-- 但职责过多，导致标题问题和时间轴问题耦合
-
-需要收紧的点：
-
-1. stability window 只稳定播放态，不稳定标题
-2. boundary 后需要显式进入 AwaitingTitle
-3. 只有 TitleConfirmed 后才能写 remembered/local
+- `serverState` 只有一个写入点：revision gate 通过后的应用逻辑。
+- `uiState` 的写入独立于 `serverState` 的写入，不在同一处理链路中。
+- 渲染函数只读取 `serverState` 和 `uiState`，不做任何计算或推断。
+- 命令接口（`playSongByName`、`switchTrack`）发出后，只更新 `uiState`（过渡标记），不写 `serverState`。
 
 ---
 
-### 6.3 `mergePlayingViewState()`
+## 5. 关键字段替换映射
 
-代码职责：
+本章逐条说明旧字段到新字段的替换关系，用于指导 `v1Api.ts` 接口升级和 `HomePage.tsx` 渲染代码改写。
 
-- 统一合并 offset / duration / cur_music
-- 识别切歌边界
+### 5.1 `offset` → `position_ms`
 
-对应状态机：
+| 维度 | 旧实现 | 新实现 |
+|---|---|---|
+| 字段来源 | `status.offset`（秒，integer） | `serverState.position_ms`（毫秒，integer） |
+| 进度条基准 | `safeOffset`（本地合并后的秒值） | `serverState.position_ms`（直接读取） |
+| 进度插值 | 基于 `localPlaybackStartedAt`（时刻戳）+ `elapsed` | 基于 `serverState.snapshot_at_ms`（时刻戳）+ 本地时钟差值 |
+| 兼容旧字段 | - | 若旧 `offset` 仍出现，`position_ms = offset * 1000` |
 
-- `PlayingStable`
-- `BoundaryDetected`
+### 5.2 `duration` → `duration_ms`
 
-规范符合度：
+| 维度 | 旧实现 | 新实现 |
+|---|---|---|
+| 字段来源 | `status.duration`（秒） | `serverState.duration_ms`（毫秒） |
+| 未知时长 | `duration == 0` 时进度条异常 | `duration_ms == 0` 时展示不确定进度条 |
+| 兼容旧字段 | - | 若旧 `duration` 仍出现，`duration_ms = duration * 1000` |
 
-- 边界检测思路基本正确
+### 5.3 `is_playing` → `transport_state`
 
-需要收紧的点：
+| 旧判断 | 新判断 |
+|---|---|
+| `status.is_playing === true` | `serverState.transport_state === "playing"` |
+| `status.is_playing === false` | `serverState.transport_state` 为 `"paused"` / `"stopped"` / `"idle"` / `"error"` |
+| 无等价 | `serverState.transport_state === "switching"`（切歌中） |
+| 无等价 | `serverState.transport_state === "starting"`（加载中） |
+| `playbackText = "正在播放：xxx"` | 基于 `transport_state` 枚举值选择文案 |
 
-1. boundary 时必须完整 reset state + ref
-2. 不应从 `prev.cur_music` 恢复旧标题
-3. 这里只应负责“发现边界”和“切换阶段”
-4. 不应在这里做标题最终确认
+进度条推进条件：`transport_state === "playing"` 时允许插值，其他状态停止插值。
 
----
+### 5.4 `cur_music` → `track.title`
 
-### 6.4 本地计时器 effect
+| 维度 | 旧实现 | 新实现 |
+|---|---|---|
+| 展示标题 | `currentMusicName`（三层 fallback） | `serverState.track?.title \|\| 占位符` |
+| 标题为空时 | 显示"未知歌曲" | `transport_state == "switching"/"starting"` 时显示过渡占位符 |
+| 歌单选中项同步 | 基于 `cur_music` 文本在列表中搜索 | 基于 `track.id` 在列表中对照（见 5.5 节） |
+| 写入 remembered | 标题非空时随时写 | 仅 `transport_state == "playing"` 时，且仅供 `uiState.initializing` 期间使用 |
 
-代码职责：
+### 5.5 `cur_music` 文本匹配 → `track.id` 对照
 
-- 根据 `localPlaybackStartedAt` 推进 offset
-- 让进度条更平滑
+旧的歌单选中项同步逻辑：
 
-对应状态机：
+```
+playingName = status.cur_music.trim()
+→ 在 playlists[playlist] 数组中查找 === playingName 的项
+→ 找到则 setMusic(playingName)
+```
 
-- `PlayingStable`
-- `AwaitingTitle`（仅时间轴层）
+新的歌单选中项同步逻辑：
 
-规范符合度：
+```
+serverState.track.id
+→ 在歌单数据结构中查找 track.id 对应的项
+→ 找到则更新选中状态
+```
 
-- 适合保留
+触发时机：`play_session_id` 变化且 `transport_state === "playing"` 时执行，其他时机（`switching`、`starting`、`idle`）不执行。
 
-需要收紧的点：
+### 5.6 `offset` 回退 / `duration` 突变 / `cur_music` 变化 → `play_session_id` 变化
 
-- 本地计时器只能改 `offset / duration`
-- 不应该补 `cur_music`
+旧切歌边界检测：
 
----
+```
+trackIdChanged || indexChanged || contextChanged || songChangedByHeuristic
+|| (durationChanged && atBoundary)
+```
 
-### 6.5 自动同步 playlist/music 的 effect
+新切歌边界检测：
 
-代码职责：
+```
+newSnapshot.play_session_id !== serverState.play_session_id
+```
 
-- 根据 `status.cur_music` 自动同步当前歌单与歌曲选择框
-
-对应状态机：
-
-- `TitleConfirmed -> UI Selection Synced`
-
-规范符合度：
-
-- 消费层逻辑基本正确
-
-需要收紧的点：
-
-- 应只消费“已确认标题”
-- 在 AwaitingTitle 期间不应同步
-
----
-
-### 6.6 `playSongByName()`
-
-代码职责：
-
-- 手动点播
-- 建立 pending
-- 乐观更新 UI
-- 等待轮询收敛
-
-对应状态机：
-
-- `Idle -> PendingPlay -> PlayingStable`
-
-规范符合度：
-
-- 手动点播链路较完整
-
-局限：
-
-- 它只解决“我自己点播放”的确认问题
-- 不解决“自动切歌时下一首标题确认”问题
+直接比较，无需任何启发式判断。
 
 ---
 
-### 6.7 `switchTrack()`
+## 6. UI 触发点定义
 
-代码职责：
+本章定义新模型下各关键 UI 动作的触发条件，替代旧模型中分散的触发逻辑。
 
-- 手动上一首 / 下一首
-- 通过 baseline 对比确认是否切歌成功
+### 6.1 session 变化 → 全 UI 切换
 
-对应状态机：
+**触发条件**：`newSnapshot.play_session_id !== serverState.play_session_id`
 
-- `PlayingStable -> BoundaryDetected -> (应进入 AwaitingTitle)`
+**执行动作**：
 
-规范符合度：
+1. 进度条归零（`uiState.progressInterpolation = { baseMs: 0, startedAt: Date.now() }`）
+2. 标记切歌动画（`uiState.switchingHint = true`）
+3. 触发歌单选中项重定位（等待 `transport_state == "playing"` 时执行）
+4. 标题更新：若新 `track.title` 非空立即更新，若为空展示过渡占位符
 
-- 已能检测“曲目大概率已切换”
-- 但没有后续标题确认阶段
+### 6.2 `transport_state` → UI 大状态
 
----
+| `transport_state` | 播放按钮状态 | 进度条行为 | 歌名展示 | 其他 |
+|---|---|---|---|---|
+| `idle` | 停止 | 归零，静止 | 清空 | - |
+| `starting` | 加载中 | 静止 | 过渡占位符（若 `track` 非空展示 `track.title`） | 展示加载指示器 |
+| `switching` | 切换中 | 静止 | 过渡展示（保留上一 session 标题，标注"切换中"） | `uiState.switchingHint = true` |
+| `playing` | 播放中 | 插值推进 | `track.title` | 清除 `switchingHint` |
+| `paused` | 暂停 | 静止 | `track.title` | - |
+| `stopped` | 停止 | 静止 | 可保留最后曲目信息 | - |
+| `error` | 出错 | 静止 | 可展示出错时的曲目名 | 展示错误提示，不自动恢复 |
 
-## 7. 偏离规范的关键问题清单
+### 6.3 `revision` → 更新门槛
 
-下面按严重程度列出当前实现偏离状态机规范的地方。
+`revision` 不直接触发 UI，但决定状态快照是否被应用。只有通过 revision gate 的快照才能流入后续的 session switch handler 和 `serverState` 更新，进而触发 UI 渲染。
 
-### P0-1：缺少 AwaitingTitle 独立状态
-后果：
-
-- 切歌后只能出现两种坏结果：
-  - 显示未知歌曲
-  - 显示上一首
-
-这是当前最核心问题。
-
----
-
-### P0-2：stability window 仍在越权处理标题
-后果：
-
-- 本来应该只保播放态连续性
-- 却把旧标题重新灌回 `status.cur_music`
-
-这是当前标题污染主因之一。
+revision gate 失败（快照被丢弃）时，UI 不发生任何变化。
 
 ---
 
-### P0-3：boundary reset 没有完整同步 state + ref
-后果：
+## 7. 删除清单
 
-- 本地计时器继续沿用旧 startedAt
-- 容易形成“进度是新歌，标题还是旧歌/空歌”的分裂状态
+以下变量、函数、逻辑必须从 `HomePage.tsx` 中删除，不得保留为"暂时不用的旧代码"。
 
----
+### 7.1 必须删除的 React state
 
-### P1-1：remembered/local 的写入时机过早
-后果：
+| 变量名 | 删除理由 |
+|---|---|
+| `localPlaybackSong` | 新模型中标题来源唯一化为 `serverState.track.title` |
+| `rememberedPlayingSong`（主路径使用） | 仅保留为 `uiState.initializing` 期间的过渡展示，不作为 state 参与渲染逻辑 |
 
-- 一旦未确认阶段误写 remembered/local
-- 后续 render、恢复窗口、稳定窗口都会被继续污染
+### 7.2 必须删除的 Ref
 
----
+| Ref 名 | 删除理由 |
+|---|---|
+| `localPlaybackSongRef` | 对应 state 已删除 |
+| `rememberedPlayingSongRef`（主路径使用） | 对应使用场景已收敛 |
+| `lastPositivePlaybackAtRef` | 稳定性窗口机制删除 |
+| `stopSuppressUntilRef` | 停止抑制机制删除 |
+| `awaitingTrackTitleRef` | 由 `play_session_id` 取代 |
+| `lastConfirmedSongRef` | 由 `play_session_id` + `track.id` 取代 |
+| `lastBoundaryAtRef` | 由 `play_session_id` 取代 |
+| `fastPollUntilRef` | SSE 主通道不需要加速轮询 |
+| `pendingPlayRef` | 乐观更新机制删除 |
 
-### P1-2：render 层仍承担事实修复职责
-后果：
+### 7.3 必须删除的函数 / 逻辑块
 
-- `currentMusicName` 不只是消费状态，而是在继续做 fallback 决策
-- 恢复逻辑与播放逻辑耦合
+| 函数 / 逻辑 | 删除理由 |
+|---|---|
+| `mergePlayingViewState()`（整体） | 本地状态合并逻辑，新模型由服务端快照直接提供 |
+| 稳定性窗口逻辑（`withinStabilityWindow` 分支） | 服务端 `transport_state` 取代前端抑制逻辑 |
+| `pendingPlay` 乐观更新分支 | 命令不再乐观更新 `serverState` |
+| `mergedSong !== prevConfirmedSong` 标题过滤逻辑 | 由 `play_session_id` 切换机制取代 |
+| `triggerFastPolling()` 及快速轮询切换 | SSE 是推送模型，无需加速轮询 |
+| `currentMusicName` 的 `rememberedPlayingSong` 和 `localPlaybackSong` fallback 分支 | 仅保留 `serverState.track?.title` 读取 |
+| `playbackSnapshotKey()` 的完整写入链路（在轮询中更新 snapshot） | 降级保留读取（`uiState.initializing` 用），删除写入链路 |
 
----
+### 7.4 必须删除的 `v1Api.ts` 旧字段读取
 
-### P1-3：自动同步逻辑没有“只消费已确认标题”的闸门
-后果：
+新代码不得读取以下兼容字段（即使后端仍返回）：
 
-- 下拉框容易停在上一首
-- 或被旧标题同步回去
-
----
-
-## 8. 推荐的实现改造顺序
-
-### 第一步：先拆出状态机标记位
-最少新增：
-
-- `awaitingTrackTitleRef`
-- `lastConfirmedSongRef`
-- `lastBoundaryAtRef`
-
----
-
-### 第二步：把 boundary 和 title confirmation 拆成两个阶段
-当前代码只有：
-- 检测边界
-
-还缺：
-- 等待新标题
-- 确认新标题
-- 拒绝旧标题回流
+- `data.is_playing` → 改读 `data.transport_state`
+- `data.cur_music` → 改读 `data.track?.title`
+- `data.offset` → 改读 `data.position_ms`
+- `data.duration` → 改读 `data.duration_ms`
 
 ---
 
-### 第三步：收紧 remembered/local 的职责
-规则应改为：
+## 8. 保留与改造清单
 
-- 只在 RefreshRecovering 使用 remembered/local 做显示恢复
-- 只在 TitleConfirmed 后写 remembered/local
-- 自动切歌期间 remembered/local 不得参与标题决策
+### 8.1 保留的函数（需更新输入字段）
 
----
+| 函数 / 逻辑 | 保留理由 | 需要更新的内容 |
+|---|---|---|
+| 设备切换 effect | 设备切换初始化逻辑仍需要 | 改造为：关闭旧 SSE 连接 → 重置 `serverState` 和 `lastAppliedRevision` → 标记 `uiState.initializing` → 获取初始快照 → 建立新 SSE |
+| 歌单选中项同步 effect | 功能保留 | 触发条件改为 `play_session_id` 变化且 `transport_state === "playing"`；查找逻辑改为 `track.id` 对照 |
+| `playSongByName()` 命令部分 | 命令发送功能保留 | 删除乐观更新，改为发出命令后标记 `uiState` 过渡状态，等待 SSE 事件 |
+| `switchTrack()` 命令部分 | 命令发送功能保留 | 同上，删除 baseline 对比等待逻辑 |
+| `loadRememberedPlayingSong()` | 供 `uiState.initializing` 期间使用 | 仅在初始化时调用一次，结果赋值给局部变量，不写入 state |
+| `saveRememberedPlayingSong()` | 保留写入 localStorage | 调用时机收紧：仅在 `serverState.transport_state === "playing"` 时写入 |
+| 降级轮询逻辑 | SSE 断线时的 fallback | 保留 HTTP 轮询调用链，但移除 `mergePlayingViewState`；轮询响应直接送入 revision gate |
+| `statusRequestSeqRef`（慢请求保护） | 仅用于降级轮询 | 仅在降级轮询 handler 中使用，SSE handler 不需要 |
 
-### 第四步：让本地计时器完全退出标题判断
-它只负责：
+### 8.2 保留的渲染输出（需更新输入来源）
 
-- `offset`
-- `duration`
-
-不再触碰：
-
-- `cur_music`
-
----
-
-### 第五步：把自动同步下拉框建立在 TitleConfirmed 之上
-自动同步的输入应是：
-
-- 已确认标题
-
-而不是：
-
-- 任意非空 `status.cur_music`
+| 渲染输出 | 原输入 | 新输入 |
+|---|---|---|
+| 歌名展示 | `currentMusicName`（三层 fallback） | `serverState.track?.title` |
+| 播放状态图标 / 文案 | `status.is_playing` | `serverState.transport_state` |
+| 进度条进度 | `progress`（基于 `safeOffset / safeDuration`） | 基于 `uiState.progressInterpolation` 推算 |
+| 进度条时间文字 | `safeOffset` / `safeDuration`（秒） | `position_ms / 1000` / `duration_ms / 1000`（注意单位转换） |
+| 歌单选中高亮 | `music === itemName`（文本比较） | `serverState.track?.id === item.id`（ID 比较） |
+| 切歌动画 | `awaitingTrackTitleRef` + `localPlaybackSong` 重置 | `uiState.switchingHint` |
+| 断线提示 | 无 | `uiState.connectionStatus !== "connected"` |
 
 ---
 
-## 9. 建议的文档归档关系
+## 9. 实现建议
 
-建议最终形成两份文档并列：
+### 9.1 React state 拆分建议
 
-1. `docs/spec/webui_playback_state_machine.md`
-   - 规范文档
-   - 定义状态机、阶段、准入和禁止规则
+建议将当前 `HomePage` 中混合在一起的状态拆分为以下两个独立的 state 块：
 
-2. `docs/spec/webui_playback_state_machine_mapping.md`
-   - 实现映射清单
-   - 把当前 `HomePage.tsx` 对照回规范
-   - 说明哪里符合、哪里偏离、下一步怎么改
+**`serverState`**（建议用 `useReducer` 管理，确保整体替换）：
+
+包含投影规范定义的完整快照字段。`useReducer` 的 action 类型只有一种：`APPLY_SNAPSHOT`，附带完整快照对象。dispatch 前由 revision gate 过滤。
+
+**`uiState`**（建议用 `useState` 管理）：
+
+包含 `connectionStatus`、`initializing`、`switchingHint`、`progressInterpolation` 四个字段，可以独立更新任意字段。
+
+### 9.2 hook 结构建议
+
+建议将 SSE 连接和状态消费逻辑抽取为独立 hook，避免 `HomePage` 继续承载过多逻辑：
+
+**`usePlayerStream(deviceId, onSnapshot)`**：
+
+- 封装 SSE 连接生命周期（建立、断线重连、页面可见性变化处理）。
+- 每次收到 `player_state` 事件时调用 `onSnapshot(snapshot)`。
+- 管理降级轮询（SSE 断线时自动启动，重连后自动停止）。
+- 暴露 `connectionStatus` 给调用方。
+
+`HomePage` 侧：
+
+- 调用 `usePlayerStream(activeDid, handleSnapshot)`。
+- `handleSnapshot` 内执行 revision gate → session switch handler → dispatch `APPLY_SNAPSHOT`。
+
+**`useProgressInterpolation(serverState)`**：
+
+- 接收 `serverState` 中的 `position_ms`、`duration_ms`、`snapshot_at_ms`、`transport_state`。
+- 在 `transport_state === "playing"` 时启动插值定时器。
+- 返回当前插值后的 `currentPositionMs`，供进度条渲染使用。
+
+### 9.3 重构顺序建议
+
+建议按以下顺序推进重构，每步均可独立验证：
+
+**第一步：升级 `PlayerStateData` 接口**
+
+在 `v1Api.ts` 中为 `PlayerStateData` 新增投影规范定义的字段（兼容旧字段保留但标注为 deprecated）。此步骤不改变任何行为，只增加类型定义。
+
+**第二步：实现 `usePlayerStream` hook**
+
+实现 SSE 连接、降级轮询切换、心跳处理、重连逻辑。先使用 `console.log` 验证快照是否正确到达，不接入 `serverState`。
+
+**第三步：接入 revision gate 和 `serverState`**
+
+将 revision gate 逻辑加入 `handleSnapshot`，将通过 gate 的快照 dispatch 到 `serverState`。此时 `HomePage` 同时存在旧的 `status` 和新的 `serverState`，可以对照验证数据一致性。
+
+**第四步：实现 session switch handler**
+
+基于 `play_session_id` 变化触发 `uiState` 更新（进度归零、切歌动画、选中项重定位）。
+
+**第五步：改写渲染层**
+
+将 `currentMusicName`、进度条、歌单选中项等渲染输出逐一切换到新字段来源，同时删除旧的 fallback 逻辑。
+
+**第六步：清理旧代码**
+
+按第 7 章删除清单逐项删除旧变量、函数和逻辑块。删除旧的 `status` state，确保代码只使用 `serverState` 和 `uiState`。
 
 ---
 
-## 10. 一页版结论
+## 10. 与规范文档的关系
 
-当前 `HomePage.tsx` 的实现现状可以概括为：
-
-- **设备切换恢复**：有
-- **手动播放 pending 状态**：有
-- **轮询 + 本地计时器平滑进度**：有
-- **切歌边界检测**：有
-- **稳定播放态**：有
-- **自动同步当前歌曲到下拉框**：有
-- **“等待新标题确认”状态**：没有
-- **“拒绝旧标题回流”机制**：没有
-
-因此现在最准确的判断不是“前端完全没有状态机”，而是：
-
-> 当前前端已经有了半套播放状态机，但缺失了自动切歌最关键的标题确认子状态机。
-
-这也是为什么进度条问题比歌曲名问题更容易先修好。
+- **`docs/spec/webui_playback_state_machine_spec.md`**（消费型状态机规范）：本文档的上位规范，定义"应该是什么"。本文档定义"当前实现怎么改"。
+- **`docs/spec/player_state_projection_spec.md`**（投影规范）：定义 `serverState` 的字段模型与语义，是 `PlayerStateData` 接口升级的依据。
+- **`docs/spec/player_stream_sse_spec.md`**（SSE 规范）：定义 `usePlayerStream` hook 的连接行为、事件格式、重连机制，是 SSE handler 实现的依据。
+- 本文档中描述的旧实现结构（`mergePlayingViewState`、`stabilityWindow`、`localPlayback*` 等），属于已废弃的旧推测型模型，不得再作为新实现的参考。

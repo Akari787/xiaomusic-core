@@ -1,9 +1,9 @@
 # XiaoMusic Runtime API v1 规范
 
-版本：v1.2
+版本：v1.3
 状态：正式契约
-最后更新：2026-03-20
-适用范围：XiaoMusic Runtime HTTP API（WebUI、Home Assistant 与第三方调用）
+最后更新：2026-03-22
+适用范围：XiaoMusic Runtime HTTP API 与 SSE 状态流（WebUI、Home Assistant 与第三方调用）
 
 ---
 
@@ -16,12 +16,20 @@
 本文档定义并约束以下内容：
 
 - 对外 HTTP 接口行为
+- SSE 状态流接口行为
 - 请求字段与查询参数
 - 成功响应结构
 - 错误响应结构
 - v1 白名单接口的内部归属路径
 
-### 1.2 冲突裁决规则
+### 1.2 与上位规范的关系
+
+以下规范文档是本文档的上位规范，本文档不重复定义其内容，当本文档与上位规范冲突时，以上位规范为准：
+
+- `docs/spec/player_state_projection_spec.md`（以下简称"投影规范"）：定义权威播放状态快照的字段模型、语义与消费约束。本文档中 `GET /api/v1/player/state` 与 `GET /api/v1/player/stream` 的 `data` 字段结构，必须完全遵守投影规范。
+- `docs/spec/player_stream_sse_spec.md`（以下简称"SSE 规范"）：定义 `GET /api/v1/player/stream` 的 SSE 传输协议细节。本文档对该接口的描述是契约级摘要，完整协议由 SSE 规范承接。
+
+### 1.3 冲突裁决规则
 
 当以下内容与本文档冲突时，一律以本文档为准：
 
@@ -33,7 +41,7 @@
 
 后续所有代码修复、前端修复、测试修复与验收结论，均以本文档为基准。
 
-### 1.3 显式列出原则
+### 1.4 显式列出原则
 
 只有本文档中显式列出的行为，才属于 v1 正式承诺。
 
@@ -45,11 +53,11 @@
 - 未声明的内部归属路径
 - 未声明的字段同构关系
 
-### 1.4 规范要求与实现现状
+### 1.5 规范要求与实现现状
 
-本文档中的“必须 / 不得 / 应 / 可以”均为规范要求。
+本文档中的"必须 / 不得 / 应 / 可以"均为规范要求。
 
-若当前实现与规范要求不一致，应判定为“实现不符合规范”，而不是修改规范去描述偏差实现。
+若当前实现与规范要求不一致，应判定为"实现不符合规范"，而不是修改规范去描述偏差实现。
 
 ---
 
@@ -71,6 +79,8 @@ v1 API 负责暴露以下正式能力：
 - 设备控制动作
 - 歌单与收藏控制
 - 设备与系统状态查询
+- 播放器权威状态快照查询（`GET /api/v1/player/state`）
+- 播放器状态 SSE 推送流（`GET /api/v1/player/stream`）
 
 ### 2.3 统一播放入口原则
 
@@ -86,7 +96,18 @@ v1 API 负责暴露以下正式能力：
 - 新插件能力与新来源扩展必须通过 `/api/v1/play` 接入
 - 不再对 `/api/v1/playlist/*` 做长期播放能力扩展承诺
 
-### 2.4 非 v1 范围
+### 2.4 命令接口与状态接口的解耦原则
+
+播放控制命令（`POST /api/v1/play`、`POST /api/v1/control/*` 等）与播放状态观测（`GET /api/v1/player/state`、`GET /api/v1/player/stream`）是两条相互独立的通道。
+
+以下约束必须遵守：
+
+- Class A 命令接口的成功响应只承诺"动作已进入链路"与 `transport` 字段，不承诺命令执行后的播放器最终状态。
+- 调用方不得依赖命令响应体中的字段推断播放器的当前播放状态。
+- 播放器的权威当前状态，只能通过 `GET /api/v1/player/state` 或 `GET /api/v1/player/stream` 获取。
+- 前端不得将命令响应中的 `transport` 字段直接写入播放状态展示层。
+
+### 2.5 非 v1 范围
 
 以下内容不属于 v1 正式契约：
 
@@ -106,9 +127,9 @@ Public API 是唯一正式对外接口层。
 定义：
 
 - `/api/v1/*` 是唯一正式对外接口层
-- 仅第 4 章白名单中的接口属于 Public API
+- 仅第 5 章白名单中的接口属于 Public API
 - 仅 Public API 对 WebUI、Home Assistant、插件与第三方调用方提供兼容性与长期稳定性承诺
-- 任何未列入第 4 章白名单的接口都不属于 Public API
+- 任何未列入第 5 章白名单的接口都不属于 Public API
 
 Public API 面向：
 
@@ -123,7 +144,7 @@ Internal API 是非 `/api/v1/*` 的内部前后端通信接口层。
 
 定义：
 
-- Internal API 不是“暂时未迁移完成的 v1 残留”
+- Internal API 不是"暂时未迁移完成的 v1 残留"
 - Internal API 是有意保留的内部层，用于承载认证、会话、管理、工具、文件辅助与 WebUI 专用交互
 - Internal API 仅供 WebUI 与项目内部模块使用
 - Internal API 不属于公开稳定契约
@@ -218,11 +239,13 @@ Forbidden / Removed：
 
 ### 4.2 JSON 协议
 
-除查询参数外，正式接口请求体与响应体均使用 JSON。
+除查询参数与 SSE 流响应外，正式接口请求体与响应体均使用 JSON。
+
+`GET /api/v1/player/stream` 的响应遵守 SSE 协议（`text/event-stream`），不使用 JSON envelope，详见第 12.25 节与 SSE 规范。
 
 ### 4.3 统一 Envelope
 
-所有 v1 白名单接口的响应均必须使用统一 envelope：
+所有 v1 白名单接口的非 SSE 响应均必须使用统一 envelope：
 
 ```json
 {
@@ -246,6 +269,8 @@ Forbidden / Removed：
 - `code != 0` 表示失败
 - `request_id` 是 envelope 顶层字段，所有白名单接口必须返回
 - 顶层不得用 `ret / success / status` 替代 `code/message`
+
+`GET /api/v1/player/stream` 在建立 SSE 连接后，其事件数据不通过统一 envelope 传输；仅在返回错误 HTTP 状态码（400、401、404、503）时，使用统一 envelope 格式。
 
 ### 4.4 通用请求约束
 
@@ -275,14 +300,14 @@ Forbidden / Removed：
 
 ## 5. 正式白名单接口
 
-本版本正式白名单接口共 24 个：
+本版本正式白名单接口共 25 个：
 
-### 4.1 播放与解析
+### 5.1 播放与解析
 
 1. `POST /api/v1/play`
 2. `POST /api/v1/resolve`
 
-### 4.2 控制
+### 5.2 控制
 
 3. `POST /api/v1/control/stop`
 4. `POST /api/v1/control/pause`
@@ -295,7 +320,7 @@ Forbidden / Removed：
 11. `POST /api/v1/control/play-mode`
 12. `POST /api/v1/control/shutdown-timer`
 
-### 4.3 音乐库
+### 5.3 音乐库
 
 13. `POST /api/v1/library/favorites/add`
 14. `POST /api/v1/library/favorites/remove`
@@ -303,7 +328,7 @@ Forbidden / Removed：
 16. `GET /api/v1/library/playlists`
 17. `GET /api/v1/library/music-info`
 
-### 4.4 查询
+### 5.4 查询
 
 18. `GET /api/v1/devices`
 19. `GET /api/v1/system/status`
@@ -312,18 +337,19 @@ Forbidden / Removed：
 22. `POST /api/v1/system/settings/item`
 23. `GET /api/v1/search/online`
 24. `GET /api/v1/player/state`
+25. `GET /api/v1/player/stream`
 
 ---
 
 ## 6. 接口分级与归属路径
 
-### 5.1 分级定义
+### 6.1 分级定义
 
 v1 白名单接口按契约分为 Class A / B / C 三类。
 
 该分级不是文档标签，而是正式约束；每个接口的成功响应契约、错误契约与内部归属路径均由分级决定。
 
-### 5.2 Class A：设备动作型接口
+### 6.2 Class A：设备动作型接口
 
 判定标准：
 
@@ -349,7 +375,9 @@ Class A 接口：
 - 必须进入 Runtime 的统一调度/分发链路
 - 必须以 transport 作为设备动作观测结果的一部分
 
-### 5.3 Class B：本地状态 / 歌单 / 收藏 / 控制型接口
+重要约束：Class A 接口的成功响应不承诺命令执行后的播放器最终状态。`transport` 字段表示"动作已进入链路并选定传输方式"，不表示播放器已到达特定 `transport_state`。调用方必须通过 `GET /api/v1/player/state` 或 SSE 流获取命令执行后的播放器权威状态。
+
+### 6.3 Class B：本地状态 / 歌单 / 收藏 / 控制型接口
 
 判定标准：
 
@@ -374,7 +402,7 @@ Class B 接口：
 - 不要求暴露 transport 作为成功契约字段
 - 仍必须输出结构化成功结果与结构化错误结果
 
-### 5.4 Class C：查询型接口
+### 6.4 Class C：查询型接口
 
 判定标准：
 
@@ -391,27 +419,29 @@ Class C 接口：
 - `GET /api/v1/system/settings`
 - `GET /api/v1/search/online`
 - `GET /api/v1/player/state`
+- `GET /api/v1/player/stream`
 - `POST /api/v1/resolve`
 
 契约要求的内部归属：
 
 - 必须以只读查询 / 聚合路径提供结果
 - 不得将 transport 作为该类接口的成功契约要求
+- `GET /api/v1/player/state` 与 `GET /api/v1/player/stream` 必须共享同一个状态快照构建器（见投影规范第 11 节）
 
 ---
 
 ## 7. 成功响应契约矩阵
 
-### 6.1 通用成功 Envelope
+### 7.1 通用成功 Envelope
 
-所有成功响应必须满足：
+所有成功响应（SSE 流除外）必须满足：
 
 - 顶层 `code = 0`
 - 顶层 `message` 必须存在
 - 顶层 `data` 必须存在
 - 顶层 `request_id` 必须存在
 
-### 6.2 Class A 成功响应
+### 7.2 Class A 成功响应
 
 Class A 成功响应必须包含：
 
@@ -420,7 +450,7 @@ Class A 成功响应必须包含：
 - 顶层 `request_id`
 - `data.status`
 - `data.transport`
-- `data.device_id`（对设备动作型接口适用时必须存在；本类接口均适用）
+- `data.device_id`
 
 Class A 成功响应按接口需要可以包含：
 
@@ -432,8 +462,9 @@ Class A 成功响应按接口需要可以包含：
 
 - 动作已进入设备动作链路
 - transport 已被选定并回传
+- 不承诺命令执行后的播放器 `transport_state`
 
-### 6.3 Class B 成功响应
+### 7.3 Class B 成功响应
 
 Class B 成功响应必须包含：
 
@@ -448,17 +479,7 @@ Class B 成功响应不得要求调用方假设存在：
 - `data.transport`
 - `data.source_plugin`
 
-特别约束：
-
-- `POST /api/v1/play` 是唯一正式播放入口
-- `POST /api/v1/library/favorites/add`
-- `POST /api/v1/library/favorites/remove`
-- `POST /api/v1/library/refresh`
-- `POST /api/v1/control/play-mode`
-- `POST /api/v1/control/shutdown-timer`
-  均不要求 `transport/source_plugin`
-
-### 6.4 Class C 成功响应
+### 7.4 Class C 成功响应
 
 Class C 成功响应必须包含：
 
@@ -472,20 +493,23 @@ Class C 不承诺下列字段：
 - `data.transport`
 - `data.source_plugin`（除非该查询接口的字段定义中显式列出）
 
-### 6.5 成功字段禁止假设规则
+`GET /api/v1/player/state` 的 `data` 字段必须完全符合投影规范第 5 节所定义的状态快照模型，详见第 12.24 节。
+
+### 7.5 成功字段禁止假设规则
 
 调用方不得做以下假设：
 
 - 因为某次实现返回了 `source_plugin`，就假设该字段属于所有控制接口正式契约
 - 因为某个内部对象存在更多字段，就假设这些字段属于 v1 正式响应
+- 因为命令接口返回了 `transport`，就假设可以从命令响应推断播放器当前 `transport_state`
 
 ---
 
 ## 8. 统一错误模型
 
-### 7.1 错误响应基础结构
+### 8.1 错误响应基础结构
 
-所有 v1 白名单接口的失败响应必须满足：
+所有 v1 白名单接口的失败响应（包括 `GET /api/v1/player/stream` 建立失败时的 HTTP 错误响应）必须满足：
 
 - 顶层 `code != 0`
 - 顶层 `message` 必须存在
@@ -507,7 +531,7 @@ Class C 不承诺下列字段：
 }
 ```
 
-### 7.2 `stage` 合法枚举
+### 8.2 `stage` 合法枚举
 
 `stage` 必须属于以下有限集合，不允许自由扩张或随意漂移：
 
@@ -520,7 +544,7 @@ Class C 不承诺下列字段：
 - `system`
 - `auth`
 
-### 7.3 错误阶段语义
+### 8.3 错误阶段语义
 
 - `request`：请求参数、字段约束、查询参数等边界错误
 - `resolve`：来源识别、媒体解析、歌单索引定位等失败
@@ -531,7 +555,7 @@ Class C 不承诺下列字段：
 - `system`：系统状态、运行时状态、非业务依赖失败
 - `auth`：鉴权、认证恢复、会话状态相关失败
 
-### 7.4 各分类接口的错误要求
+### 8.4 各分类接口的错误要求
 
 Class A 错误要求：
 
@@ -548,8 +572,16 @@ Class C 错误要求：
 
 - 即使是查询接口，也必须提供结构化错误
 - 查询失败不得退化为只有 envelope 顶层文案的错误
+- `GET /api/v1/player/stream` 在 HTTP 层面建立失败时，错误响应必须遵守统一 envelope 与结构化错误模型
 
-### 7.5 禁止项
+### 8.5 SSE stream_error 事件与 HTTP 错误的区分
+
+`GET /api/v1/player/stream` 在连接建立后可能推送 `stream_error` 类型的 SSE 事件，用于通知客户端需要关闭连接的运行时错误（见 SSE 规范第 10.3 节）。`stream_error` 事件不是 HTTP 错误响应，不遵守统一 envelope 格式，其格式由 SSE 规范定义。两者的适用场景：
+
+- HTTP 错误（400/401/404/503）：连接建立阶段失败，返回统一 envelope JSON，不产生 SSE 流。
+- `stream_error` SSE 事件：连接建立后的运行时错误，在 SSE 流中推送，不是 HTTP 错误响应。
+
+### 8.6 禁止项
 
 禁止以下做法：
 
@@ -562,39 +594,72 @@ Class C 错误要求：
 
 ## 9. 内部归属约束
 
-### 8.1 Class A 归属约束
+### 9.1 Class A 归属约束
 
 Class A 接口必须进入统一调度 / 分发链路。
 
 若 Class A 接口未进入统一调度 / 分发链路，应判定为实现不符合规范。
 
-### 8.2 Class B 归属约束
+### 9.2 Class B 归属约束
 
 Class B 接口可以在 router / runtime 侧实现，但必须保持其自身成功返回模型。
 
 若 Class B 接口伪装为 Class A 返回模型，应判定为实现不符合规范。
 
-### 8.3 Class C 归属约束
+### 9.3 Class C 归属约束
 
 Class C 接口必须提供统一 envelope 与结构化错误。
 
-若 Class C 接口缺少统一 envelope 或结构化错误，应判定为实现不符合规范。
+`GET /api/v1/player/state` 与 `GET /api/v1/player/stream` 必须共享同一个状态快照构建器（见投影规范第 11 节）。若两个接口基于不同逻辑独立拼装状态，应判定为实现不符合规范。
 
 ---
 
-## 10. 接口归属总表
+## 10. 播放状态获取策略
+
+本章定义前端获取播放器权威状态的规范策略。此策略是 v1 契约的组成部分，消费方必须遵守。
+
+### 10.1 双通道定位
+
+v1 通过两个接口暴露播放器权威状态：
+
+| 接口 | 定位 | 适用场景 |
+|---|---|---|
+| `GET /api/v1/player/stream` | **主通道** | SSE 连接正常时的所有状态接收 |
+| `GET /api/v1/player/state` | **初始化 + 降级回退** | 页面首次加载的初始快照、SSE 断线期间的轮询兜底、调试与状态核验 |
+
+### 10.2 前端获取策略规则
+
+前端必须遵守以下策略：
+
+1. 优先 SSE：在 SSE 连接正常运行期间，前端必须以 SSE 事件作为唯一状态来源，不得同时对 `/player/state` 发起轮询。
+2. 初始化顺序：页面加载时，应先通过 `GET /api/v1/player/state` 获取初始快照渲染 UI，再建立 SSE 连接。SSE 连接建立并收到初始事件后，停止任何轮询，切换到 SSE 主通道。
+3. 降级回退：SSE 连接断开且重连失败时，前端应切换为对 `GET /api/v1/player/state` 的轮询（间隔不低于 3 秒）。一旦 SSE 重连成功，必须立即停止轮询。
+4. 禁止并行竞争：不允许将 SSE 事件与 HTTP 轮询结果并行写入 UI，不允许两路来源互相覆盖。
+
+### 10.3 revision 去重要求
+
+无论通过哪个通道收到状态快照，前端必须基于 `revision` 字段进行去重：
+
+- `revision` 严格小于当前已渲染 revision 的快照，必须丢弃，不得写回 UI。
+- `revision` 等于当前已渲染 revision 的快照，视为重复，应丢弃，不触发 UI 重渲染。
+
+详细规则见投影规范第 6.3 节。
+
+---
+
+## 11. 接口归属总表
 
 | 接口 | 分类 | 契约要求的内部归属 | 成功响应关键字段 | 错误模型要求 | 备注 |
 |---|---|---|---|---|---|
-| `POST /api/v1/play` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport`，可含 `data.source_plugin`, `data.extra` | 必须有 `error_code`, `stage`；设备动作失败不得退化为模糊内部错误 | 唯一正式播放入口；要求 `transport` |
-| `POST /api/v1/control/stop` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
-| `POST /api/v1/control/pause` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
-| `POST /api/v1/control/resume` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
-| `POST /api/v1/control/tts` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
-| `POST /api/v1/control/volume` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
-| `POST /api/v1/control/probe` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
-| `POST /api/v1/control/previous` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
-| `POST /api/v1/control/next` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 要求 `transport` |
+| `POST /api/v1/play` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport`，可含 `data.source_plugin`, `data.extra` | 必须有 `error_code`, `stage`；设备动作失败不得退化为模糊内部错误 | 唯一正式播放入口；承诺 `transport`，不承诺命令后 `transport_state` |
+| `POST /api/v1/control/stop` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
+| `POST /api/v1/control/pause` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
+| `POST /api/v1/control/resume` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
+| `POST /api/v1/control/tts` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
+| `POST /api/v1/control/volume` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
+| `POST /api/v1/control/probe` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
+| `POST /api/v1/control/previous` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
+| `POST /api/v1/control/next` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
 | `POST /api/v1/control/play-mode` | B | router / runtime 本地控制路径 | `data.status`, `data.device_id`, `request_id` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `POST /api/v1/control/shutdown-timer` | B | router / runtime 本地控制路径 | `data.status`, `data.device_id`, `request_id` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `POST /api/v1/library/favorites/add` | B | library 本地控制路径 | `data.status`, `data.device_id`, `data.track_name` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
@@ -609,13 +674,14 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 | `GET /api/v1/system/status` | C | 只读查询 / 聚合路径 | `data.status`, `data.version`, `data.devices_count` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `GET /api/v1/system/settings` | C | system 设置查询路径 | `data.settings`, `data.device_ids`, `data.devices` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
 | `GET /api/v1/search/online` | C | 搜索查询路径 | `data.items`, `data.total` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
-| `GET /api/v1/player/state` | C | 只读状态聚合路径 | `data.device_id`, `data.is_playing`, `data.cur_music`, `data.offset`, `data.duration`, `data.current_track_id`, `data.current_index`, `data.context_type`, `data.context_id`, `data.context_name` | 必须有 `error_code`, `stage` | 不得要求 `transport` |
+| `GET /api/v1/player/state` | C | 只读状态聚合路径（与 stream 共享快照构建器） | 完整状态快照（见第 12.24 节） | 必须有 `error_code`, `stage` | 初始化 + 降级 fallback 通道 |
+| `GET /api/v1/player/stream` | C | 只读状态推送路径（与 state 共享快照构建器） | SSE 事件流（见第 12.25 节） | HTTP 建立失败时必须有 `error_code`, `stage` | **主通道**；SSE 协议 |
 
 ---
 
-## 11. 接口逐项契约
+## 12. 接口逐项契约
 
-### 10.1 `POST /api/v1/play`
+### 12.1 `POST /api/v1/play`
 
 用途：播放一个明确媒体目标。
 
@@ -660,7 +726,9 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.resolved_title`
 - `data.extra`
 
-### 10.2 `POST /api/v1/resolve`
+约束：成功响应中的 `transport` 表示动作已进入链路，不表示播放器已到达 `playing` 状态。调用方必须通过 `GET /api/v1/player/state` 或 SSE 流确认播放状态。
+
+### 12.2 `POST /api/v1/resolve`
 
 用途：只解析，不播放。
 
@@ -676,7 +744,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 成功响应以解析结果字段为主，不承诺 `transport`。
 
-### 10.3 `POST /api/v1/control/stop`
+### 12.3 `POST /api/v1/control/stop`
 
 用途：停止当前播放。
 
@@ -686,9 +754,9 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 { "device_id": "<device_id>" }
 ```
 
-成功响应必须包含 `data.transport`。
+成功响应必须包含 `data.transport`。成功响应不承诺播放器已达到 `stopped` 状态，调用方须通过状态通道确认。
 
-### 10.4 `POST /api/v1/control/pause`
+### 12.4 `POST /api/v1/control/pause`
 
 用途：暂停当前播放。
 
@@ -698,9 +766,9 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 { "device_id": "<device_id>" }
 ```
 
-成功响应必须包含 `data.transport`。
+成功响应必须包含 `data.transport`。成功响应不承诺播放器已达到 `paused` 状态，调用方须通过状态通道确认。
 
-### 10.5 `POST /api/v1/control/resume`
+### 12.5 `POST /api/v1/control/resume`
 
 用途：恢复当前播放。
 
@@ -710,9 +778,9 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 { "device_id": "<device_id>" }
 ```
 
-成功响应必须包含 `data.transport`。
+成功响应必须包含 `data.transport`。成功响应不承诺播放器已达到 `playing` 状态，调用方须通过状态通道确认。
 
-### 10.6 `POST /api/v1/control/tts`
+### 12.6 `POST /api/v1/control/tts`
 
 用途：播放一段 TTS 文本。
 
@@ -731,7 +799,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 成功响应必须包含 `data.transport`。
 
-### 10.7 `POST /api/v1/control/volume`
+### 12.7 `POST /api/v1/control/volume`
 
 用途：设置设备音量。
 
@@ -751,7 +819,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 成功响应必须包含 `data.transport`。
 
-### 10.8 `POST /api/v1/control/probe`
+### 12.8 `POST /api/v1/control/probe`
 
 用途：执行设备可用性探测。
 
@@ -763,7 +831,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 成功响应必须包含 `data.transport`。
 
-### 10.9 `POST /api/v1/control/previous`
+### 12.9 `POST /api/v1/control/previous`
 
 用途：切到上一首。
 
@@ -773,9 +841,9 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 { "device_id": "<device_id>" }
 ```
 
-成功响应必须包含 `data.transport`。
+成功响应必须包含 `data.transport`。成功响应不承诺切歌已完成，调用方须通过状态通道（SSE 中 `play_session_id` 变化且 `transport_state == "playing"`）确认切歌成功。
 
-### 10.10 `POST /api/v1/control/next`
+### 12.10 `POST /api/v1/control/next`
 
 用途：切到下一首。
 
@@ -785,9 +853,9 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 { "device_id": "<device_id>" }
 ```
 
-成功响应必须包含 `data.transport`。
+成功响应必须包含 `data.transport`。成功响应不承诺切歌已完成，调用方须通过状态通道（SSE 中 `play_session_id` 变化且 `transport_state == "playing"`）确认切歌成功。
 
-### 10.11 `POST /api/v1/control/play-mode`
+### 12.11 `POST /api/v1/control/play-mode`
 
 用途：设置播放模式。
 
@@ -810,7 +878,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 该接口不承诺 `data.transport`。
 
-### 10.12 `POST /api/v1/control/shutdown-timer`
+### 12.12 `POST /api/v1/control/shutdown-timer`
 
 用途：设置停止播放定时器。
 
@@ -830,7 +898,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 该接口不承诺 `data.transport`。
 
-### 10.13 `POST /api/v1/library/favorites/add`
+### 12.13 `POST /api/v1/library/favorites/add`
 
 用途：将歌曲加入收藏。
 
@@ -850,7 +918,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 该接口不承诺 `data.transport`。
 
-### 10.14 `POST /api/v1/library/favorites/remove`
+### 12.14 `POST /api/v1/library/favorites/remove`
 
 用途：将歌曲移出收藏。
 
@@ -858,7 +926,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 该接口不承诺 `data.transport`。
 
-### 10.15 `POST /api/v1/library/refresh`
+### 12.15 `POST /api/v1/library/refresh`
 
 用途：刷新音乐库或歌单索引。
 
@@ -870,7 +938,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 该接口不承诺 `data.transport`。
 
-### 10.16 `GET /api/v1/library/playlists`
+### 12.16 `GET /api/v1/library/playlists`
 
 用途：获取播放上下文所需的歌单与歌曲列表。
 
@@ -881,7 +949,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 查询错误应返回结构化 `error_code/stage`，推荐归类为 `library` 或 `request`。
 
-### 10.17 `GET /api/v1/library/music-info`
+### 12.17 `GET /api/v1/library/music-info`
 
 用途：获取单曲的最小上下文信息。
 
@@ -901,7 +969,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.error_code = E_INVALID_REQUEST`
 - `data.stage = request`
 
-### 10.18 `GET /api/v1/devices`
+### 12.18 `GET /api/v1/devices`
 
 用途：获取设备列表。
 
@@ -913,7 +981,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.devices[].model`
 - `data.devices[].online`
 
-### 10.19 `GET /api/v1/system/status`
+### 12.19 `GET /api/v1/system/status`
 
 用途：获取系统状态。
 
@@ -923,7 +991,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.version`
 - `data.devices_count`
 
-### 10.20 `GET /api/v1/system/settings`
+### 12.20 `GET /api/v1/system/settings`
 
 用途：获取 WebUI 当前所需的最小系统设置与设备联动信息。
 
@@ -939,7 +1007,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.device_ids` 为当前已选择设备 DID 列表
 - `data.devices` 为可供设置页勾选的设备列表
 
-### 10.21 `POST /api/v1/system/settings`
+### 12.21 `POST /api/v1/system/settings`
 
 用途：保存设置页当前配置。
 
@@ -957,7 +1025,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.status`
 - `data.saved`
 
-### 10.22 `POST /api/v1/system/settings/item`
+### 12.22 `POST /api/v1/system/settings/item`
 
 用途：更新单个设置项。
 
@@ -982,7 +1050,7 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.error_code = E_INVALID_REQUEST`
 - `data.stage = request`
 
-### 10.23 `GET /api/v1/search/online`
+### 12.23 `GET /api/v1/search/online`
 
 用途：执行在线搜索，返回 WebUI 当前所需的最小搜索结果集合。
 
@@ -1007,37 +1075,31 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `data.error_code = E_INVALID_REQUEST`
 - `data.stage = request`
 
-### 10.24 `GET /api/v1/player/state`
+### 12.24 `GET /api/v1/player/state`
 
-用途：获取播放状态查询结果。
+用途：获取当前设备的权威播放状态快照。
+
+定位：初始化通道与降级回退通道。在 SSE 主通道（`GET /api/v1/player/stream`）正常运行期间，调用方不应通过本接口轮询获取状态更新；本接口适用于页面首次加载的初始快照获取、SSE 断线期间的轮询兜底以及调试核验目的。
 
 查询参数：
 
-- `device_id`，必填
+- `device_id`，必填，非空
 
-成功响应最小字段：
+成功响应结构：
 
-- `data.device_id: string`
-- `data.is_playing: boolean`
-- `data.cur_music: string`
-- `data.offset: number`
-- `data.duration: number`
-- `data.current_track_id: string` - 当前曲目的稳定标识，用于可靠判断切歌
-- `data.current_index: number | null` - 当前曲目在播放队列中的位置索引
-- `data.context_type: string | null` - 播放上下文类型（如 "playlist"）
-- `data.context_id: string | null` - 播放上下文标识
-- `data.context_name: string | null` - 播放上下文名称
+`data` 字段必须是完整的权威播放状态快照，完全符合投影规范第 5 节所定义的状态快照模型。`data` 必须包含以下字段（字段语义以投影规范为准，本文档不重复定义）：
 
-字段语义说明：
-
-- `current_track_id`：稳定标识当前曲目身份，同一首歌在同一次连续播放期间保持稳定，切到下一首后必须变化。不依赖展示标题文本。
-- `current_index/context_*`：反映当前播放上下文与队列位置，用于 WebUI / HA / 第三方调用方做稳定状态同步。
-
-字段来源说明：
-
-- `current_track_id`：使用 `context_id + current_index + cur_music` 的 MD5 哈希（前16位）生成，保证同一首歌稳定不变，且同名歌曲重复出现时也能区分
-- `current_index`：优先使用设备播放器内部的真实索引字段 `_current_index`，兜底时使用 `play_list.index(cur_music)`
-- `context_*`：来自 `get_cur_play_list()` 获取的播放列表名称
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `device_id` | `string` | 当前状态所属设备 ID |
+| `revision` | `integer` | 状态版本号，单设备维度单调递增 |
+| `play_session_id` | `string` | 当前播放会话唯一标识 |
+| `transport_state` | `string` | 播放传输状态枚举值（`idle` / `starting` / `switching` / `playing` / `paused` / `stopped` / `error`） |
+| `track` | `object \| null` | 当前曲目信息，含 `track.id`（稳定身份标识）与 `track.title` |
+| `context` | `object \| null` | 播放上下文信息，含 `context.id`、`context.name`、`context.current_index` |
+| `position_ms` | `integer` | 当前播放位置（毫秒） |
+| `duration_ms` | `integer` | 当前曲目总时长（毫秒），未知时为 `0` |
+| `snapshot_at_ms` | `integer` | 快照生成时的服务端时间戳（毫秒 Unix 时间戳） |
 
 响应示例：
 
@@ -1047,15 +1109,23 @@ Class C 接口必须提供统一 envelope 与结构化错误。
   "message": "ok",
   "data": {
     "device_id": "981257654",
-    "is_playing": true,
-    "cur_music": "希望を求めて",
-    "offset": 2,
-    "duration": 180,
-    "current_track_id": "a1b2c3d4e5f6g7h8",
-    "current_index": 5,
-    "context_type": "playlist",
-    "context_id": "OTS",
-    "context_name": "OTS"
+    "revision": 42,
+    "play_session_id": "sess_a1b2c3d4",
+    "transport_state": "playing",
+    "track": {
+      "id": "a1b2c3d4e5f6g7h8",
+      "title": "希望を求めて",
+      "artist": "Unknown",
+      "source": "local_library"
+    },
+    "context": {
+      "id": "OTS",
+      "name": "OTS",
+      "current_index": 5
+    },
+    "position_ms": 32000,
+    "duration_ms": 218000,
+    "snapshot_at_ms": 1711084800000
   },
   "request_id": "abc123def456"
 }
@@ -1063,14 +1133,87 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 约束：
 
-- `offset / duration` 单位固定为秒
-- 查询型接口不承诺 `transport`
+- 本接口必须与 `GET /api/v1/player/stream` 共享同一个状态快照构建器。
+- 本接口不承诺 `transport`（控制命令结果字段），不得将 `transport` 混入状态快照。
+- 查询失败必须返回结构化错误，`stage` 应为 `system` 或 `request`。
+- 兼容字段说明见第 13 章。
+
+### 12.25 `GET /api/v1/player/stream`
+
+用途：通过 SSE（Server-Sent Events）持续推送当前设备的播放状态事件流。
+
+定位：播放状态主通道。在 SSE 连接正常运行期间，前端必须以本接口的事件作为唯一播放状态来源，停止对 `GET /api/v1/player/state` 的轮询。
+
+完整协议由 SSE 规范（`docs/spec/player_stream_sse_spec.md`）定义。本节提供契约级摘要。
+
+查询参数：
+
+- `device_id`，必填，非空。一个连接只订阅一个设备，不允许省略或通过通配符订阅多个设备。
+
+响应协议：
+
+- HTTP 200 成功建立连接后，响应为 `Content-Type: text/event-stream` 的长连接 SSE 流，不使用统一 envelope。
+- HTTP 400 / 401 / 404 / 503 建立失败时，响应为统一 envelope JSON（见第 8 章）。
+
+事件格式：
+
+连接建立后，服务端必须立即推送一条完整的当前状态快照事件，后续在播放状态发生变化时持续推送：
+
+```
+event: player_state
+id: <revision>
+data: <完整状态快照 JSON>
+
+```
+
+- `event` 固定为 `player_state`
+- `id` 固定为该事件所携带快照的 `revision` 值（字符串形式）
+- `data` 必须是完整的权威播放状态快照，字段模型与 `GET /api/v1/player/state` 的 `data` 完全一致（见第 12.24 节）
+
+服务端应定期发送心跳注释（`: heartbeat`），频率建议 15 秒，不得超过 30 秒。
+
+主要约束（完整约束见 SSE 规范）：
+
+- 连接建立后必须立即推送完整初始快照。
+- 重连后必须推送完整最新快照，不做增量补发。
+- 进度自然推进不触发新事件。
+- 服务端不得因播放器无活动而主动关闭连接。
+- 本接口必须与 `GET /api/v1/player/state` 共享同一个状态快照构建器。
 
 ---
 
-## 12. 请求扩展对象
+## 13. 兼容字段说明
 
-### 11.1 `context_hint`
+本章说明在投影规范建立前使用的旧状态字段的降级定位。
+
+### 13.1 兼容字段清单
+
+以下字段属于遗留兼容字段，其正式语义已由投影规范中的新字段取代：
+
+| 旧兼容字段 | 已被取代的正式字段 | 语义映射 |
+|---|---|---|
+| `cur_music` | `track.title` | 对应当前曲目展示标题 |
+| `is_playing` | `transport_state == "playing"` | 对应播放传输状态的布尔简化 |
+| `offset` | `position_ms / 1000` | 对应播放位置，旧字段单位为秒 |
+| `duration` | `duration_ms / 1000` | 对应曲目时长，旧字段单位为秒 |
+| `current_track_id` | `track.id` | 对应曲目稳定身份标识 |
+| `current_index` | `context.current_index` | 对应曲目在上下文中的位置索引 |
+| `context_type` | 已合并到 `context` 对象 | 上下文类型，不再作为独立顶层字段 |
+| `context_id` | `context.id` | 对应播放上下文唯一标识 |
+| `context_name` | `context.name` | 对应播放上下文展示名称 |
+
+### 13.2 兼容字段约束
+
+- 兼容字段如在当前实现中继续出现于 `GET /api/v1/player/state` 的响应中，仅视为向后兼容的投影输出，不属于本文档的正式契约字段。
+- 新前端代码、新插件、新 Home Assistant 集成实现，不得依赖上述兼容字段作为播放状态的主依据。
+- 新实现必须依赖投影规范定义的正式字段（`transport_state`、`track.id`、`play_session_id`、`revision`、`position_ms`、`duration_ms` 等）。
+- 上述兼容字段在未来版本中可能被删除，删除时不视为破坏性变更，不单独发版通知。
+
+---
+
+## 14. 请求扩展对象
+
+### 14.1 `context_hint`
 
 `context_hint` 是可选对象，用于指导上下文选择：
 
@@ -1089,61 +1232,6 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 
 ---
 
-## 13. 本次修改说明（供审阅）
-
-1. 本次新增或重写了以下章节：
-   - “总则与契约优先级”
-   - “接口分级与归属路径”
-   - “成功响应契约矩阵”
-   - “统一错误模型”
-   - “内部归属约束”
-   - “接口归属总表”
-2. 本次删除或修正了以下旧冲突表述：
-   - 删除了旧文档中以阶段性落地口径描述正式接口的章节
-   - 删除了把部分接口写成“目标契约”或“可暂缓收口”的表述
-   - 删除了对未显式列出旧行为的默认承诺
-3. 播放入口边界已明确写为：
-   - `POST /api/v1/play` 是唯一正式播放入口
-   - `/api/v1/playlist/*` 不再属于白名单正式接口
-   - 新能力不得再以 `playlist/*` 作为播放入口基准
-4. Class A / B / C 划分方式如下：
-   - Class A：设备动作型，必须进入统一调度 / 分发链路，成功响应必须可观测 `transport`
-   - Class B：本地状态 / 歌单 / 收藏 / 控制型，可保留在 router / runtime 路径，但必须遵守统一 envelope 与错误模型，且不得伪装为 Class A
-   - Class C：查询型，必须提供统一 envelope 与结构化错误，不承诺 transport
-5. 本步不涉及代码改动，因为本次任务目标是先完成 v1 API 契约收口，把对外行为、内部归属、成功响应与错误模型定义清楚；代码实现是否符合规范属于后续代码修复步骤。
-
-## 14. 本次修正说明（供审阅）
-
-1. 本次删除或降级了以下 `player/state` 相关字段的正式契约地位：
-   - `current_track_title`
-   - `current_track_id`
-   - `current_track_duration`
-   - `play_mode`
-   - `context_type`
-   - `context_id`
-   - `context_name`
-   - `queue_supported`
-   - `current_index`
-   - `queue_length`
-   - `has_next`
-   - `has_previous`
-2. 这些字段不应在当前阶段写成正式契约，因为本轮文档收口只保留当前代码可稳定承诺的最小查询字段；上述字段属于状态聚合扩展信息，当前不应成为前端或外部调用方可依赖的稳定约束。
-3. `GET /api/v1/player/state` 当前最终保留的最小正式字段为：
-   - `data.device_id`
-   - `data.is_playing`
-   - `data.cur_music`
-   - `data.offset`
-   - `data.duration`
-4. 以下大框架内容本次保留未动：
-   - v1 唯一权威来源
-   - Class A / B / C 接口分级
-   - `/api/v1/play` 是唯一正式播放入口
-   - Class A 必须要求 `transport`
-   - Class B / C 不得假设 `transport`
-   - 统一错误模型
-   - 内部归属约束
-   - 接口归属总表的大框架
-
 ## 15. 统一播放入口收敛原则
 
 1. `POST /api/v1/play` 是唯一正式播放入口。
@@ -1152,21 +1240,3 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 4. 新前端功能不得新增对 `/api/v1/playlist/*` 的依赖。
 5. 新插件能力与新来源扩展必须通过统一播放入口接入。
 6. 不再对 `/api/v1/playlist/*` 做长期接口能力扩展承诺。
-
-## 16. 本次修改说明（供审阅）
-
-1. 本次新增了“接口分层与边界”章节，并补齐了 Public API、Internal API、Forbidden / Removed 三层正式定义。
-2. Public API 被定义为第 5 章 v1 白名单接口集合；Internal API 被定义为内部前后端通信、认证、文件、工具与管理辅助接口；Forbidden / Removed 被定义为已删除接口与明确禁止恢复的入口集合。
-3. 当前被明确写入 Internal API 清单的接口包括：
-   - 认证 / 会话接口：`/api/auth/status`、`/api/auth/refresh`、`/api/auth/logout`、`/api/get_qrcode`
-   - 管理 / 文件 / 工具接口：`/api/file/fetch_playlist_json`、`/api/file/cleantempdir`、`/refreshmusictag`
-4. 当前被明确写入 Forbidden / Removed 清单的内容包括：
-   - `/api/v1/playlist/play`
-   - `/api/v1/playlist/play-index`
-   - 已删除的旧 device wrapper
-   - 已删除的 `*_legacy` facade 方法
-   - 中文命令入口、cmd 风格入口、自然语言控制入口、并行播放入口设计
-5. 本次新增了“进入 v1 的准入标准”与“Internal API 使用约束”，明确只有具备长期复用价值、能遵守统一 envelope 与结构化错误模型、且表达产品能力的接口，才可以进入 v1。
-6. 本步不涉及代码修改，因为本次任务目标是先把接口分层边界写成强约束文档，为后续接口去留与迁移判断提供统一依据。
-- 已删除的 Internal API 工具入口
-  - `POST /refreshmusictag`
