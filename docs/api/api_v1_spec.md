@@ -1033,6 +1033,34 @@ Class C 接口必须提供统一 envelope 与结构化错误。
 - `current_track_id`：稳定标识当前曲目身份，同一首歌在同一次连续播放期间保持稳定，切到下一首后必须变化。不依赖展示标题文本。
 - `current_index/context_*`：反映当前播放上下文与队列位置，用于 WebUI / HA / 第三方调用方做稳定状态同步。
 
+字段来源说明：
+
+- `current_track_id`：使用 `context_id + cur_music` 的 MD5 哈希（前16位）生成，保证同一首歌稳定不变
+- `current_index`：来自 `device_player._play_list.index(cur_music)`
+- `context_*`：来自 `get_cur_play_list()` 获取的播放列表名称
+
+响应示例：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "device_id": "981257654",
+    "is_playing": true,
+    "cur_music": "希望を求めて",
+    "offset": 2,
+    "duration": 180,
+    "current_track_id": "a1b2c3d4e5f6g7h8",
+    "current_index": 5,
+    "context_type": "playlist",
+    "context_id": "OTS",
+    "context_name": "OTS"
+  },
+  "request_id": "abc123def456"
+}
+```
+
 约束：
 
 - `offset / duration` 单位固定为秒
