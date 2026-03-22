@@ -605,7 +605,6 @@ export function HomePage() {
       (Date.now() < refreshRestoreUntilRef.current && localSongFresh && !awaitingTrackTitleRef.current
         ? localPlaybackSong
         : "") ||
-      (awaitingTrackTitleRef.current ? rememberedPlayingSong : "") ||
       "",
   ).trim();
   const playbackText = status.is_playing ? `正在播放：${currentMusicName || "未知歌曲"}` : "空闲";
