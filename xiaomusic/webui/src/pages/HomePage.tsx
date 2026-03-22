@@ -16,7 +16,6 @@ import {
   next as v1Next,
   play as v1Play,
   previous as v1Previous,
-  removeFavorite as v1RemoveFavorite,
   saveSystemSettings,
   setPlayMode as v1SetPlayMode,
   setShutdownTimer as v1SetShutdownTimer,
@@ -35,8 +34,6 @@ import {
   fetchPlaylistJson,
   fetchQrcode,
 } from "../services/homeApi";
-
-void [v1RemoveFavorite];
 
 import { useTheme } from "../theme/ThemeProvider";
 import "../styles/home.css";
@@ -265,17 +262,12 @@ type UiState = {
   connectionStatus: "connected" | "reconnecting" | "fallback_polling";
   initializing: boolean;
   switchingHint: boolean;
-  progressInterpolation: {
-    baseMs: number;
-    startedAt: number;
-  } | null;
 };
 
 const EMPTY_UI_STATE: UiState = {
   connectionStatus: "reconnecting",
   initializing: true,
   switchingHint: false,
-  progressInterpolation: null,
 };
 
 type ServerStateAction =
@@ -493,12 +485,30 @@ function saveRememberedVolume(did: string, volume: number): void {
   saveLocal(volumeStorageKey(did), String(next));
 }
 
-function useProgressInterpolation(serverState: PlayerStateData, uiState: UiState): {
+function clearXmCache(): void {
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && (key.startsWith("xm_") || key.startsWith("xm_last_playing_song_"))) {
+      keysToRemove.push(key);
+    }
+  }
+  keysToRemove.forEach((k) => {
+    try {
+      localStorage.removeItem(k);
+    } catch {
+      // ignore
+    }
+  });
+}
+
+function useProgressInterpolation(serverState: PlayerStateData, transportState: TransportState): {
   currentPositionMs: number;
   progress: number;
 } {
   const [currentPositionMs, setCurrentPositionMs] = useState<number>(() => serverState.position_ms);
   const timerRef = useRef<number | null>(null);
+  const lastRevisionRef = useRef<number>(-1);
 
   useEffect(() => {
     if (timerRef.current !== null) {
@@ -506,20 +516,36 @@ function useProgressInterpolation(serverState: PlayerStateData, uiState: UiState
       timerRef.current = null;
     }
 
-    if (serverState.transport_state !== "playing") {
+    if (serverState.revision === lastRevisionRef.current) {
+      return;
+    }
+    lastRevisionRef.current = serverState.revision;
+
+    if (transportState !== "playing") {
       setCurrentPositionMs(serverState.position_ms);
       return;
     }
 
     const snapshotAt = serverState.snapshot_at_ms;
     const basePosition = serverState.position_ms;
-    const startedAt = Date.now();
+    const durationMs = serverState.duration_ms;
 
     setCurrentPositionMs(basePosition);
 
     timerRef.current = window.setInterval(() => {
-      const elapsed = Date.now() - startedAt;
-      const newPosition = basePosition + elapsed;
+      const now = Date.now();
+      const elapsed = now - snapshotAt;
+      if (elapsed > 5000) {
+        if (timerRef.current !== null) {
+          window.clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+        return;
+      }
+      let newPosition = basePosition + elapsed;
+      if (durationMs > 0) {
+        newPosition = Math.min(newPosition, durationMs);
+      }
       setCurrentPositionMs(newPosition);
     }, 250);
 
@@ -530,10 +556,12 @@ function useProgressInterpolation(serverState: PlayerStateData, uiState: UiState
       }
     };
   }, [
-    serverState.transport_state,
+    transportState,
     serverState.position_ms,
     serverState.snapshot_at_ms,
     serverState.play_session_id,
+    serverState.revision,
+    serverState.duration_ms,
   ]);
 
   const progress = useMemo(() => {
@@ -548,167 +576,193 @@ function useProgressInterpolation(serverState: PlayerStateData, uiState: UiState
 
 function usePlayerStream(
   deviceId: string,
-  onSnapshot: (snapshot: PlayerStateData) => void,
+  applySnapshot: (snapshot: PlayerStateData, currentDeviceId: string) => boolean,
   onConnectionStatusChange: (status: UiState["connectionStatus"]) => void,
+  lastAppliedRevisionRef: React.MutableRefObject<number>,
 ) {
   const eventSourceRef = useRef<EventSource | null>(null);
-  const reconnectTimeoutRef = useRef<number | null>(null);
-  const pollingIntervalRef = useRef<number | null>(null);
-  const lastAppliedRevisionRef = useRef<number>(-1);
-  const statusRequestSeqRef = useRef<number>(0);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const pollingTimerRef = useRef<number | null>(null);
+  const currentDeviceIdRef = useRef<string>("");
   const isPollingRef = useRef<boolean>(false);
-  const activeDidRef = useRef<string>("");
+  const mountedRef = useRef<boolean>(true);
 
-  const stopPolling = useMemo(() => {
-    return () => {
-      if (pollingIntervalRef.current !== null) {
-        window.clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
+  function disconnectStream(): void {
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (eventSourceRef.current !== null) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+  }
+
+  function stopPolling(): void {
+    if (pollingTimerRef.current !== null) {
+      window.clearInterval(pollingTimerRef.current);
+      pollingTimerRef.current = null;
+    }
+    isPollingRef.current = false;
+  }
+
+  function startFallbackPolling(): void {
+    if (!mountedRef.current || !currentDeviceIdRef.current) {
+      return;
+    }
+    stopPolling();
+    onConnectionStatusChange("fallback_polling");
+
+    pollingTimerRef.current = window.setInterval(async () => {
+      if (!mountedRef.current) {
+        stopPolling();
+        return;
       }
-      if (reconnectTimeoutRef.current !== null) {
-        window.clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
+      const did = currentDeviceIdRef.current;
+      if (!did) {
+        stopPolling();
+        return;
       }
-      isPollingRef.current = false;
-    };
-  }, []);
+      if (isPollingRef.current) {
+        return;
+      }
 
-  const applySnapshot = useMemo(
-    () =>
-      (snapshot: PlayerStateData): boolean => {
-        if (snapshot.revision <= lastAppliedRevisionRef.current) {
-          if (lastAppliedRevisionRef.current > 0 && snapshot.revision < lastAppliedRevisionRef.current * 0.1) {
-            lastAppliedRevisionRef.current = -1;
-          } else {
-            return false;
-          }
-        }
-        lastAppliedRevisionRef.current = snapshot.revision;
-        onSnapshot(snapshot);
-        return true;
-      },
-    [onSnapshot],
-  );
-
-  const startPolling = useMemo(
-    () => {
-      let cancelled = false;
-
-      const pollOnce = async () => {
-        if (cancelled || !activeDidRef.current) return;
-        if (isPollingRef.current) return;
-
-        isPollingRef.current = true;
-        const requestSeq = statusRequestSeqRef.current + 1;
-        statusRequestSeqRef.current = requestSeq;
-        const currentDeviceId = activeDidRef.current;
-
-        try {
-          const out = await getPlayerState(currentDeviceId);
-          if (cancelled || currentDeviceId !== activeDidRef.current) {
-            isPollingRef.current = false;
-            return;
-          }
-          if (!isApiOk(out)) {
-            isPollingRef.current = false;
-            return;
-          }
-          const data = out.data || EMPTY_SERVER_STATE;
-          applySnapshot(data);
-        } catch {
-          // ignore errors during fallback polling
-        } finally {
+      isPollingRef.current = true;
+      try {
+        const out = await getPlayerState(did);
+        if (!mountedRef.current || did !== currentDeviceIdRef.current) {
           isPollingRef.current = false;
-        }
-      };
-
-      return () => {
-        cancelled = true;
-        stopPolling();
-        onConnectionStatusChange("fallback_polling");
-
-        pollingIntervalRef.current = window.setInterval(pollOnce, 3000);
-      };
-    },
-    [applySnapshot, onConnectionStatusChange, stopPolling],
-  );
-
-  const connect = useMemo(
-    () => {
-      let cancelled = false;
-
-      return () => {
-        if (cancelled) return;
-        stopPolling();
-
-        if (!deviceId) {
-          onConnectionStatusChange("reconnecting");
           return;
         }
-
-        activeDidRef.current = deviceId;
-        lastAppliedRevisionRef.current = -1;
-
-        const url = getPlayerStreamUrl(deviceId);
-        const es = new EventSource(url);
-        eventSourceRef.current = es;
-
-        es.onopen = () => {
-          if (cancelled || es !== eventSourceRef.current) return;
-          onConnectionStatusChange("connected");
-        };
-
-        es.onerror = () => {
-          if (cancelled || es !== eventSourceRef.current) return;
-
-          es.close();
-          eventSourceRef.current = null;
-          onConnectionStatusChange("reconnecting");
-
-          reconnectTimeoutRef.current = window.setTimeout(() => {
-            if (cancelled || es !== eventSourceRef.current) return;
-            if (activeDidRef.current === deviceId) {
-              startPolling();
-            }
-          }, 3000);
-        };
-
-        es.addEventListener("player_state", (event: MessageEvent) => {
-          if (cancelled || es !== eventSourceRef.current) return;
-          try {
-            const snapshot = JSON.parse(event.data) as PlayerStateData;
-            applySnapshot(snapshot);
-          } catch {
-            // ignore parse errors
+        if (isApiOk(out)) {
+          const snapshot = out.data || EMPTY_SERVER_STATE;
+          const applied = applySnapshot(snapshot, did);
+          if (applied && eventSourceRef.current !== null) {
+            stopPolling();
+            onConnectionStatusChange("connected");
           }
-        });
+        }
+      } catch {
+        // ignore polling errors
+      } finally {
+        isPollingRef.current = false;
+      }
+    }, 3000);
+  }
 
-        es.addEventListener("stream_error", (event: MessageEvent) => {
-          if (cancelled || es !== eventSourceRef.current) return;
-          try {
-            const errorData = JSON.parse(event.data) as { error_code?: string };
-            if (errorData.error_code === "E_AUTH_EXPIRED") {
-              // handle auth refresh if needed
-            }
-          } catch {
-            // ignore parse errors
-          }
-        });
-      };
-    },
-    [applySnapshot, onConnectionStatusChange, startPolling, stopPolling],
-  );
+  function scheduleReconnect(): void {
+    if (!mountedRef.current || !currentDeviceIdRef.current) {
+      return;
+    }
+    disconnectStream();
+    onConnectionStatusChange("reconnecting");
+
+    reconnectTimerRef.current = window.setTimeout(() => {
+      if (!mountedRef.current) {
+        return;
+      }
+      const did = currentDeviceIdRef.current;
+      if (!did) {
+        return;
+      }
+      startFallbackPolling();
+      connectStream(did);
+    }, 3000);
+  }
+
+  function connectStream(did: string): void {
+    disconnectStream();
+    if (!mountedRef.current) {
+      return;
+    }
+
+    const url = getPlayerStreamUrl(did);
+    const es = new EventSource(url);
+    eventSourceRef.current = es;
+
+    es.onopen = () => {
+      if (!mountedRef.current) {
+        es.close();
+        return;
+      }
+      stopPolling();
+      onConnectionStatusChange("connected");
+    };
+
+    es.onerror = () => {
+      if (!mountedRef.current) {
+        return;
+      }
+      scheduleReconnect();
+    };
+
+    es.addEventListener("player_state", (event: MessageEvent) => {
+      if (!mountedRef.current) {
+        return;
+      }
+      const did = currentDeviceIdRef.current;
+      try {
+        const snapshot = JSON.parse(event.data) as PlayerStateData;
+        applySnapshot(snapshot, did);
+      } catch {
+        // ignore parse errors
+      }
+    });
+
+    es.addEventListener("stream_error", (event: MessageEvent) => {
+      if (!mountedRef.current) {
+        return;
+      }
+      try {
+        const errorData = JSON.parse(event.data) as { error_code?: string };
+        if (errorData.error_code === "E_AUTH_EXPIRED") {
+          // handle auth refresh if needed
+        }
+      } catch {
+        // ignore parse errors
+      }
+    });
+  }
 
   useEffect(() => {
-    connect();
-    return () => {
+    mountedRef.current = true;
+    currentDeviceIdRef.current = deviceId;
+    lastAppliedRevisionRef.current = -1;
+
+    if (!deviceId) {
+      disconnectStream();
       stopPolling();
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
+      onConnectionStatusChange("reconnecting");
+      return;
+    }
+
+    (async () => {
+      const out = await getPlayerState(deviceId);
+      if (!mountedRef.current || deviceId !== currentDeviceIdRef.current) {
+        return;
       }
+      if (isApiOk(out)) {
+        applySnapshot(out.data || EMPTY_SERVER_STATE, deviceId);
+      }
+    })();
+
+    startFallbackPolling();
+    connectStream(deviceId);
+
+    return () => {
+      mountedRef.current = false;
+      disconnectStream();
+      stopPolling();
     };
-  }, [connect, stopPolling]);
+  }, [deviceId]);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      disconnectStream();
+      stopPolling();
+    };
+  }, []);
 }
 
 export function HomePage() {
@@ -755,56 +809,55 @@ export function HomePage() {
   const [serverState, dispatchServerState] = useReducer(serverStateReducer, EMPTY_SERVER_STATE);
   const [uiState, setUiState] = useState<UiState>(EMPTY_UI_STATE);
   const serverStateRef = useRef<PlayerStateData>(EMPTY_SERVER_STATE);
-  const uiStateRef = useRef<UiState>(EMPTY_UI_STATE);
   const prevPlaySessionRef = useRef<string>("");
-  const prevTransportStateRef = useRef<TransportState>("idle");
-  const rememberedSongRef = useRef<string>("");
   const activeDidRef = useRef<string>(activeDid);
   const publicBaseMigratedRef = useRef<boolean>(false);
-  const statusRequestSeqRef = useRef<number>(0);
   const themeFileInputRef = useRef<HTMLInputElement | null>(null);
+  const lastAppliedRevisionRef = useRef<number>(-1);
 
-  const { currentPositionMs, progress } = useProgressInterpolation(serverState, uiState);
+  const { currentPositionMs, progress } = useProgressInterpolation(serverState, serverState.transport_state);
 
-  const handleSnapshot = (snapshot: PlayerStateData) => {
-    const prevState = serverStateRef.current;
-    const prevSessionId = prevState.play_session_id;
-    const newSessionId = snapshot.play_session_id;
+  const applySnapshotFn = useMemo(
+    () =>
+      (snapshot: PlayerStateData, currentDeviceId: string): boolean => {
+        if (snapshot.device_id !== currentDeviceId) {
+          return false;
+        }
+        if (snapshot.revision <= lastAppliedRevisionRef.current) {
+          if (lastAppliedRevisionRef.current > 0 && snapshot.revision < lastAppliedRevisionRef.current * 0.1) {
+            lastAppliedRevisionRef.current = -1;
+          } else {
+            return false;
+          }
+        }
+        lastAppliedRevisionRef.current = snapshot.revision;
 
-    if (newSessionId !== prevSessionId) {
-      prevPlaySessionRef.current = prevSessionId;
-      setUiState((prev) => ({
-        ...prev,
-        switchingHint: true,
-        progressInterpolation: { baseMs: 0, startedAt: Date.now() },
-      }));
-    }
+        const prevState = serverStateRef.current;
+        if (snapshot.play_session_id !== prevState.play_session_id) {
+          prevPlaySessionRef.current = prevState.play_session_id;
+          setUiState((prev) => ({ ...prev, switchingHint: true }));
+        }
 
-    if (snapshot.transport_state === "playing") {
-      if (snapshot.track?.title) {
-        saveRememberedPlayingSong(snapshot.device_id, snapshot.track.title);
-        rememberedSongRef.current = snapshot.track.title;
-      }
-      setUiState((prev) => ({
-        ...prev,
-        switchingHint: false,
-      }));
-    }
+        if (snapshot.transport_state === "playing") {
+          if (snapshot.track?.title) {
+            saveRememberedPlayingSong(snapshot.device_id, snapshot.track.title);
+          }
+          setUiState((prev) => ({ ...prev, switchingHint: false }));
+        }
 
-    serverStateRef.current = snapshot;
-    dispatchServerState({ type: "APPLY_SNAPSHOT", snapshot });
-    setUiState((prev) => ({ ...prev, initializing: false }));
-  };
+        serverStateRef.current = snapshot;
+        dispatchServerState({ type: "APPLY_SNAPSHOT", snapshot });
+        setUiState((prev) => ({ ...prev, initializing: false }));
+        return true;
+      },
+    [],
+  );
 
   const handleConnectionStatusChange = (status: UiState["connectionStatus"]) => {
     setUiState((prev) => ({ ...prev, connectionStatus: status }));
   };
 
-  usePlayerStream(activeDid, handleSnapshot, handleConnectionStatusChange);
-
-  useEffect(() => {
-    uiStateRef.current = uiState;
-  }, [uiState]);
+  usePlayerStream(activeDid, applySnapshotFn, handleConnectionStatusChange, lastAppliedRevisionRef);
 
   useEffect(() => {
     if (activeDid) {
@@ -918,35 +971,26 @@ export function HomePage() {
     [customThemes],
   );
 
-  const currentMusicName = useMemo(() => {
-    if (serverState.track?.title) {
-      return serverState.track.title;
-    }
-    if (uiState.initializing && rememberedSongRef.current) {
-      return rememberedSongRef.current;
-    }
-    return "";
-  }, [serverState.track?.title, uiState.initializing]);
-
   const playbackText = useMemo(() => {
+    const title = serverState.track?.title || "";
     switch (serverState.transport_state) {
       case "playing":
-        return `正在播放：${currentMusicName || "未知歌曲"}`;
+        return title ? `正在播放：${title}` : "正在播放";
       case "paused":
-        return `已暂停：${currentMusicName || "未知歌曲"}`;
+        return title ? `已暂停：${title}` : "已暂停";
       case "starting":
         return "正在加载...";
       case "switching":
-        return `正在切换：${currentMusicName || "未知歌曲"}`;
+        return "正在切换...";
       case "stopped":
-        return `已停止：${currentMusicName || ""}`;
+        return title ? `已停止：${title}` : "已停止";
       case "error":
         return "播放出错";
       case "idle":
       default:
         return "空闲";
     }
-  }, [serverState.transport_state, currentMusicName]);
+  }, [serverState.transport_state, serverState.track?.title]);
 
   const safeOffsetSec = Math.max(0, currentPositionMs / 1000);
   const safeDurationSec = Math.max(0, serverState.duration_ms / 1000);
@@ -1143,13 +1187,10 @@ export function HomePage() {
       dispatchServerState({ type: "RESET" });
       setUiState(EMPTY_UI_STATE);
       serverStateRef.current = EMPTY_SERVER_STATE;
-      rememberedSongRef.current = "";
       prevPlaySessionRef.current = "";
       return;
     }
 
-    const remembered = loadRememberedPlayingSong(activeDid);
-    rememberedSongRef.current = remembered;
     setVolume(loadRememberedVolume(activeDid));
     setUiState((prev) => ({ ...prev, initializing: true }));
   }, [activeDid]);
@@ -1166,42 +1207,40 @@ export function HomePage() {
     if (serverState.transport_state !== "playing") {
       return;
     }
-    if (!serverState.track?.id) {
-      return;
-    }
     if (!Object.keys(playlists).length) {
       return;
     }
 
-    const currentTrackId = serverState.track.id;
     const currentContext = serverState.context;
-
-    if (currentContext?.id && currentContext.current_index !== null && currentContext.current_index !== undefined) {
-      const contextSongs = playlists[currentContext.name] || [];
-      const index = currentContext.current_index;
-      if (index >= 0 && index < contextSongs.length) {
-        const songAtIndex = contextSongs[index];
-        if (songAtIndex) {
-          if (playlist !== currentContext.name) {
-            setPlaylist(currentContext.name);
-          }
-          if (music !== songAtIndex) {
-            setMusic(songAtIndex);
-          }
-          return;
-        }
-      }
+    if (!currentContext) {
+      return;
+    }
+    if (currentContext.current_index === null || currentContext.current_index === undefined) {
+      return;
     }
 
-    const matchedPlaylist = Object.keys(playlists).find((name) => {
-      return false;
-    });
-    if (matchedPlaylist && music !== serverState.track.title) {
-      setPlaylist(matchedPlaylist);
-      setMusic(serverState.track.title || "");
+    const contextSongs = playlists[currentContext.name];
+    if (!contextSongs) {
+      return;
+    }
+
+    const index = currentContext.current_index;
+    if (index < 0 || index >= contextSongs.length) {
+      return;
+    }
+
+    const songAtIndex = contextSongs[index];
+    if (!songAtIndex) {
+      return;
+    }
+
+    if (playlist !== currentContext.name) {
+      setPlaylist(currentContext.name);
+    }
+    if (music !== songAtIndex) {
+      setMusic(songAtIndex);
     }
   }, [
-    serverState.track?.id,
     serverState.context,
     serverState.transport_state,
     playlists,
@@ -1463,6 +1502,7 @@ export function HomePage() {
     if (out.already_logged_in) {
       setQrcodeUrl("");
       setQrcodeExpireAt(0);
+      setQrcodeRemain(0);
       setQrcodeStatus(out.message || "已登录，无需扫码");
       await loadAuthStatus();
       await loadSettingData();
@@ -1574,8 +1614,8 @@ export function HomePage() {
     setMessage(out.ret || "获取歌单失败");
   }
 
-  function clearCache() {
-    localStorage.clear();
+  function doClearCache() {
+    clearXmCache();
     setMessage("浏览器缓存已清除");
   }
 
@@ -2433,7 +2473,7 @@ export function HomePage() {
             </div>
             <div className={`section-content ${operationOpen ? "" : "collapsed"}`} style={{ display: operationOpen ? "block" : "none" }}>
               <div className="button-grid">
-                <button onClick={() => clearCache()}>
+                <button onClick={() => doClearCache()}>
                   <span className="material-icons">delete_sweep</span>
                   <span>清空缓存</span>
                 </button>
