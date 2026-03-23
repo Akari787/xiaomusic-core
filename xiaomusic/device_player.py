@@ -604,7 +604,7 @@ class XiaoMusicDevice:
         self._paused_time = 0
 
         if self.event_bus:
-            self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.device_id)
+            self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.did)
 
         sec = await self.xiaomusic.music_library.get_music_duration(name)
         # 存储真实歌曲时长
@@ -1270,7 +1270,7 @@ class XiaoMusicDevice:
         await self.group_force_stop_xiaoai()
         self.log.info("stop now")
         if self.event_bus:
-            self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.device_id)
+            self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.did)
 
     async def pause(self):
         """暂停播放并使旧计时器失效。"""
@@ -1280,6 +1280,8 @@ class XiaoMusicDevice:
         await self.cancel_group_next_timer()
         await self.group_force_stop_xiaoai()
         self.log.info("pause now")
+        if self.event_bus:
+            self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.did)
 
     async def group_force_stop_xiaoai(self):
         """强制停止组内所有设备"""

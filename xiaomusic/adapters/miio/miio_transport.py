@@ -102,18 +102,6 @@ class MiioTransport(Transport):
                 int((time.perf_counter() - start) * 1000),
                 device_id,
             )
-            if player.event_bus is not None:
-                try:
-                    status_info = await player.get_player_status()
-                    if int(status_info.get("status", 0) or 0) == 1:
-                        player.is_playing = True
-                    else:
-                        player.is_playing = False
-                    from xiaomusic.events import PLAYER_STATE_CHANGED
-
-                    player.event_bus.publish(PLAYER_STATE_CHANGED, device_id=device_id)
-                except Exception:
-                    pass
             return {"ret": "OK"}
         except Exception:
             LOG.warning(
