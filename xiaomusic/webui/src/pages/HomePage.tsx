@@ -509,6 +509,8 @@ function useProgressInterpolation(serverState: PlayerStateData, transportState: 
   const [currentPositionMs, setCurrentPositionMs] = useState<number>(() => serverState.position_ms);
   const timerRef = useRef<number | null>(null);
   const lastRevisionRef = useRef<number>(-1);
+  const lastSessionRef = useRef<string>('');
+  const lastSnapshotRef = useRef<number>(0);
 
   useEffect(() => {
     if (timerRef.current !== null) {
@@ -516,32 +518,32 @@ function useProgressInterpolation(serverState: PlayerStateData, transportState: 
       timerRef.current = null;
     }
 
-    if (serverState.revision === lastRevisionRef.current) {
-      return;
-    }
-    lastRevisionRef.current = serverState.revision;
-
     if (transportState !== "playing") {
       setCurrentPositionMs(serverState.position_ms);
       return;
     }
 
-    const snapshotAt = serverState.snapshot_at_ms;
+    const sessionChanged = serverState.play_session_id !== lastSessionRef.current;
+    const revisionChanged = serverState.revision !== lastRevisionRef.current;
+    if (sessionChanged) {
+      lastSessionRef.current = serverState.play_session_id;
+    }
+    if (revisionChanged) {
+      lastRevisionRef.current = serverState.revision;
+    }
+
     const basePosition = serverState.position_ms;
     const durationMs = serverState.duration_ms;
+    let snapshotAt = serverState.snapshot_at_ms;
 
-    setCurrentPositionMs(basePosition);
+    if (sessionChanged || revisionChanged) {
+      setCurrentPositionMs(basePosition);
+      lastSnapshotRef.current = snapshotAt;
+    }
 
     timerRef.current = window.setInterval(() => {
       const now = Date.now();
-      const elapsed = now - snapshotAt;
-      if (elapsed > 5000) {
-        if (timerRef.current !== null) {
-          window.clearInterval(timerRef.current);
-          timerRef.current = null;
-        }
-        return;
-      }
+      const elapsed = now - lastSnapshotRef.current;
       let newPosition = basePosition + elapsed;
       if (durationMs > 0) {
         newPosition = Math.min(newPosition, durationMs);
