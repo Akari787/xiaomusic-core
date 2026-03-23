@@ -2513,3 +2513,198 @@ async def test_auth_call_non_destructive_recovery_success_retries(auth_manager):
     )
     assert result == "success"
     assert call_count == 2, "Should have retried after successful recovery"
+
+
+@pytest.mark.asyncio
+async def test_runtime_rebuild_with_existing_short_session_success(auth_manager):
+    """测试用已有 short session 重建 runtime 成功"""
+    import json
+
+    # 设置 auth.json 中有 short session
+    auth_data = {
+        "passToken": "test_pass",
+        "userId": "test_user",
+        "cUserId": "test_cuser",
+        "psecurity": "test_psecurity",
+        "serviceToken": "test_service_token",
+        "ssecurity": "test_ssecurity",
+        "deviceId": "test_device_id",
+    }
+    with open(auth_manager.auth_token_path, "w") as f:
+        json.dump(auth_data, f)
+
+    # 模拟 device_list 成功
+    class MockMiAccount:
+        def __init__(self, *args, **kwargs):
+            self.token = {}
+
+    class MockMiNAService:
+        def __init__(self, account):
+            self.account = account
+
+        async def device_list(self):
+            return [{"did": "test_device"}]
+
+    # Mock MiAccount 和 MiNAService
+    import xiaomusic.auth as auth_module
+
+    original_MiAccount = auth_module.MiAccount
+    original_MiNAService = auth_module.MiNAService
+
+    auth_module.MiAccount = MockMiAccount
+    auth_module.MiNAService = MockMiNAService
+
+    try:
+        (
+            ok,
+            detail,
+        ) = await auth_manager._attempt_runtime_rebuild_with_existing_short_session(
+            ctx="test_ctx", reason="test_reason"
+        )
+
+        assert ok is True, f"Expected success but got: {detail}"
+        assert "existing_short_session_verified" in detail
+        assert isinstance(auth_manager.mina_service, MockMiNAService)
+    finally:
+        auth_module.MiAccount = original_MiAccount
+        auth_module.MiNAService = original_MiNAService
+
+
+@pytest.mark.asyncio
+async def test_runtime_rebuild_with_existing_short_session_verify_failed(auth_manager):
+    """测试用已有 short session 重建 runtime，但 verify 失败"""
+    import json
+
+    # 设置 auth.json 中有 short session
+    auth_data = {
+        "passToken": "test_pass",
+        "userId": "test_user",
+        "cUserId": "test_cuser",
+        "psecurity": "test_psecurity",
+        "serviceToken": "test_service_token",
+        "ssecurity": "test_ssecurity",
+        "deviceId": "test_device_id",
+    }
+    with open(auth_manager.auth_token_path, "w") as f:
+        json.dump(auth_data, f)
+
+    # 模拟 device_list 失败
+    class MockMiAccount:
+        def __init__(self, *args, **kwargs):
+            self.token = {}
+
+    class MockMiNAService:
+        def __init__(self, account):
+            self.account = account
+
+        async def device_list(self):
+            raise RuntimeError("Verify failed: 401")
+
+    import xiaomusic.auth as auth_module
+
+    original_MiAccount = auth_module.MiAccount
+    original_MiNAService = auth_module.MiNAService
+
+    auth_module.MiAccount = MockMiAccount
+    auth_module.MiNAService = MockMiNAService
+
+    try:
+        (
+            ok,
+            detail,
+        ) = await auth_manager._attempt_runtime_rebuild_with_existing_short_session(
+            ctx="test_ctx", reason="test_reason"
+        )
+
+        assert ok is False, f"Expected failure but got: {detail}"
+        assert "verify_failed" in detail
+        # 验证没有清空 short session
+        with open(auth_manager.auth_token_path) as f:
+            saved_data = json.load(f)
+        assert "serviceToken" in saved_data
+    finally:
+        auth_module.MiAccount = original_MiAccount
+        auth_module.MiNAService = original_MiNAService
+
+
+@pytest.mark.asyncio
+async def test_runtime_rebuild_no_existing_short_session(auth_manager):
+    """测试没有已有 short session 时，helper 直接失败"""
+    import json
+
+    # 设置 auth.json 中没有 short session
+    auth_data = {
+        "passToken": "test_pass",
+        "userId": "test_user",
+        "cUserId": "test_cuser",
+        "psecurity": "test_psecurity",
+        "ssecurity": "test_ssecurity",
+        "deviceId": "test_device_id",
+    }
+    with open(auth_manager.auth_token_path, "w") as f:
+        json.dump(auth_data, f)
+
+    (
+        ok,
+        detail,
+    ) = await auth_manager._attempt_runtime_rebuild_with_existing_short_session(
+        ctx="test_ctx", reason="test_reason"
+    )
+
+    assert ok is False
+    assert "no_existing_short_session" in detail
+
+
+@pytest.mark.asyncio
+async def test_non_destructive_recovery_prioritizes_existing_short_session(
+    auth_manager,
+):
+    """测试非破坏性恢复优先尝试已有 short session"""
+    import json
+
+    # 设置 auth.json 中有 short session
+    auth_data = {
+        "passToken": "test_pass",
+        "userId": "test_user",
+        "cUserId": "test_cuser",
+        "psecurity": "test_psecurity",
+        "serviceToken": "test_service_token",
+        "ssecurity": "test_ssecurity",
+        "deviceId": "test_device_id",
+    }
+    with open(auth_manager.auth_token_path, "w") as f:
+        json.dump(auth_data, f)
+
+    # 模拟 device_list 成功
+    class MockMiAccount:
+        def __init__(self, *args, **kwargs):
+            self.token = {}
+
+    class MockMiNAService:
+        def __init__(self, account):
+            self.account = account
+
+        async def device_list(self):
+            return [{"did": "test_device"}]
+
+    import xiaomusic.auth as auth_module
+
+    original_MiAccount = auth_module.MiAccount
+    original_MiNAService = auth_module.MiNAService
+
+    auth_module.MiAccount = MockMiAccount
+    auth_module.MiNAService = MockMiNAService
+
+    try:
+        ok, detail = await auth_manager._attempt_non_destructive_auth_recovery(
+            ctx="test_ctx", reason="test_reason"
+        )
+
+        assert ok is True, f"Expected success but got: {detail}"
+        assert (
+            "existing_short_session_verified" in detail
+            or "existing_short_session_runtime_rebuild" in detail
+        )
+    finally:
+        auth_module.MiAccount = original_MiAccount
+        auth_module.MiNAService = original_MiNAService

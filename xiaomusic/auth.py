@@ -1630,6 +1630,187 @@ class AuthManager:
             payload["error"] = str(err)[:200]
         self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
+    async def _attempt_runtime_rebuild_with_existing_short_session(
+        self, ctx: str = "", reason: str = ""
+    ) -> tuple[bool, str]:
+        """尝试用 auth.json 中已有的 short session 重建 runtime
+
+        这是自动恢复路径中优先尝试的策略，模拟手动恢复成功路径：
+        1. 读取 auth.json 中已有的 serviceToken
+        2. 新建 MiAccount 并注入旧 token
+        3. 新建 MiNAService / MiIOService
+        4. 用新对象 verify
+        5. 成功后原子替换当前 runtime 引用
+
+        失败时不会 clear short session，不会写空 auth.json。
+
+        Returns:
+            tuple[bool, str]: (是否成功, 结果描述)
+        """
+        recovery_reason = reason or ctx or "existing_short_session_recovery"
+        auth_session_id = self._auth_session_id()
+
+        # 发送开始日志
+        payload_start = {
+            "event": "auth_runtime_rebuild_with_existing_short_session",
+            "stage": "start",
+            "auth_session_id": auth_session_id,
+            "ctx": ctx or "",
+            "reason": recovery_reason,
+        }
+        self.log.info(
+            json.dumps(payload_start, ensure_ascii=False, separators=(",", ":"))
+        )
+
+        try:
+            # Step 1: 重新读取 auth 数据
+            if self.token_store is not None:
+                try:
+                    self.token_store.load()
+                except Exception:
+                    pass
+
+            auth_data = self._get_auth_data()
+
+            # 检查是否存在 short session
+            auth_service_token = auth_data.get(
+                "yetAnotherServiceToken"
+            ) or auth_data.get("serviceToken")
+            auth_ssecurity = auth_data.get("ssecurity")
+
+            if not auth_service_token or not auth_ssecurity:
+                payload_fail = {
+                    "event": "auth_runtime_rebuild_with_existing_short_session",
+                    "stage": "complete",
+                    "auth_session_id": auth_session_id,
+                    "ctx": ctx or "",
+                    "result": "failed",
+                    "reason": "no_existing_short_session",
+                    "detail": "auth.json missing serviceToken or ssecurity",
+                    "has_serviceToken": bool(auth_service_token),
+                    "has_ssecurity": bool(auth_ssecurity),
+                    "used_existing_short_session": False,
+                    "runtime_objects_recreated": False,
+                    "runtime_swap_applied": False,
+                }
+                self.log.info(
+                    json.dumps(payload_fail, ensure_ascii=False, separators=(",", ":"))
+                )
+                return False, "no_existing_short_session"
+
+            # Step 2: 新建临时 MiAccount
+            account_name = auth_data.get("userId", "")
+            if not account_name:
+                payload_fail = {
+                    "event": "auth_runtime_rebuild_with_existing_short_session",
+                    "stage": "complete",
+                    "auth_session_id": auth_session_id,
+                    "ctx": ctx or "",
+                    "result": "failed",
+                    "reason": "missing_userId",
+                    "detail": "auth.json missing userId for MiAccount creation",
+                    "used_existing_short_session": True,
+                    "runtime_objects_recreated": False,
+                    "runtime_swap_applied": False,
+                }
+                self.log.info(
+                    json.dumps(payload_fail, ensure_ascii=False, separators=(",", ":"))
+                )
+                return False, "missing_userId"
+
+            # 创建新的 MiAccount 实例
+            temp_mi_account = MiAccount(
+                self.mi_session,
+                account_name,
+                "",
+                str(self.mi_token_home),
+            )
+
+            # 注入已有的 short session token
+            token_data = getattr(temp_mi_account, "token", None)
+            if isinstance(token_data, dict):
+                # 使用和 login_miboy 一致的格式：(ssecurity, serviceToken)
+                token_data["micoapi"] = (auth_ssecurity, auth_service_token)
+
+            # Step 3: 新建临时 MiNAService
+            temp_mina_service = MiNAService(temp_mi_account)
+
+            # Step 4: 用新对象 verify
+            try:
+                await temp_mina_service.device_list()
+            except Exception as verify_err:
+                payload_fail = {
+                    "event": "auth_runtime_rebuild_with_existing_short_session",
+                    "stage": "complete",
+                    "auth_session_id": auth_session_id,
+                    "ctx": ctx or "",
+                    "result": "failed",
+                    "reason": "verify_failed",
+                    "detail": f"new runtime verify failed: {type(verify_err).__name__}: {verify_err}",
+                    "used_existing_short_session": True,
+                    "runtime_objects_recreated": True,
+                    "runtime_swap_applied": False,
+                }
+                self.log.info(
+                    json.dumps(payload_fail, ensure_ascii=False, separators=(",", ":"))
+                )
+                # 失败时丢弃临时对象，不影响当前 runtime
+                return False, f"verify_failed:{type(verify_err).__name__}"
+
+            # Step 5: 成功后原子替换
+            # 替换 mina_service
+            old_mina_service = self.mina_service
+            self.mina_service = temp_mina_service
+
+            # 替换 miio_service（如果需要）
+            old_miio_service = self.miio_service
+            try:
+                self.miio_service = MiIOService(temp_mi_account)
+            except Exception:
+                # MiIOService 创建失败不影响整体成功
+                pass
+
+            # 更新 runtime token 状态
+            self.set_token(temp_mi_account)
+
+            # 记录成功日志
+            payload_ok = {
+                "event": "auth_runtime_rebuild_with_existing_short_session",
+                "stage": "complete",
+                "auth_session_id": auth_session_id,
+                "ctx": ctx or "",
+                "result": "success",
+                "reason": "existing_short_session_verified",
+                "detail": "reused existing short session with new runtime objects",
+                "used_existing_short_session": True,
+                "runtime_objects_recreated": True,
+                "runtime_swap_applied": True,
+                "old_mina_service_id": id(old_mina_service),
+                "new_mina_service_id": id(self.mina_service),
+            }
+            self.log.info(
+                json.dumps(payload_ok, ensure_ascii=False, separators=(",", ":"))
+            )
+            return True, "existing_short_session_verified"
+
+        except Exception as e:
+            payload_err = {
+                "event": "auth_runtime_rebuild_with_existing_short_session",
+                "stage": "complete",
+                "auth_session_id": auth_session_id,
+                "ctx": ctx or "",
+                "result": "error",
+                "reason": "exception",
+                "detail": f"{type(e).__name__}: {e}",
+                "used_existing_short_session": False,
+                "runtime_objects_recreated": False,
+                "runtime_swap_applied": False,
+            }
+            self.log.info(
+                json.dumps(payload_err, ensure_ascii=False, separators=(",", ":"))
+            )
+            return False, f"exception:{type(e).__name__}"
+
     async def _attempt_non_destructive_auth_recovery(
         self, ctx: str = "", reason: str = ""
     ) -> tuple[bool, str]:
@@ -1661,14 +1842,41 @@ class AuthManager:
         )
 
         try:
-            # 步骤 1: 重新加载 token_store，确保 runtime 有最新数据
+            # Phase A: 优先尝试"复用旧 short session + 新 runtime"路径
+            # 这是最接近手动成功路径的策略
+            (
+                ok,
+                detail,
+            ) = await self._attempt_runtime_rebuild_with_existing_short_session(
+                ctx=ctx, reason=recovery_reason
+            )
+            if ok:
+                payload_phase_a_ok = {
+                    "event": "auth_non_destructive_recovery",
+                    "stage": "complete",
+                    "auth_session_id": auth_session_id,
+                    "ctx": ctx or "",
+                    "result": "success",
+                    "reason": "existing_short_session_runtime_rebuild",
+                    "detail": detail,
+                    "phase": "A",
+                }
+                self.log.info(
+                    json.dumps(
+                        payload_phase_a_ok, ensure_ascii=False, separators=(",", ":")
+                    )
+                )
+                return True, detail
+
+            # Phase B: 如果 Phase A 失败，尝试原有轻量恢复动作
+            # 重新加载 token_store
             if self.token_store is not None:
                 try:
                     self.token_store.load()
                 except Exception:
                     pass
 
-            # 步骤 2: 检查 short session 是否存在
+            # 检查 short session 是否存在
             auth_data = self._get_auth_data()
             has_short_session = bool(
                 auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
@@ -1683,13 +1891,14 @@ class AuthManager:
                     "result": "failed",
                     "reason": "no_short_session",
                     "detail": "short session not found in auth data",
+                    "phase": "B",
                 }
                 self.log.info(
                     json.dumps(payload_fail, ensure_ascii=False, separators=(",", ":"))
                 )
                 return False, "no_short_session"
 
-            # 步骤 3: 尝试验证 runtime（不修改任何状态）
+            # 尝试验证 runtime（不修改任何状态）
             try:
                 ready = await self._verify_runtime_auth_ready()
                 if ready:
@@ -1701,6 +1910,7 @@ class AuthManager:
                         "result": "success",
                         "reason": "runtime_verified",
                         "detail": "runtime auth still valid",
+                        "phase": "B",
                     }
                     self.log.info(
                         json.dumps(
@@ -1709,46 +1919,6 @@ class AuthManager:
                     )
                     return True, "runtime_verified"
             except Exception as verify_err:
-                # 验证失败，但不表示 short session 无效，可能是临时问题
-                pass
-
-            # 步骤 4: 尝试重新绑定 runtime service（不 clear）
-            try:
-                if self.mina_service is not None:
-                    account = getattr(self.mina_service, "account", None)
-                    if account is not None:
-                        token = getattr(account, "token", None)
-                        if isinstance(token, dict):
-                            # 尝试从 auth_data 重新注入 micoapi token
-                            service_token = auth_data.get("serviceToken", "")
-                            yet_another = auth_data.get("yetAnotherServiceToken", "")
-                            if service_token or yet_another:
-                                token["micoapi"] = {
-                                    "serviceToken": service_token,
-                                    "yetAnotherServiceToken": yet_another,
-                                    "ssecurity": auth_data.get("ssecurity", ""),
-                                }
-                                # 再次验证
-                                ready = await self._verify_runtime_auth_ready()
-                                if ready:
-                                    payload_rebind = {
-                                        "event": "auth_non_destructive_recovery",
-                                        "stage": "complete",
-                                        "auth_session_id": auth_session_id,
-                                        "ctx": ctx or "",
-                                        "result": "success",
-                                        "reason": "runtime_rebound",
-                                        "detail": "runtime rebound and verified",
-                                    }
-                                    self.log.info(
-                                        json.dumps(
-                                            payload_rebind,
-                                            ensure_ascii=False,
-                                            separators=(",", ":"),
-                                        )
-                                    )
-                                    return True, "runtime_rebound"
-            except Exception:
                 pass
 
             # 所有非破坏性尝试都失败
@@ -1759,7 +1929,8 @@ class AuthManager:
                 "ctx": ctx or "",
                 "result": "failed",
                 "reason": "all_attempts_failed",
-                "detail": "non-destructive recovery attempts exhausted",
+                "detail": f"non-destructive recovery attempts exhausted (phase A: {detail})",
+                "phase": "B",
             }
             self.log.info(
                 json.dumps(
