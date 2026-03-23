@@ -1016,7 +1016,7 @@ async def api_v1_player_state(
         )
 
 
-_player_stream_subscribers: dict[str, asyncio.Queue] = {}
+_player_stream_subscribers: dict[str, set[asyncio.Queue[bytes]]] = {}
 _player_stream_sub_lock = asyncio.Lock()
 
 
@@ -1035,12 +1035,13 @@ async def _push_player_state_event(device_id: str) -> None:
     )
     event_bytes = event.encode("utf-8")
     async with _player_stream_sub_lock:
-        queue = _player_stream_subscribers.get(device_id)
-        if queue is not None:
-            try:
-                queue.put_nowait(event_bytes)
-            except Exception:
-                pass
+        subscribers = _player_stream_subscribers.get(device_id)
+        if subscribers:
+            for queue in list(subscribers):
+                try:
+                    queue.put_nowait(event_bytes)
+                except Exception:
+                    pass
 
 
 @router.get("/api/v1/player/stream")
@@ -1067,20 +1068,22 @@ async def api_v1_player_stream(
     q: asyncio.Queue[bytes] = asyncio.Queue()
 
     async with _player_stream_sub_lock:
-        if device_id in _player_stream_subscribers:
-            old_q = _player_stream_subscribers.pop(device_id)
-            while not old_q.empty():
-                try:
-                    old_q.get_nowait()
-                except Exception:
-                    break
-        _player_stream_subscribers[device_id] = q
+        if device_id not in _player_stream_subscribers:
+            _player_stream_subscribers[device_id] = set()
+        _player_stream_subscribers[device_id].add(q)
 
-    async def _remove_sub(did: str):
+    async def _remove_sub(did: str, queue: asyncio.Queue[bytes]):
         async with _player_stream_sub_lock:
-            _player_stream_subscribers.pop(did, None)
+            subs = _player_stream_subscribers.get(did)
+            if subs and queue in subs:
+                subs.discard(queue)
+            if not subs:
+                _player_stream_subscribers.pop(did, None)
 
     async def on_state_changed(**kwargs):
+        event_device_id = kwargs.get("device_id")
+        if event_device_id != device_id:
+            return
         await _push_player_state_event(device_id)
 
     if event_bus is not None:
@@ -1099,7 +1102,7 @@ async def api_v1_player_stream(
                 event_bus.unsubscribe(PLAYER_STATE_CHANGED, on_state_changed)
             except Exception:
                 pass
-        await _remove_sub(device_id)
+        await _remove_sub(device_id, q)
 
     async def event_generator():
         try:

@@ -752,7 +752,6 @@ class PlaybackFacade:
             play_session_id=play_session_id,
             context_id=cur_playlist,
             current_index=current_index,
-            position_ms=position_ms,
             duration_ms=duration_ms,
         )
 
@@ -845,13 +844,13 @@ class PlaybackFacade:
         play_session_id: str,
         context_id: str,
         current_index: int | None,
-        position_ms: int,
         duration_ms: int,
     ) -> str:
-        """Build a deterministic key that captures all externally-visible state.
+        """Build a deterministic key that captures discrete externally-visible state.
 
         This key is used for revision deduplication: when the key hasn't changed,
-        the revision stays the same.
+        the revision stays the same. Only includes fields that represent discrete
+        state changes (not natural time progression like position_ms).
         """
         return "|".join(
             str(x)
@@ -862,7 +861,6 @@ class PlaybackFacade:
                 play_session_id,
                 context_id,
                 current_index,
-                position_ms,
                 duration_ms,
             ]
         )
