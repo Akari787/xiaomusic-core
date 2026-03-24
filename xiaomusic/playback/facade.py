@@ -694,16 +694,29 @@ class PlaybackFacade:
         current_index: int | None = None
         if device_player:
             try:
+                play_list = getattr(device_player, "_play_list", [])
+            except (ValueError, AttributeError):
+                play_list = []
+
+            try:
                 real_index = getattr(device_player, "_current_index", -1)
-                if real_index >= 0:
+                if real_index >= 0 and play_list and track_title:
+                    if real_index < len(play_list):
+                        list_title = str(play_list[real_index] or "")
+                        if list_title == track_title:
+                            current_index = real_index
+                        else:
+                            current_index = None
+                    else:
+                        current_index = None
+                elif real_index >= 0:
                     current_index = real_index
             except (ValueError, AttributeError):
                 pass
 
-            if current_index is None and track_title:
+            if current_index is None and track_title and play_list:
                 try:
-                    play_list = getattr(device_player, "_play_list", [])
-                    if play_list and track_title in play_list:
+                    if track_title in play_list:
                         current_index = play_list.index(track_title)
                 except (ValueError, AttributeError):
                     pass
