@@ -1202,11 +1202,18 @@ export function HomePage() {
   useEffect(() => {
     if (!songs.length) {
       setMusic("");
+      setSelectedTrackId(null);
       return;
     }
     setMusic((prev) => {
       const found = songs.find((s) => s.title === prev);
       return found ? prev : songs[0].title;
+    });
+    setSelectedTrackId((prev) => {
+      if (prev && songs.find(s => s.id === prev)) {
+        return prev;
+      }
+      return songs[0]?.id ?? null;
     });
   }, [songs]);
 
@@ -1296,12 +1303,17 @@ export function HomePage() {
     }
   }
 
+
   async function playSongByName(songName: string) {
     if (!requireDid()) {
       return;
     }
     const deviceId = activeDid;
-    const picked = String(songName || "").trim() || String(songs[0] || "").trim();
+    let picked = songName;
+    if (!picked && songs.length > 0) {
+      const currentItem = songs.find(s => s.id === selectedTrackId);
+      picked = currentItem?.title ?? songs[0].title;
+    }
     if (!picked) {
       setMessage("当前歌单为空，请先刷新歌单或切换列表");
       return;
@@ -1345,7 +1357,9 @@ export function HomePage() {
   }
 
   async function playCurrent() {
-    await playSongByName(music);
+    const currentItem = songs.find(s => s.id === selectedTrackId);
+    const songToPlay = currentItem?.title ?? music;
+    await playSongByName(songToPlay);
   }
 
   async function togglePlayMode() {
@@ -1654,9 +1668,11 @@ export function HomePage() {
     const nextSongs = playlists[nextPlaylist] || [];
     if (!nextSongs.length) {
       setMusic("");
+      setSelectedTrackId(null);
       return;
     }
     setMusic(nextSongs[0].title);
+    setSelectedTrackId(nextSongs[0].id);
   }
 
   function fieldValue(key: string): string {
@@ -1857,14 +1873,25 @@ export function HomePage() {
                   {filteredSongs.map((item, idx) => (
                     <tr
                       key={`song-${item.id}-${idx}`}
-                      className={music === item.title ? "active" : ""}
-                      onClick={() => setMusic(item.title)}
-                      onDoubleClick={() => void playSongByName(item.title)}
+                      className={selectedTrackId === item.id ? "active" : ""}
+                      onClick={() => {
+                        setSelectedTrackId(item.id);
+                        setMusic(item.title);
+                      }}
+                      onDoubleClick={() => {
+                        setSelectedTrackId(item.id);
+                        setMusic(item.title);
+                        void playSongByName(item.title);
+                      }}
                     >
                       <td>{idx + 1}</td>
                       <td>{item.title}</td>
                       <td>
-                        <button onClick={() => void playSongByName(item.title)}>播放</button>
+                        <button onClick={() => {
+                          setSelectedTrackId(item.id);
+                          setMusic(item.title);
+                          void playSongByName(item.title);
+                        }}>播放</button>
                       </td>
                     </tr>
                   ))}
@@ -1988,9 +2015,16 @@ export function HomePage() {
           <label htmlFor="music_name" className="label-with-action">
             选择歌曲:
           </label>
-          <select id="music_name" className="song-selector" value={music} onChange={(e) => setMusic(e.target.value)}>
+          <select id="music_name" className="song-selector" value={selectedTrackId ?? ""} onChange={(e) => {
+            const selectedId = e.target.value;
+            const item = songs.find(s => s.id === selectedId);
+            if (item) {
+              setSelectedTrackId(selectedId);
+              setMusic(item.title);
+            }
+          }}>
             {songs.map((item) => (
-              <option key={item.id} value={item.title}>
+              <option key={item.id} value={item.id}>
                 {item.title}
               </option>
             ))}
