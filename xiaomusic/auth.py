@@ -1614,6 +1614,9 @@ class AuthManager:
         decision_reason: str,
         streak: int,
         err: str = "",
+        phase_a_result: str = "",
+        phase_a_detail: str = "",
+        strong_invalidation_evidence: bool = False,
     ) -> None:
         """发送short session clear决策日志"""
         payload = {
@@ -1628,6 +1631,12 @@ class AuthManager:
         }
         if err:
             payload["error"] = str(err)[:200]
+        if phase_a_result:
+            payload["phase_a_result"] = phase_a_result
+        if phase_a_detail:
+            payload["phase_a_detail"] = str(phase_a_detail)[:200]
+        if strong_invalidation_evidence:
+            payload["strong_invalidation_evidence"] = strong_invalidation_evidence
         self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
     async def _attempt_runtime_rebuild_with_existing_short_session(
@@ -1813,14 +1822,14 @@ class AuthManager:
 
     async def _attempt_non_destructive_auth_recovery(
         self, ctx: str = "", reason: str = ""
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, bool]:
         """尝试非破坏性认证恢复
 
         只做轻量级恢复，不 clear short session，不 mark_session_invalid。
         用于首次 auth error suspect 时的保守恢复策略。
 
         Returns:
-            tuple[bool, str]: (是否成功, 结果描述)
+            tuple[bool, str, bool]: (是否成功, 结果描述, 是否属于强证据需要立即升级)
         """
         recovery_reason = reason or ctx or "auth_error_suspect"
         auth_session_id = self._auth_session_id()
@@ -1860,15 +1869,43 @@ class AuthManager:
                     "reason": "existing_short_session_runtime_rebuild",
                     "detail": detail,
                     "phase": "A",
+                    "strong_invalidation_evidence": False,
                 }
                 self.log.info(
                     json.dumps(
                         payload_phase_a_ok, ensure_ascii=False, separators=(",", ":")
                     )
                 )
-                return True, detail
+                return True, detail, False
 
-            # Phase B: 如果 Phase A 失败，尝试原有轻量恢复动作
+            # Phase A 失败，检查是否属于强证据
+            # 从 detail 中提取 reason 信息
+            phase_a_reason = detail.split(":")[0] if detail else ""
+            is_strong = self._is_strong_short_session_invalidation_evidence(
+                reason=phase_a_reason, detail=detail
+            )
+
+            if is_strong:
+                # 强证据：立即升级到 clear+rebuild
+                payload_strong = {
+                    "event": "auth_non_destructive_recovery",
+                    "stage": "complete",
+                    "auth_session_id": auth_session_id,
+                    "ctx": ctx or "",
+                    "result": "failed",
+                    "reason": "strong_invalidation_evidence",
+                    "detail": detail,
+                    "phase": "A",
+                    "strong_invalidation_evidence": True,
+                }
+                self.log.info(
+                    json.dumps(
+                        payload_strong, ensure_ascii=False, separators=(",", ":")
+                    )
+                )
+                return False, detail, True
+
+            # Phase B: 如果 Phase A 失败但不是强证据，尝试原有轻量恢复动作
             # 重新加载 token_store
             if self.token_store is not None:
                 try:
@@ -1892,11 +1929,12 @@ class AuthManager:
                     "reason": "no_short_session",
                     "detail": "short session not found in auth data",
                     "phase": "B",
+                    "strong_invalidation_evidence": False,
                 }
                 self.log.info(
                     json.dumps(payload_fail, ensure_ascii=False, separators=(",", ":"))
                 )
-                return False, "no_short_session"
+                return False, "no_short_session", False
 
             # 尝试验证 runtime（不修改任何状态）
             try:
@@ -1911,13 +1949,14 @@ class AuthManager:
                         "reason": "runtime_verified",
                         "detail": "runtime auth still valid",
                         "phase": "B",
+                        "strong_invalidation_evidence": False,
                     }
                     self.log.info(
                         json.dumps(
                             payload_ok, ensure_ascii=False, separators=(",", ":")
                         )
                     )
-                    return True, "runtime_verified"
+                    return True, "runtime_verified", False
             except Exception as verify_err:
                 pass
 
@@ -1931,13 +1970,14 @@ class AuthManager:
                 "reason": "all_attempts_failed",
                 "detail": f"non-destructive recovery attempts exhausted (phase A: {detail})",
                 "phase": "B",
+                "strong_invalidation_evidence": False,
             }
             self.log.info(
                 json.dumps(
                     payload_fail_final, ensure_ascii=False, separators=(",", ":")
                 )
             )
-            return False, "all_attempts_failed"
+            return False, "all_attempts_failed", False
 
         except Exception as e:
             payload_err = {
@@ -1948,11 +1988,41 @@ class AuthManager:
                 "result": "error",
                 "reason": "exception",
                 "detail": f"{type(e).__name__}: {e}",
+                "strong_invalidation_evidence": False,
             }
             self.log.info(
                 json.dumps(payload_err, ensure_ascii=False, separators=(",", ":"))
             )
-            return False, f"exception:{type(e).__name__}"
+            return False, f"exception:{type(e).__name__}", False
+
+    @staticmethod
+    def _is_strong_short_session_invalidation_evidence(
+        reason: str = "", detail: str = ""
+    ) -> bool:
+        """判断是否属于强证据，需要立即升级到 clear+rebuild
+
+        只有在以下场景才返回 True：
+        - Phase A verify_failed 且是明确的 Mina auth failure
+
+        返回 False 的场景：
+        - no_existing_short_session
+        - missing_userId
+        - exception (非认证错误)
+        - 对象创建失败
+        """
+        reason_lower = (reason or "").lower()
+        detail_lower = (detail or "").lower()
+
+        # verify_failed 且是明确的 Mina auth failure
+        if "verify_failed" in reason_lower:
+            if "login failed" in detail_lower:
+                return True
+            if "401" in detail_lower or "unauthorized" in detail_lower:
+                return True
+            if "70016" in detail_lower:
+                return True
+
+        return False
 
     @staticmethod
     def _is_short_session_failure_signal(
@@ -3311,12 +3381,46 @@ class AuthManager:
                 (
                     recovery_ok,
                     recovery_detail,
+                    escalate_to_clear,
                 ) = await self._attempt_non_destructive_auth_recovery(
                     ctx=ctx, reason=str(e)
                 )
 
                 if recovery_ok:
                     # 恢复成功，直接重试原请求
+                    if retry <= 0:
+                        raise
+                    return await fn()
+                elif escalate_to_clear:
+                    # 强证据：立即升级到 clear+rebuild
+                    self._emit_auth_short_session_clear_decision(
+                        ctx=ctx,
+                        auth_error_detected=True,
+                        clear_executed=True,
+                        clear_reason=ctx or "strong_invalidation_evidence",
+                        decision_reason="strong_invalidation_evidence_after_runtime_rebuild",
+                        streak=self._auth_error_suspect_streak,
+                        err=str(e),
+                        phase_a_result="failed",
+                        phase_a_detail=recovery_detail,
+                        strong_invalidation_evidence=True,
+                    )
+                    cleared = self._clear_short_lived_session(
+                        clear_reason=ctx or "strong_invalidation_evidence",
+                        err=e,
+                    )
+                    # clear后重置suspect状态
+                    self._reset_auth_error_suspect()
+
+                    if not cleared and await self.need_login():
+                        self._mark_recovery_active(
+                            f"auth_call_strong_evidence:{ctx or 'unknown'}"
+                        )
+                    await self.ensure_logged_in(
+                        force=True,
+                        reason=ctx or str(e),
+                        prefer_refresh=True,
+                    )
                     if retry <= 0:
                         raise
                     return await fn()

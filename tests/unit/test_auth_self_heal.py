@@ -109,7 +109,7 @@ async def test_auth_call_triggers_relogin_and_retries_once(auth_manager):
 
     async def _non_destructive(ctx="", reason=""):
         calls["non_destructive"] += 1
-        return True, "runtime_verified"
+        return True, "runtime_verified", False
 
     auth_manager.ensure_logged_in = _ensure
     auth_manager._attempt_non_destructive_auth_recovery = _non_destructive
@@ -157,7 +157,7 @@ async def test_concurrent_auth_call_only_one_relogin(auth_manager):
 
     async def _non_destructive(ctx="", reason=""):
         relogin_calls["non_destructive"] += 1
-        return True, "runtime_verified"
+        return True, "runtime_verified", False
 
     def _clear(clear_reason: str, err=None):  # noqa: ARG001
         relogin_calls["clear"] += 1
@@ -380,7 +380,7 @@ async def test_auth_call_triggers_short_session_clear_before_relogin(
 
     async def _non_destructive(ctx="", reason=""):
         called["non_destructive"] += 1
-        return True, "runtime_verified"
+        return True, "runtime_verified", False
 
     monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
     auth_manager.ensure_logged_in = _ensure
@@ -1685,7 +1685,7 @@ async def test_auth_call_proceeds_recovery_when_clear_skipped_but_need_login(
 
     async def _non_destructive(ctx="", reason=""):
         call_order.append("non_destructive")
-        return True, "runtime_verified"
+        return True, "runtime_verified", False
 
     monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
     auth_manager.need_login = _need_login
@@ -1732,7 +1732,7 @@ async def test_auth_call_marks_recovery_active_when_clear_skipped(
 
     # 非破坏性恢复失败
     async def _non_destructive(ctx="", reason=""):
-        return False, "all_attempts_failed"
+        return False, "all_attempts_failed", False
 
     monkeypatch.setattr(auth_manager, "_clear_short_lived_session", _clear)
     auth_manager.need_login = _need_login
@@ -2293,7 +2293,7 @@ async def test_auth_call_retry_behavior_preserved(auth_manager):
 
     # 非破坏性恢复成功
     async def _successful_recovery(ctx="", reason=""):
-        return True, "runtime_verified"
+        return True, "runtime_verified", False
 
     auth_manager._attempt_non_destructive_auth_recovery = _successful_recovery
 
@@ -2362,7 +2362,7 @@ async def test_auth_call_first_suspect_uses_non_destructive_recovery(auth_manage
 
     async def _track_non_destructive(ctx="", reason=""):
         non_destructive_calls.append({"ctx": ctx, "reason": reason})
-        return True, "runtime_verified"
+        return True, "runtime_verified", False
 
     auth_manager._clear_short_lived_session = _track_clear
     auth_manager.ensure_logged_in = _track_ensure
@@ -2463,7 +2463,7 @@ async def test_auth_call_non_destructive_failure_preserves_short_session(auth_ma
 
     # 非破坏性恢复失败
     async def _failing_recovery(ctx="", reason=""):
-        return False, "all_attempts_failed"
+        return False, "all_attempts_failed", False
 
     auth_manager._attempt_non_destructive_auth_recovery = _failing_recovery
 
@@ -2495,7 +2495,7 @@ async def test_auth_call_non_destructive_recovery_success_retries(auth_manager):
 
     # 非破坏性恢复成功
     async def _successful_recovery(ctx="", reason=""):
-        return True, "runtime_verified"
+        return True, "runtime_verified", False
 
     auth_manager._attempt_non_destructive_auth_recovery = _successful_recovery
 
@@ -2696,7 +2696,11 @@ async def test_non_destructive_recovery_prioritizes_existing_short_session(
     auth_module.MiNAService = MockMiNAService
 
     try:
-        ok, detail = await auth_manager._attempt_non_destructive_auth_recovery(
+        (
+            ok,
+            detail,
+            escalate,
+        ) = await auth_manager._attempt_non_destructive_auth_recovery(
             ctx="test_ctx", reason="test_reason"
         )
 
@@ -2705,6 +2709,157 @@ async def test_non_destructive_recovery_prioritizes_existing_short_session(
             "existing_short_session_verified" in detail
             or "existing_short_session_runtime_rebuild" in detail
         )
+        assert escalate is False
     finally:
         auth_module.MiAccount = original_MiAccount
         auth_module.MiNAService = original_MiNAService
+
+
+def test_is_strong_short_session_invalidation_evidence():
+    """测试强证据判定逻辑"""
+    from xiaomusic.auth import AuthManager
+
+    # 强证据场景：verify_failed + Login failed
+    assert (
+        AuthManager._is_strong_short_session_invalidation_evidence(
+            reason="verify_failed", detail="Exception: Login failed"
+        )
+        is True
+    )
+
+    assert (
+        AuthManager._is_strong_short_session_invalidation_evidence(
+            reason="verify_failed", detail="401 unauthorized"
+        )
+        is True
+    )
+
+    assert (
+        AuthManager._is_strong_short_session_invalidation_evidence(
+            reason="verify_failed", detail="Error 70016"
+        )
+        is True
+    )
+
+    # 非强证据场景
+    assert (
+        AuthManager._is_strong_short_session_invalidation_evidence(
+            reason="no_existing_short_session", detail="auth.json missing serviceToken"
+        )
+        is False
+    )
+
+    assert (
+        AuthManager._is_strong_short_session_invalidation_evidence(
+            reason="missing_userId", detail="auth.json missing userId"
+        )
+        is False
+    )
+
+    assert (
+        AuthManager._is_strong_short_session_invalidation_evidence(
+            reason="exception", detail="NetworkError: connection timeout"
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_auth_call_escalates_on_strong_evidence(auth_manager):
+    """Phase A verify_failed + Login failed 应直接升级到 clear+rebuild"""
+    import json
+
+    # 设置 auth.json 中有 short session
+    auth_data = {
+        "passToken": "test_pass",
+        "userId": "test_user",
+        "cUserId": "test_cuser",
+        "psecurity": "test_psecurity",
+        "serviceToken": "test_service_token",
+        "ssecurity": "test_ssecurity",
+        "deviceId": "test_device_id",
+    }
+    with open(auth_manager.auth_token_path, "w") as f:
+        json.dump(auth_data, f)
+
+    clear_calls = []
+    ensure_calls = []
+    original_clear = auth_manager._clear_short_lived_session
+
+    def _track_clear(*args, **kwargs):
+        clear_calls.append((args, kwargs))
+        return original_clear(*args, **kwargs)
+
+    async def _track_ensure(**kwargs):
+        ensure_calls.append(kwargs)
+        return True
+
+    auth_manager._clear_short_lived_session = _track_clear
+    auth_manager.ensure_logged_in = _track_ensure
+    auth_manager.need_login = lambda: asyncio.sleep(0) or True
+
+    # 模拟 Phase A 返回 verify_failed + Login failed（强证据）
+    async def _mock_recovery(ctx="", reason=""):
+        return False, "verify_failed:Exception: Login failed", True  # 强证据
+
+    auth_manager._attempt_non_destructive_auth_recovery = _mock_recovery
+
+    call_count = 0
+
+    async def _failing_then_succeed():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise Exception("Login failed")
+        return "success"
+
+    result = await auth_manager.auth_call(
+        _failing_then_succeed, retry=1, ctx="test_ctx"
+    )
+    assert result == "success"
+    assert len(clear_calls) == 1, "Strong evidence should trigger clear"
+    assert len(ensure_calls) == 1, "Strong evidence should call ensure_logged_in"
+    assert ensure_calls[0].get("prefer_refresh") is True
+
+
+@pytest.mark.asyncio
+async def test_auth_call_no_escalate_on_weak_evidence(auth_manager):
+    """非强证据不应升级到 clear+rebuild"""
+    import json
+
+    # 设置 auth.json 中有 short session
+    auth_data = {
+        "passToken": "test_pass",
+        "userId": "test_user",
+        "cUserId": "test_cuser",
+        "psecurity": "test_psecurity",
+        "serviceToken": "test_service_token",
+        "ssecurity": "test_ssecurity",
+        "deviceId": "test_device_id",
+    }
+    with open(auth_manager.auth_token_path, "w") as f:
+        json.dump(auth_data, f)
+
+    clear_calls = []
+    original_clear = auth_manager._clear_short_lived_session
+
+    def _track_clear(*args, **kwargs):
+        clear_calls.append((args, kwargs))
+        return original_clear(*args, **kwargs)
+
+    auth_manager._clear_short_lived_session = _track_clear
+    auth_manager.need_login = lambda: asyncio.sleep(0) or True
+
+    # 模拟 Phase A 返回非强证据失败
+    async def _mock_recovery(ctx="", reason=""):
+        return False, "no_existing_short_session", False  # 非强证据
+
+    auth_manager._attempt_non_destructive_auth_recovery = _mock_recovery
+
+    async def _failing_fn():
+        raise Exception("Login failed")
+
+    with pytest.raises(Exception):
+        await auth_manager.auth_call(_failing_fn, retry=0, ctx="test_ctx")
+
+    assert len(clear_calls) == 0, "Weak evidence should NOT trigger clear"
