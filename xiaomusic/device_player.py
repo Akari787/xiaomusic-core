@@ -432,6 +432,7 @@ class XiaoMusicDevice:
         if name == "":
             self.log.info("本地没有歌曲")
             return
+        self._last_cmd = "play_next"
         await self._play(name, preserve_playlist=manual)
 
     async def play_prev(self):
@@ -457,6 +458,7 @@ class XiaoMusicDevice:
         if name == "":
             await self.do_tts("本地没有歌曲")
             return
+        self._last_cmd = "play_prev"
         await self._play(name, preserve_playlist=manual)
 
     async def playlocal(self, name=""):

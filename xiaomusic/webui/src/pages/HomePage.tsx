@@ -985,7 +985,7 @@ export function HomePage() {
       case "switching":
         return "正在切换...";
       case "stopped":
-        return title ? `已停止：${title}` : "已停止";
+        return "空闲";
       case "error":
         return "播放出错";
       case "idle":
