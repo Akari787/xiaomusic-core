@@ -640,18 +640,26 @@ class PlaybackFacade:
             if is_playing:
                 detail = raw_status.get("play_song_detail")
                 if isinstance(detail, dict):
-                    track_title = str(
-                        detail.get("audio_name")
-                        or detail.get("title")
-                        or detail.get("name")
-                        or ""
+                    track_title = (
+                        str(
+                            detail.get("audio_name")
+                            or detail.get("title")
+                            or detail.get("name")
+                            or ""
+                        )
+                        .strip('"')
+                        .strip()
                     )
                     if not track_title:
-                        track_title = str(
-                            getattr(self.xiaomusic, "playingmusic", lambda _did: "")(
-                                did
+                        track_title = (
+                            str(
+                                getattr(
+                                    self.xiaomusic, "playingmusic", lambda _did: ""
+                                )(did)
+                                or ""
                             )
-                            or ""
+                            .strip('"')
+                            .strip()
                         )
 
                     artist = detail.get("artist") or detail.get("singer")
@@ -682,9 +690,15 @@ class PlaybackFacade:
                             detail_dur / 1000.0 if detail_dur > 10000 else detail_dur
                         )
                 else:
-                    track_title = str(
-                        getattr(self.xiaomusic, "playingmusic", lambda _did: "")(did)
-                        or ""
+                    track_title = (
+                        str(
+                            getattr(self.xiaomusic, "playingmusic", lambda _did: "")(
+                                did
+                            )
+                            or ""
+                        )
+                        .strip('"')
+                        .strip()
                     )
 
             if not track_title and device_player and transport_state != "idle":
