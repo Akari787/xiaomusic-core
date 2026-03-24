@@ -845,9 +845,29 @@ async def api_v1_library_refresh(data: LibraryRefreshRequest):
 async def api_v1_library_playlists(request_id: str | None = None):
     rid = _next_request_id(request_id)
     try:
-        playlists = _get_xiaomusic().music_library.get_music_list()
+        from xiaomusic.playback.facade import build_track_id
+
+        raw_playlists = _get_xiaomusic().music_library.get_music_list()
+        from xiaomusic.utils.text_utils import custom_sort_key
+
+        playlists_with_ids = {}
+        if isinstance(raw_playlists, dict):
+            for name, songs in raw_playlists.items():
+                if isinstance(songs, list):
+                    sorted_songs = sorted(songs, key=custom_sort_key)
+                    items = []
+                    for idx, title in enumerate(sorted_songs):
+                        items.append(
+                            {
+                                "id": build_track_id(name, idx, title),
+                                "title": title,
+                            }
+                        )
+                    playlists_with_ids[name] = items
+                else:
+                    playlists_with_ids[name] = songs
         return _api_ok(
-            {"playlists": playlists if isinstance(playlists, dict) else {}},
+            {"playlists": playlists_with_ids},
             request_id=rid,
         )
     except Exception as exc:

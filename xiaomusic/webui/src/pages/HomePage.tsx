@@ -770,9 +770,10 @@ function usePlayerStream(
 export function HomePage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [activeDid, setActiveDid] = useState<string>(() => loadLocal("xm_ui_active_did"));
-  const [playlists, setPlaylists] = useState<Record<string, string[]>>({});
+  const [playlists, setPlaylists] = useState<Record<string, { id: string; title: string }[]>>({});
   const [playlist, setPlaylist] = useState<string>(() => loadLocal("xm_ui_playlist"));
   const [music, setMusic] = useState<string>(() => loadLocal("xm_ui_music"));
+  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [volume, setVolume] = useState<number>(50);
   const [message, setMessage] = useState<string>("");
   const [version, setVersion] = useState<string>("");
@@ -939,12 +940,13 @@ export function HomePage() {
   }, [authStatus.runtime_auth_ready, authStatus.login_in_progress]);
 
   const songs = useMemo(() => playlists[playlist] || [], [playlists, playlist]);
+  const songTitles = useMemo(() => songs.map((s) => s.title), [songs]);
   const filteredSongs = useMemo(() => {
     const key = soundscapeFilter.trim().toLowerCase();
     if (!key) {
       return songs;
     }
-    return songs.filter((name) => name.toLowerCase().includes(key));
+    return songs.filter((item) => item.title.toLowerCase().includes(key));
   }, [songs, soundscapeFilter]);
   const authLoggedIn = Boolean(authStatus.token_valid);
   const authReady = Boolean(authStatus.runtime_auth_ready);
@@ -1202,52 +1204,61 @@ export function HomePage() {
       setMusic("");
       return;
     }
-    setMusic((prev) => (prev && songs.includes(prev) ? prev : songs[0]));
+    setMusic((prev) => {
+      const found = songs.find((s) => s.title === prev);
+      return found ? prev : songs[0].title;
+    });
   }, [songs]);
 
   useEffect(() => {
-    if (serverState.transport_state !== "playing") {
+    if (serverState.transport_state !== "playing" && serverState.transport_state !== "paused") {
       return;
     }
     if (!Object.keys(playlists).length) {
       return;
     }
 
-    const currentContext = serverState.context;
-    if (!currentContext) {
+    const currentTrack = serverState.track;
+    if (!currentTrack || !currentTrack.id) {
       return;
     }
-    if (currentContext.current_index === null || currentContext.current_index === undefined) {
+
+    const currentContext = serverState.context;
+    if (!currentContext || !currentContext.name) {
       return;
     }
 
     const contextSongs = playlists[currentContext.name];
-    if (!contextSongs) {
+    if (!contextSongs || !Array.isArray(contextSongs)) {
       return;
     }
 
-    const index = currentContext.current_index;
-    if (index < 0 || index >= contextSongs.length) {
-      return;
-    }
+    const trackId = currentTrack.id;
+    const matchingItem = contextSongs.find((item) => item.id === trackId);
 
-    const songAtIndex = contextSongs[index];
-    if (!songAtIndex) {
+    if (!matchingItem) {
       return;
     }
 
     if (playlist !== currentContext.name) {
       setPlaylist(currentContext.name);
     }
-    if (music !== songAtIndex) {
-      setMusic(songAtIndex);
+
+    if (matchingItem.title !== music) {
+      setMusic(matchingItem.title);
+    }
+
+    if (selectedTrackId !== trackId) {
+      setSelectedTrackId(trackId);
     }
   }, [
+    serverState.track,
     serverState.context,
     serverState.transport_state,
     playlists,
     playlist,
     music,
+    selectedTrackId,
   ]);
 
   useEffect(() => {
@@ -1645,7 +1656,7 @@ export function HomePage() {
       setMusic("");
       return;
     }
-    setMusic(nextSongs[0]);
+    setMusic(nextSongs[0].title);
   }
 
   function fieldValue(key: string): string {
@@ -1842,18 +1853,18 @@ export function HomePage() {
                     <th>操作</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {filteredSongs.map((name, idx) => (
+                  <tbody>
+                  {filteredSongs.map((item, idx) => (
                     <tr
-                      key={`song-${name}-${idx}`}
-                      className={music === name ? "active" : ""}
-                      onClick={() => setMusic(name)}
-                      onDoubleClick={() => void playSongByName(name)}
+                      key={`song-${item.id}-${idx}`}
+                      className={music === item.title ? "active" : ""}
+                      onClick={() => setMusic(item.title)}
+                      onDoubleClick={() => void playSongByName(item.title)}
                     >
                       <td>{idx + 1}</td>
-                      <td>{name}</td>
+                      <td>{item.title}</td>
                       <td>
-                        <button onClick={() => void playSongByName(name)}>播放</button>
+                        <button onClick={() => void playSongByName(item.title)}>播放</button>
                       </td>
                     </tr>
                   ))}
@@ -1978,9 +1989,9 @@ export function HomePage() {
             选择歌曲:
           </label>
           <select id="music_name" className="song-selector" value={music} onChange={(e) => setMusic(e.target.value)}>
-            {songs.map((name) => (
-              <option key={name} value={name}>
-                {name}
+            {songs.map((item) => (
+              <option key={item.id} value={item.title}>
+                {item.title}
               </option>
             ))}
           </select>

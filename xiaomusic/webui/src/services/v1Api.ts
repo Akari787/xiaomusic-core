@@ -114,8 +114,13 @@ export interface DevicesData {
   devices: DeviceRow[];
 }
 
+export interface PlaylistItem {
+  id: string;
+  title: string;
+}
+
 export interface LibraryPlaylistsData {
-  playlists: Record<string, string[]>;
+  playlists: Record<string, PlaylistItem[]>;
 }
 
 export interface LibraryMusicInfoData {

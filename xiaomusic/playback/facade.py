@@ -24,6 +24,29 @@ if TYPE_CHECKING:
     pass
 
 
+def build_track_id(playlist_name: str, index: int | None, title: str) -> str:
+    """Build stable track identity for playlist items.
+
+    This function generates a consistent track ID that matches the logic
+    used in build_player_state_snapshot(). Both must use the same
+    algorithm to ensure frontend can match track.id with playlist items.
+
+    Args:
+        playlist_name: The playlist name (context_id)
+        index: The position in playlist, or None if unknown
+        title: The song title
+
+    Returns:
+        16-character hex string MD5 hash
+    """
+    track_key = (
+        f"{playlist_name or 'default'}:"
+        f"{index if index is not None else -1}:"
+        f"{title or ''}"
+    )
+    return hashlib.md5(track_key.encode()).hexdigest()[:16]
+
+
 class PlaybackFacade:
     """Keep API layer thin while exposing stable runtime methods."""
 
@@ -738,12 +761,7 @@ class PlaybackFacade:
 
         track_id = ""
         if track_title or current_index is not None or cur_playlist:
-            track_key = (
-                f"{cur_playlist or 'default'}:"
-                f"{current_index if current_index is not None else -1}:"
-                f"{track_title or ''}"
-            )
-            track_id = hashlib.md5(track_key.encode()).hexdigest()[:16]
+            track_id = build_track_id(cur_playlist, current_index, track_title)
 
         track_obj: dict[str, Any] | None = None
         if transport_state not in {"idle"} and (track_title or track_id):
