@@ -1748,6 +1748,7 @@ class AuthManager:
             try:
                 await temp_mina_service.device_list()
             except Exception as verify_err:
+                verify_detail = f"new runtime verify failed: {type(verify_err).__name__}: {verify_err}"
                 payload_fail = {
                     "event": "auth_runtime_rebuild_with_existing_short_session",
                     "stage": "complete",
@@ -1755,7 +1756,7 @@ class AuthManager:
                     "ctx": ctx or "",
                     "result": "failed",
                     "reason": "verify_failed",
-                    "detail": f"new runtime verify failed: {type(verify_err).__name__}: {verify_err}",
+                    "detail": verify_detail,
                     "used_existing_short_session": True,
                     "runtime_objects_recreated": True,
                     "runtime_swap_applied": False,
@@ -1764,7 +1765,8 @@ class AuthManager:
                     json.dumps(payload_fail, ensure_ascii=False, separators=(",", ":"))
                 )
                 # 失败时丢弃临时对象，不影响当前 runtime
-                return False, f"verify_failed:{type(verify_err).__name__}"
+                # 返回完整的 detail，以便强证据判定
+                return False, verify_detail
 
             # Step 5: 成功后原子替换
             # 替换 mina_service
