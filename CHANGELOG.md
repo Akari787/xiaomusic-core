@@ -1,15 +1,43 @@
-## v1.0.9 (unreleased)
+## v1.0.9 (2026-03-25)
 
-### Breaking Change
+### 后端：统一播放状态快照与 SSE 实时推送
 
-- **彻底移除 `network_audio` 兼容层**：
-  - 删除 `/network_audio/healthz`、`/network_audio/sessions`、`/network_audio/stream/{sid}` 路由
-  - 删除 `xiaomusic/network_audio/` 模块目录与 `xiaomusic/api/routers/network_audio.py`
-  - 删除 `NetworkAudioRuntime`、`NetworkAudioPlayService`、`should_use_network_audio()` 等兼容别名
-  - 正式路径统一为 `/relay/{healthz,sessions,stream/{sid}}`
-  - 旧有会话不受影响；新生成的 sid 使用 `rs_` 前缀
-  - sid 生成策略不变（`secrets.token_urlsafe(16)`）
-  - API 返回结构不变
+- **统一快照构建器**：`build_player_state_snapshot()` 作为 `/api/v1/player/state` 与 `/api/v1/player/stream` 的唯一权威状态来源
+- **新增 SSE 端点**：`GET /api/v1/player/stream?device_id=...` 支持 Server-Sent Events 实时推送
+  - 建连立即推送完整快照
+  - 15 秒心跳，5 秒重连提示
+  - 支持同一设备多订阅者
+- **revision 语义修正**：移除 `position_ms` 从 revision key，仅离散状态变化触发 revision 递增
+- **transport_state 推导**：从设备内部状态 + 硬件实际状态推导出 idle/starting/switching/playing/paused/stopped/error
+- **play_session_id 暴露**：从设备播放器暴露当前会话 ID
+- **PLAYER_STATE_CHANGED 事件**：统一使用 canonical did 作为 device_id，解决事件过滤不生效问题
+
+### 前端：播放状态机重构
+
+- **serverState + uiState 模型**：WebUI 播放状态拆分为服务端权威快照 + 本地 UI 辅助状态
+- **SSE 实时更新**：WebUI 通过 SSE 接收播放状态增量推送，替代旧轮询
+- **进度条插值优化**：基于 `snapshot_at_ms` 持续推进，不再 5 秒后停止
+- **deviceId 切换**：切换设备时正确关闭旧 SSE 并连接新设备
+- **进度缓存清理**：仅清理 xm_ 前缀的 localStorage 项
+
+### 前端：歌单选中项 track.id 驱动
+
+- **playlist item 携带稳定 identity**：`/api/v1/library/playlists` 返回 `{ id, title }[]`
+- **track.id 同步**：下拉框选中项由 `selectedTrackId` 驱动，不再依赖 `context.current_index`
+- **item.id 一致性**：playlist item.id 与 snapshot.track.id 使用同一算法生成 (`build_track_id`)
+- **strip 引号修复**：解决硬件返回的 track_title 包含引号导致匹配失败问题
+
+### Bug 修复
+
+- **stop 后 next/prev 长期显示 switching**：`_play_next()` / `_play_prev()` 现在正确设置 `_last_cmd`
+- **stopped 显示"已停止：xxx"**：改为显示"空闲"
+- **异步 EventBus 订阅者**：修复 async callback 未被正确调度执行的问题
+- **current_index 与 track.title 不一致**：验证 `_current_index` 是否与实际歌曲匹配，不一致时重新查找
+
+### API 边界
+
+- `/api/v1/player/state` 返回完整新快照格式 + 旧字段兼容层
+- `/api/v1/player/stream` SSE 端点支持设备不存在时返回 404
 
 ## v1.0.8 (2026-03-21)
 
