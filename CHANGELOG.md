@@ -22,7 +22,7 @@
 
 ### 前端：歌单选中项 track.id 驱动
 
-- **playlist item 携带稳定 identity**：`/api/v1/library/playlists` 返回 `{ id, title }[]`
+- **playlist item 携带稳定 identity**：`/api/v1/library/playlists` 返回 `{ id, title }[]`，引入稳定 playlist item identity 用于与 `track.id` 对齐
 - **track.id 同步**：下拉框选中项由 `selectedTrackId` 驱动，不再依赖 `context.current_index`
 - **item.id 一致性**：playlist item.id 与 snapshot.track.id 使用同一算法生成 (`build_track_id`)
 - **strip 引号修复**：解决硬件返回的 track_title 包含引号导致匹配失败问题
@@ -38,6 +38,7 @@
 
 - `/api/v1/player/state` 返回完整新快照格式 + 旧字段兼容层
 - `/api/v1/player/stream` SSE 端点支持设备不存在时返回 404
+- 将 `network_audio` 相关模块、API 路由与开发文档正式收口为 `relay` 命名，统一代码结构与术语体系
 
 ## v1.0.8 (2026-03-21)
 
