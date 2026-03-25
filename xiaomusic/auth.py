@@ -1641,7 +1641,7 @@ class AuthManager:
 
     async def _attempt_runtime_rebuild_with_existing_short_session(
         self, ctx: str = "", reason: str = ""
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, dict]:
         """尝试用 auth.json 中已有的 short session 重建 runtime
 
         这是自动恢复路径中优先尝试的策略，模拟手动恢复成功路径：
@@ -1654,10 +1654,26 @@ class AuthManager:
         失败时不会 clear short session，不会写空 auth.json。
 
         Returns:
-            tuple[bool, str]: (是否成功, 结果描述)
+            tuple[bool, str, dict]: (是否成功, 结果描述, 结构化元数据)
+                元数据包含:
+                - reason: 失败原因
+                - auth_failure_detected: 是否检测到认证失败
+                - verify_error_text: verify 错误原始文本
+                - used_existing_short_session: 是否使用了已有 short session
+                - runtime_objects_recreated: 是否创建了新 runtime 对象
         """
         recovery_reason = reason or ctx or "existing_short_session_recovery"
         auth_session_id = self._auth_session_id()
+
+        # 默认元数据
+        default_meta = {
+            "reason": "",
+            "auth_failure_detected": False,
+            "verify_error_text": "",
+            "used_existing_short_session": False,
+            "runtime_objects_recreated": False,
+            "runtime_swap_applied": False,
+        }
 
         # 发送开始日志
         payload_start = {
@@ -1688,6 +1704,11 @@ class AuthManager:
             auth_ssecurity = auth_data.get("ssecurity")
 
             if not auth_service_token or not auth_ssecurity:
+                meta = {
+                    **default_meta,
+                    "reason": "no_existing_short_session",
+                    "used_existing_short_session": False,
+                }
                 payload_fail = {
                     "event": "auth_runtime_rebuild_with_existing_short_session",
                     "stage": "complete",
@@ -1701,15 +1722,21 @@ class AuthManager:
                     "used_existing_short_session": False,
                     "runtime_objects_recreated": False,
                     "runtime_swap_applied": False,
+                    "auth_failure_detected": False,
                 }
                 self.log.info(
                     json.dumps(payload_fail, ensure_ascii=False, separators=(",", ":"))
                 )
-                return False, "no_existing_short_session"
+                return False, "no_existing_short_session", meta
 
             # Step 2: 新建临时 MiAccount
             account_name = auth_data.get("userId", "")
             if not account_name:
+                meta = {
+                    **default_meta,
+                    "reason": "missing_userId",
+                    "used_existing_short_session": True,
+                }
                 payload_fail = {
                     "event": "auth_runtime_rebuild_with_existing_short_session",
                     "stage": "complete",
@@ -1721,11 +1748,12 @@ class AuthManager:
                     "used_existing_short_session": True,
                     "runtime_objects_recreated": False,
                     "runtime_swap_applied": False,
+                    "auth_failure_detected": False,
                 }
                 self.log.info(
                     json.dumps(payload_fail, ensure_ascii=False, separators=(",", ":"))
                 )
-                return False, "missing_userId"
+                return False, "missing_userId", meta
 
             # 创建新的 MiAccount 实例
             temp_mi_account = MiAccount(
@@ -1748,7 +1776,17 @@ class AuthManager:
             try:
                 await temp_mina_service.device_list()
             except Exception as verify_err:
+                verify_error_text = str(verify_err)
+                auth_failure_detected = self._is_auth_failure_error(verify_error_text)
                 verify_detail = f"new runtime verify failed: {type(verify_err).__name__}: {verify_err}"
+                meta = {
+                    **default_meta,
+                    "reason": "verify_failed",
+                    "auth_failure_detected": auth_failure_detected,
+                    "verify_error_text": verify_error_text,
+                    "used_existing_short_session": True,
+                    "runtime_objects_recreated": True,
+                }
                 payload_fail = {
                     "event": "auth_runtime_rebuild_with_existing_short_session",
                     "stage": "complete",
@@ -1760,13 +1798,15 @@ class AuthManager:
                     "used_existing_short_session": True,
                     "runtime_objects_recreated": True,
                     "runtime_swap_applied": False,
+                    "auth_failure_detected": auth_failure_detected,
+                    "verify_error_text": verify_error_text,
                 }
                 self.log.info(
                     json.dumps(payload_fail, ensure_ascii=False, separators=(",", ":"))
                 )
                 # 失败时丢弃临时对象，不影响当前 runtime
-                # 返回完整的 detail，以便强证据判定
-                return False, verify_detail
+                # 返回完整的 detail 和结构化元数据
+                return False, verify_detail, meta
 
             # Step 5: 成功后原子替换
             # 替换 mina_service
@@ -1785,6 +1825,13 @@ class AuthManager:
             self.set_token(temp_mi_account)
 
             # 记录成功日志
+            meta = {
+                **default_meta,
+                "reason": "existing_short_session_verified",
+                "used_existing_short_session": True,
+                "runtime_objects_recreated": True,
+                "runtime_swap_applied": True,
+            }
             payload_ok = {
                 "event": "auth_runtime_rebuild_with_existing_short_session",
                 "stage": "complete",
@@ -1796,15 +1843,24 @@ class AuthManager:
                 "used_existing_short_session": True,
                 "runtime_objects_recreated": True,
                 "runtime_swap_applied": True,
+                "auth_failure_detected": False,
                 "old_mina_service_id": id(old_mina_service),
                 "new_mina_service_id": id(self.mina_service),
             }
             self.log.info(
                 json.dumps(payload_ok, ensure_ascii=False, separators=(",", ":"))
             )
-            return True, "existing_short_session_verified"
+            return True, "existing_short_session_verified", meta
 
         except Exception as e:
+            error_text = str(e)
+            auth_failure_detected = self._is_auth_failure_error(error_text)
+            meta = {
+                **default_meta,
+                "reason": "exception",
+                "auth_failure_detected": auth_failure_detected,
+                "verify_error_text": error_text,
+            }
             payload_err = {
                 "event": "auth_runtime_rebuild_with_existing_short_session",
                 "stage": "complete",
@@ -1816,11 +1872,12 @@ class AuthManager:
                 "used_existing_short_session": False,
                 "runtime_objects_recreated": False,
                 "runtime_swap_applied": False,
+                "auth_failure_detected": auth_failure_detected,
             }
             self.log.info(
                 json.dumps(payload_err, ensure_ascii=False, separators=(",", ":"))
             )
-            return False, f"exception:{type(e).__name__}"
+            return False, f"exception:{type(e).__name__}", meta
 
     async def _attempt_non_destructive_auth_recovery(
         self, ctx: str = "", reason: str = ""
@@ -1858,6 +1915,7 @@ class AuthManager:
             (
                 ok,
                 detail,
+                phase_a_meta,
             ) = await self._attempt_runtime_rebuild_with_existing_short_session(
                 ctx=ctx, reason=recovery_reason
             )
@@ -1872,6 +1930,9 @@ class AuthManager:
                     "detail": detail,
                     "phase": "A",
                     "strong_invalidation_evidence": False,
+                    "phase_a_auth_failure_detected": phase_a_meta.get(
+                        "auth_failure_detected", False
+                    ),
                 }
                 self.log.info(
                     json.dumps(
@@ -1881,10 +1942,15 @@ class AuthManager:
                 return True, detail, False
 
             # Phase A 失败，检查是否属于强证据
-            # 从 detail 中提取 reason 信息
-            phase_a_reason = detail.split(":")[0] if detail else ""
+            # 优先使用结构化字段判定
+            phase_a_reason = phase_a_meta.get("reason", "")
+            phase_a_auth_failure_detected = phase_a_meta.get(
+                "auth_failure_detected", False
+            )
             is_strong = self._is_strong_short_session_invalidation_evidence(
-                reason=phase_a_reason, detail=detail
+                reason=phase_a_reason,
+                detail=detail,
+                auth_failure_detected=phase_a_auth_failure_detected,
             )
 
             if is_strong:
@@ -1899,6 +1965,11 @@ class AuthManager:
                     "detail": detail,
                     "phase": "A",
                     "strong_invalidation_evidence": True,
+                    "phase_a_reason": phase_a_reason,
+                    "phase_a_auth_failure_detected": phase_a_auth_failure_detected,
+                    "phase_a_verify_error_text": phase_a_meta.get(
+                        "verify_error_text", ""
+                    ),
                 }
                 self.log.info(
                     json.dumps(
@@ -1932,6 +2003,7 @@ class AuthManager:
                     "detail": "short session not found in auth data",
                     "phase": "B",
                     "strong_invalidation_evidence": False,
+                    "phase_a_auth_failure_detected": phase_a_auth_failure_detected,
                 }
                 self.log.info(
                     json.dumps(payload_fail, ensure_ascii=False, separators=(",", ":"))
@@ -1998,10 +2070,27 @@ class AuthManager:
             return False, f"exception:{type(e).__name__}", False
 
     @staticmethod
+    def _is_auth_failure_error(error_text: str) -> bool:
+        """判断错误文本是否表示认证失败"""
+        error_lower = (error_text or "").lower()
+        if "login failed" in error_lower:
+            return True
+        if "401" in error_lower or "unauthorized" in error_lower:
+            return True
+        if "70016" in error_lower:
+            return True
+        return False
+
+    @staticmethod
     def _is_strong_short_session_invalidation_evidence(
-        reason: str = "", detail: str = ""
+        reason: str = "",
+        detail: str = "",
+        auth_failure_detected: bool | None = None,
     ) -> bool:
         """判断是否属于强证据，需要立即升级到 clear+rebuild
+
+        优先使用结构化字段 auth_failure_detected。
+        如果未提供，则回退到 detail 文本匹配。
 
         只有在以下场景才返回 True：
         - Phase A verify_failed 且是明确的 Mina auth failure
@@ -2013,16 +2102,25 @@ class AuthManager:
         - 对象创建失败
         """
         reason_lower = (reason or "").lower()
-        detail_lower = (detail or "").lower()
 
-        # verify_failed 且是明确的 Mina auth failure
-        if "verify_failed" in reason_lower:
-            if "login failed" in detail_lower:
-                return True
-            if "401" in detail_lower or "unauthorized" in detail_lower:
-                return True
-            if "70016" in detail_lower:
-                return True
+        # 必须是 verify_failed
+        if "verify_failed" not in reason_lower:
+            return False
+
+        # 优先使用结构化字段
+        if auth_failure_detected is True:
+            return True
+        if auth_failure_detected is False:
+            return False
+
+        # 回退到 detail 文本匹配
+        detail_lower = (detail or "").lower()
+        if "login failed" in detail_lower:
+            return True
+        if "401" in detail_lower or "unauthorized" in detail_lower:
+            return True
+        if "70016" in detail_lower:
+            return True
 
         return False
 

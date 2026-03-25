@@ -2558,6 +2558,7 @@ async def test_runtime_rebuild_with_existing_short_session_success(auth_manager)
         (
             ok,
             detail,
+            meta,
         ) = await auth_manager._attempt_runtime_rebuild_with_existing_short_session(
             ctx="test_ctx", reason="test_reason"
         )
@@ -2565,6 +2566,7 @@ async def test_runtime_rebuild_with_existing_short_session_success(auth_manager)
         assert ok is True, f"Expected success but got: {detail}"
         assert "existing_short_session_verified" in detail
         assert isinstance(auth_manager.mina_service, MockMiNAService)
+        assert meta["auth_failure_detected"] is False
     finally:
         auth_module.MiAccount = original_MiAccount
         auth_module.MiNAService = original_MiNAService
@@ -2612,16 +2614,20 @@ async def test_runtime_rebuild_with_existing_short_session_verify_failed(auth_ma
         (
             ok,
             detail,
+            meta,
         ) = await auth_manager._attempt_runtime_rebuild_with_existing_short_session(
             ctx="test_ctx", reason="test_reason"
         )
 
         assert ok is False, f"Expected failure but got: {detail}"
-        assert "verify_failed" in detail
+        assert "verify failed" in detail.lower()
         # 验证没有清空 short session
         with open(auth_manager.auth_token_path) as f:
             saved_data = json.load(f)
         assert "serviceToken" in saved_data
+        # 验证结构化元数据
+        assert meta["auth_failure_detected"] is True
+        assert meta["reason"] == "verify_failed"
     finally:
         auth_module.MiAccount = original_MiAccount
         auth_module.MiNAService = original_MiNAService
@@ -2647,12 +2653,14 @@ async def test_runtime_rebuild_no_existing_short_session(auth_manager):
     (
         ok,
         detail,
+        meta,
     ) = await auth_manager._attempt_runtime_rebuild_with_existing_short_session(
         ctx="test_ctx", reason="test_reason"
     )
 
     assert ok is False
     assert "no_existing_short_session" in detail
+    assert meta["auth_failure_detected"] is False
 
 
 @pytest.mark.asyncio
@@ -2863,3 +2871,129 @@ async def test_auth_call_no_escalate_on_weak_evidence(auth_manager):
         await auth_manager.auth_call(_failing_fn, retry=0, ctx="test_ctx")
 
     assert len(clear_calls) == 0, "Weak evidence should NOT trigger clear"
+
+
+def test_is_auth_failure_error():
+    """测试 _is_auth_failure_error 函数"""
+    from xiaomusic.auth import AuthManager
+
+    # 认证失败场景
+    assert AuthManager._is_auth_failure_error("Login failed") is True
+    assert AuthManager._is_auth_failure_error("Error: Login failed") is True
+    assert AuthManager._is_auth_failure_error("401 Unauthorized") is True
+    assert AuthManager._is_auth_failure_error("HTTP 401") is True
+    assert AuthManager._is_auth_failure_error("Error 70016") is True
+
+    # 非认证失败场景
+    assert AuthManager._is_auth_failure_error("Network timeout") is False
+    assert AuthManager._is_auth_failure_error("Connection refused") is False
+    assert AuthManager._is_auth_failure_error("") is False
+    assert AuthManager._is_auth_failure_error(None) is False
+
+
+def test_is_strong_evidence_with_structured_field():
+    """测试强证据判定优先使用结构化字段"""
+    from xiaomusic.auth import AuthManager
+
+    # 结构化字段 auth_failure_detected=True
+    assert (
+        AuthManager._is_strong_short_session_invalidation_evidence(
+            reason="verify_failed",
+            detail="",  # detail 为空
+            auth_failure_detected=True,
+        )
+        is True
+    )
+
+    # 结构化字段 auth_failure_detected=False
+    assert (
+        AuthManager._is_strong_short_session_invalidation_evidence(
+            reason="verify_failed",
+            detail="Login failed",  # detail 匹配但结构化字段明确为 False
+            auth_failure_detected=False,
+        )
+        is False
+    )
+
+    # 无结构化字段时回退到 detail 匹配
+    assert (
+        AuthManager._is_strong_short_session_invalidation_evidence(
+            reason="verify_failed",
+            detail="Login failed",
+            auth_failure_detected=None,
+        )
+        is True
+    )
+
+    # 非 verify_failed 不是强证据
+    assert (
+        AuthManager._is_strong_short_session_invalidation_evidence(
+            reason="no_existing_short_session",
+            detail="",
+            auth_failure_detected=True,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_phase_a_returns_structured_meta(auth_manager):
+    """测试 Phase A 返回结构化元数据"""
+    import json
+
+    # 设置 auth.json 中有 short session
+    auth_data = {
+        "passToken": "test_pass",
+        "userId": "test_user",
+        "cUserId": "test_cuser",
+        "psecurity": "test_psecurity",
+        "serviceToken": "test_service_token",
+        "ssecurity": "test_ssecurity",
+        "deviceId": "test_device_id",
+    }
+    with open(auth_manager.auth_token_path, "w") as f:
+        json.dump(auth_data, f)
+
+    # 模拟 device_list 失败并返回 Login failed
+    class MockMiAccount:
+        def __init__(self, *args, **kwargs):
+            self.token = {}
+
+    class MockMiNAService:
+        def __init__(self, account):
+            self.account = account
+
+        async def device_list(self):
+            raise RuntimeError(
+                "Error https://api2.mina.mi.com/remote/ubus: Login failed"
+            )
+
+    import xiaomusic.auth as auth_module
+
+    original_MiAccount = auth_module.MiAccount
+    original_MiNAService = auth_module.MiNAService
+
+    auth_module.MiAccount = MockMiAccount
+    auth_module.MiNAService = MockMiNAService
+
+    try:
+        (
+            ok,
+            detail,
+            meta,
+        ) = await auth_manager._attempt_runtime_rebuild_with_existing_short_session(
+            ctx="test_ctx", reason="test_reason"
+        )
+
+        assert ok is False
+        assert "verify failed" in detail.lower()  # detail 包含 "verify failed"
+        assert meta["reason"] == "verify_failed"
+        assert (
+            meta["auth_failure_detected"] is True
+        )  # 关键：auth_failure_detected 应为 True
+        assert meta["used_existing_short_session"] is True
+        assert meta["runtime_objects_recreated"] is True
+        assert "Login failed" in meta["verify_error_text"]
+    finally:
+        auth_module.MiAccount = original_MiAccount
+        auth_module.MiNAService = original_MiNAService
