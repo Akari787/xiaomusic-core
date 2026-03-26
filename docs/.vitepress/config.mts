@@ -1,6 +1,5 @@
 import { loadEnv, defineConfig } from 'vitepress'
 import AutoSidebar from 'vite-plugin-vitepress-auto-sidebar';
-import GitHubIssuesPlugin from './vitepress-plugin-github-issues.mts';
 
 function normalizeBase(rawBase: string): string {
   let base = (rawBase || '').trim()
@@ -39,7 +38,6 @@ export default async ({ mode }) => {
 
   const siteHostnameRaw = process.env.VITE_SITE_HOSTNAME || env.VITE_SITE_HOSTNAME || 'https://akari787.github.io'
   const siteHostname = normalizeHostname(siteHostnameRaw) || 'https://akari787.github.io'
-  const issuesToken = process.env.VITE_GITHUB_ISSUES_TOKEN || env.VITE_GITHUB_ISSUES_TOKEN || ''
   return defineConfig({
     // GitHub Pages: for project pages you typically need "/<repo-name>/".
     // Override via VITE_SITE_BASE in CI or locally.
@@ -49,7 +47,6 @@ export default async ({ mode }) => {
     themeConfig: {
       // https://vitepress.dev/reference/default-theme-config
       nav: [
-        { text: 'Guide', link: '/issues' },
         { text: 'GitHub', link: 'https://github.com/Akari787/xiaomusic-core' },
       ],
 
@@ -87,16 +84,6 @@ export default async ({ mode }) => {
           path: '.',
           collapsed: true,
           titleFromFile: true,
-        }),
-        GitHubIssuesPlugin({
-          repo: 'Akari787/xiaomusic-core',
-          token: issuesToken,
-          replaceRules: [
-            {
-              baseUrl: 'https://github.com/Akari787/xiaomusic-core/issues',
-              targetUrl: '/issues',
-            },
-          ],
         }),
       ],
     }

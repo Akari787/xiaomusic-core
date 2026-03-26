@@ -1,5 +1,4 @@
 ---
-# https://vitepress.dev/reference/default-theme-home-page
 layout: home
 
 hero:
@@ -8,23 +7,14 @@ hero:
   tagline: 独立维护核心分支，专注稳定播放、自托管与认证恢复体验
   actions:
     - theme: brand
-      text: 使用指南
-      link: /issues/index
-    - theme: alt
-      text: API v1 规范
+      text: API
       link: /api/api_v1_spec
     - theme: alt
-      text: 认证架构
-      link: /authentication_architecture
+      text: Architecture
+      link: /architecture/module_inventory
     - theme: alt
-      text: 开发文档
-      link: /dev/index
-    - theme: alt
-      text: 规范文档
-      link: /spec/relay_terminology
-    - theme: alt
-      text: FAQ
-      link: /issues/99
+      text: Spec
+      link: /spec/runtime_specification
     - theme: alt
       text: GitHub
       link: https://github.com/Akari787/xiaomusic-core

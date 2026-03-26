@@ -614,25 +614,4 @@ flowchart TD
 | [docs/spec/playback_coordinator_interface.md](docs/spec/playback_coordinator_interface.md) | 播放编排接口说明 |
 | [docs/spec/auth_runtime_recovery.md](docs/spec/auth_runtime_recovery.md) | 认证运行时恢复规范 |
 | [docs/authentication_architecture.md](docs/authentication_architecture.md) | 认证系统架构说明 |
-| [docs/dev/runtime_contracts.md](docs/dev/runtime_contracts.md) | Runtime 合同与内部约束补充 |
-| [docs/dev/source_transport_matrix.md](docs/dev/source_transport_matrix.md) | 来源 / 传输能力矩阵 |
-| [docs/architecture/](docs/architecture/) | 更细粒度的架构分析与重构设计文档 |
-
----
-
-## 10. 本次修改说明（供审阅）
-
-1. 我将 `ARCHITECTURE.md` 与 `docs/api/api_v1_spec.md` 的优先级关系写明为：API 契约、字段、错误模型、接口分级与内部归属约束统一以 `docs/api/api_v1_spec.md` 为准，架构文档不再承担第二份契约职责。
-2. 我将“当前现状图”和“目标架构图”明确分开：前者描述当前双轨并存的实现状态，后者描述按照 Class A / B / C 收敛后的目标归属。
-3. 我把双轨结构写成“当前实现现状说明”，而不是“契约授权”；并明确指出双轨存在的风险是路径差异引发文档漂移，而不是为模糊契约提供合法性。
-4. 三类接口在架构图中的归属体现为：Class A 进入统一调度 / 分发链路，Class B 进入 router / runtime 本地控制路径，Class C 进入只读查询 / 聚合路径。
-5. 本步仍然不涉及代码改动，因为本次任务目标是修正文档角色边界与架构说明方式，避免架构文档与 API 契约文档冲突；实现收敛属于后续代码步骤。
-
-## 11. 本次修改说明（供审阅）
-
-1. 本次新增了“接口分层视图”，把 HTTP 接口正式区分为 Public API、Internal API、Forbidden / Removed 三层。
-2. 我将架构边界写清为：WebUI 可以调用 Public API 与 Internal API；插件与第三方只能依赖 Public API；Forbidden / Removed 不再出现在目标架构中。
-3. 当前被明确保留为 Internal API 的接口主要是认证 / 会话接口与文件 / 工具接口，它们服务于内部前后端协作，不属于对外稳定控制面。
-4. 这些 Internal 接口不对插件和第三方公开承诺，因为它们表达的是认证流程、文件工具和后台辅助动作，而不是值得长期稳定承诺的产品级能力。
-5. 被明确列入禁止恢复清单的内容包括：已删除的旧播放入口、旧 wrapper、legacy facade 方法，以及中文命令、cmd 风格入口、自然语言控制入口和并行播放入口设计。
-6. 本步不涉及代码修改，因为目标是先把接口边界、调用方约束与接口去留标准写成强约束文档；实现迁移与删除动作属于后续代码步骤。
+| [docs/architecture/](docs/architecture/) | 更细粒度的架构分析文档 |
