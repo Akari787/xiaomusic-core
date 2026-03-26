@@ -8,8 +8,6 @@
 
 项目文档: <https://github.com/Akari787/xiaomusic-core/tree/main/docs>
 
-FAQ: <https://github.com/Akari787/xiaomusic-core/blob/main/docs/issues/99.md>
-
 ## 🙏 致谢
 
 - 本项目基于 [hanxi/xiaomusic](https://github.com/hanxi/xiaomusic) 进行维护与扩展，感谢原作者与社区贡献。
