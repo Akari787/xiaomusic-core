@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class AuthSettings(BaseSettings):
-    HTTP_AUTH_HASH: str = Field(min_length=1)
+    HTTP_AUTH_HASH: str = Field(default="", min_length=0)
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -13,12 +13,47 @@ from xiaomusic.security.redaction import redact_text
 
 LOGO = r"""
  __  __  _                   __  __                 _
- \ \/ / (_)   __ _    ___   |  \/  |  _   _   ___  (_)   ___
+ \ \/ / (_)   __ _    ___   |  \/ |  _   _   ___  (_)   ___
   \  /  | |  / _` |  / _ \  | |\/| | | | | | / __| | |  / __|
   /  \  | | | (_| | | (_) | | |  | | | |_| | \__ \ | | | (__
- /_/\_\ |_|  \__,_|  \___/  |_|  |_|  \__,_| |___/ |_|  \___|
-          {}
+/_/\_\ |_|  \__,_|  \___/  |_|  |_|  \__,_| |___/ |_|  \___|
+         {}
 """
+
+
+def _ensure_http_auth_configured() -> None:
+    """确保 HTTP_AUTH_HASH 已配置，必要时从 HTTP_AUTH_PASSWORD 生成。
+
+    优先级规则：
+    1. HTTP_AUTH_HASH 存在 -> 直接使用，不生成
+    2. HTTP_AUTH_PASSWORD 存在 -> 自动生成 bcrypt 哈希注入环境变量
+    3. 两者都不存在 -> 拒绝启动
+    """
+    existing_hash = os.getenv("HTTP_AUTH_HASH", "").strip()
+    if existing_hash:
+        # 情况 A：已有 hash，直接使用
+        return
+
+    plaintext_password = os.getenv("HTTP_AUTH_PASSWORD", "").strip()
+    if not plaintext_password:
+        # 情况 C：两者都没有，拒绝启动
+        raise RuntimeError(
+            "HTTP authentication not configured. "
+            "You must provide either HTTP_AUTH_HASH (bcrypt hash) or HTTP_AUTH_PASSWORD (plaintext). "
+            "For Docker: docker run ... -e HTTP_AUTH_PASSWORD='your_password' ..."
+        )
+
+    # 情况 B：从明文密码生成哈希
+    import bcrypt
+
+    hashed = bcrypt.hashpw(plaintext_password.encode("utf-8"), bcrypt.gensalt()).decode(
+        "utf-8"
+    )
+    os.environ["HTTP_AUTH_HASH"] = hashed
+    print(
+        "HTTP auth: generated runtime HTTP_AUTH_HASH from HTTP_AUTH_PASSWORD",
+        flush=True,
+    )
 
 
 def _sentry_before_send(event, hint):
@@ -49,7 +84,12 @@ ignore_logger("miservice")
 
 
 def _detect_configured_worker_count() -> int:
-    for key in ("XIAOMUSIC_WORKERS", "UVICORN_WORKERS", "WEB_CONCURRENCY", "GUNICORN_WORKERS"):
+    for key in (
+        "XIAOMUSIC_WORKERS",
+        "UVICORN_WORKERS",
+        "WEB_CONCURRENCY",
+        "GUNICORN_WORKERS",
+    ):
         raw = (os.getenv(key, "") or "").strip()
         if not raw:
             continue
@@ -73,7 +113,12 @@ def _enforce_single_worker() -> None:
 def _cors_localhost_only(origins: list[str]) -> bool:
     if not origins:
         return False
-    allowed = {"http://localhost", "http://127.0.0.1", "https://localhost", "https://127.0.0.1"}
+    allowed = {
+        "http://localhost",
+        "http://127.0.0.1",
+        "https://localhost",
+        "https://127.0.0.1",
+    }
     for origin in origins:
         if (origin or "").strip().lower() not in allowed:
             return False
@@ -85,7 +130,9 @@ def _warn_if_httpauth_unsafe(config, bind_host: str, logger: logging.Logger) -> 
         return
     host = (bind_host or "").strip().lower()
     localhost_bind = host in {"127.0.0.1", "localhost"}
-    cors_local = _cors_localhost_only(list(getattr(config, "cors_allow_origins", []) or []))
+    cors_local = _cors_localhost_only(
+        list(getattr(config, "cors_allow_origins", []) or [])
+    )
     if (not localhost_bind) or (not cors_local):
         logger.warning(
             "HTTP auth disabled; if exposed beyond LAN this is unsafe (disable_httpauth=true, bind_host=%s, cors_localhost_only=%s)",
@@ -101,6 +148,7 @@ def main():
     from xiaomusic.xiaomusic import XiaoMusic
 
     _enforce_single_worker()
+    _ensure_http_auth_configured()
 
     parser = argparse.ArgumentParser()
     parser.add_argument(

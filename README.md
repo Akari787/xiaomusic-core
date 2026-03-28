@@ -33,22 +33,24 @@ mkdir -p conf music
 # 2. 拉取镜像
 docker pull akari787/xiaomusic-core:stable
 
-# 3. 生成并填入 HTTP_AUTH_HASH
-python scripts/generate_password_hash.py
-
-# 4. 启动容器
+# 3. 启动容器（使用 HTTP_AUTH_PASSWORD 自动生成哈希）
 docker run -d --name xiaomusic-core \
   -p 58090:8090 \
   -v $(pwd)/conf:/app/conf \
   -v $(pwd)/music:/app/music \
-  -e HTTP_AUTH_HASH='<替换为生成的哈希>' \
+  -e HTTP_AUTH_PASSWORD='your_password' \
   akari787/xiaomusic-core:stable
 
-# 5. 访问
+# 4. 访问
 # http://<HOST>:58090/
 ```
 
-启动后在设置页完成扫码登录即可使用。若需要 compose、开发构建或更严格的安全部署方式，见下方文档导航与仓库内示例配置。
+说明：
+
+- 若提供 `HTTP_AUTH_PASSWORD`，容器启动时会自动生成 bcrypt 哈希并用于运行时认证，无需手动生成
+- 若希望使用固定哈希，也可直接提供 `HTTP_AUTH_HASH`（可通过 `python scripts/generate_password_hash.py` 生成）
+- 两者都提供时，优先使用 `HTTP_AUTH_HASH`
+- 启动后在设置页完成扫码登录即可使用
 
 ## 4. 文档导航
 
