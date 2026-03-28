@@ -93,6 +93,8 @@ async with _recovery_lock:
 | 不 rebuild | follower 不进入 `ensure_logged_in(prefer_refresh=True)` |
 | 不发起自己的 redirect/relogin 主链 | follower 依赖 leader 的恢复结果 |
 
+**边界提醒**：follower 不 clear、不 rebuild 是当前代码语义。但"是否所有并发现场都已被线上充分证明"仍需实机闭环验证。文档中的 PASS/FAIL 口径服务于后续验收，不等于当前线上结论。
+
 ### 5.4 follower 允许做什么
 
 | 行为 | 说明 |
@@ -215,16 +217,23 @@ auth_recovery_singleflight: role=blocked action=backoff_skip reason="backoff act
 
 1. 出现一个 `role=leader action=start`
 2. 同一时间窗口出现 `role=follower action=join_existing_recovery`
-3. 同一恢复窗口只有一条 clear+rebuild / redirect 主链
+3. 同一恢复窗口内，日志显示只有一条 clear+rebuild / redirect 主链被执行
 4. leader 出现 `action=finish result=ok` 或 `result=failed`
+
+注意：这是当前实现目标和验收目标。当前代码已引入 leader/follower/backoff 机制来逼近这一目标。是否在线上真实收敛为单条主链，仍需靠下一次实机掉线验收确认。
 
 ### 8.4 PARTIAL PASS 判断口径
 
 - leader 执行了 clear+rebuild，但最终仍失败
 - follower 出现，但 leader 恢复失败导致 backoff
-- 单个请求触发恢复（无 follower），但恢复流程完整
 
-### 8.5 FAIL 判断口径
+### 8.5 EVIDENCE INSUFFICIENT 判断口径
+
+- 现场没有形成足够并发，无法验证 follower / backoff / 单 leader 是否真实生效
+- 无 follower 出现的单请求恢复：可视为"恢复链跑通，但 singleflight 未被充分触发验证"
+- 这不是失败，也不是通过，而是证据不足
+
+### 8.6 FAIL 判断口径
 
 - 出现多个 leader start（同一恢复窗口内）
 - follower 自行执行了 clear 或 rebuild

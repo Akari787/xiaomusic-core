@@ -101,12 +101,13 @@ clear+rebuild 路径:
 ### 4.3 locked
 
 - 语义：认证锁定，需要人工干预（扫码登录）
-- 进入条件：长期态字段缺失（`passToken`、`psecurity`、`ssecurity` 均不存在）
+- 进入条件：长期态必需字段缺失或不完整，导致 persistent auth 不可用时，恢复失败后可能进入 locked
+- 判定依据：`_has_persistent_auth_fields` 返回 False（当前实现检查 `passToken`、`psecurity`、`ssecurity` 等关键字段是否存在）
 - 退出条件：
   - 扫码登录后调用 `clear_auth_lock`
   - 锁定超时后自动转为 degraded
 
-**重要**：locked 不是短期 token 失效后的默认结果。只有在长期态缺失或等价硬故障时才应进入 locked。
+**重要**：locked 不是短期 token 失效后的默认结果。只有在长期态缺失或等价硬故障导致恢复失败时才应进入 locked。
 
 ---
 
@@ -143,8 +144,8 @@ clear+rebuild 路径:
 
 ### 5.4 suspect 重置时机
 
-- clear short session 执行后重置
-- 非破坏性恢复成功后不重置（因为没有 clear）
+- clear short session 执行后，当前实现会显式调用 `_reset_auth_error_suspect()` 重置 suspect 状态
+- non-destructive recovery 成功后，当前实现没有显式 reset suspect；这是当前实现现状，不代表必然行为规范
 
 ---
 
@@ -261,7 +262,7 @@ clear 后进入 `ensure_logged_in(prefer_refresh=True)`：
 _clear_short_lived_session(clear_reason)
     ↓
 _rebuild_short_session_from_persistent_auth(reason)
-    ├─ persistent_auth_login (使用长期态重建短期态)
+    ├─ persistent_auth_login (primary path: 使用长期态重建短期态)
     └─ refresh_token_fallback (如果 persistent 失败)
     ↓
 rebuild_services(reason, allow_login_fallback=False)
@@ -269,17 +270,19 @@ rebuild_services(reason, allow_login_fallback=False)
     ↓
 _verify_runtime_auth_ready()
     └─ 调用 device_list 验证
-    ↓
-_transition_auth_mode("healthy")
 ```
+
+注意：`_rebuild_short_session_from_persistent_auth` 内部包含 primary path 与 refresh fallback，不是单一路径。
 
 ### 8.3 rebuild 成功/失败后的状态变化
 
 | 结果 | auth_mode | 说明 |
 |------|-----------|------|
 | rebuild 成功 | healthy | 恢复完成 |
-| rebuild 失败但有长期态 | degraded | 可能下次重试恢复 |
+| rebuild 失败但有长期态 | degraded | 下次重试可能恢复 |
 | rebuild 失败且无长期态 | locked | 需要人工扫码登录 |
+
+rebuild 失败时最终可能进入 degraded 或 locked，而不是默认回到 healthy。恢复主链不是"唯一成功路径"，而是当前实现的主要恢复路径。
 
 ---
 
@@ -339,6 +342,7 @@ _transition_auth_mode("healthy")
 3. **本文档描述的是当前实现基线，不代表未来永久架构**
 4. **singleflight 是否在线上真正完全生效，仍需后续实机验收确认**
 5. **Phase A 成功依赖 auth.json 中已有有效的 short session**：如果 short session 已过期，Phase A 会失败
+6. **本文档同时包含"当前代码已实现行为"与"当前验收应验证的行为约束"**：对尚未完成实机闭环验证的内容，不应视为线上已证明事实
 
 ---
 
