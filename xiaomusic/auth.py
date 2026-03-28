@@ -239,6 +239,17 @@ class AuthManager:
         self._last_auth_error_suspect_ctx: str = ""
         self._auth_error_suspect_window_sec: int = 30
 
+        # recovery singleflight 状态
+        self._recovery_lock = asyncio.Lock()
+        self._recovery_inflight: bool = False
+        self._recovery_leader_ctx: str = ""
+        self._recovery_leader_session_id: str = ""
+        self._recovery_started_ts: float = 0.0
+        self._recovery_finished_ts: float = 0.0
+        self._recovery_result: str = ""
+        self._recovery_backoff_until_ts: float = 0.0
+        self._recovery_backoff_sec: int = 10
+
         # 当前设备DID（用于设备ID更新）
         self._cur_did = None
         self.device_id = get_random(16).upper()
@@ -1638,6 +1649,107 @@ class AuthManager:
         if strong_invalidation_evidence:
             payload["strong_invalidation_evidence"] = strong_invalidation_evidence
         self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+
+    def _emit_recovery_singleflight(
+        self,
+        *,
+        role: str,
+        action: str,
+        ctx: str = "",
+        result: str = "",
+        reason: str = "",
+        backoff_until: float = 0.0,
+    ) -> None:
+        """发送 recovery singleflight 日志"""
+        payload = {
+            "event": "auth_recovery_singleflight",
+            "auth_session_id": self._auth_session_id(),
+            "ctx": ctx or "",
+            "role": role,
+            "action": action,
+        }
+        if result:
+            payload["result"] = result
+        if reason:
+            payload["reason"] = reason
+        if backoff_until:
+            payload["backoff_until"] = backoff_until
+        self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+
+    def _is_recovery_backoff_active(self) -> bool:
+        """检查是否处于恢复失败后的 backoff 窗口"""
+        now = time.time()
+        return now < self._recovery_backoff_until_ts
+
+    async def _try_acquire_recovery_leader(self, ctx: str = "") -> tuple[bool, str]:
+        """尝试获取 recovery leader 资格
+
+        Returns:
+            tuple[bool, str]: (是否成为leader, 状态描述)
+        """
+        now = time.time()
+
+        # 检查 backoff
+        if self._is_recovery_backoff_active():
+            backoff_remaining = self._recovery_backoff_until_ts - now
+            self._emit_recovery_singleflight(
+                role="blocked",
+                action="backoff_skip",
+                ctx=ctx,
+                reason=f"backoff active, remaining={backoff_remaining:.1f}s",
+                backoff_until=self._recovery_backoff_until_ts,
+            )
+            return False, "backoff_active"
+
+        async with self._recovery_lock:
+            if self._recovery_inflight:
+                # 已有恢复在进行，成为 follower
+                self._emit_recovery_singleflight(
+                    role="follower",
+                    action="join_existing_recovery",
+                    ctx=ctx,
+                    reason=f"leader_ctx={self._recovery_leader_ctx}",
+                )
+                return False, "follower"
+
+            # 成为 leader
+            self._recovery_inflight = True
+            self._recovery_leader_ctx = ctx or ""
+            self._recovery_leader_session_id = self._auth_session_id()
+            self._recovery_started_ts = now
+            self._recovery_result = ""
+
+            self._emit_recovery_singleflight(
+                role="leader",
+                action="start",
+                ctx=ctx,
+            )
+            return True, "leader"
+
+    def _release_recovery_leader(
+        self, ctx: str = "", result: str = "ok", reason: str = ""
+    ) -> None:
+        """释放 recovery leader 资格"""
+        now = time.time()
+        self._recovery_inflight = False
+        self._recovery_finished_ts = now
+        self._recovery_result = result
+
+        # 如果失败，设置 backoff
+        if result != "ok":
+            self._recovery_backoff_until_ts = now + self._recovery_backoff_sec
+
+        self._emit_recovery_singleflight(
+            role="leader",
+            action="finish",
+            ctx=ctx,
+            result=result,
+            reason=reason,
+        )
+
+        # 重置 leader 状态
+        self._recovery_leader_ctx = ""
+        self._recovery_leader_session_id = ""
 
     async def _attempt_runtime_rebuild_with_existing_short_session(
         self, ctx: str = "", reason: str = ""
@@ -3437,33 +3549,61 @@ class AuthManager:
             )
 
             if should_clear:
-                # 走 clear + rebuild 路径
-                cleared = self._clear_short_lived_session(
-                    clear_reason=ctx or "auth_error",
-                    err=e,
+                # 尝试获取 recovery leader 资格
+                is_leader, leader_status = await self._try_acquire_recovery_leader(
+                    ctx=ctx or "auth_error"
                 )
-                self._emit_auth_short_session_clear_decision(
-                    ctx=ctx,
-                    auth_error_detected=True,
-                    clear_executed=cleared,
-                    clear_reason=ctx or "auth_error",
-                    decision_reason=decision_reason,
-                    streak=self._auth_error_suspect_streak,
-                    err=str(e),
-                )
-                # clear后重置suspect状态
-                self._reset_auth_error_suspect()
 
-                if not cleared and await self.need_login():
-                    self._mark_recovery_active(f"auth_call:{ctx or 'unknown'}")
-                await self.ensure_logged_in(
-                    force=True,
-                    reason=ctx or str(e),
-                    prefer_refresh=True,
-                )
-                if retry <= 0:
+                if not is_leader:
+                    # follower：不 clear，不 rebuild
+                    if leader_status == "backoff_active":
+                        # backoff 中，直接抛出错误
+                        raise
+                    # follower：等待 leader 完成后重试
+                    if retry <= 0:
+                        raise
+                    # 短暂等待后重试
+                    await asyncio.sleep(0.5)
+                    return await fn()
+
+                # leader：执行 clear + rebuild
+                try:
+                    cleared = self._clear_short_lived_session(
+                        clear_reason=ctx or "auth_error",
+                        err=e,
+                    )
+                    self._emit_auth_short_session_clear_decision(
+                        ctx=ctx,
+                        auth_error_detected=True,
+                        clear_executed=cleared,
+                        clear_reason=ctx or "auth_error",
+                        decision_reason=decision_reason,
+                        streak=self._auth_error_suspect_streak,
+                        err=str(e),
+                    )
+                    # clear后重置suspect状态
+                    self._reset_auth_error_suspect()
+
+                    if not cleared and await self.need_login():
+                        self._mark_recovery_active(f"auth_call:{ctx or 'unknown'}")
+                    await self.ensure_logged_in(
+                        force=True,
+                        reason=ctx or str(e),
+                        prefer_refresh=True,
+                    )
+                    # leader 成功
+                    self._release_recovery_leader(ctx=ctx or "auth_error", result="ok")
+                    if retry <= 0:
+                        raise
+                    return await fn()
+                except Exception as recovery_err:
+                    # leader 失败
+                    self._release_recovery_leader(
+                        ctx=ctx or "auth_error",
+                        result="failed",
+                        reason=str(recovery_err),
+                    )
                     raise
-                return await fn()
             else:
                 # 走非破坏性恢复路径
                 self._record_auth_error_suspect(ctx=ctx)
@@ -3492,38 +3632,67 @@ class AuthManager:
                         raise
                     return await fn()
                 elif escalate_to_clear:
-                    # 强证据：立即升级到 clear+rebuild
-                    self._emit_auth_short_session_clear_decision(
-                        ctx=ctx,
-                        auth_error_detected=True,
-                        clear_executed=True,
-                        clear_reason=ctx or "strong_invalidation_evidence",
-                        decision_reason="strong_invalidation_evidence_after_runtime_rebuild",
-                        streak=self._auth_error_suspect_streak,
-                        err=str(e),
-                        phase_a_result="failed",
-                        phase_a_detail=recovery_detail,
-                        strong_invalidation_evidence=True,
+                    # 强证据：需要升级到 clear+rebuild
+                    # 尝试获取 recovery leader 资格
+                    is_leader, leader_status = await self._try_acquire_recovery_leader(
+                        ctx=ctx or "strong_invalidation_evidence"
                     )
-                    cleared = self._clear_short_lived_session(
-                        clear_reason=ctx or "strong_invalidation_evidence",
-                        err=e,
-                    )
-                    # clear后重置suspect状态
-                    self._reset_auth_error_suspect()
 
-                    if not cleared and await self.need_login():
-                        self._mark_recovery_active(
-                            f"auth_call_strong_evidence:{ctx or 'unknown'}"
+                    if not is_leader:
+                        # follower：不 clear，不 rebuild
+                        if leader_status == "backoff_active":
+                            raise
+                        # follower：等待 leader 完成后重试
+                        if retry <= 0:
+                            raise
+                        await asyncio.sleep(0.5)
+                        return await fn()
+
+                    # leader：执行 clear+rebuild
+                    try:
+                        self._emit_auth_short_session_clear_decision(
+                            ctx=ctx,
+                            auth_error_detected=True,
+                            clear_executed=True,
+                            clear_reason=ctx or "strong_invalidation_evidence",
+                            decision_reason="strong_invalidation_evidence_after_runtime_rebuild",
+                            streak=self._auth_error_suspect_streak,
+                            err=str(e),
+                            phase_a_result="failed",
+                            phase_a_detail=recovery_detail,
+                            strong_invalidation_evidence=True,
                         )
-                    await self.ensure_logged_in(
-                        force=True,
-                        reason=ctx or str(e),
-                        prefer_refresh=True,
-                    )
-                    if retry <= 0:
+                        cleared = self._clear_short_lived_session(
+                            clear_reason=ctx or "strong_invalidation_evidence",
+                            err=e,
+                        )
+                        # clear后重置suspect状态
+                        self._reset_auth_error_suspect()
+
+                        if not cleared and await self.need_login():
+                            self._mark_recovery_active(
+                                f"auth_call_strong_evidence:{ctx or 'unknown'}"
+                            )
+                        await self.ensure_logged_in(
+                            force=True,
+                            reason=ctx or str(e),
+                            prefer_refresh=True,
+                        )
+                        # leader 成功
+                        self._release_recovery_leader(
+                            ctx=ctx or "strong_invalidation_evidence", result="ok"
+                        )
+                        if retry <= 0:
+                            raise
+                        return await fn()
+                    except Exception as recovery_err:
+                        # leader 失败
+                        self._release_recovery_leader(
+                            ctx=ctx or "strong_invalidation_evidence",
+                            result="failed",
+                            reason=str(recovery_err),
+                        )
                         raise
-                    return await fn()
                 else:
                     # 非破坏性恢复失败，标记 recovery active
                     if await self.need_login():

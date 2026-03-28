@@ -2997,3 +2997,118 @@ async def test_phase_a_returns_structured_meta(auth_manager):
     finally:
         auth_module.MiAccount = original_MiAccount
         auth_module.MiNAService = original_MiNAService
+
+
+@pytest.mark.asyncio
+async def test_recovery_singleflight_only_one_leader(auth_manager):
+    """并发 auth error 只有一个 leader 执行 clear+rebuild"""
+    clear_calls = []
+    original_clear = auth_manager._clear_short_lived_session
+
+    def _track_clear(*args, **kwargs):
+        clear_calls.append((args, kwargs))
+        return original_clear(*args, **kwargs)
+
+    auth_manager._clear_short_lived_session = _track_clear
+    auth_manager.need_login = lambda: asyncio.sleep(0) or True
+    auth_manager.ensure_logged_in = lambda **kw: asyncio.sleep(0) or None
+
+    call_count = 0
+
+    async def _failing_fn():
+        nonlocal call_count
+        call_count += 1
+        raise Exception("Login failed")
+
+    # 模拟并发的 auth error 请求
+    tasks = [
+        auth_manager.auth_call(_failing_fn, retry=0, ctx=f"concurrent_{i}")
+        for i in range(5)
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 验证只有一次 clear（只有一个 leader）
+    assert len(clear_calls) == 1, f"Expected 1 clear, got {len(clear_calls)}"
+
+
+@pytest.mark.asyncio
+async def test_recovery_singleflight_follower_does_not_clear(auth_manager):
+    """follower 不会再次 clear"""
+    clear_calls = []
+    original_clear = auth_manager._clear_short_lived_session
+
+    def _track_clear(*args, **kwargs):
+        clear_calls.append((args, kwargs))
+        return original_clear(*args, **kwargs)
+
+    auth_manager._clear_short_lived_session = _track_clear
+    auth_manager.need_login = lambda: asyncio.sleep(0) or True
+    auth_manager.ensure_logged_in = lambda **kw: asyncio.sleep(0) or None
+
+    # 手动设置 recovery_inflight 模拟已有 leader
+    auth_manager._recovery_inflight = True
+    auth_manager._recovery_leader_ctx = "existing_leader"
+
+    async def _failing_fn():
+        raise Exception("Login failed")
+
+    # follower 请求
+    with pytest.raises(Exception):
+        await auth_manager.auth_call(_failing_fn, retry=0, ctx="follower")
+
+    # 验证 follower 没有 clear
+    assert len(clear_calls) == 0, "Follower should NOT clear"
+
+
+@pytest.mark.asyncio
+async def test_recovery_backoff_after_failure(auth_manager):
+    """恢复失败后 backoff 生效"""
+    import time
+
+    # 直接设置 backoff 状态
+    auth_manager._recovery_backoff_until_ts = time.time() + 10
+
+    # 验证 backoff 生效
+    assert auth_manager._is_recovery_backoff_active() is True
+
+    async def _failing_fn():
+        raise Exception("Login failed")
+
+    # 验证后续请求被 backoff 拦截
+    with pytest.raises(Exception):
+        await auth_manager.auth_call(_failing_fn, retry=0, ctx="test_ctx")
+
+
+def test_recovery_singleflight_state_management(auth_manager):
+    """测试 singleflight 状态管理"""
+    import asyncio
+
+    # 初始状态
+    assert auth_manager._recovery_inflight is False
+    assert auth_manager._is_recovery_backoff_active() is False
+
+    # 获取 leader
+    is_leader, status = asyncio.get_event_loop().run_until_complete(
+        auth_manager._try_acquire_recovery_leader(ctx="test")
+    )
+    assert is_leader is True
+    assert status == "leader"
+    assert auth_manager._recovery_inflight is True
+
+    # 再次尝试获取，应该成为 follower
+    is_leader2, status2 = asyncio.get_event_loop().run_until_complete(
+        auth_manager._try_acquire_recovery_leader(ctx="test2")
+    )
+    assert is_leader2 is False
+    assert status2 == "follower"
+
+    # 释放 leader
+    auth_manager._release_recovery_leader(ctx="test", result="ok")
+    assert auth_manager._recovery_inflight is False
+
+    # 现在可以再次获取 leader
+    is_leader3, status3 = asyncio.get_event_loop().run_until_complete(
+        auth_manager._try_acquire_recovery_leader(ctx="test3")
+    )
+    assert is_leader3 is True
+    assert status3 == "leader"
