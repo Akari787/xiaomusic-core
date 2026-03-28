@@ -69,8 +69,8 @@ clear+rebuild 路径:
     rebuild_services (runtime rebind)
         ↓
     verify
-        ↓
-    success → 重试原请求
+        ├─ success → 重试原请求
+        └─ failed → degraded / locked
 ```
 
 关键区分：

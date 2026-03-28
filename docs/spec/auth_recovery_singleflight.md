@@ -259,7 +259,7 @@ auth_recovery_singleflight: role=blocked action=backoff_skip reason="backoff act
 |------|------|
 | follower 不 clear | follower 无权修改 auth.json |
 | follower 不 rebuild | follower 不进入 `ensure_logged_in(prefer_refresh=True)` |
-| leader 独占恢复主链 | 同一时间只有一个 leader 执行 clear+rebuild |
+| leader 独占恢复主链（当前实现目标） | 同一时间应只有一个 leader 执行 clear+rebuild 主链 |
 | 失败后有 backoff | leader 失败后必须有保护窗口 |
 
 任何未来重构若改变上述语义，必须同步修改本文档与验收用例。
