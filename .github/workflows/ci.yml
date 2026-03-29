@@ -8,6 +8,7 @@ on:
 
 env:
   LOCAL_IMAGE: xiaomusic-core
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # NOTE: Some GitHub setups reject using the `secrets` context inside `if:`.
   # Mirror secrets into env, and only use env.* in conditions.
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
