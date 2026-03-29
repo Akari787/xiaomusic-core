@@ -1751,6 +1751,34 @@ class AuthManager:
         self._recovery_leader_ctx = ""
         self._recovery_leader_session_id = ""
 
+    async def _run_recovery_execution_under_singleflight(
+        self,
+        *,
+        ctx: str = "",
+        reason: str = "",
+        recovery_fn=None,
+    ) -> tuple[bool, str]:
+        """Run a recovery body under the shared recovery leader gate."""
+        leader_ctx = ctx or reason or "recovery"
+        is_leader, leader_status = await self._try_acquire_recovery_leader(
+            ctx=leader_ctx
+        )
+        if not is_leader:
+            return False, leader_status
+
+        try:
+            if callable(recovery_fn):
+                await recovery_fn()
+            self._release_recovery_leader(ctx=leader_ctx, result="ok")
+            return True, "ok"
+        except Exception as recovery_err:
+            self._release_recovery_leader(
+                ctx=leader_ctx,
+                result="failed",
+                reason=str(recovery_err),
+            )
+            raise
+
     async def _attempt_runtime_rebuild_with_existing_short_session(
         self, ctx: str = "", reason: str = ""
     ) -> tuple[bool, str, dict]:
@@ -2564,37 +2592,139 @@ class AuthManager:
                 self.log.info("try login")
                 self._last_login_ts = now
                 auth_data = self._get_auth_data()
-                used_rebuild_strategy = "none"
-                used_refresh_fallback = False
-                if not auth_data.get("serviceToken") and not auth_data.get(
-                    "yetAnotherServiceToken"
-                ):
-                    rebuilt = await self._rebuild_short_session_from_persistent_auth(
-                        "init_all_data"
-                    )
-                    rebuild_detail = dict(self._last_short_session_rebuild_detail or {})
-                    used_rebuild_strategy = str(
-                        rebuild_detail.get("used_path") or "none"
-                    )
-                    used_refresh_fallback = bool(
-                        used_rebuild_strategy == "refresh_token_fallback"
-                    )
-                    if rebuilt and self._is_persistent_auth_login_strategy(
-                        used_rebuild_strategy
+
+                async def _init_all_data_recovery() -> None:
+                    used_rebuild_strategy = "none"
+                    used_refresh_fallback = False
+                    if not auth_data.get("serviceToken") and not auth_data.get(
+                        "yetAnotherServiceToken"
                     ):
-                        self._update_last_cookie_rebuild_outcome(
-                            runtime_rebind_result="pending",
-                            verify_result="pending",
+                        rebuilt = (
+                            await self._rebuild_short_session_from_persistent_auth(
+                                "init_all_data"
+                            )
                         )
-                try:
-                    await self.login_miboy(
-                        allow_login_fallback=False, reason="init_all_data"
-                    )
-                    if used_rebuild_strategy != "none":
+                        rebuild_detail = dict(
+                            self._last_short_session_rebuild_detail or {}
+                        )
+                        used_rebuild_strategy = str(
+                            rebuild_detail.get("used_path") or "none"
+                        )
+                        used_refresh_fallback = bool(
+                            used_rebuild_strategy == "refresh_token_fallback"
+                        )
+                        if rebuilt and self._is_persistent_auth_login_strategy(
+                            used_rebuild_strategy
+                        ):
+                            self._update_last_cookie_rebuild_outcome(
+                                runtime_rebind_result="pending",
+                                verify_result="pending",
+                            )
+                    try:
+                        await self.login_miboy(
+                            allow_login_fallback=False, reason="init_all_data"
+                        )
+                        if used_rebuild_strategy != "none":
+                            self._record_runtime_rebind_state(
+                                result="ok", reason="init_all_data"
+                            )
+                            self._record_verify_state(
+                                result="ok", reason="init_all_data"
+                            )
+                            if self._is_persistent_auth_login_strategy(
+                                used_rebuild_strategy
+                            ):
+                                self._update_last_cookie_rebuild_outcome(
+                                    runtime_rebind_result="ok",
+                                    verify_result="ok",
+                                )
+                            self._emit_auth_recovery_flow(
+                                result="ok",
+                                initial_state="short_session_missing",
+                                persistent_auth_available=self._has_persistent_auth_fields(
+                                    self._get_auth_data()
+                                ),
+                                existing_short_session_valid=False,
+                                used_rebuild_strategy=used_rebuild_strategy,
+                                used_refresh_fallback=used_refresh_fallback,
+                                runtime_rebind_result="ok",
+                                verify_result="ok",
+                                entered_manual_login=False,
+                                entered_locked=False,
+                                final_auth_mode="healthy",
+                            )
+                    except Exception as login_err:
+                        err_text = str(login_err).lower()
+                        should_rebuild = (
+                            "service token verify failed" in err_text
+                            or "missing short session token" in err_text
+                            or self._refresh_failed_requires_relogin(login_err)
+                        )
+                        if not should_rebuild:
+                            raise
+                        self._clear_short_lived_session(
+                            clear_reason="init_all_data_verify_failed",
+                            err=login_err,
+                        )
+                        rebuilt = (
+                            await self._rebuild_short_session_from_persistent_auth(
+                                "init_all_data_verify_failed"
+                            )
+                        )
+                        rebuild_detail = dict(
+                            self._last_short_session_rebuild_detail or {}
+                        )
+                        used_rebuild_strategy = str(
+                            rebuild_detail.get("used_path") or "none"
+                        )
+                        used_refresh_fallback = bool(
+                            used_rebuild_strategy == "refresh_token_fallback"
+                        )
+                        if not rebuilt:
+                            self._last_auth_error = "missing short session token; rebuild from long auth required"
+                            self._transition_auth_mode(
+                                "degraded", reason="init_all_data_verify_failed"
+                            )
+                            self._record_runtime_rebind_state(
+                                result="failed",
+                                reason="init_all_data_verify_failed",
+                                error_code="short_session_rebuild_failed",
+                                error_message=str(login_err),
+                            )
+                            self._record_verify_state(
+                                result="failed",
+                                reason="init_all_data_verify_failed",
+                                error_code="short_session_rebuild_failed",
+                                error_message=str(login_err),
+                            )
+                            self._emit_auth_recovery_flow(
+                                result="failed",
+                                initial_state="short_session_missing",
+                                persistent_auth_available=self._has_persistent_auth_fields(
+                                    self._get_auth_data()
+                                ),
+                                existing_short_session_valid=False,
+                                used_rebuild_strategy=used_rebuild_strategy,
+                                used_refresh_fallback=used_refresh_fallback,
+                                runtime_rebind_result="failed",
+                                verify_result="failed",
+                                entered_manual_login=False,
+                                entered_locked=False,
+                                final_auth_mode="degraded",
+                                error_code="short_session_rebuild_failed",
+                                error_message=str(login_err),
+                            )
+                            raise
+                        await self.login_miboy(
+                            allow_login_fallback=False,
+                            reason="init_all_data_verify_failed",
+                        )
                         self._record_runtime_rebind_state(
-                            result="ok", reason="init_all_data"
+                            result="ok", reason="init_all_data_verify_failed"
                         )
-                        self._record_verify_state(result="ok", reason="init_all_data")
+                        self._record_verify_state(
+                            result="ok", reason="init_all_data_verify_failed"
+                        )
                         if self._is_persistent_auth_login_strategy(
                             used_rebuild_strategy
                         ):
@@ -2617,93 +2747,19 @@ class AuthManager:
                             entered_locked=False,
                             final_auth_mode="healthy",
                         )
-                except Exception as login_err:
-                    err_text = str(login_err).lower()
-                    should_rebuild = (
-                        "service token verify failed" in err_text
-                        or "missing short session token" in err_text
-                        or self._refresh_failed_requires_relogin(login_err)
-                    )
-                    if not should_rebuild:
-                        raise
-                    self._clear_short_lived_session(
-                        clear_reason="init_all_data_verify_failed",
-                        err=login_err,
-                    )
-                    rebuilt = await self._rebuild_short_session_from_persistent_auth(
-                        "init_all_data_verify_failed"
-                    )
-                    rebuild_detail = dict(self._last_short_session_rebuild_detail or {})
-                    used_rebuild_strategy = str(
-                        rebuild_detail.get("used_path") or "none"
-                    )
-                    used_refresh_fallback = bool(
-                        used_rebuild_strategy == "refresh_token_fallback"
-                    )
-                    if not rebuilt:
-                        self._last_auth_error = "missing short session token; rebuild from long auth required"
-                        self._transition_auth_mode(
-                            "degraded", reason="init_all_data_verify_failed"
-                        )
-                        self._record_runtime_rebind_state(
-                            result="failed",
-                            reason="init_all_data_verify_failed",
-                            error_code="short_session_rebuild_failed",
-                            error_message=str(login_err),
-                        )
-                        self._record_verify_state(
-                            result="failed",
-                            reason="init_all_data_verify_failed",
-                            error_code="short_session_rebuild_failed",
-                            error_message=str(login_err),
-                        )
-                        self._emit_auth_recovery_flow(
-                            result="failed",
-                            initial_state="short_session_missing",
-                            persistent_auth_available=self._has_persistent_auth_fields(
-                                self._get_auth_data()
-                            ),
-                            existing_short_session_valid=False,
-                            used_rebuild_strategy=used_rebuild_strategy,
-                            used_refresh_fallback=used_refresh_fallback,
-                            runtime_rebind_result="failed",
-                            verify_result="failed",
-                            entered_manual_login=False,
-                            entered_locked=False,
-                            final_auth_mode="degraded",
-                            error_code="short_session_rebuild_failed",
-                            error_message=str(login_err),
-                        )
-                        raise
-                    await self.login_miboy(
-                        allow_login_fallback=False, reason="init_all_data_verify_failed"
-                    )
-                    self._record_runtime_rebind_state(
-                        result="ok", reason="init_all_data_verify_failed"
-                    )
-                    self._record_verify_state(
-                        result="ok", reason="init_all_data_verify_failed"
-                    )
-                    if self._is_persistent_auth_login_strategy(used_rebuild_strategy):
-                        self._update_last_cookie_rebuild_outcome(
-                            runtime_rebind_result="ok",
-                            verify_result="ok",
-                        )
-                    self._emit_auth_recovery_flow(
-                        result="ok",
-                        initial_state="short_session_missing",
-                        persistent_auth_available=self._has_persistent_auth_fields(
-                            self._get_auth_data()
-                        ),
-                        existing_short_session_valid=False,
-                        used_rebuild_strategy=used_rebuild_strategy,
-                        used_refresh_fallback=used_refresh_fallback,
-                        runtime_rebind_result="ok",
-                        verify_result="ok",
-                        entered_manual_login=False,
-                        entered_locked=False,
-                        final_auth_mode="healthy",
-                    )
+
+                (
+                    is_leader,
+                    leader_status,
+                ) = await self._run_recovery_execution_under_singleflight(
+                    ctx="init_all_data",
+                    reason="init_all_data",
+                    recovery_fn=_init_all_data_recovery,
+                )
+                if not is_leader:
+                    if leader_status == "backoff_active":
+                        raise RuntimeError("recovery backoff active")
+                    await asyncio.sleep(0.5)
             else:
                 self.log.info("skip login due cooldown")
         else:
@@ -3240,7 +3296,13 @@ class AuthManager:
                     allow_login_fallback=False,
                 )
 
-    async def ensure_logged_in(self, force=False, reason="", prefer_refresh=False):
+    async def ensure_logged_in(
+        self,
+        force=False,
+        reason="",
+        prefer_refresh=False,
+        recovery_owner: bool = False,
+    ):
         async with self._relogin_lock:
             now = time.time()
             self._relogin_inflight_ts = now
@@ -3266,7 +3328,7 @@ class AuthManager:
                 return False
 
             if now < self._next_relogin_allowed_ts:
-                if need:
+                if need and recovery_owner:
                     self.log.warning(
                         f"auth_relogin: bypass_backoff=true reason=need_login "
                         f"(backoff remaining={int(self._next_relogin_allowed_ts - now)}s)"
@@ -3549,25 +3611,8 @@ class AuthManager:
             )
 
             if should_clear:
-                # 尝试获取 recovery leader 资格
-                is_leader, leader_status = await self._try_acquire_recovery_leader(
-                    ctx=ctx or "auth_error"
-                )
 
-                if not is_leader:
-                    # follower：不 clear，不 rebuild
-                    if leader_status == "backoff_active":
-                        # backoff 中，直接抛出错误
-                        raise
-                    # follower：等待 leader 完成后重试
-                    if retry <= 0:
-                        raise
-                    # 短暂等待后重试
-                    await asyncio.sleep(0.5)
-                    return await fn()
-
-                # leader：执行 clear + rebuild
-                try:
+                async def _clear_and_rebuild() -> None:
                     cleared = self._clear_short_lived_session(
                         clear_reason=ctx or "auth_error",
                         err=e,
@@ -3590,20 +3635,32 @@ class AuthManager:
                         force=True,
                         reason=ctx or str(e),
                         prefer_refresh=True,
+                        recovery_owner=True,
                     )
-                    # leader 成功
-                    self._release_recovery_leader(ctx=ctx or "auth_error", result="ok")
+
+                (
+                    is_leader,
+                    leader_status,
+                ) = await self._run_recovery_execution_under_singleflight(
+                    ctx=ctx or "auth_error",
+                    reason=ctx or "auth_error",
+                    recovery_fn=_clear_and_rebuild,
+                )
+
+                if not is_leader:
+                    # follower：不 clear，不 rebuild
+                    if leader_status == "backoff_active":
+                        # backoff 中，直接抛出错误
+                        raise
+                    # follower：等待 leader 完成后重试
                     if retry <= 0:
                         raise
+                    # 短暂等待后重试
+                    await asyncio.sleep(0.5)
                     return await fn()
-                except Exception as recovery_err:
-                    # leader 失败
-                    self._release_recovery_leader(
-                        ctx=ctx or "auth_error",
-                        result="failed",
-                        reason=str(recovery_err),
-                    )
+                if retry <= 0:
                     raise
+                return await fn()
             else:
                 # 走非破坏性恢复路径
                 self._record_auth_error_suspect(ctx=ctx)
@@ -3633,23 +3690,7 @@ class AuthManager:
                     return await fn()
                 elif escalate_to_clear:
                     # 强证据：需要升级到 clear+rebuild
-                    # 尝试获取 recovery leader 资格
-                    is_leader, leader_status = await self._try_acquire_recovery_leader(
-                        ctx=ctx or "strong_invalidation_evidence"
-                    )
-
-                    if not is_leader:
-                        # follower：不 clear，不 rebuild
-                        if leader_status == "backoff_active":
-                            raise
-                        # follower：等待 leader 完成后重试
-                        if retry <= 0:
-                            raise
-                        await asyncio.sleep(0.5)
-                        return await fn()
-
-                    # leader：执行 clear+rebuild
-                    try:
+                    async def _clear_and_rebuild_strong() -> None:
                         self._emit_auth_short_session_clear_decision(
                             ctx=ctx,
                             auth_error_detected=True,
@@ -3677,22 +3718,30 @@ class AuthManager:
                             force=True,
                             reason=ctx or str(e),
                             prefer_refresh=True,
+                            recovery_owner=True,
                         )
-                        # leader 成功
-                        self._release_recovery_leader(
-                            ctx=ctx or "strong_invalidation_evidence", result="ok"
-                        )
+
+                    (
+                        is_leader,
+                        leader_status,
+                    ) = await self._run_recovery_execution_under_singleflight(
+                        ctx=ctx or "strong_invalidation_evidence",
+                        reason=ctx or "strong_invalidation_evidence",
+                        recovery_fn=_clear_and_rebuild_strong,
+                    )
+
+                    if not is_leader:
+                        # follower：不 clear，不 rebuild
+                        if leader_status == "backoff_active":
+                            raise
+                        # follower：等待 leader 完成后重试
                         if retry <= 0:
                             raise
+                        await asyncio.sleep(0.5)
                         return await fn()
-                    except Exception as recovery_err:
-                        # leader 失败
-                        self._release_recovery_leader(
-                            ctx=ctx or "strong_invalidation_evidence",
-                            result="failed",
-                            reason=str(recovery_err),
-                        )
+                    if retry <= 0:
                         raise
+                    return await fn()
                 else:
                     # 非破坏性恢复失败，标记 recovery active
                     if await self.need_login():
@@ -3790,11 +3839,24 @@ class AuthManager:
                 # relogin/rebuild path used by getalldevices.
                 if self._keepalive_fail_streak >= 2:
                     try:
-                        await self.ensure_logged_in(
-                            force=True,
+                        (
+                            is_leader,
+                            leader_status,
+                        ) = await self._run_recovery_execution_under_singleflight(
+                            ctx="keepalive_auto_recover",
                             reason="keepalive_auto_recover",
-                            prefer_refresh=True,
+                            recovery_fn=lambda: self.ensure_logged_in(
+                                force=True,
+                                reason="keepalive_auto_recover",
+                                prefer_refresh=True,
+                                recovery_owner=True,
+                            ),
                         )
+                        if not is_leader:
+                            if leader_status == "backoff_active":
+                                raise RuntimeError("recovery backoff active")
+                            await asyncio.sleep(0.5)
+                            continue
                         await self.mina_call(
                             "device_list", retry=0, ctx="keepalive-auto-recover"
                         )
@@ -3829,11 +3891,24 @@ class AuthManager:
                         cooldown_sec,
                     )
                     try:
-                        await self.ensure_logged_in(
-                            force=True,
+                        (
+                            is_leader,
+                            leader_status,
+                        ) = await self._run_recovery_execution_under_singleflight(
+                            ctx="keepalive_proactive_recovery",
                             reason="keepalive_proactive_recovery",
-                            prefer_refresh=True,
+                            recovery_fn=lambda: self.ensure_logged_in(
+                                force=True,
+                                reason="keepalive_proactive_recovery",
+                                prefer_refresh=True,
+                                recovery_owner=True,
+                            ),
                         )
+                        if not is_leader:
+                            if leader_status == "backoff_active":
+                                raise RuntimeError("recovery backoff active")
+                            await asyncio.sleep(0.5)
+                            continue
                         await self.mina_call(
                             "device_list", retry=0, ctx="keepalive-proactive-recover"
                         )

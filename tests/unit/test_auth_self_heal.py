@@ -102,7 +102,9 @@ async def auth_manager(tmp_path):
 async def test_auth_call_triggers_relogin_and_retries_once(auth_manager):
     calls = {"fn": 0, "ensure": 0, "non_destructive": 0}
 
-    async def _ensure(force=False, reason="", prefer_refresh=False):  # noqa: ARG001
+    async def _ensure(
+        force=False, reason="", prefer_refresh=False, recovery_owner=False
+    ):  # noqa: ARG001
         calls["ensure"] += 1
         assert prefer_refresh is True
         return True
@@ -254,7 +256,7 @@ async def test_keepalive_degrades_after_three_failures(auth_manager, monkeypatch
         if len(delays) >= 3:
             raise asyncio.CancelledError()
 
-    async def _ensure(force=False, reason=""):  # noqa: ARG001
+    async def _ensure(force=False, reason="", recovery_owner=False):  # noqa: ARG001
         return False
 
     async def _mina_call(*args, **kwargs):  # noqa: ARG001
@@ -280,7 +282,7 @@ async def test_keepalive_recovers_from_degraded(auth_manager, monkeypatch):
         delays.append(delay)
         raise asyncio.CancelledError()
 
-    async def _ensure(force=False, reason=""):  # noqa: ARG001
+    async def _ensure(force=False, reason="", recovery_owner=False):  # noqa: ARG001
         return False
 
     async def _mina_call(*args, **kwargs):  # noqa: ARG001
@@ -374,7 +376,9 @@ async def test_auth_call_triggers_short_session_clear_before_relogin(
         called["clear"] += 1
         return True
 
-    async def _ensure(force=False, reason="", prefer_refresh=False):  # noqa: ARG001
+    async def _ensure(
+        force=False, reason="", prefer_refresh=False, recovery_owner=False
+    ):  # noqa: ARG001
         called["ensure"] += 1
         return True
 
@@ -1677,7 +1681,9 @@ async def test_auth_call_proceeds_recovery_when_clear_skipped_but_need_login(
         call_order.append("need_login")
         return True
 
-    async def _ensure(force=False, reason="", prefer_refresh=False):
+    async def _ensure(
+        force=False, reason="", prefer_refresh=False, recovery_owner=False
+    ):
         call_order.append("ensure_logged_in")
         assert force is True
         assert prefer_refresh is True
@@ -1727,7 +1733,9 @@ async def test_auth_call_marks_recovery_active_when_clear_skipped(
     async def _need_login():
         return True
 
-    async def _ensure(force=False, reason="", prefer_refresh=False):
+    async def _ensure(
+        force=False, reason="", prefer_refresh=False, recovery_owner=False
+    ):
         return True
 
     # 非破坏性恢复失败
@@ -1797,7 +1805,10 @@ async def test_ensure_logged_in_bypasses_backoff_when_need_login(
     auth_manager._last_ok_ts = 0
 
     out = await auth_manager.ensure_logged_in(
-        force=True, reason="ut-bypass", prefer_refresh=True
+        force=True,
+        reason="ut-bypass",
+        prefer_refresh=True,
+        recovery_owner=True,
     )
     assert out is True
     bypass_log = next((e for e in events if "bypass_backoff=true" in e), None)
@@ -1838,7 +1849,9 @@ async def test_keepalive_proactive_recovery_succeeds_and_resets_streak(
     async def _sleep(delay):
         raise asyncio.CancelledError()
 
-    async def _ensure(force=False, reason="", prefer_refresh=False):
+    async def _ensure(
+        force=False, reason="", prefer_refresh=False, recovery_owner=False
+    ):
         return True
 
     async def _mina_call(method, *args, **kwargs):
@@ -1878,7 +1891,9 @@ async def test_keepalive_proactive_recovery_respects_cooldown(
         sleep_delays.append(delay)
         raise asyncio.CancelledError()
 
-    async def _ensure(force=False, reason="", prefer_refresh=False):
+    async def _ensure(
+        force=False, reason="", prefer_refresh=False, recovery_owner=False
+    ):
         ensure_calls.append((force, reason))
         return True
 
@@ -1912,7 +1927,9 @@ async def test_keepalive_proactive_recovery_fails_and_sets_cooldown(
     async def _sleep(delay):
         raise asyncio.CancelledError()
 
-    async def _ensure(force=False, reason="", prefer_refresh=False):
+    async def _ensure(
+        force=False, reason="", prefer_refresh=False, recovery_owner=False
+    ):
         ensure_calls.append((force, reason))
         return False
 
@@ -1976,7 +1993,9 @@ async def test_keepalive_proactive_recovery_succeeds_after_initial_failure(
     async def _need_login():
         return False
 
-    async def _ensure(force=False, reason="", prefer_refresh=False):
+    async def _ensure(
+        force=False, reason="", prefer_refresh=False, recovery_owner=False
+    ):
         ensure_call_n["n"] += 1
         if "proactive" in reason:
             proactive_attempts.append(ensure_call_n["n"])
@@ -2055,7 +2074,10 @@ async def test_backoff_bypass_allows_complete_recovery_flow(auth_manager, monkey
     auth_manager._last_ok_ts = 0
 
     out = await auth_manager.ensure_logged_in(
-        force=True, reason="ut-bypass-clear", prefer_refresh=True
+        force=True,
+        reason="ut-bypass-clear",
+        prefer_refresh=True,
+        recovery_owner=True,
     )
     assert out is True
     bypass_log = next((e for e in events if "bypass_backoff" in e), None)
@@ -2078,7 +2100,9 @@ async def test_keepalive_proactive_recovery_success_resets_last_ok_ts_and_streak
     async def _need_login():
         return False
 
-    async def _ensure(force=False, reason="", prefer_refresh=False):
+    async def _ensure(
+        force=False, reason="", prefer_refresh=False, recovery_owner=False
+    ):
         return True
 
     async def _mina_call(method, *args, **kwargs):
