@@ -57,7 +57,7 @@ jobs:
 
       - name: Test Docker image for ${{ matrix.platform }}
         run: |
-          docker run --rm ${{ env.LOCAL_IMAGE }}:${{ github.ref_name }}-${{ matrix.platform }} /app/.venv/bin/python3 /app/xiaomusic.py -h
+          docker run --rm ${{ env.LOCAL_IMAGE }}:${{ github.ref_name }}-${{ matrix.platform }} /app/.venv/bin/python3 -c "import xiaomusic; print('ok')"
 
       - name: Show image size for ${{ matrix.platform }}
         run: |
