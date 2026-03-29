@@ -55,8 +55,12 @@
 | 入口 | 触发方式 |
 |------|----------|
 | `auth_call` | 检测到 auth error 后进入 suspect / clear+rebuild 流程 |
-| `keepalive_loop` | keepalive 失败后调用 `ensure_logged_in(prefer_refresh=True)` |
+| `keepalive_loop` | keepalive 常规失败后调用 `ensure_logged_in` |
+| `keepalive_auto_recover` | keepalive 连续失败后自动调用 `ensure_logged_in(prefer_refresh=True)` |
+| `keepalive_proactive_recovery` | keepalive 进入 degraded 后主动调用 `ensure_logged_in(prefer_refresh=True)` |
 | `init_all_data` | 检测 short session 缺失后调用 `_rebuild_short_session_from_persistent_auth` |
+| `init_all_data_verify_failed` | init 登录失败后执行 clear + rebuild |
+| `getalldevices` / 设备初始化路径 | 初始化时可能触发登录或恢复流程 |
 
 ### 4.2 恢复执行动作（recovery execution actions）
 
@@ -127,6 +131,7 @@
 - 各触发路径改为调用这个统一入口，而不是直接执行 rebuild
 - `auth_call` 保留现有状态机语义，但恢复执行最终应落到统一入口
 - keepalive / init_all_data 的最小改动目标是"接入统一入口"，不是各自复制 singleflight 逻辑
+- 在现有实现里，`ensure_logged_in(prefer_refresh=True)` 所承载的是最接近"恢复执行主链"的行为边界；后续最小改动应优先让会进入 clear+rebuild / relogin / redirect 的路径统一落到受保护入口，而不是给每个底层 rebuild 动作分别复制 singleflight
 
 ### 8.2 不展开的内容
 
@@ -179,3 +184,7 @@
    - leader 独占恢复主链
    - 失败后有 backoff
    - suspect / Phase A / strong evidence 语义不变
+
+6. **后续实现时，对新增路径有什么约束？**
+   - 任何新增会触发 clear+rebuild / relogin / redirect 的路径，都必须遵守本文档的统一入口约束
+   - 不得新增绕过统一恢复执行入口的新恢复路径
