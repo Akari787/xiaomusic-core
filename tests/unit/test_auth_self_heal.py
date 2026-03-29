@@ -1335,6 +1335,40 @@ async def test_init_all_data_rebuilds_when_existing_short_verify_failed(auth_man
 
 
 @pytest.mark.asyncio
+async def test_init_all_data_follower_waits_for_ready_before_post_init(
+    auth_manager, monkeypatch
+):
+    calls = {"device_update": 0}
+
+    async def _need_login():
+        return True
+
+    async def _can_login():
+        return True
+
+    async def _sleep(delay):  # noqa: ARG001
+        return None
+
+    async def _leader(*args, **kwargs):  # noqa: ARG001
+        return False, "ok"
+
+    async def _update(auth):  # noqa: ARG001
+        calls["device_update"] += 1
+
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    auth_manager.need_login = _need_login
+    auth_manager.can_login = _can_login
+    auth_manager._run_recovery_execution_under_singleflight = _leader
+    auth_manager.device_manager.update_device_info = _update
+    auth_manager._last_login_ts = 0
+    auth_manager._login_cooldown_sec = 0
+
+    with pytest.raises(RuntimeError, match="init_all_data recovery follower not ready"):
+        await auth_manager.init_all_data()
+    assert calls["device_update"] == 0
+
+
+@pytest.mark.asyncio
 async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_miaccount_strategy(
     auth_manager,
 ):

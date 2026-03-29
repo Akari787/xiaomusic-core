@@ -2759,7 +2759,18 @@ class AuthManager:
                 if not is_leader:
                     if leader_status == "backoff_active":
                         raise RuntimeError("recovery backoff active")
-                    await asyncio.sleep(0.5)
+                    ready = False
+                    for _ in range(10):
+                        await asyncio.sleep(0.5)
+                        if (
+                            self.mina_service is not None
+                            and not await self.need_login()
+                        ):
+                            ready = await self._verify_runtime_auth_ready()
+                            if ready:
+                                break
+                    if not ready:
+                        raise RuntimeError("init_all_data recovery follower not ready")
             else:
                 self.log.info("skip login due cooldown")
         else:
