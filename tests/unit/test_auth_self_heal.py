@@ -986,6 +986,112 @@ async def test_rebuild_short_session_records_missing_persistent_auth_fields(
 
 
 @pytest.mark.asyncio
+async def test_rebuild_service_cookies_short_circuits_when_nonce_missing(
+    auth_manager, monkeypatch
+):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    calls = {"security": 0}
+
+    class _FakeMiAccount:
+        def __init__(self, *args, **kwargs):
+            self.token = {}
+
+        async def _serviceLogin(self, path):
+            return {
+                "code": 0,
+                "desc": "成功",
+                "location": "https://api2.mina.mi.com/sts?foo=bar",
+                "ssecurity": "ss",
+            }
+
+        async def _securityTokenService(self, location, nonce, ssecurity):
+            calls["security"] += 1
+            raise AssertionError("_securityTokenService should not be called")
+
+    monkeypatch.setattr("xiaomusic.auth.MiAccount", _FakeMiAccount)
+    monkeypatch.setattr(auth_manager, "set_token", lambda account: None)
+
+    out = await auth_manager._try_miaccount_persistent_auth_relogin(
+        before=json.loads(token_path.read_text(encoding="utf-8")),
+        reason="ut-missing-nonce",
+        sid="micoapi",
+    )
+    assert out["ok"] is False
+    assert out["error_code"] == "redirect_missing_nonce"
+    assert out["failed_reason"] == "service_login_response_missing_nonce"
+    assert out["http_stage"] == "redirect"
+    assert out["writeback_target"] == "none"
+    assert out["used_path"] == "miaccount_persistent_auth_login"
+    assert calls["security"] == 0
+    diag = out["diagnostic"]
+    assert diag["service_login_code"] == 0
+    assert diag["has_location"] is True
+    assert diag["has_nonce"] is False
+    assert diag["has_ssecurity"] is True
+    assert diag["blocked_before_security_token_service"] is True
+    assert diag["security_token_service_invoked"] is False
+
+
+@pytest.mark.asyncio
+async def test_rebuild_short_session_primary_missing_nonce_still_reaches_fallback(
+    auth_manager, monkeypatch
+):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    calls = {"security": 0, "fallback": 0}
+
+    class _FakeMiAccount:
+        def __init__(self, *args, **kwargs):
+            self.token = {}
+
+        async def _serviceLogin(self, path):
+            return {
+                "code": 0,
+                "desc": "成功",
+                "location": "https://api2.mina.mi.com/sts?foo=bar",
+                "ssecurity": "ss",
+            }
+
+        async def _securityTokenService(self, location, nonce, ssecurity):
+            calls["security"] += 1
+            raise AssertionError("_securityTokenService should not be called")
+
+    async def _fallback(reason):  # noqa: ARG001
+        calls["fallback"] += 1
+        return {
+            "ok": False,
+            "error_code": "short_session_refresh_failed",
+            "failed_reason": "refresh_failed",
+            "used_path": "refresh_token_fallback",
+        }
+
+    monkeypatch.setattr("xiaomusic.auth.MiAccount", _FakeMiAccount)
+    monkeypatch.setattr(auth_manager, "set_token", lambda account: None)
+    monkeypatch.setattr(
+        auth_manager,
+        "_rebuild_short_session_tokens_via_refresh_fallback",
+        _fallback,
+    )
+
+    out = await auth_manager._rebuild_short_session_tokens_from_persistent_auth(
+        "ut-missing-nonce"
+    )
+    assert out["ok"] is False
+    assert out["used_path"] == "refresh_token_fallback"
+    assert calls["security"] == 0
+    assert calls["fallback"] == 1
+
+
+@pytest.mark.asyncio
 async def test_rebuild_short_session_does_not_call_login_on_long_missing(
     auth_manager, monkeypatch
 ):

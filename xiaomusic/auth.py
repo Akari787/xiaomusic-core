@@ -934,6 +934,34 @@ class AuthManager:
         except Exception:
             pass
 
+        if not has_nonce:
+            failed_reason = "service_login_response_missing_nonce"
+            return {
+                "ok": False,
+                "error_code": "redirect_missing_nonce",
+                "failed_reason": failed_reason,
+                "error_message": "serviceLogin response missing nonce; skip _securityTokenService",
+                "http_stage": "redirect",
+                "writeback_target": "none",
+                "sid": sid,
+                "used_path": "miaccount_persistent_auth_login",
+                "diagnostic": {
+                    "target_host": service_login_host,
+                    "redirect_host": redirect_host,
+                    "http_status": None,
+                    "service_login_code": service_login_code,
+                    "service_login_desc": service_login_desc,
+                    "has_location": has_location,
+                    "has_nonce": has_nonce,
+                    "has_ssecurity": has_ssecurity,
+                    "blocked_before_security_token_service": True,
+                    "security_token_service_invoked": False,
+                    "is_cloud_auth_rejection": False,
+                    "is_network_error": False,
+                    "is_401_403_rejection": False,
+                },
+            }
+
         try:
             service_token = await mi_account._securityTokenService(
                 location, nonce, ssecurity
