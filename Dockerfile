@@ -72,6 +72,7 @@ COPY xiaomusic/ ./xiaomusic/
 COPY plugins/ ./plugins/
 COPY holiday/ ./holiday/
 COPY xiaomusic.py .
+COPY sitecustomize.py .
 
 # 构建 WebUI 静态资源（镜像仅保留构建产物）
 RUN if [ -f xiaomusic/webui/package.json ]; then \
@@ -109,6 +110,7 @@ COPY --from=builder /app/xiaomusic/ ./xiaomusic/
 COPY --from=builder /app/plugins/ ./plugins/
 COPY --from=builder /app/holiday/ ./holiday/
 COPY --from=builder /app/xiaomusic.py .
+COPY --from=builder /app/sitecustomize.py .
 COPY --from=builder /app/xiaomusic/__init__.py /base_version.py
 
 # 仅保留 WebUI 构建后的静态资源，剔除前端源码与测试文件
