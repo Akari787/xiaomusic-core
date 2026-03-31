@@ -1083,27 +1083,115 @@ class AuthManager:
                 "writeback_target": "none",
                 "sid": sid,
                 "used_path": "mijia_persistent_auth_login",
+                "diagnostic": {
+                    "via": "mijia_persistent_auth_login",
+                    "manual_login_required": False,
+                },
             }
         relogin_ret = await asyncio.to_thread(relogin_fn, sid)
         if not isinstance(relogin_ret, dict):
             return {
                 "ok": False,
-                "error_code": "persistent_auth_login_failed",
+                "error_code": "invalid_mijia_relogin_response",
                 "failed_reason": "invalid_mijia_relogin_response",
                 "error_message": f"unexpected MiJiaAPI relogin response: {type(relogin_ret).__name__}",
                 "http_stage": "serviceLogin",
                 "writeback_target": "none",
                 "sid": sid,
                 "used_path": "mijia_persistent_auth_login",
+                "diagnostic": {
+                    "via": "mijia_persistent_auth_login",
+                    "response_type": type(relogin_ret).__name__,
+                    "manual_login_required": False,
+                },
             }
         relogin_ret = dict(relogin_ret)
         relogin_ret.setdefault("used_path", "mijia_persistent_auth_login")
-        if "diagnostic" not in relogin_ret:
-            relogin_ret["diagnostic"] = {
-                "via": "mijia_persistent_auth_login",
-            }
-        else:
-            relogin_ret["diagnostic"]["via"] = "mijia_persistent_auth_login"
+        relogin_ret.setdefault("sid", sid)
+        relogin_ret.setdefault("ok", False)
+        relogin_ret.setdefault(
+            "writeback_target", "auth_json" if relogin_ret.get("ok") else "none"
+        )
+        relogin_ret.setdefault(
+            "http_stage",
+            "refresh"
+            if relogin_ret.get("used_path") == "refresh_token_fallback"
+            else "serviceLogin",
+        )
+        diagnostic = relogin_ret.get("diagnostic")
+        if not isinstance(diagnostic, dict):
+            diagnostic = {}
+            relogin_ret["diagnostic"] = diagnostic
+        diagnostic["via"] = "mijia_persistent_auth_login"
+        diagnostic.setdefault("manual_login_required", False)
+        if not relogin_ret.get("ok"):
+            error_code = str(relogin_ret.get("error_code") or "")
+            failed_reason = str(relogin_ret.get("failed_reason") or "")
+            error_message = str(
+                relogin_ret.get("error_message")
+                or relogin_ret.get("message")
+                or relogin_ret.get("desc")
+                or ""
+            )
+            http_stage = str(relogin_ret.get("http_stage") or "")
+            diag_http_status = diagnostic.get("redirect_http_status") or diagnostic.get(
+                "http_status"
+            )
+            err_text = " ".join(
+                str(part)
+                for part in (
+                    error_code,
+                    failed_reason,
+                    error_message,
+                    http_stage,
+                    diag_http_status,
+                )
+                if part not in (None, "")
+            ).lower()
+            if not error_code:
+                if str(diag_http_status) in {"401", "403"} or "401" in err_text:
+                    error_code = "redirect_http_401"
+                    failed_reason = "redirect_http_401"
+                    relogin_ret["http_stage"] = (
+                        relogin_ret.get("http_stage") or "redirect"
+                    )
+                    diagnostic["is_401_403_rejection"] = True
+                elif "403" in err_text or "forbidden" in err_text:
+                    error_code = "redirect_http_403"
+                    failed_reason = "redirect_http_403"
+                    relogin_ret["http_stage"] = (
+                        relogin_ret.get("http_stage") or "redirect"
+                    )
+                    diagnostic["is_401_403_rejection"] = True
+                elif "refresh" in err_text and "fail" in err_text:
+                    error_code = "short_session_refresh_failed"
+                    failed_reason = "refresh_failed"
+                    relogin_ret["http_stage"] = (
+                        relogin_ret.get("http_stage") or "refresh"
+                    )
+                    diagnostic["refresh_path_invoked"] = True
+                elif "manual" in err_text and "login" in err_text:
+                    error_code = "manual_login_required"
+                    failed_reason = "manual_login_required"
+                    relogin_ret["http_stage"] = (
+                        relogin_ret.get("http_stage") or "manualLogin"
+                    )
+                    diagnostic["manual_login_required"] = True
+                else:
+                    error_code = "invalid_mijia_relogin_response"
+                    failed_reason = "invalid_mijia_relogin_response"
+            if error_code in {"redirect_http_401", "redirect_http_403"}:
+                diagnostic["is_401_403_rejection"] = True
+            if error_code == "short_session_refresh_failed":
+                diagnostic["refresh_path_invoked"] = True
+            if error_code == "manual_login_required":
+                diagnostic["manual_login_required"] = True
+            if error_code == "invalid_mijia_relogin_response":
+                diagnostic["response_valid"] = False
+            relogin_ret["error_code"] = error_code
+            relogin_ret["failed_reason"] = failed_reason or error_code
+            relogin_ret["error_message"] = error_message or error_code
+            relogin_ret["writeback_target"] = "none"
         return relogin_ret
 
     @staticmethod
@@ -1303,6 +1391,12 @@ class AuthManager:
         ok = bool(ret.get("ok") and (has_service_after or has_yast_after))
         if ok and ret.get("writeback_target") == "none":
             ret["writeback_target"] = "auth_json"
+        if not ok:
+            ret["writeback_target"] = "none"
+            if not ret.get("error_code"):
+                ret["error_code"] = "service_token_not_written"
+            if not ret.get("failed_reason"):
+                ret["failed_reason"] = "service_token_not_written"
         if ok and not ret.get("http_stage"):
             ret["http_stage"] = "redirect"
 
@@ -1367,7 +1461,9 @@ class AuthManager:
         )
         return {
             "ok": ok,
-            "error_code": str(ret.get("error_code") or ""),
+            "error_code": str(
+                ret.get("error_code") or ("" if ok else "service_token_not_written")
+            ),
             "error_message": str(ret.get("error_message") or ""),
             "failed_reason": str(
                 ret.get("failed_reason") or ("" if ok else "service_token_not_written")
@@ -1445,6 +1541,15 @@ class AuthManager:
             "ok": ok,
             "error_code": error_code,
             "error_message": error_message,
+            "http_stage": "refresh",
+            "writeback_target": "auth_json"
+            if (has_service_after or has_yast_after)
+            else "none",
+            "diagnostic": {
+                "via": "refresh_token_fallback",
+                "refresh_path_invoked": True,
+                "manual_login_required": False,
+            },
             "failed_reason": ""
             if ok
             else ("refresh_failed" if error_code else "short_token_not_written"),

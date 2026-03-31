@@ -1092,6 +1092,84 @@ async def test_rebuild_short_session_primary_missing_nonce_still_reaches_fallbac
 
 
 @pytest.mark.asyncio
+async def test_mijia_persistent_auth_relogin_invalid_response_is_normalized(
+    auth_manager, monkeypatch
+):
+    class _FakeMiJiaAPI:
+        def __init__(self, auth_data_path=None, token_store=None):  # noqa: ARG002
+            return None
+
+        def rebuild_service_cookies_from_persistent_auth(self, sid="micoapi"):  # noqa: ARG002
+            return {}
+
+    fake_module = types.ModuleType("xiaomusic.qrcode_login")
+    fake_module.MiJiaAPI = _FakeMiJiaAPI
+    monkeypatch.setitem(sys.modules, "xiaomusic.qrcode_login", fake_module)
+
+    out = await auth_manager._try_mijia_persistent_auth_relogin(
+        auth_dir=str(Path(auth_manager.auth_token_path).parent), sid="micoapi"
+    )
+    assert out["ok"] is False
+    assert out["error_code"] == "invalid_mijia_relogin_response"
+    assert out["failed_reason"] == "invalid_mijia_relogin_response"
+    assert out["writeback_target"] == "none"
+    assert out["http_stage"] == "serviceLogin"
+    assert out["diagnostic"]["via"] == "mijia_persistent_auth_login"
+    assert out["diagnostic"]["response_valid"] is False
+
+
+@pytest.mark.asyncio
+async def test_rebuild_short_session_reports_service_token_not_written_when_fallback_ok_but_disk_empty(
+    auth_manager, monkeypatch
+):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    async def _primary(*, before, reason, sid="micoapi"):  # noqa: ARG001
+        return {
+            "ok": False,
+            "error_code": "redirect_missing_nonce",
+            "failed_reason": "service_login_response_missing_nonce",
+            "error_message": "serviceLogin response missing nonce; skip _securityTokenService",
+            "http_stage": "redirect",
+            "writeback_target": "none",
+            "sid": sid,
+            "used_path": "miaccount_persistent_auth_login",
+        }
+
+    async def _fallback(*, auth_dir, sid="micoapi"):  # noqa: ARG001
+        return {
+            "ok": True,
+            "used_path": "mijia_persistent_auth_login",
+            "sid": sid,
+            "http_stage": "redirect",
+            "writeback_target": "auth_json",
+        }
+
+    monkeypatch.setattr(
+        auth_manager, "_try_miaccount_persistent_auth_relogin", _primary
+    )
+    monkeypatch.setattr(
+        auth_manager,
+        "_try_mijia_persistent_auth_relogin",
+        _fallback,
+    )
+
+    out = await auth_manager._rebuild_service_cookies_from_persistent_auth(
+        reason="ut-fallback-no-writeback", sid="micoapi"
+    )
+    assert out["ok"] is False
+    assert out["error_code"] == "service_token_not_written"
+    assert out["failed_reason"] == "service_token_not_written"
+    assert out["writeback_target"] == "none"
+    assert out["path_attempts"][0]["used_path"] == "miaccount_persistent_auth_login"
+    assert out["path_attempts"][1]["used_path"] == "mijia_persistent_auth_login"
+
+
+@pytest.mark.asyncio
 async def test_rebuild_short_session_does_not_call_login_on_long_missing(
     auth_manager, monkeypatch
 ):
