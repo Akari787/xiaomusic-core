@@ -1239,6 +1239,9 @@ class AuthManager:
         error_code: str = "",
         error_message: str = "",
         refresh_token_path_invoked: bool = False,
+        runtime_seed_incomplete: bool = False,
+        runtime_rebind_attempted: bool = False,
+        verify_attempted: bool = False,
     ) -> None:
         payload = {
             "event": "auth_runtime_reload",
@@ -1257,6 +1260,9 @@ class AuthManager:
             "error_code": error_code,
             "error_message": (error_message or "")[:200],
             "refresh_token_path_invoked": bool(refresh_token_path_invoked),
+            "runtime_seed_incomplete": bool(runtime_seed_incomplete),
+            "runtime_rebind_attempted": bool(runtime_rebind_attempted),
+            "verify_attempted": bool(verify_attempted),
         }
         self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
         self._auth_runtime_reload_state["last_reload_runtime"] = dict(payload)
@@ -3250,6 +3256,9 @@ class AuthManager:
             token_loaded = False
             error_code = ""
             last_error = ""
+            runtime_seed_incomplete = False
+            runtime_rebind_attempted = False
+            verify_attempted = False
 
             try:
                 if self.token_store is not None:
@@ -3289,6 +3298,9 @@ class AuthManager:
                         error_code=error_code,
                         error_message=last_error,
                         refresh_token_path_invoked=False,
+                        runtime_seed_incomplete=False,
+                        runtime_rebind_attempted=False,
+                        verify_attempted=False,
                     )
                     return {
                         "refreshed": False,
@@ -3301,6 +3313,9 @@ class AuthManager:
                         "verify_result": "failed",
                         "last_error": last_error,
                         "error_code": error_code,
+                        "runtime_seed_incomplete": False,
+                        "runtime_rebind_attempted": False,
+                        "verify_attempted": False,
                         "missing_long_lived_fields": missing_long,
                         "missing_short_session_fields": missing_short,
                         "timestamps": {
@@ -3316,6 +3331,7 @@ class AuthManager:
                         },
                     }
 
+                runtime_rebind_attempted = True
                 runtime_auth_ready = await self.rebuild_services(
                     reason=reason,
                     allow_login_fallback=False,
@@ -3325,6 +3341,7 @@ class AuthManager:
                 runtime_seed_has_service = bool(
                     self._short_session_fingerprint() != "none"
                 )
+                verify_attempted = True
 
                 if runtime_auth_ready:
                     await self.device_manager.update_device_info(self)
@@ -3340,7 +3357,35 @@ class AuthManager:
 
             except Exception as e:
                 last_error = str(e)
-                error_code = type(e).__name__
+                mina_rebuilt = self.mina_service is not None
+                miio_rebuilt = self.miio_service is not None
+                runtime_seed_has_service = bool(
+                    self._short_session_fingerprint() != "none"
+                )
+                exc_text = last_error.lower()
+                verify_attempted = any(
+                    kw in exc_text
+                    for kw in (
+                        "verify failed",
+                        "service token verify failed",
+                        "device_list",
+                    )
+                )
+                if not mina_rebuilt and not miio_rebuilt:
+                    error_code = "runtime_seed_incomplete"
+                    last_error = (
+                        "short session present on disk but runtime seed not established"
+                    )
+                    runtime_seed_incomplete = True
+                    runtime_seed_has_service = False
+                elif (
+                    "verify failed" in exc_text
+                    or "service token verify failed" in exc_text
+                    or "device_list" in exc_text
+                ):
+                    error_code = "runtime_verify_failed"
+                else:
+                    error_code = "runtime_rebind_failed"
                 self._last_auth_error = last_error
                 self._transition_auth_mode("degraded", reason=reason)
                 runtime_auth_ready = False
@@ -3359,6 +3404,9 @@ class AuthManager:
                 error_code=error_code,
                 error_message=last_error,
                 refresh_token_path_invoked=False,
+                runtime_seed_incomplete=runtime_seed_incomplete,
+                runtime_rebind_attempted=runtime_rebind_attempted,
+                verify_attempted=verify_attempted,
             )
 
             return {
@@ -3372,6 +3420,9 @@ class AuthManager:
                 "verify_result": verify_result,
                 "last_error": last_error or None,
                 "error_code": error_code,
+                "runtime_seed_incomplete": runtime_seed_incomplete,
+                "runtime_rebind_attempted": runtime_rebind_attempted,
+                "verify_attempted": verify_attempted,
                 "timestamps": {
                     "saveTime": int(self._token_save_ts() * 1000)
                     if self._token_save_ts()

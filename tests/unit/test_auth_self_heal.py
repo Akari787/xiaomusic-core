@@ -1743,6 +1743,76 @@ async def test_manual_reload_runtime_fails_with_missing_short_tokens(auth_manage
     assert "serviceToken" in out["missing_short_session_fields"][0]
 
 
+@pytest.mark.asyncio
+async def test_manual_reload_runtime_classifies_runtime_seed_incomplete(auth_manager):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data["serviceToken"] = "disk-st"
+    data["yetAnotherServiceToken"] = "disk-yast"
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        raise RuntimeError("bootstrap seed failed")
+
+    auth_manager.rebuild_services = _rebuild
+
+    out = await auth_manager.manual_reload_runtime(reason="ut-seed-incomplete")
+    assert out["runtime_auth_ready"] is False
+    assert out["error_code"] == "runtime_seed_incomplete"
+    assert out["runtime_seed_incomplete"] is True
+    assert out["runtime_rebind_attempted"] is True
+    assert out["verify_attempted"] is False
+    assert "runtime seed not established" in str(out["last_error"])
+
+
+@pytest.mark.asyncio
+async def test_manual_reload_runtime_classifies_runtime_rebind_failed(auth_manager):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data["serviceToken"] = "disk-st"
+    data["yetAnotherServiceToken"] = "disk-yast"
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        auth_manager.mina_service = object()
+        auth_manager.miio_service = None
+        raise RuntimeError("mina service init failed")
+
+    auth_manager.rebuild_services = _rebuild
+
+    out = await auth_manager.manual_reload_runtime(reason="ut-rebind-failed")
+    assert out["runtime_auth_ready"] is False
+    assert out["error_code"] == "runtime_rebind_failed"
+    assert out["runtime_seed_incomplete"] is False
+    assert out["runtime_rebind_attempted"] is True
+    assert out["verify_attempted"] is False
+
+
+@pytest.mark.asyncio
+async def test_manual_reload_runtime_classifies_runtime_verify_failed(auth_manager):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data["serviceToken"] = "disk-st"
+    data["yetAnotherServiceToken"] = "disk-yast"
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        auth_manager.mina_service = object()
+        auth_manager.miio_service = object()
+        raise RuntimeError("service token verify failed and login fallback disabled")
+
+    auth_manager.rebuild_services = _rebuild
+
+    out = await auth_manager.manual_reload_runtime(reason="ut-verify-failed")
+    assert out["runtime_auth_ready"] is False
+    assert out["error_code"] == "runtime_verify_failed"
+    assert out["runtime_seed_incomplete"] is False
+    assert out["runtime_rebind_attempted"] is True
+    assert out["verify_attempted"] is True
+    state = auth_manager.auth_runtime_reload_debug_state()["last_reload_runtime"]
+    assert state["error_code"] == "runtime_verify_failed"
+
+
 def test_auth_debug_state_zeroes_ttl_when_short_session_missing(auth_manager):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
