@@ -3339,19 +3339,26 @@ class AuthManager:
                 mina_rebuilt = self.mina_service is not None
                 miio_rebuilt = self.miio_service is not None
                 runtime_seed_has_service = bool(
-                    self._short_session_fingerprint() != "none"
+                    self.mina_service is not None or self.miio_service is not None
                 )
-                verify_attempted = True
 
                 if runtime_auth_ready:
+                    verify_attempted = True
                     await self.device_manager.update_device_info(self)
                     device_map_refreshed = True
                     self._last_auth_error = ""
                     self._transition_auth_mode("healthy", reason=reason)
                     verify_result = "ok"
                 else:
-                    error_code = "runtime_verify_failed"
-                    last_error = "runtime verify failed"
+                    if not runtime_seed_has_service:
+                        error_code = "runtime_seed_incomplete"
+                        last_error = "short session present on disk but runtime seed not established"
+                        runtime_seed_incomplete = True
+                        verify_attempted = False
+                    else:
+                        verify_attempted = True
+                        error_code = "runtime_verify_failed"
+                        last_error = "runtime verify failed"
                     self._last_auth_error = last_error
                     self._transition_auth_mode("degraded", reason=reason)
 
@@ -3360,7 +3367,7 @@ class AuthManager:
                 mina_rebuilt = self.mina_service is not None
                 miio_rebuilt = self.miio_service is not None
                 runtime_seed_has_service = bool(
-                    self._short_session_fingerprint() != "none"
+                    self.mina_service is not None or self.miio_service is not None
                 )
                 exc_text = last_error.lower()
                 verify_attempted = any(
@@ -3378,6 +3385,7 @@ class AuthManager:
                     )
                     runtime_seed_incomplete = True
                     runtime_seed_has_service = False
+                    verify_attempted = False
                 elif (
                     "verify failed" in exc_text
                     or "service token verify failed" in exc_text

@@ -1766,6 +1766,31 @@ async def test_manual_reload_runtime_classifies_runtime_seed_incomplete(auth_man
 
 
 @pytest.mark.asyncio
+async def test_manual_reload_runtime_classifies_runtime_seed_incomplete_when_rebuild_returns_false(
+    auth_manager,
+):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data["serviceToken"] = "disk-st"
+    data["yetAnotherServiceToken"] = "disk-yast"
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        return False
+
+    auth_manager.rebuild_services = _rebuild
+
+    out = await auth_manager.manual_reload_runtime(
+        reason="ut-seed-incomplete-false-return"
+    )
+    assert out["runtime_auth_ready"] is False
+    assert out["error_code"] == "runtime_seed_incomplete"
+    assert out["runtime_seed_incomplete"] is True
+    assert out["runtime_rebind_attempted"] is True
+    assert out["verify_attempted"] is False
+
+
+@pytest.mark.asyncio
 async def test_manual_reload_runtime_classifies_runtime_rebind_failed(auth_manager):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
