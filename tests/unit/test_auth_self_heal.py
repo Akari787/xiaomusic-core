@@ -1934,6 +1934,55 @@ async def test_manual_reload_runtime_hands_off_auth_failure_to_recovery_chain(
     assert ensure_calls[0]["recovery_owner"] is True
 
 
+@pytest.mark.asyncio
+async def test_auto_runtime_reload_schedules_when_degraded(auth_manager, monkeypatch):
+    calls = []
+
+    async def _manual_reload_runtime(**kwargs):
+        calls.append(kwargs)
+        auth_manager._auth_runtime_reload_state["last_reload_runtime"] = {
+            "runtime_auth_ready": True,
+            "auto_runtime_reload_triggered": kwargs["auto_runtime_reload_triggered"],
+            "auto_runtime_reload_source": kwargs["auto_runtime_reload_source"],
+        }
+        return {"runtime_auth_ready": True}
+
+    async def _singleflight(ctx="", reason="", recovery_fn=None):  # noqa: ARG001
+        assert ctx == "auto_runtime_reload:keepalive"
+        await recovery_fn()
+        return True, "ok"
+
+    auth_manager._auth_mode = "degraded"
+    monkeypatch.setattr(auth_manager, "manual_reload_runtime", _manual_reload_runtime)
+    monkeypatch.setattr(
+        auth_manager, "_run_recovery_execution_under_singleflight", _singleflight
+    )
+
+    scheduled = auth_manager._maybe_schedule_auto_runtime_reload(
+        source="keepalive", reason="keepalive_probe"
+    )
+    assert scheduled is True
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    state = auth_manager.auth_runtime_reload_debug_state()["last_auto_runtime_reload"]
+    assert state["triggered"] is True
+    assert state["result"] == "ok"
+    assert calls and calls[0]["auto_runtime_reload_triggered"] is True
+    assert calls[0]["auto_runtime_reload_source"] == "keepalive"
+
+
+def test_auto_runtime_reload_skips_when_healthy(auth_manager):
+    auth_manager._auth_mode = "healthy"
+
+    scheduled = auth_manager._maybe_schedule_auto_runtime_reload(
+        source="keepalive", reason="keepalive_probe"
+    )
+    assert scheduled is False
+    state = auth_manager.auth_runtime_reload_debug_state()["last_auto_runtime_reload"]
+    assert state["triggered"] is False
+    assert state["skipped_reason"] == "auth_mode_not_degraded"
+
+
 def test_auth_debug_state_zeroes_ttl_when_short_session_missing(auth_manager):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))

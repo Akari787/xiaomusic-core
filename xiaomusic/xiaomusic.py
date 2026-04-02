@@ -275,7 +275,10 @@ class XiaoMusic:
 
     def _queue_library_refresh(self, reason: str = ""):
         self._library_refresh_pending = True
-        if self._library_refresh_task is not None and not self._library_refresh_task.done():
+        if (
+            self._library_refresh_task is not None
+            and not self._library_refresh_task.done()
+        ):
             return
 
         async def _run():
@@ -303,7 +306,9 @@ class XiaoMusic:
         try:
             self.startup_diagnostics = build_startup_diagnostics(self.config)
             if not self.startup_diagnostics.ok:
-                self.log.warning("startup self-check failed: %s", self.startup_diagnostics)
+                self.log.warning(
+                    "startup self-check failed: %s", self.startup_diagnostics
+                )
         except Exception as e:
             self.log.exception("startup self-check error: %s", e)
         self.music_library.try_gen_all_music_tag()  # 事件循环开始后调用一次
@@ -580,9 +585,7 @@ class XiaoMusic:
         play_list = self.music_library.music_list[list_name]
         if 0 <= index - 1 < len(play_list):
             music_name = play_list[index - 1]
-            self.log.info(
-                f"即将播放歌单 {list_name} 里的第 {index} 个: {music_name}"
-            )
+            self.log.info(f"即将播放歌单 {list_name} 里的第 {index} 个: {music_name}")
             await self.device_manager.devices[did].play_music_list(
                 list_name, music_name
             )
@@ -817,7 +820,10 @@ class XiaoMusic:
             if self.auth_manager.is_auth_locked():
                 cached = self._cached_device_list()
                 if cached:
-                    self.log.info("getalldevices auth locked, return cached list count=%d", len(cached))
+                    self.log.info(
+                        "getalldevices auth locked, return cached list count=%d",
+                        len(cached),
+                    )
                     return cached
             # 认证失效时不在此路径重试风暴，改为返回缓存设备并等待人工重登。
             try:
@@ -834,7 +840,9 @@ class XiaoMusic:
                 self.log.warning(f"Execption after reinit {e2}")
                 cached = self._cached_device_list()
                 if cached:
-                    self.log.info("getalldevices fallback to cached list count=%d", len(cached))
+                    self.log.info(
+                        "getalldevices fallback to cached list count=%d", len(cached)
+                    )
                     return cached
         return device_list
 
@@ -856,7 +864,11 @@ class XiaoMusic:
 
     async def exec(self, did="", arg1=None, **kwargs):
         self.auth_manager._cur_did = did
-        from xiaomusic.security.errors import ExecDisabledError, ExecNotAllowedError, ExecValidationError
+        from xiaomusic.security.errors import (
+            ExecDisabledError,
+            ExecNotAllowedError,
+            ExecValidationError,
+        )
 
         code = arg1 if arg1 else ""
         try:

@@ -222,6 +222,7 @@ class AuthManager:
         }
         self._auth_runtime_reload_state: dict[str, dict[str, Any]] = {
             "last_reload_runtime": {},
+            "last_auto_runtime_reload": {},
         }
         self._last_short_session_rebuild_detail: dict[str, Any] = {}
         self._runtime_reload_context_active = False
@@ -229,6 +230,9 @@ class AuthManager:
         self._runtime_reload_verify_attempted = False
         self._runtime_reload_verify_error_text = ""
         self._runtime_reload_verify_auth_failure_detected = False
+        self._auto_runtime_reload_task: asyncio.Task | None = None
+        self._auto_runtime_reload_cooldown_until_ts = 0.0
+        self._auto_runtime_reload_last_attempt_ts = 0.0
 
         self._high_freq_methods = {
             "device_list",
@@ -522,6 +526,137 @@ class AuthManager:
 
     def auth_runtime_reload_debug_state(self) -> dict[str, Any]:
         return deepcopy(self._auth_runtime_reload_state)
+
+    def _record_auto_runtime_reload_state(self, state: dict[str, Any]) -> None:
+        payload = dict(state)
+        self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        self._auth_runtime_reload_state["last_auto_runtime_reload"] = payload
+
+    def _auto_runtime_reload_eligible(self, source: str) -> tuple[bool, str, float]:
+        now = time.time()
+        if self._auth_mode != "degraded":
+            return False, "auth_mode_not_degraded", 0.0
+        if self._is_auth_locked():
+            return False, "auth_locked", 0.0
+        if self._recovery_is_active():
+            return False, "recovery_active", 0.0
+        if self._runtime_reload_context_active:
+            return False, "runtime_reload_context_active", 0.0
+        if self._relogin_lock.locked():
+            return False, "relogin_lock_busy", 0.0
+
+        auth_data = self._get_auth_data()
+        persistent_auth_available = self._has_persistent_auth_fields(auth_data)
+        short_session_available = bool(
+            auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
+        )
+        if not persistent_auth_available:
+            return False, "persistent_auth_missing", 0.0
+        if not short_session_available:
+            return False, "short_session_missing", 0.0
+        if now < self._next_relogin_allowed_ts:
+            return False, "relogin_backoff_active", self._next_relogin_allowed_ts
+        if now < self._auto_runtime_reload_cooldown_until_ts:
+            return (
+                False,
+                "auto_runtime_reload_cooldown_active",
+                (self._auto_runtime_reload_cooldown_until_ts),
+            )
+        if (
+            self._auto_runtime_reload_task is not None
+            and not self._auto_runtime_reload_task.done()
+        ):
+            return False, "auto_runtime_reload_inflight", 0.0
+        return True, "", 0.0
+
+    def _maybe_schedule_auto_runtime_reload(
+        self, *, source: str, reason: str = ""
+    ) -> bool:
+        eligible, skip_reason, backoff_until = self._auto_runtime_reload_eligible(
+            source
+        )
+        now = time.time()
+        state = {
+            "event": "auth_runtime_reload_auto",
+            "source": source,
+            "reason": reason or source,
+            "triggered": bool(eligible),
+            "skipped_reason": skip_reason,
+            "backoff_until": int(backoff_until * 1000) if backoff_until else 0,
+            "result": "skipped",
+            "auth_mode": self._auth_mode,
+            "persistent_auth_available": self._has_persistent_auth_fields(
+                self._get_auth_data()
+            ),
+            "short_session_available": bool(
+                self._get_auth_data().get("serviceToken")
+                or self._get_auth_data().get("yetAnotherServiceToken")
+            ),
+            "auth_session_id": self._auth_session_id(),
+            "timestamp_ms": int(now * 1000),
+        }
+
+        if not eligible:
+            self._record_auto_runtime_reload_state(state)
+            return False
+
+        self._auto_runtime_reload_last_attempt_ts = now
+        state["result"] = "scheduled"
+        self._record_auto_runtime_reload_state(state)
+
+        async def _runner() -> None:
+            try:
+
+                async def _do_reload() -> dict[str, Any]:
+                    return await self.manual_reload_runtime(
+                        reason=f"auto_runtime_reload:{source}",
+                        auto_runtime_reload_triggered=True,
+                        auto_runtime_reload_source=source,
+                        auto_runtime_reload_reason=reason or source,
+                    )
+
+                (
+                    is_leader,
+                    leader_status,
+                ) = await self._run_recovery_execution_under_singleflight(
+                    ctx=f"auto_runtime_reload:{source}",
+                    reason=reason or source,
+                    recovery_fn=_do_reload,
+                )
+                result_state = dict(state)
+                result_state["triggered"] = bool(is_leader)
+                result_state["result"] = leader_status if not is_leader else "ok"
+                result_state["skipped_reason"] = leader_status if not is_leader else ""
+                result_state["backoff_until"] = (
+                    int(self._next_relogin_allowed_ts * 1000)
+                    if self._next_relogin_allowed_ts > 0
+                    else 0
+                )
+                if is_leader:
+                    reload_state = dict(
+                        self._auth_runtime_reload_state.get("last_reload_runtime", {})
+                    )
+                    result_state["result"] = (
+                        "ok" if reload_state.get("runtime_auth_ready") else "failed"
+                    )
+                    result_state["auto_runtime_reload_result"] = result_state["result"]
+                    result_state["auto_runtime_reload_skipped_reason"] = ""
+                    result_state["auto_runtime_reload_backoff_until"] = (
+                        int(self._auto_runtime_reload_cooldown_until_ts * 1000)
+                        if self._auto_runtime_reload_cooldown_until_ts > 0
+                        else 0
+                    )
+                    if not reload_state.get("runtime_auth_ready"):
+                        self._auto_runtime_reload_cooldown_until_ts = time.time() + 300
+                        result_state["backoff_until"] = int(
+                            self._auto_runtime_reload_cooldown_until_ts * 1000
+                        )
+                self._record_auto_runtime_reload_state(result_state)
+            finally:
+                self._auto_runtime_reload_task = None
+
+        self._auto_runtime_reload_task = asyncio.create_task(_runner())
+        return True
 
     def _emit_auth_short_session_rebuild(
         self,
@@ -1256,6 +1391,12 @@ class AuthManager:
         recovery_chain_result: str = "skipped",
         recovery_chain_error_code: str = "",
         recovery_chain_error_message: str = "",
+        auto_runtime_reload_triggered: bool = False,
+        auto_runtime_reload_reason: str = "",
+        auto_runtime_reload_skipped_reason: str = "",
+        auto_runtime_reload_backoff_until: int = 0,
+        auto_runtime_reload_result: str = "skipped",
+        auto_runtime_reload_source: str = "",
         error_code: str = "",
         error_message: str = "",
         refresh_token_path_invoked: bool = False,
@@ -1292,6 +1433,12 @@ class AuthManager:
             "recovery_chain_result": recovery_chain_result,
             "recovery_chain_error_code": recovery_chain_error_code,
             "recovery_chain_error_message": (recovery_chain_error_message or "")[:200],
+            "auto_runtime_reload_triggered": bool(auto_runtime_reload_triggered),
+            "auto_runtime_reload_reason": auto_runtime_reload_reason,
+            "auto_runtime_reload_skipped_reason": auto_runtime_reload_skipped_reason,
+            "auto_runtime_reload_backoff_until": int(auto_runtime_reload_backoff_until),
+            "auto_runtime_reload_result": auto_runtime_reload_result,
+            "auto_runtime_reload_source": auto_runtime_reload_source,
             "error_code": error_code,
             "final_error_code": error_code,
             "error_message": (error_message or "")[:200],
@@ -2956,6 +3103,9 @@ class AuthManager:
         if cookie_jar:
             self.mi_session.cookie_jar.update_cookies(cookie_jar)
         self.cookie_jar = self.mi_session.cookie_jar
+        self._maybe_schedule_auto_runtime_reload(
+            source="init_all_data", reason="init_all_data"
+        )
 
     async def can_login(self):
         if self._get_auth_data():
@@ -3287,7 +3437,11 @@ class AuthManager:
             }
 
     async def manual_reload_runtime(
-        self, reason: str = "manual_refresh_runtime"
+        self,
+        reason: str = "manual_refresh_runtime",
+        auto_runtime_reload_triggered: bool = False,
+        auto_runtime_reload_reason: str = "",
+        auto_runtime_reload_source: str = "",
     ) -> dict[str, Any]:
         mode_before = self._auth_mode
         async with self._relogin_lock:
@@ -3564,6 +3718,18 @@ class AuthManager:
                 "recovery_chain_result": recovery_chain_result,
                 "recovery_chain_error_code": recovery_chain_error_code,
                 "recovery_chain_error_message": recovery_chain_error_message or None,
+                "auto_runtime_reload_triggered": auto_runtime_reload_triggered,
+                "auto_runtime_reload_reason": auto_runtime_reload_reason or None,
+                "auto_runtime_reload_skipped_reason": None,
+                "auto_runtime_reload_backoff_until": int(
+                    self._auto_runtime_reload_cooldown_until_ts * 1000
+                )
+                if self._auto_runtime_reload_cooldown_until_ts > 0
+                else 0,
+                "auto_runtime_reload_result": ("ok" if runtime_auth_ready else "failed")
+                if auto_runtime_reload_triggered
+                else "skipped",
+                "auto_runtime_reload_source": auto_runtime_reload_source or None,
                 "mode_before": mode_before,
                 "mode_after": self._auth_mode,
                 "timestamps": {
@@ -3669,6 +3835,18 @@ class AuthManager:
                 recovery_chain_result=recovery_chain_result,
                 recovery_chain_error_code=recovery_chain_error_code,
                 recovery_chain_error_message=recovery_chain_error_message,
+                auto_runtime_reload_triggered=auto_runtime_reload_triggered,
+                auto_runtime_reload_reason=auto_runtime_reload_reason,
+                auto_runtime_reload_skipped_reason="",
+                auto_runtime_reload_backoff_until=int(
+                    self._auto_runtime_reload_cooldown_until_ts * 1000
+                )
+                if self._auto_runtime_reload_cooldown_until_ts > 0
+                else 0,
+                auto_runtime_reload_result=("ok" if runtime_auth_ready else "failed")
+                if auto_runtime_reload_triggered
+                else "skipped",
+                auto_runtime_reload_source=auto_runtime_reload_source,
                 error_code=error_code,
                 error_message=last_error,
                 refresh_token_path_invoked=False,
@@ -4251,6 +4429,11 @@ class AuthManager:
         while True:
             try:
                 await self._maybe_scheduled_refresh()
+                if self._maybe_schedule_auto_runtime_reload(
+                    source="keepalive", reason="keepalive_probe"
+                ):
+                    await asyncio.sleep(5)
+                    continue
                 await self.ensure_logged_in(force=False, reason="keepalive")
                 await self.mina_call("device_list", retry=1, ctx="keepalive")
                 self._last_ok_ts = time.time()
