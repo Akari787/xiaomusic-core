@@ -227,6 +227,8 @@ class AuthManager:
         self._runtime_reload_context_active = False
         self._runtime_reload_seed_established = False
         self._runtime_reload_verify_attempted = False
+        self._runtime_reload_verify_error_text = ""
+        self._runtime_reload_verify_auth_failure_detected = False
 
         self._high_freq_methods = {
             "device_list",
@@ -1247,6 +1249,13 @@ class AuthManager:
         device_map_refreshed: bool,
         verify_attempted: bool = False,
         verify_result: str,
+        verify_error_text: str = "",
+        verify_auth_failure_detected: bool = False,
+        recovery_chain_handoff: bool = False,
+        short_session_invalidated_after_verify: bool = False,
+        recovery_chain_result: str = "skipped",
+        recovery_chain_error_code: str = "",
+        recovery_chain_error_message: str = "",
         error_code: str = "",
         error_message: str = "",
         refresh_token_path_invoked: bool = False,
@@ -1274,6 +1283,15 @@ class AuthManager:
             "device_map_refreshed": bool(device_map_refreshed),
             "verify_attempted": bool(verify_attempted),
             "verify_result": verify_result,
+            "verify_error_text": (verify_error_text or "")[:200],
+            "verify_auth_failure_detected": bool(verify_auth_failure_detected),
+            "recovery_chain_handoff": bool(recovery_chain_handoff),
+            "short_session_invalidated_after_verify": bool(
+                short_session_invalidated_after_verify
+            ),
+            "recovery_chain_result": recovery_chain_result,
+            "recovery_chain_error_code": recovery_chain_error_code,
+            "recovery_chain_error_message": (recovery_chain_error_message or "")[:200],
             "error_code": error_code,
             "final_error_code": error_code,
             "error_message": (error_message or "")[:200],
@@ -3030,6 +3048,8 @@ class AuthManager:
         mode_before = self._auth_mode
         try:
             if self.mina_service is None:
+                self._runtime_reload_verify_error_text = "mina_service unavailable"
+                self._runtime_reload_verify_auth_failure_detected = False
                 self._emit_auth_state(
                     auth_step="verify_session",
                     auth_result="refresh_failed",
@@ -3040,6 +3060,8 @@ class AuthManager:
                 return False
             await self.mina_service.device_list()
             self._last_ok_ts = time.time()
+            self._runtime_reload_verify_error_text = ""
+            self._runtime_reload_verify_auth_failure_detected = False
             self._emit_auth_state(
                 auth_step="verify_session",
                 auth_result="ok",
@@ -3048,12 +3070,17 @@ class AuthManager:
             )
             return True
         except Exception as e:
+            verify_error_text = str(e)
+            self._runtime_reload_verify_error_text = verify_error_text
+            self._runtime_reload_verify_auth_failure_detected = (
+                self._is_auth_failure_error(verify_error_text)
+            )
             self._emit_auth_state(
                 auth_step="verify_session",
                 auth_result=self._classify_auth_result(e),
                 auth_mode_before=mode_before,
                 auth_mode_after=self._auth_mode,
-                err=str(e),
+                err=verify_error_text,
             )
             return False
 
@@ -3103,6 +3130,8 @@ class AuthManager:
                     },
                 )
             raise
+        if getattr(self, "_runtime_reload_context_active", False):
+            self._runtime_reload_verify_attempted = True
         ready = await self._verify_runtime_auth_ready()
         after_session = self._auth_session_id()
         after_mina_id = id(self.mina_service) if self.mina_service is not None else 0
@@ -3265,6 +3294,7 @@ class AuthManager:
             token_store_reloaded = False
             disk_has_service = False
             disk_has_yast = False
+            persistent_auth_available = False
             runtime_seed_present = False
             runtime_seed_has_service = False
             mina_rebuilt = False
@@ -3281,6 +3311,13 @@ class AuthManager:
             seed_attempted = False
             seed_result = "skipped"
             rebind_result = "skipped"
+            verify_error_text = ""
+            verify_auth_failure_detected = False
+            recovery_chain_handoff = False
+            short_session_invalidated_after_verify = False
+            recovery_chain_result = "skipped"
+            recovery_chain_error_code = ""
+            recovery_chain_error_message = ""
 
             try:
                 if self.token_store is not None:
@@ -3289,6 +3326,7 @@ class AuthManager:
 
                 auth_data = self._get_auth_data()
                 token_loaded = bool(auth_data)
+                persistent_auth_available = self._has_persistent_auth_fields(auth_data)
                 disk_has_service = bool(auth_data.get("serviceToken"))
                 disk_has_yast = bool(auth_data.get("yetAnotherServiceToken"))
                 runtime_seed_present = bool(disk_has_service or disk_has_yast)
@@ -3365,6 +3403,8 @@ class AuthManager:
                 self._runtime_reload_context_active = True
                 self._runtime_reload_seed_established = False
                 self._runtime_reload_verify_attempted = False
+                self._runtime_reload_verify_error_text = ""
+                self._runtime_reload_verify_auth_failure_detected = False
                 try:
                     runtime_auth_ready = await self.rebuild_services(
                         reason=reason,
@@ -3383,6 +3423,8 @@ class AuthManager:
                     verify_attempted = True
                     verify_result = "ok"
                     rebind_result = "ok"
+                    verify_error_text = ""
+                    verify_auth_failure_detected = False
                     await self.device_manager.update_device_info(self)
                     device_map_refreshed = True
                     self._last_auth_error = ""
@@ -3397,9 +3439,23 @@ class AuthManager:
                     elif self._runtime_reload_verify_attempted:
                         verify_attempted = True
                         error_code = "runtime_verify_failed"
-                        last_error = "runtime verify failed"
+                        verify_error_text = self._runtime_reload_verify_error_text
+                        verify_auth_failure_detected = (
+                            self._runtime_reload_verify_auth_failure_detected
+                        )
+                        last_error = (
+                            f"runtime verify failed: {verify_error_text}"
+                            if verify_error_text
+                            else "runtime verify failed"
+                        )
                         verify_result = "failed"
                         rebind_result = "ok"
+                        if verify_auth_failure_detected and persistent_auth_available:
+                            short_session_invalidated_after_verify = self._clear_short_lived_session(
+                                clear_reason=f"runtime_verify_failed:{reason or 'manual_refresh_runtime'}",
+                                err=verify_error_text or last_error,
+                            )
+                            recovery_chain_handoff = True
                     else:
                         error_code = "runtime_rebind_failed"
                         last_error = "runtime rebind failed"
@@ -3473,13 +3529,15 @@ class AuthManager:
                 device_map_refreshed=device_map_refreshed,
                 verify_attempted=verify_attempted,
                 verify_result=verify_result,
+                verify_error_text=verify_error_text,
+                verify_auth_failure_detected=verify_auth_failure_detected,
                 error_code=error_code,
                 error_message=last_error,
                 refresh_token_path_invoked=False,
                 runtime_seed_incomplete=runtime_seed_incomplete,
             )
 
-            return {
+            result = {
                 "refreshed": bool(runtime_auth_ready),
                 "runtime_auth_ready": bool(runtime_auth_ready),
                 "token_saved": False,
@@ -3499,6 +3557,13 @@ class AuthManager:
                 "rebind_result": rebind_result,
                 "final_error_code": error_code,
                 "final_failed_reason": last_error or None,
+                "verify_error_text": verify_error_text or None,
+                "verify_auth_failure_detected": verify_auth_failure_detected,
+                "recovery_chain_handoff": recovery_chain_handoff,
+                "short_session_invalidated_after_verify": short_session_invalidated_after_verify,
+                "recovery_chain_result": recovery_chain_result,
+                "recovery_chain_error_code": recovery_chain_error_code,
+                "recovery_chain_error_message": recovery_chain_error_message or None,
                 "mode_before": mode_before,
                 "mode_after": self._auth_mode,
                 "timestamps": {
@@ -3513,6 +3578,104 @@ class AuthManager:
                     else None,
                 },
             }
+
+        if recovery_chain_handoff:
+            recovery_error_text = ""
+            recovery_ok = False
+            try:
+                recovery_ok = await self.ensure_logged_in(
+                    force=True,
+                    reason=f"{reason}:runtime_verify_failed",
+                    prefer_refresh=True,
+                    recovery_owner=True,
+                )
+            except Exception as e:
+                recovery_error_text = str(e)
+                recovery_ok = False
+
+            recovery_debug = self.auth_short_session_rebuild_debug_state()
+            recovery_flow = recovery_debug.get("last_auth_recovery_flow", {})
+            recovery_rebind = recovery_debug.get("last_runtime_rebind", {})
+            recovery_verify = recovery_debug.get("last_verify", {})
+            recovery_chain_result = "ok" if recovery_ok else "failed"
+            recovery_chain_error_code = str(
+                (recovery_flow or {}).get("error_code")
+                or (recovery_rebind or {}).get("error_code")
+                or (recovery_verify or {}).get("error_code")
+                or self._classify_auth_result(recovery_error_text)
+                or "recovery_chain_failed"
+            )
+            recovery_chain_error_message = str(
+                (recovery_flow or {}).get("error_message")
+                or (recovery_rebind or {}).get("error_message")
+                or (recovery_verify or {}).get("error_message")
+                or recovery_error_text
+                or self._last_auth_error
+                or ""
+            )
+            runtime_auth_ready = bool(recovery_ok)
+            error_code = "" if recovery_ok else recovery_chain_error_code
+            last_error = "" if recovery_ok else recovery_chain_error_message
+            result["refreshed"] = runtime_auth_ready
+            result["runtime_auth_ready"] = runtime_auth_ready
+            result["runtime_rebound"] = bool(
+                self.mina_service is not None and self.miio_service is not None
+            )
+            result["device_map_refreshed"] = bool(device_map_refreshed or recovery_ok)
+            result["last_error"] = last_error or None
+            result["error_code"] = error_code
+            result["runtime_seed_incomplete"] = runtime_seed_incomplete
+            result["runtime_rebind_attempted"] = runtime_rebind_attempted
+            result["verify_attempted"] = verify_attempted
+            result["final_error_code"] = error_code
+            result["final_failed_reason"] = last_error or None
+            result["verify_error_text"] = verify_error_text or None
+            result["verify_auth_failure_detected"] = verify_auth_failure_detected
+            result["recovery_chain_handoff"] = True
+            result["short_session_invalidated_after_verify"] = (
+                short_session_invalidated_after_verify
+            )
+            result["recovery_chain_result"] = recovery_chain_result
+            result["recovery_chain_error_code"] = recovery_chain_error_code
+            result["recovery_chain_error_message"] = (
+                recovery_chain_error_message or None
+            )
+            result["mode_after"] = self._auth_mode
+            self._emit_auth_runtime_reload(
+                result="ok" if runtime_auth_ready else "failed",
+                reason=reason,
+                mode_before=mode_before,
+                mode_after=self._auth_mode,
+                reload_started=True,
+                seed_attempted=seed_attempted,
+                seed_result=seed_result,
+                token_store_reloaded=token_store_reloaded,
+                disk_has_service_token=disk_has_service,
+                disk_has_yast=disk_has_yast,
+                runtime_seed_has_service_token=bool(
+                    self._runtime_reload_seed_established
+                ),
+                mina_service_rebuilt=bool(self.mina_service is not None),
+                miio_service_rebuilt=bool(self.miio_service is not None),
+                rebind_attempted=runtime_rebind_attempted,
+                rebind_result=rebind_result,
+                device_map_refreshed=bool(device_map_refreshed and recovery_ok),
+                verify_attempted=verify_attempted,
+                verify_result=verify_result,
+                verify_error_text=verify_error_text,
+                verify_auth_failure_detected=verify_auth_failure_detected,
+                recovery_chain_handoff=True,
+                short_session_invalidated_after_verify=short_session_invalidated_after_verify,
+                recovery_chain_result=recovery_chain_result,
+                recovery_chain_error_code=recovery_chain_error_code,
+                recovery_chain_error_message=recovery_chain_error_message,
+                error_code=error_code,
+                error_message=last_error,
+                refresh_token_path_invoked=False,
+                runtime_seed_incomplete=runtime_seed_incomplete,
+            )
+
+        return result
 
     async def _reload_runtime_from_disk_auth(self, reason: str) -> dict[str, Any]:
         """Reload runtime state from disk auth snapshot only.
@@ -4273,7 +4436,10 @@ class AuthManager:
 
             runtime_verified = False
             login_exchange_called = False
-            if has_service_token:
+            runtime_reload_mode = bool(
+                getattr(self, "_runtime_reload_context_active", False)
+            )
+            if has_service_token and not runtime_reload_mode:
                 try:
                     if getattr(self, "_runtime_reload_context_active", False):
                         self._runtime_reload_verify_attempted = True
@@ -4349,6 +4515,9 @@ class AuthManager:
                     raise RuntimeError(
                         "service token verify failed and auto login fallback disabled"
                     )
+            elif has_service_token and runtime_reload_mode:
+                # Defer runtime readiness verification to the runtime-reload wrapper.
+                runtime_verified = True
             else:
                 self._auth_log(
                     reason=reason or "auth_error",

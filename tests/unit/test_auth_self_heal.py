@@ -1849,6 +1849,91 @@ async def test_manual_reload_runtime_classifies_runtime_verify_failed(auth_manag
     assert state["runtime_seed_has_serviceToken"] is True
 
 
+@pytest.mark.asyncio
+async def test_manual_reload_runtime_records_verify_error_details(auth_manager):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data["serviceToken"] = "disk-st"
+    data["yetAnotherServiceToken"] = "disk-yast"
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        auth_manager._runtime_reload_seed_established = True
+        auth_manager._runtime_reload_verify_attempted = True
+        auth_manager._runtime_reload_verify_error_text = "Verify failed: 401"
+        auth_manager._runtime_reload_verify_auth_failure_detected = False
+        auth_manager.mina_service = object()
+        auth_manager.miio_service = object()
+        return False
+
+    auth_manager.rebuild_services = _rebuild
+
+    out = await auth_manager.manual_reload_runtime(reason="ut-verify-details")
+    assert out["runtime_auth_ready"] is False
+    assert out["error_code"] == "runtime_verify_failed"
+    assert out["verify_error_text"] == "Verify failed: 401"
+    assert out["verify_auth_failure_detected"] is False
+    assert out["recovery_chain_handoff"] is False
+    assert "Verify failed: 401" in str(out["last_error"])
+
+
+@pytest.mark.asyncio
+async def test_manual_reload_runtime_hands_off_auth_failure_to_recovery_chain(
+    auth_manager,
+):
+    token_path = Path(auth_manager.auth_token_path)
+    data = json.loads(token_path.read_text(encoding="utf-8"))
+    data["serviceToken"] = "disk-st"
+    data["yetAnotherServiceToken"] = "disk-yast"
+    token_path.write_text(json.dumps(data), encoding="utf-8")
+
+    clear_calls = []
+    ensure_calls = []
+    original_clear = auth_manager._clear_short_lived_session
+
+    def _track_clear(*args, **kwargs):
+        clear_calls.append((args, kwargs))
+        return original_clear(*args, **kwargs)
+
+    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        auth_manager._runtime_reload_seed_established = True
+        auth_manager._runtime_reload_verify_attempted = True
+        auth_manager._runtime_reload_verify_error_text = (
+            "Error https://api2.mina.mi.com/admin/v2/device_list: Login failed"
+        )
+        auth_manager._runtime_reload_verify_auth_failure_detected = True
+        auth_manager.mina_service = object()
+        auth_manager.miio_service = object()
+        return False
+
+    async def _ensure_logged_in(**kwargs):
+        ensure_calls.append(kwargs)
+        auth_manager._auth_mode = "healthy"
+        auth_manager._last_auth_error = ""
+        auth_manager._last_ok_ts = time.time()
+        auth_manager.mina_service = object()
+        auth_manager.miio_service = object()
+        return True
+
+    auth_manager._clear_short_lived_session = _track_clear
+    auth_manager.rebuild_services = _rebuild
+    auth_manager.ensure_logged_in = _ensure_logged_in
+
+    out = await auth_manager.manual_reload_runtime(reason="ut-handoff")
+    assert out["verify_result"] == "failed"
+    assert out["verify_auth_failure_detected"] is True
+    assert out["recovery_chain_handoff"] is True
+    assert out["short_session_invalidated_after_verify"] is True
+    assert out["recovery_chain_result"] == "ok"
+    assert out["runtime_auth_ready"] is True
+    assert out["mode_after"] == "healthy"
+    assert out["error_code"] == ""
+    assert len(clear_calls) == 1
+    assert len(ensure_calls) == 1
+    assert ensure_calls[0]["prefer_refresh"] is True
+    assert ensure_calls[0]["recovery_owner"] is True
+
+
 def test_auth_debug_state_zeroes_ttl_when_short_session_missing(auth_manager):
     token_path = Path(auth_manager.auth_token_path)
     data = json.loads(token_path.read_text(encoding="utf-8"))
