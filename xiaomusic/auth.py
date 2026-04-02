@@ -3247,6 +3247,7 @@ class AuthManager:
             token_store_reloaded = False
             disk_has_service = False
             disk_has_yast = False
+            runtime_seed_present = False
             runtime_seed_has_service = False
             mina_rebuilt = False
             miio_rebuilt = False
@@ -3269,6 +3270,7 @@ class AuthManager:
                 token_loaded = bool(auth_data)
                 disk_has_service = bool(auth_data.get("serviceToken"))
                 disk_has_yast = bool(auth_data.get("yetAnotherServiceToken"))
+                runtime_seed_present = bool(disk_has_service or disk_has_yast)
                 missing_long, missing_short = self._missing_runtime_reload_fields(
                     auth_data
                 )
@@ -3338,9 +3340,6 @@ class AuthManager:
                 )
                 mina_rebuilt = self.mina_service is not None
                 miio_rebuilt = self.miio_service is not None
-                runtime_seed_has_service = bool(
-                    self.mina_service is not None or self.miio_service is not None
-                )
 
                 if runtime_auth_ready:
                     verify_attempted = True
@@ -3350,7 +3349,7 @@ class AuthManager:
                     self._transition_auth_mode("healthy", reason=reason)
                     verify_result = "ok"
                 else:
-                    if not runtime_seed_has_service:
+                    if not mina_rebuilt and not miio_rebuilt:
                         error_code = "runtime_seed_incomplete"
                         last_error = "short session present on disk but runtime seed not established"
                         runtime_seed_incomplete = True
@@ -3366,9 +3365,6 @@ class AuthManager:
                 last_error = str(e)
                 mina_rebuilt = self.mina_service is not None
                 miio_rebuilt = self.miio_service is not None
-                runtime_seed_has_service = bool(
-                    self.mina_service is not None or self.miio_service is not None
-                )
                 exc_text = last_error.lower()
                 verify_attempted = any(
                     kw in exc_text
@@ -3378,25 +3374,24 @@ class AuthManager:
                         "device_list",
                     )
                 )
-                if not mina_rebuilt and not miio_rebuilt:
+                if verify_attempted:
+                    error_code = "runtime_verify_failed"
+                elif not mina_rebuilt and not miio_rebuilt:
                     error_code = "runtime_seed_incomplete"
                     last_error = (
                         "short session present on disk but runtime seed not established"
                     )
                     runtime_seed_incomplete = True
-                    runtime_seed_has_service = False
                     verify_attempted = False
-                elif (
-                    "verify failed" in exc_text
-                    or "service token verify failed" in exc_text
-                    or "device_list" in exc_text
-                ):
-                    error_code = "runtime_verify_failed"
                 else:
                     error_code = "runtime_rebind_failed"
                 self._last_auth_error = last_error
                 self._transition_auth_mode("degraded", reason=reason)
                 runtime_auth_ready = False
+
+            runtime_seed_has_service = bool(
+                runtime_seed_present and error_code != "runtime_seed_incomplete"
+            )
 
             self._emit_auth_runtime_reload(
                 result="ok" if runtime_auth_ready else "failed",

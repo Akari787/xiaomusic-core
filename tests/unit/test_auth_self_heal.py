@@ -1836,6 +1836,7 @@ async def test_manual_reload_runtime_classifies_runtime_verify_failed(auth_manag
     assert out["verify_attempted"] is True
     state = auth_manager.auth_runtime_reload_debug_state()["last_reload_runtime"]
     assert state["error_code"] == "runtime_verify_failed"
+    assert state["runtime_seed_has_serviceToken"] is True
 
 
 def test_auth_debug_state_zeroes_ttl_when_short_session_missing(auth_manager):
