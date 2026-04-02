@@ -224,6 +224,9 @@ class AuthManager:
             "last_reload_runtime": {},
         }
         self._last_short_session_rebuild_detail: dict[str, Any] = {}
+        self._runtime_reload_context_active = False
+        self._runtime_reload_seed_established = False
+        self._runtime_reload_verify_attempted = False
 
         self._high_freq_methods = {
             "device_list",
@@ -1228,26 +1231,37 @@ class AuthManager:
         *,
         result: str,
         reason: str,
+        mode_before: str = "",
+        mode_after: str = "",
+        reload_started: bool = False,
+        seed_attempted: bool = False,
+        seed_result: str = "skipped",
         token_store_reloaded: bool,
         disk_has_service_token: bool,
         disk_has_yast: bool,
         runtime_seed_has_service_token: bool,
         mina_service_rebuilt: bool,
         miio_service_rebuilt: bool,
+        rebind_attempted: bool = False,
+        rebind_result: str = "skipped",
         device_map_refreshed: bool,
+        verify_attempted: bool = False,
         verify_result: str,
         error_code: str = "",
         error_message: str = "",
         refresh_token_path_invoked: bool = False,
         runtime_seed_incomplete: bool = False,
-        runtime_rebind_attempted: bool = False,
-        verify_attempted: bool = False,
     ) -> None:
         payload = {
             "event": "auth_runtime_reload",
             "stage": "reload_runtime",
             "result": result,
             "reason": reason,
+            "reload_started": bool(reload_started),
+            "mode_before": mode_before,
+            "mode_after": mode_after,
+            "seed_attempted": bool(seed_attempted),
+            "seed_result": seed_result,
             "auth_session_id": self._auth_session_id(),
             "token_store_reloaded": bool(token_store_reloaded),
             "disk_has_serviceToken": bool(disk_has_service_token),
@@ -1255,14 +1269,17 @@ class AuthManager:
             "runtime_seed_has_serviceToken": bool(runtime_seed_has_service_token),
             "mina_service_rebuilt": bool(mina_service_rebuilt),
             "miio_service_rebuilt": bool(miio_service_rebuilt),
+            "rebind_attempted": bool(rebind_attempted),
+            "rebind_result": rebind_result,
             "device_map_refreshed": bool(device_map_refreshed),
+            "verify_attempted": bool(verify_attempted),
             "verify_result": verify_result,
             "error_code": error_code,
+            "final_error_code": error_code,
             "error_message": (error_message or "")[:200],
+            "final_failed_reason": (error_message or "")[:200],
             "refresh_token_path_invoked": bool(refresh_token_path_invoked),
             "runtime_seed_incomplete": bool(runtime_seed_incomplete),
-            "runtime_rebind_attempted": bool(runtime_rebind_attempted),
-            "verify_attempted": bool(verify_attempted),
         }
         self.log.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
         self._auth_runtime_reload_state["last_reload_runtime"] = dict(payload)
@@ -3243,6 +3260,7 @@ class AuthManager:
     async def manual_reload_runtime(
         self, reason: str = "manual_refresh_runtime"
     ) -> dict[str, Any]:
+        mode_before = self._auth_mode
         async with self._relogin_lock:
             token_store_reloaded = False
             disk_has_service = False
@@ -3260,6 +3278,9 @@ class AuthManager:
             runtime_seed_incomplete = False
             runtime_rebind_attempted = False
             verify_attempted = False
+            seed_attempted = False
+            seed_result = "skipped"
+            rebind_result = "skipped"
 
             try:
                 if self.token_store is not None:
@@ -3289,20 +3310,26 @@ class AuthManager:
                     self._emit_auth_runtime_reload(
                         result="failed",
                         reason=reason,
+                        mode_before=mode_before,
+                        mode_after=self._auth_mode,
+                        reload_started=True,
+                        seed_attempted=False,
+                        seed_result="skipped",
                         token_store_reloaded=token_store_reloaded,
                         disk_has_service_token=disk_has_service,
                         disk_has_yast=disk_has_yast,
                         runtime_seed_has_service_token=False,
                         mina_service_rebuilt=False,
                         miio_service_rebuilt=False,
+                        rebind_attempted=False,
+                        rebind_result="skipped",
                         device_map_refreshed=False,
-                        verify_result="failed",
+                        verify_attempted=False,
+                        verify_result="skipped",
                         error_code=error_code,
                         error_message=last_error,
                         refresh_token_path_invoked=False,
                         runtime_seed_incomplete=False,
-                        runtime_rebind_attempted=False,
-                        verify_attempted=False,
                     )
                     return {
                         "refreshed": False,
@@ -3312,7 +3339,7 @@ class AuthManager:
                         "token_store_reloaded": token_store_reloaded,
                         "runtime_rebound": False,
                         "device_map_refreshed": False,
-                        "verify_result": "failed",
+                        "verify_result": "skipped",
                         "last_error": last_error,
                         "error_code": error_code,
                         "runtime_seed_incomplete": False,
@@ -3334,30 +3361,50 @@ class AuthManager:
                     }
 
                 runtime_rebind_attempted = True
-                runtime_auth_ready = await self.rebuild_services(
-                    reason=reason,
-                    allow_login_fallback=False,
-                )
+                seed_attempted = True
+                self._runtime_reload_context_active = True
+                self._runtime_reload_seed_established = False
+                self._runtime_reload_verify_attempted = False
+                try:
+                    runtime_auth_ready = await self.rebuild_services(
+                        reason=reason,
+                        allow_login_fallback=False,
+                    )
+                finally:
+                    self._runtime_reload_context_active = False
                 mina_rebuilt = self.mina_service is not None
                 miio_rebuilt = self.miio_service is not None
+                if self._runtime_reload_seed_established:
+                    seed_result = "ok"
+                elif runtime_seed_present:
+                    seed_result = "failed"
 
                 if runtime_auth_ready:
                     verify_attempted = True
+                    verify_result = "ok"
+                    rebind_result = "ok"
                     await self.device_manager.update_device_info(self)
                     device_map_refreshed = True
                     self._last_auth_error = ""
                     self._transition_auth_mode("healthy", reason=reason)
-                    verify_result = "ok"
                 else:
-                    if not mina_rebuilt and not miio_rebuilt:
+                    if not self._runtime_reload_seed_established:
                         error_code = "runtime_seed_incomplete"
                         last_error = "short session present on disk but runtime seed not established"
                         runtime_seed_incomplete = True
-                        verify_attempted = False
-                    else:
+                        verify_result = "skipped"
+                        rebind_result = "skipped"
+                    elif self._runtime_reload_verify_attempted:
                         verify_attempted = True
                         error_code = "runtime_verify_failed"
                         last_error = "runtime verify failed"
+                        verify_result = "failed"
+                        rebind_result = "ok"
+                    else:
+                        error_code = "runtime_rebind_failed"
+                        last_error = "runtime rebind failed"
+                        verify_result = "skipped"
+                        rebind_result = "failed"
                     self._last_auth_error = last_error
                     self._transition_auth_mode("degraded", reason=reason)
 
@@ -3366,7 +3413,7 @@ class AuthManager:
                 mina_rebuilt = self.mina_service is not None
                 miio_rebuilt = self.miio_service is not None
                 exc_text = last_error.lower()
-                verify_attempted = any(
+                verify_hint = any(
                     kw in exc_text
                     for kw in (
                         "verify failed",
@@ -3374,8 +3421,16 @@ class AuthManager:
                         "device_list",
                     )
                 )
-                if verify_attempted:
+                if self._runtime_reload_verify_attempted or verify_hint:
+                    verify_attempted = True
                     error_code = "runtime_verify_failed"
+                    verify_result = "failed"
+                    rebind_result = (
+                        "ok" if self._runtime_reload_seed_established else "skipped"
+                    )
+                    seed_result = (
+                        "ok" if self._runtime_reload_seed_established else "failed"
+                    )
                 elif not mina_rebuilt and not miio_rebuilt:
                     error_code = "runtime_seed_incomplete"
                     last_error = (
@@ -3383,33 +3438,45 @@ class AuthManager:
                     )
                     runtime_seed_incomplete = True
                     verify_attempted = False
+                    verify_result = "skipped"
+                    rebind_result = "skipped"
+                    seed_result = "failed"
                 else:
                     error_code = "runtime_rebind_failed"
+                    verify_result = "skipped"
+                    rebind_result = "failed"
+                    seed_result = (
+                        "ok" if self._runtime_reload_seed_established else "failed"
+                    )
                 self._last_auth_error = last_error
                 self._transition_auth_mode("degraded", reason=reason)
                 runtime_auth_ready = False
 
-            runtime_seed_has_service = bool(
-                runtime_seed_present and error_code != "runtime_seed_incomplete"
-            )
+            runtime_seed_has_service = bool(self._runtime_reload_seed_established)
 
             self._emit_auth_runtime_reload(
                 result="ok" if runtime_auth_ready else "failed",
                 reason=reason,
+                mode_before=mode_before,
+                mode_after=self._auth_mode,
+                reload_started=True,
+                seed_attempted=seed_attempted,
+                seed_result=seed_result,
                 token_store_reloaded=token_store_reloaded,
                 disk_has_service_token=disk_has_service,
                 disk_has_yast=disk_has_yast,
                 runtime_seed_has_service_token=runtime_seed_has_service,
                 mina_service_rebuilt=mina_rebuilt,
                 miio_service_rebuilt=miio_rebuilt,
+                rebind_attempted=runtime_rebind_attempted,
+                rebind_result=rebind_result,
                 device_map_refreshed=device_map_refreshed,
+                verify_attempted=verify_attempted,
                 verify_result=verify_result,
                 error_code=error_code,
                 error_message=last_error,
                 refresh_token_path_invoked=False,
                 runtime_seed_incomplete=runtime_seed_incomplete,
-                runtime_rebind_attempted=runtime_rebind_attempted,
-                verify_attempted=verify_attempted,
             )
 
             return {
@@ -3426,6 +3493,14 @@ class AuthManager:
                 "runtime_seed_incomplete": runtime_seed_incomplete,
                 "runtime_rebind_attempted": runtime_rebind_attempted,
                 "verify_attempted": verify_attempted,
+                "reload_started": True,
+                "seed_attempted": seed_attempted,
+                "seed_result": seed_result,
+                "rebind_result": rebind_result,
+                "final_error_code": error_code,
+                "final_failed_reason": last_error or None,
+                "mode_before": mode_before,
+                "mode_after": self._auth_mode,
                 "timestamps": {
                     "saveTime": int(self._token_save_ts() * 1000)
                     if self._token_save_ts()
@@ -4193,11 +4268,15 @@ class AuthManager:
 
             self.mina_service = MiNAService(mi_account)
             self.miio_service = MiIOService(mi_account)
+            if getattr(self, "_runtime_reload_context_active", False):
+                self._runtime_reload_seed_established = True
 
             runtime_verified = False
             login_exchange_called = False
             if has_service_token:
                 try:
+                    if getattr(self, "_runtime_reload_context_active", False):
+                        self._runtime_reload_verify_attempted = True
                     await self.mina_service.device_list()
                     runtime_verified = True
                     if self._recovery_is_active():

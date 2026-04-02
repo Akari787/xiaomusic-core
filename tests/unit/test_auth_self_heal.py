@@ -1741,6 +1741,7 @@ async def test_manual_reload_runtime_fails_with_missing_short_tokens(auth_manage
     assert "short session tokens missing" in str(out["last_error"])
     assert out["missing_long_lived_fields"] == []
     assert "serviceToken" in out["missing_short_session_fields"][0]
+    assert out["verify_result"] == "skipped"
 
 
 @pytest.mark.asyncio
@@ -1762,6 +1763,8 @@ async def test_manual_reload_runtime_classifies_runtime_seed_incomplete(auth_man
     assert out["runtime_seed_incomplete"] is True
     assert out["runtime_rebind_attempted"] is True
     assert out["verify_attempted"] is False
+    assert out["verify_result"] == "skipped"
+    assert out["seed_result"] == "failed"
     assert "runtime seed not established" in str(out["last_error"])
 
 
@@ -1788,6 +1791,7 @@ async def test_manual_reload_runtime_classifies_runtime_seed_incomplete_when_reb
     assert out["runtime_seed_incomplete"] is True
     assert out["runtime_rebind_attempted"] is True
     assert out["verify_attempted"] is False
+    assert out["verify_result"] == "skipped"
 
 
 @pytest.mark.asyncio
@@ -1811,6 +1815,8 @@ async def test_manual_reload_runtime_classifies_runtime_rebind_failed(auth_manag
     assert out["runtime_seed_incomplete"] is False
     assert out["runtime_rebind_attempted"] is True
     assert out["verify_attempted"] is False
+    assert out["verify_result"] == "skipped"
+    assert out["rebind_result"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -1822,6 +1828,7 @@ async def test_manual_reload_runtime_classifies_runtime_verify_failed(auth_manag
     token_path.write_text(json.dumps(data), encoding="utf-8")
 
     async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
+        auth_manager._runtime_reload_seed_established = True
         auth_manager.mina_service = object()
         auth_manager.miio_service = object()
         raise RuntimeError("service token verify failed and login fallback disabled")
@@ -1834,6 +1841,9 @@ async def test_manual_reload_runtime_classifies_runtime_verify_failed(auth_manag
     assert out["runtime_seed_incomplete"] is False
     assert out["runtime_rebind_attempted"] is True
     assert out["verify_attempted"] is True
+    assert out["verify_result"] == "failed"
+    assert out["seed_result"] == "ok"
+    assert out["rebind_result"] == "ok"
     state = auth_manager.auth_runtime_reload_debug_state()["last_reload_runtime"]
     assert state["error_code"] == "runtime_verify_failed"
     assert state["runtime_seed_has_serviceToken"] is True
