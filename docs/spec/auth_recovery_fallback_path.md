@@ -195,6 +195,7 @@
 - runtime reload 依赖现有 short session
 - fallback 用于"short session 已缺失但 persistent auth 仍在"的场景
 - 两者不是同一路径
+- runtime reload 现在可能由 `init_all_data()` / `keepalive_loop()` 自动触发，但职责仍然只是消费盘上已有 short session
 
 ### 8.3 与 manual login 的边界
 

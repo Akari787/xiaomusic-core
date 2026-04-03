@@ -33,6 +33,8 @@
 
 当前 singleflight 的目标不是消灭所有失败，而是确保同一时间只有一条恢复主链执行。
 
+当前实现里，自动 runtime reload（来自 `init_all_data()` / `keepalive_loop()`）也必须复用同一个恢复 leader/backoff 门，不能单独起第二套并发控制。
+
 ---
 
 ## 3. 术语定义
@@ -44,6 +46,7 @@
 | follower | 在已有 leader 执行期间到达的请求，不得自行 clear/rebuild |
 | backoff | leader 恢复失败后的保护窗口，阻断下一波立即并发重入 |
 | clear+rebuild | clear short session + ensure_logged_in(prefer_refresh=True) 的组合 |
+| auto runtime reload | 受控自动触发的 runtime reload，必须先过同一恢复 leader/backoff 门 |
 | recovery attempt | 一次完整的恢复尝试（从获取 leader 到释放 leader） |
 | ctx | 触发恢复的上下文标识（如 `mina:device_list:keepalive`） |
 | auth error trigger | 触发恢复链的认证错误事件 |
@@ -57,6 +60,7 @@
 3. follower 不得自行触发 `ensure_logged_in(prefer_refresh=True)`
 4. 失败后进入短 backoff，避免立即重入
 5. singleflight 只解决恢复窗口互斥，不保证 Xiaomi 云端一定成功
+6. 自动 runtime reload 触发后若已存在 recovery leader，必须表现为 follower / blocked，不得并发再开一条恢复链
 
 ---
 
@@ -171,6 +175,7 @@ auth_call 捕获 auth error
 | non-destructive recovery (Phase A/B) | 否 | 不 clear，不 rebuild，不争夺 leader |
 | strong evidence 升级后 | 是 | 需要 clear+rebuild，争夺 leader |
 | consecutive error 直接 clear | 是 | 需要 clear+rebuild，争夺 leader |
+| auto runtime reload | 是 | 作为恢复执行前置调度，必须复用同一 leader/backoff 门 |
 
 ### 7.3 必须写清的关系
 

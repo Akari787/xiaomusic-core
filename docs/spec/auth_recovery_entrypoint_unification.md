@@ -55,10 +55,12 @@
 | 入口 | 触发方式 |
 |------|----------|
 | `auth_call` | 检测到 auth error 后进入 suspect / clear+rebuild 流程 |
-| `keepalive_loop` | keepalive 常规失败后调用 `ensure_logged_in` |
+| `init_all_data` | 扫码登录成功后或启动后，发现 degraded + tokens available 时调度 runtime reload |
+| `keepalive_loop` | 运行中 degraded probe 命中时调度 runtime reload |
+| `keepalive_loop`（auth error recovery） | keepalive 常规失败后调用 `ensure_logged_in` |
 | `keepalive_auto_recover` | keepalive 连续失败后自动调用 `ensure_logged_in(prefer_refresh=True)` |
 | `keepalive_proactive_recovery` | keepalive 进入 degraded 后主动调用 `ensure_logged_in(prefer_refresh=True)` |
-| `init_all_data` | 检测 short session 缺失后调用 `_rebuild_short_session_from_persistent_auth` |
+| `init_all_data`（short session 缺失分支） | 检测 short session 缺失后调用 `_rebuild_short_session_from_persistent_auth` |
 | `init_all_data_verify_failed` | init 登录失败后执行 clear + rebuild |
 | `getalldevices` / 设备初始化路径 | 初始化时可能触发登录或恢复流程 |
 
@@ -74,6 +76,7 @@
 | `_rebuild_service_cookies_from_persistent_auth()` | 重建 service cookies |
 | `rebuild_services()` | 重新初始化 mina_service / miio_service |
 | `ensure_logged_in(prefer_refresh=True)` | 完整的 clear + rebuild + rebind + verify 链 |
+| `manual_reload_runtime()` | 从磁盘重建 runtime 的共享核心入口，手动与自动触发都应复用 |
 
 **关键区分**："触发恢复"与"执行恢复"不是同一个层次。
 

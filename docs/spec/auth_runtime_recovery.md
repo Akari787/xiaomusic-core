@@ -45,13 +45,14 @@
 
 当用户完成扫码登录且新的短期 token 已持久化到磁盘时：
 
-1. 调用 `POST /api/auth/refresh` 或 `POST /api/auth/refresh_runtime`
-2. 从磁盘重载运行时认证状态
-3. 执行 runtime rebind
-4. 刷新 device map
-5. 执行 verify
+1. 若运行时仍未 ready，系统会自动调度一次 runtime reload
+2. 也可以调用 `POST /api/auth/refresh` 或 `POST /api/auth/refresh_runtime`
+3. 从磁盘重载运行时认证状态
+4. 执行 runtime rebind
+5. 刷新 device map
+6. 执行 verify
 
-这一过程不需要重启容器。
+这一过程不需要重启容器，自动触发与手动触发共享同一核心链路。
 
 ## 5. Refresh 与 Reload Runtime 的区别
 
@@ -60,8 +61,9 @@
 
 当前主线语义：
 
-- `POST /api/auth/refresh` 表示刷新运行时
+- `POST /api/auth/refresh` 表示手动刷新运行时
 - `POST /api/auth/refresh_runtime` 是同语义的显式别名
+- 自动 runtime reload 由 `init_all_data()` / `keepalive_loop()` 受控触发，不是新的执行链
 
 ## 6. Locked 策略
 

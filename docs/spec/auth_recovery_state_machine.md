@@ -286,26 +286,41 @@ rebuild 失败时最终可能进入 degraded 或 locked，而不是默认回到 
 
 ---
 
-## 9. manual reload runtime 与自动恢复的边界
+## 9. runtime reload 与自动恢复的边界
 
-### 9.1 manual_reload_runtime / refresh_runtime
+### 9.1 runtime reload 入口家族
 
 - 接口：`POST /api/auth/refresh`、`POST /api/auth/refresh_runtime`
 - 语义：从磁盘重新加载 auth.json，重建 runtime
-- 与自动恢复链不是同一个入口
-- 适用于扫码登录后手动触发恢复
+- 手动按钮与自动调度共享同一 runtime reload 核心链路
+- 自动入口来自 `init_all_data()` / `keepalive_loop()`，不是新的恢复状态机
 
 ### 9.2 扫码登录后从磁盘重建 runtime
 
 用户完成扫码登录后：
 
 1. 新的 auth token 已持久化到 auth.json
-2. 调用 `POST /api/auth/refresh` 或 `POST /api/auth/refresh_runtime`
-3. 系统从磁盘重载认证状态
-4. 执行 runtime rebind
-5. 执行 verify
+2. 若 runtime 尚未 ready，系统会自动尝试一次 runtime reload
+3. 也可以显式调用 `POST /api/auth/refresh` 或 `POST /api/auth/refresh_runtime`
+4. 系统从磁盘重载认证状态
+5. 执行 runtime rebind
+6. 执行 verify
 
-**这一过程不依赖自动恢复链，是独立的手动恢复入口。**
+**手动入口与自动触发入口复用同一 runtime reload 核心链路，只是触发来源不同。**
+
+### 9.3 runtime reload 自动触发条件
+
+- `auth_mode=degraded`
+- `persistent_auth_available=true`
+- `short_session_available=true`
+- 当前不存在进行中的同类恢复
+- 不在 cooldown / backoff 窗口内
+
+### 9.4 runtime reload 结果分流
+
+- `runtime_auth_ready=true`：进入 `healthy`
+- `verify_auth_failure_detected=true`：认为 short session 已被证伪，handoff 到既有 short-session 恢复链
+- 网络/连接错误：保留 `degraded`，进入 cooldown / backoff，不误入 auth handoff
 
 ---
 
@@ -321,7 +336,7 @@ rebuild 失败时最终可能进入 degraded 或 locked，而不是默认回到 
 | `auth_recovery_singleflight` | 记录 singleflight：leader/follower、backoff、开始/结束 |
 | `auth_recovery_flow` | 记录完整恢复流程：初始状态、rebuild 策略、rebind 结果、verify 结果 |
 | `auth_cookie_rebuild` / `auth_persistent_auth_relogin` | 记录 persistent-auth 重建过程 |
-| `auth_runtime_reload` | 记录 runtime reload：token_store 状态、service 重建、verify 结果 |
+| `auth_runtime_reload` | 记录 runtime reload：token_store 状态、service 重建、verify 结果、自动触发/hand-off |
 | `auth_mode_transition` | 记录 auth_mode 状态转移 |
 
 ### 10.2 验收用途
@@ -332,6 +347,7 @@ rebuild 失败时最终可能进入 degraded 或 locked，而不是默认回到 
 2. `auth_non_destructive_recovery` 中的 `phase` 和 `strong_invalidation_evidence`：判断 Phase A 是否失败、是否升级
 3. `auth_recovery_singleflight` 中的 `role`：判断是否有多路并发 recovery
 4. `auth_recovery_flow` 中的 `result` 和 `used_rebuild_strategy`：判断 rebuild 是否成功
+5. `auth_runtime_reload` 中的 `auto_runtime_reload_triggered` / `verify_auth_failure_detected` / `recovery_chain_handoff`：判断自动 runtime reload 是否正确分流
 
 ---
 
