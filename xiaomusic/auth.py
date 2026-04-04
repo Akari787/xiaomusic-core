@@ -36,6 +36,30 @@ AUTH_ERROR_KEYWORDS = (
     "403",
 )
 
+AUTH_STRICT_ERROR_KEYWORDS = (
+    "login failed",
+    "unauthorized",
+    "invalid token",
+    "service token expired",
+    "servicetoken invalid",
+    "servicetoken expired",
+    "token expired",
+    "refresh token expired",
+    "passport token expired",
+)
+
+LONG_TERM_AUTH_FAILURE_HINTS = (
+    "refresh token expired",
+    "passport token expired",
+    "service token expired",
+    "servicetoken expired",
+    "need qr",
+    "scan qr",
+    "qr login",
+    "account locked",
+    "login required",
+)
+
 # 网络错误关键词
 NETWORK_ERROR_KEYWORDS = (
     "timeout",
@@ -82,6 +106,34 @@ def is_auth_error(exc=None, resp=None, body=None) -> bool:
 
     lowered = " ".join(text_parts).lower()
     return any(word in lowered for word in AUTH_ERROR_KEYWORDS)
+
+
+def is_auth_error_strict(exc=None, resp=None, body=None) -> bool:
+    """更严格的认证错误判断。"""
+    status = None
+    if resp is not None:
+        status = getattr(resp, "status", None)
+    if status is None and exc is not None:
+        status = getattr(exc, "status", None)
+    if status is None and exc is not None:
+        status = getattr(exc, "code", None)
+    if status in (401, 403):
+        return True
+
+    text_parts = []
+    if body is not None:
+        if isinstance(body, dict):
+            for key in ("code", "message", "msg", "error", "detail"):
+                val = body.get(key)
+                if val is not None:
+                    text_parts.append(str(val))
+        else:
+            text_parts.append(str(body))
+    if exc is not None:
+        text_parts.append(str(exc))
+
+    lowered = " ".join(text_parts).lower()
+    return any(word in lowered for word in AUTH_STRICT_ERROR_KEYWORDS)
 
 
 def is_network_error(exc=None, resp=None, body=None) -> bool:
@@ -257,11 +309,16 @@ class SimpleAuthManager:
         reason: str = "ensure_logged_in",
         prefer_refresh: bool = True,
         recovery_owner: bool = False,
+        preserve_healthy_runtime: bool = False,
         **kwargs,
     ) -> bool:
         """兼容旧入口：统一委托给 ensure_auth。"""
         _ = prefer_refresh, recovery_owner, kwargs
-        return await self.ensure_auth(force=force, reason=reason)
+        return await self.ensure_auth(
+            force=force,
+            reason=reason,
+            preserve_healthy_runtime=preserve_healthy_runtime,
+        )
 
     def record_playback_capability_verify(self, *args, **kwargs):
         """兼容播放能力探测接口"""
@@ -274,8 +331,50 @@ class SimpleAuthManager:
             },
         }
 
+    def _classify_auth_failure(
+        self, err_text: str, auth_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """将失败分类为网络/认证/运行时错误。"""
+        lowered = err_text.lower()
+        if is_network_error(exc=RuntimeError(err_text)):
+            return {
+                "error_type": "network_error",
+                "long_term_expired": False,
+                "need_qr_scan": False,
+                "user_action_required": False,
+            }
+
+        if not auth_data or not self._has_persistent_auth_fields(auth_data):
+            return {
+                "error_type": "missing_long_term_auth",
+                "long_term_expired": True,
+                "need_qr_scan": True,
+                "user_action_required": True,
+            }
+
+        if is_auth_error_strict(exc=RuntimeError(err_text)):
+            long_term_expired = any(
+                hint in lowered for hint in LONG_TERM_AUTH_FAILURE_HINTS
+            )
+            return {
+                "error_type": "auth_error",
+                "long_term_expired": long_term_expired,
+                "need_qr_scan": long_term_expired,
+                "user_action_required": long_term_expired,
+            }
+
+        return {
+            "error_type": "runtime_error",
+            "long_term_expired": False,
+            "need_qr_scan": False,
+            "user_action_required": False,
+        }
+
     async def ensure_auth(
-        self, force: bool = False, reason: str = "ensure_auth"
+        self,
+        force: bool = False,
+        reason: str = "ensure_auth",
+        preserve_healthy_runtime: bool = False,
     ) -> bool:
         """
         确保认证可用，如果不可用则尝试恢复
@@ -287,14 +386,20 @@ class SimpleAuthManager:
             return False
 
         if force:
-            return await self._try_login(reason=reason or "ensure_auth")
+            return await self._try_login(
+                reason=reason or "ensure_auth",
+                preserve_healthy_runtime=preserve_healthy_runtime,
+            )
 
         # 如果状态健康，快速返回
         if self._state == self.STATE_HEALTHY:
             if self.mina_service is None:
                 self._state = self.STATE_DEGRADED
                 self._last_error = "mina service unavailable"
-                return await self._try_login(reason=reason or "ensure_auth")
+                return await self._try_login(
+                    reason=reason or "ensure_auth",
+                    preserve_healthy_runtime=preserve_healthy_runtime,
+                )
             try:
                 await self.mina_service.device_list()
                 self._last_ok_ts = time.time()
@@ -309,7 +414,10 @@ class SimpleAuthManager:
                 self._last_recovery_stage = "probe"
                 self._last_recovery_error_code = "auth_error"
                 self._last_recovery_error_message = self._last_error
-                return await self._try_login(reason=reason or "ensure_auth")
+                return await self._try_login(
+                    reason=reason or "ensure_auth",
+                    preserve_healthy_runtime=preserve_healthy_runtime,
+                )
 
         # 状态不健康，尝试恢复
         if self._state in (self.STATE_DEGRADED, self.STATE_LOCKED):
@@ -321,7 +429,10 @@ class SimpleAuthManager:
             ):
                 return False
 
-            success = await self._try_login(reason=reason or "ensure_auth")
+            success = await self._try_login(
+                reason=reason or "ensure_auth",
+                preserve_healthy_runtime=preserve_healthy_runtime,
+            )
             if success:
                 self._state = self.STATE_HEALTHY
                 return True
@@ -336,43 +447,37 @@ class SimpleAuthManager:
 
         return False
 
-    def auth_status_snapshot(self) -> dict[str, Any]:
-        """获取认证状态快照"""
-        return {
-            "state": self._state,
-            "locked": self._state == self.STATE_LOCKED,
-            "locked_until_ts": int(self._locked_until * 1000)
-            if self._locked_until > 0
-            else 0,
-            "lock_reason": self._last_error,
-            "last_ok_ts": int(self._last_ok_ts * 1000) if self._last_ok_ts > 0 else 0,
-            "cooldown_until_ts": int(self._cooldown_until * 1000)
-            if self._cooldown_until > 0
-            else 0,
-        }
-
-    def auth_debug_state(self) -> dict[str, Any]:
-        """获取调试状态"""
-        return {
-            "last_auth_error": self._last_error,
-            "state": self._state,
-            "retry_count": self._retry_count,
-        }
-
     # ==================== 核心恢复逻辑 ====================
 
-    async def _try_login(self, reason: str = "") -> bool:
+    async def _try_login(
+        self, reason: str = "", preserve_healthy_runtime: bool = False
+    ) -> bool:
         """
         简化的登录逻辑
 
         核心思路：
         1. 读取持久化 token
-        2. 创建 MiAccount 并登录
-        3. 重建服务对象
-        4. 验证
+        2. 创建候选 runtime
+        3. 先验证候选 runtime
+        4. 验证成功后再原子替换当前 runtime
         """
+        previous_state = self._state
+        previous_locked_until = self._locked_until
+        previous_cooldown_until = self._cooldown_until
+        previous_retry_count = self._retry_count
+        runtime_swap_attempted = False
+        runtime_swap_applied = False
+        verify_attempted = False
+        verify_error_text = ""
+        login_error_text = ""
+        failure_classification: dict[str, Any] = {
+            "error_type": "runtime_error",
+            "long_term_expired": False,
+            "need_qr_scan": False,
+            "user_action_required": False,
+        }
+
         try:
-            # Step 1: 读取认证数据
             auth_data = self._get_auth_data()
             if not auth_data:
                 self._last_error = "no auth data"
@@ -380,6 +485,9 @@ class SimpleAuthManager:
                 self._last_recovery_stage = "read_auth"
                 self._last_recovery_error_code = "missing_auth_data"
                 self._last_recovery_error_message = self._last_error
+                failure_classification = self._classify_auth_failure(
+                    self._last_error, auth_data
+                )
                 return False
 
             user_id = auth_data.get("userId", "")
@@ -389,21 +497,22 @@ class SimpleAuthManager:
                 self._last_recovery_stage = "read_auth"
                 self._last_recovery_error_code = "missing_auth_fields"
                 self._last_recovery_error_message = self._last_error
+                failure_classification = self._classify_auth_failure(
+                    self._last_error, auth_data
+                )
                 return False
 
-            # Step 2: 创建 MiAccount
             try:
-                mi_account = MiAccount()
+                new_account = MiAccount()
             except TypeError:
-                mi_account = MiAccount(
+                new_account = MiAccount(
                     self.mi_session,
                     user_id,
-                    "",  # 空密码，使用持久化 token
+                    "",
                     str(self.mi_token_home),
                 )
 
-            # Step 3: 设置持久化 token
-            self.set_token(mi_account)
+            self.set_token(new_account)
             self._last_login_trace = {
                 "stage": "login_input_snapshot",
                 "reason": reason,
@@ -418,37 +527,51 @@ class SimpleAuthManager:
                     auth_data.get("yetAnotherServiceToken")
                 ),
                 "ts": int(time.time() * 1000),
+                "runtime_swap_attempted": False,
+                "runtime_swap_applied": False,
+                "verify_attempted": False,
+                "verify_error_text": "",
+                "login_error_text": "",
             }
 
-            # Step 4: 登录获取新的 short session
-            # 这是关键：用 login() 而非复用旧 token
             try:
-                await mi_account.login("micoapi")
+                await new_account.login("micoapi")
             except Exception as login_err:
-                # 登录失败，尝试用旧 token 直接创建服务
+                login_error_text = str(login_err)[:200]
                 self.log.warning(f"login failed, trying direct: {login_err}")
                 self._last_login_trace = {
                     **self._last_login_trace,
                     "stage": "login_http_exchange",
                     "result": "failed",
-                    "error": str(login_err)[:200],
+                    "error": login_error_text,
+                    "login_error_text": login_error_text,
                 }
 
-            # Step 5: 重建服务对象
             try:
-                self.mina_service = MiNAService(mi_account)
+                new_mina_service = MiNAService(new_account)
             except TypeError:
-                self.mina_service = MiNAService()
+                new_mina_service = MiNAService()
             try:
-                self.miio_service = MiIOService(mi_account)
+                new_miio_service = MiIOService(new_account)
             except TypeError:
-                self.miio_service = MiIOService()
-            self.login_account = mi_account
+                new_miio_service = MiIOService()
 
-            # Step 6: 验证
-            await self.mina_service.device_list()
+            runtime_swap_attempted = True
+            self._last_login_trace = {
+                **self._last_login_trace,
+                "runtime_swap_attempted": True,
+            }
 
-            # 验证成功，更新签名
+            verify_attempted = True
+            try:
+                await new_mina_service.device_list()
+            except Exception as verify_err:
+                verify_error_text = str(verify_err)[:200]
+                raise
+
+            self.mina_service = new_mina_service
+            self.miio_service = new_miio_service
+            self.login_account = new_account
             self.login_signature = self._get_login_signature()
             self._last_ok_ts = time.time()
             self._last_login_ts = time.time()
@@ -464,50 +587,60 @@ class SimpleAuthManager:
                 "stage": "post_login_runtime_seed",
                 "result": "ok",
                 "runtime_seed_has_serviceToken": bool(
-                    mi_account.token.get("serviceToken")
+                    new_account.token.get("serviceToken")
                 ),
                 "runtime_seed_has_yetAnotherServiceToken": bool(
-                    mi_account.token.get("yetAnotherServiceToken")
+                    new_account.token.get("yetAnotherServiceToken")
                 ),
                 "runtime_seed_has_ssecurity": bool(
-                    mi_account.token.get("micoapi", (None, None))[0]
+                    new_account.token.get("micoapi", (None, None))[0]
                 ),
+                "runtime_swap_attempted": runtime_swap_attempted,
+                "runtime_swap_applied": True,
+                "verify_attempted": verify_attempted,
+                "verify_error_text": "",
+                "login_error_text": login_error_text,
             }
 
-            # 持久化新 token
-            self._persist_auth_data(auth_data, mi_account, "login")
-
+            self._persist_auth_data(auth_data, new_account, "login")
             self.log.info("认证成功")
             return True
 
         except Exception as e:
             self._last_error = str(e)[:200]
             self.log.error(f"认证失败: {e}")
+            failure_classification = self._classify_auth_failure(
+                self._last_error, auth_data
+            )
+            self._last_recovery_result = "failed"
+            self._last_recovery_stage = "verify" if verify_attempted else "login"
+            self._last_recovery_error_code = failure_classification["error_type"]
+            self._last_recovery_error_message = self._last_error
+            self._last_login_trace = {
+                **self._last_login_trace,
+                "stage": self._last_recovery_stage,
+                "result": "failed",
+                "runtime_swap_attempted": runtime_swap_attempted,
+                "runtime_swap_applied": False,
+                "verify_attempted": verify_attempted,
+                "verify_error_text": verify_error_text or self._last_error,
+                "login_error_text": login_error_text,
+                **failure_classification,
+            }
+
+            if preserve_healthy_runtime and previous_state == self.STATE_HEALTHY:
+                self._state = previous_state
+                self._locked_until = previous_locked_until
+                self._cooldown_until = previous_cooldown_until
+                self._retry_count = previous_retry_count
+                return False
+
             self._retry_count += 1
-            if is_network_error(exc=e):
-                self._last_recovery_result = "failed"
-                self._last_recovery_stage = "network"
-                self._last_recovery_error_code = "network_error"
-                self._last_recovery_error_message = self._last_error
-                self._state = self.STATE_DEGRADED
-                self._start_cooldown()
-            elif is_auth_error(exc=e):
-                self._last_recovery_result = "failed"
-                self._last_recovery_stage = "login"
-                self._last_recovery_error_code = "auth_error"
-                self._last_recovery_error_message = self._last_error
-                self._state = self.STATE_DEGRADED
-                if self._retry_count >= self._max_retries:
-                    self._state = self.STATE_LOCKED
-                    self._locked_until = time.time() + 300
-                else:
-                    self._start_cooldown()
+            self._state = self.STATE_DEGRADED
+            if self._retry_count >= self._max_retries:
+                self._state = self.STATE_LOCKED
+                self._locked_until = time.time() + 300
             else:
-                self._last_recovery_result = "failed"
-                self._last_recovery_stage = "login"
-                self._last_recovery_error_code = type(e).__name__
-                self._last_recovery_error_message = self._last_error
-                self._state = self.STATE_DEGRADED
                 self._start_cooldown()
             return False
 
@@ -698,6 +831,14 @@ class SimpleAuthManager:
             try:
                 # 确保认证可用
                 if not await self.ensure_auth():
+                    last_recovery_code = self._last_recovery_error_code
+                    if last_recovery_code == "network_error" or is_network_error(
+                        exc=RuntimeError(self._last_error)
+                    ):
+                        if attempt < retry:
+                            await asyncio.sleep(1)
+                            continue
+                        raise RuntimeError("认证不可用")
                     if attempt < retry:
                         # 触发后台恢复并等待
                         self._schedule_background_recovery()
@@ -746,13 +887,23 @@ class SimpleAuthManager:
                     self._state = self.STATE_HEALTHY
                     self.log.info("后台恢复成功")
                 else:
-                    self._state = self.STATE_LOCKED
-                    self._locked_until = time.time() + 300
-                    self.log.warning("后台恢复失败，已进入锁定状态")
+                    if self._retry_count >= self._max_retries:
+                        self._state = self.STATE_LOCKED
+                        self._locked_until = time.time() + 300
+                        self.log.warning("后台恢复失败，已进入锁定状态")
+                    else:
+                        self._state = self.STATE_DEGRADED
+                        self._start_cooldown()
+                        self.log.warning("后台恢复失败，保持降级并进入冷却")
             except Exception as e:
                 self.log.error(f"后台恢复异常: {e}")
-                self._state = self.STATE_LOCKED
-                self._locked_until = time.time() + 300
+                self._retry_count += 1
+                if self._retry_count >= self._max_retries:
+                    self._state = self.STATE_LOCKED
+                    self._locked_until = time.time() + 300
+                else:
+                    self._state = self.STATE_DEGRADED
+                    self._start_cooldown()
             finally:
                 self._recovery_task = None
 
@@ -816,19 +967,61 @@ class SimpleAuthManager:
 
         用于 WebUI 的刷新按钮
         """
+        state_before = self._state
+        mode_before = self._state
+        locked_before = self._locked_until
+        cooldown_before = self._cooldown_until
+        preserve_healthy_runtime = state_before == self.STATE_HEALTHY
         success = await self.ensure_logged_in(
-            force=True, reason=reason, prefer_refresh=True
+            force=True,
+            reason=reason,
+            prefer_refresh=True,
+            preserve_healthy_runtime=preserve_healthy_runtime,
+        )
+        trace = dict(self._last_login_trace or {})
+        failure_info = self._classify_auth_failure(
+            self._last_error, self._get_auth_data()
+        )
+        if (
+            not success
+            and preserve_healthy_runtime
+            and not failure_info["long_term_expired"]
+        ):
+            self._state = state_before
+            self._locked_until = locked_before
+            self._cooldown_until = cooldown_before
+        runtime_auth_ready = bool(
+            success
+            or (preserve_healthy_runtime and not failure_info["long_term_expired"])
         )
         runtime_reload_state = {
             "reason": reason,
             "result": "ok" if success else "failed",
             "error_code": ""
             if success
-            else (self._last_recovery_error_code or "login_failed"),
+            else (
+                self._last_recovery_error_code
+                or failure_info["error_type"]
+                or "login_failed"
+            ),
+            "error_type": ""
+            if success
+            else (failure_info["error_type"] or "runtime_error"),
             "error_message": self._last_error,
-            "state_before": self._state,
+            "state_before": state_before,
             "state_after": self._state,
-            "verify_auth_failure_detected": False,
+            "mode_before": mode_before,
+            "mode_after": self._state,
+            "runtime_swap_attempted": bool(trace.get("runtime_swap_attempted", False)),
+            "runtime_swap_applied": bool(trace.get("runtime_swap_applied", False)),
+            "verify_attempted": bool(trace.get("verify_attempted", False)),
+            "verify_error_text": str(trace.get("verify_error_text", "") or ""),
+            "need_qr_scan": bool(failure_info["need_qr_scan"]),
+            "user_action_required": bool(failure_info["user_action_required"]),
+            "long_term_expired": bool(failure_info["long_term_expired"]),
+            "verify_auth_failure_detected": bool(
+                trace.get("verify_attempted", False) and not success
+            ),
             "recovery_chain_handoff": False,
             "recovery_chain_result": "skipped",
             "recovery_chain_terminal_stage": self._last_recovery_stage,
@@ -851,25 +1044,51 @@ class SimpleAuthManager:
 
         return {
             "refreshed": success,
-            "runtime_auth_ready": success,
+            "runtime_auth_ready": runtime_auth_ready,
             "token_saved": success,
             "token_loaded": bool(self._get_auth_data()),
             "token_store_reloaded": self.token_store is not None,
             "runtime_rebound": success,
             "device_map_refreshed": success,
-            "verify_result": "ok" if success else "failed",
+            "verify_result": "ok"
+            if success
+            else ("failed" if trace.get("verify_attempted") else "skipped"),
             "last_error": self._last_error,
-            "error_code": "" if success else "login_failed",
-            "runtime_seed_incomplete": not success,
-            "runtime_rebind_attempted": True,
-            "verify_attempted": success,
-            "mode_before": self._state,
+            "state_before": state_before,
+            "state_after": self._state,
+            "mode_before": mode_before,
             "mode_after": self._state,
+            "error_code": ""
+            if success
+            else (
+                self._last_recovery_error_code
+                or failure_info["error_type"]
+                or "login_failed"
+            ),
+            "error_type": ""
+            if success
+            else (failure_info["error_type"] or "runtime_error"),
+            "runtime_seed_incomplete": bool(
+                not success and not trace.get("verify_attempted", False)
+            ),
+            "runtime_rebind_attempted": bool(
+                trace.get("runtime_swap_attempted", False) or success
+            ),
+            "verify_attempted": bool(trace.get("verify_attempted", False)),
             "recovery_chain_handoff": False,
             "recovery_chain_result": "skipped",
             "recovery_chain_terminal_stage": self._last_recovery_stage,
             "recovery_chain_terminal_error_code": self._last_recovery_error_code,
             "recovery_chain_terminal_error_message": self._last_recovery_error_message,
+            "runtime_swap_attempted": bool(trace.get("runtime_swap_attempted", False)),
+            "runtime_swap_applied": bool(trace.get("runtime_swap_applied", False)),
+            "verify_error_text": str(trace.get("verify_error_text", "") or ""),
+            "need_qr_scan": bool(failure_info["need_qr_scan"]),
+            "user_action_required": bool(failure_info["user_action_required"]),
+            "long_term_expired": bool(failure_info["long_term_expired"]),
+            "verify_auth_failure_detected": bool(
+                trace.get("verify_attempted", False) and not success
+            ),
             "auto_runtime_reload_triggered": bool(
                 kwargs.get("auto_runtime_reload_triggered", False)
             ),
@@ -902,6 +1121,12 @@ class SimpleAuthManager:
         return {
             "state": self._state,
             "last_error": self._last_error,
+            "error_type": self._last_recovery_error_code,
+            "need_qr_scan": bool(self._last_login_trace.get("need_qr_scan")),
+            "user_action_required": bool(
+                self._last_login_trace.get("user_action_required")
+            ),
+            "long_term_expired": bool(self._last_login_trace.get("long_term_expired")),
             "final_auth_mode": self._state,
             "recovery_task_running": self._recovery_task is not None
             and not self._recovery_task.done(),
@@ -930,10 +1155,6 @@ class SimpleAuthManager:
             else 0,
             "last_login_trace": self._last_login_trace,
         }
-
-    def auth_rebuild_debug_state(self) -> dict[str, Any]:
-        """重建调试状态"""
-        return self.auth_debug_state()
 
     def auth_short_session_rebuild_debug_state(self) -> dict[str, Any]:
         """短期会话重建调试状态"""
@@ -982,6 +1203,12 @@ class SimpleAuthManager:
                 auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
             ),
             "retry_count": self._retry_count,
+            "error_type": self._last_recovery_error_code,
+            "need_qr_scan": bool(self._last_login_trace.get("need_qr_scan")),
+            "user_action_required": bool(
+                self._last_login_trace.get("user_action_required")
+            ),
+            "long_term_expired": bool(self._last_login_trace.get("long_term_expired")),
         }
 
     def auth_debug_state(self) -> dict[str, Any]:
@@ -1006,6 +1233,12 @@ class SimpleAuthManager:
             "short_session_available": bool(
                 auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
             ),
+            "error_type": self._last_recovery_error_code,
+            "need_qr_scan": bool(self._last_login_trace.get("need_qr_scan")),
+            "user_action_required": bool(
+                self._last_login_trace.get("user_action_required")
+            ),
+            "long_term_expired": bool(self._last_login_trace.get("long_term_expired")),
         }
 
     def clear_auth_lock(self, reason: str = "", mode: str = "degraded"):
