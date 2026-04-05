@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from dataclasses import asdict, is_dataclass
 from typing import TYPE_CHECKING, Any, Callable
@@ -15,10 +16,17 @@ from xiaomusic.constants.api_fields import DEVICE_ID, REQUEST_ID
 from xiaomusic.core.coordinator import PlaybackCoordinator
 from xiaomusic.core.delivery import DeliveryAdapter
 from xiaomusic.core.device import DeviceRegistry
-from xiaomusic.core.errors import DeviceNotFoundError, InvalidRequestError
+from xiaomusic.core.errors import (
+    DeviceNotFoundError,
+    InvalidRequestError,
+    TransportError,
+)
 from xiaomusic.core.models import MediaRequest, PlayOptions
 from xiaomusic.core.source import SourceRegistry
 from xiaomusic.core.transport import TransportPolicy, TransportRouter
+
+
+LOG = logging.getLogger("xiaomusic.playback.facade")
 
 if TYPE_CHECKING:
     pass
@@ -83,7 +91,7 @@ class PlaybackFacade:
             device_registry=device_registry,
             delivery_adapter=delivery_adapter,
             transport_router=router,
-            playback_status_provider=self.xiaomusic.get_player_status,
+            playback_status_provider=getattr(self.xiaomusic, "get_player_status", None),
         )
         return self._core_coordinator
 
@@ -159,20 +167,58 @@ class PlaybackFacade:
         if not bool(getattr(self.xiaomusic, "did_exist", lambda _did: False)(did)):
             raise DeviceNotFoundError("device not found")
 
+        request_id_value = str(request_id or uuid4().hex[:16])
+        req = MediaRequest.from_payload(
+            request_id=request_id_value,
+            source_hint=normalized_hint,
+            query=q,
+            device_id=did,
+            options=opts,
+            include_prefer_proxy=True,
+        )
         playlist_context = (
             self._playlist_context(opts, q)
             if normalized_hint == "local_library"
             else None
         )
         if playlist_context is not None:
-            request_id_value = str(request_id or uuid4().hex[:16])
             playlist_name, music_name = playlist_context
-            await self.xiaomusic.do_play_music_list(did, playlist_name, music_name)
+            logger = getattr(self.xiaomusic, "log", LOG)
+            logger.info(
+                "play_command_attempted device_id=%s source_plugin=local_library request_id=%s music_name=%s search_key=%s",
+                did,
+                request_id_value,
+                music_name,
+                q,
+            )
+            started = await self.xiaomusic.do_play_music_list(
+                did, playlist_name, music_name
+            )
+            logger.info(
+                "play_start_confirmation_result device_id=%s source_plugin=local_library request_id=%s started=%s",
+                did,
+                request_id_value,
+                str(started).lower() if started is not None else "unknown",
+            )
+            if started is False:
+                self._record_playback_capability_verify(
+                    result="failed",
+                    verify_method="playlist_context_play",
+                    playback_capability_level="runtime_playlist_context",
+                    transport="device_player",
+                    error_code="dispatch_not_started",
+                    error_message="accepted=True started=False",
+                )
+                raise TransportError(
+                    "playback command accepted but device did not start playing"
+                )
             self._record_playback_capability_verify(
                 result="ok",
                 verify_method="playlist_context_play",
                 playback_capability_level="runtime_playlist_context",
                 transport="device_player",
+                error_code="",
+                error_message=f"accepted=True started={started}",
             )
             return {
                 "status": "playing",
@@ -195,14 +241,6 @@ class PlaybackFacade:
                 },
             }
 
-        req = MediaRequest.from_payload(
-            request_id=str(request_id or uuid4().hex[:16]),
-            source_hint=normalized_hint,
-            query=q,
-            device_id=did,
-            options=opts,
-            include_prefer_proxy=True,
-        )
         try:
             result = await self._core().play(req, device_id=did)
         except Exception as exc:

@@ -571,10 +571,12 @@ class XiaoMusic:
         # 检查音乐列表是否存在，如果不存在则进行语音提示并返回
         if list_name not in self.music_library.music_list:
             await self.do_tts(did, f"播放列表{list_name}不存在")
-            return
+            return False
 
         # 调用设备播放音乐列表的方法
-        await self.device_manager.devices[did].play_music_list(list_name, music_name)
+        return await self.device_manager.devices[did].play_music_list(
+            list_name, music_name
+        )
 
     async def play_music_list_by_index(self, did, playlist_name, index):
         list_name = self._find_real_music_list_name(playlist_name)
@@ -586,11 +588,11 @@ class XiaoMusic:
         if 0 <= index - 1 < len(play_list):
             music_name = play_list[index - 1]
             self.log.info(f"即将播放歌单 {list_name} 里的第 {index} 个: {music_name}")
-            await self.device_manager.devices[did].play_music_list(
+            return await self.device_manager.devices[did].play_music_list(
                 list_name, music_name
             )
-            return
         await self.do_tts(did, f"播放列表{list_name}中找不到第{index}个")
+        return False
 
     # 口令:播放列表第
     async def play_music_list_index(self, did="", arg1="", **kwargs):
@@ -612,11 +614,11 @@ class XiaoMusic:
         if 0 <= index - 1 < len(play_list):
             music_name = play_list[index - 1]
             self.log.info(f"即将播放 ${arg1} 里的第 ${index} 个: ${music_name}")
-            await self.device_manager.devices[did].play_music_list(
+            return await self.device_manager.devices[did].play_music_list(
                 list_name, music_name
             )
-            return
         await self.do_tts(did, f"播放列表{list_name}中找不到第${index}个")
+        return False
 
     # 口令:播放歌曲
     async def play(self, did="", arg1="", **kwargs):

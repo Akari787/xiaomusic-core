@@ -6,9 +6,18 @@ from typing import Any, Awaitable, Callable
 
 from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
 from xiaomusic.core.device.device_registry import DeviceRegistry
-from xiaomusic.core.errors.stream_errors import ExpiredStreamError, UndeliverableStreamError
+from xiaomusic.core.errors.stream_errors import (
+    ExpiredStreamError,
+    UndeliverableStreamError,
+)
 from xiaomusic.core.errors.transport_errors import TransportError
-from xiaomusic.core.models.media import DeliveryPlan, MediaRequest, PlaybackAttempt, PlaybackOutcome, PreparedStream
+from xiaomusic.core.models.media import (
+    DeliveryPlan,
+    MediaRequest,
+    PlaybackAttempt,
+    PlaybackOutcome,
+    PreparedStream,
+)
 from xiaomusic.core.source.source_registry import SourceRegistry
 from xiaomusic.core.transport.transport_router import TransportRouter
 
@@ -26,7 +35,8 @@ class PlaybackCoordinator:
         delivery_adapter: DeliveryAdapter,
         transport_router: TransportRouter,
         max_resolve_retry: int = 1,
-        playback_status_provider: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+        playback_status_provider: Callable[[str], Awaitable[dict[str, Any]]]
+        | None = None,
     ) -> None:
         self._source_registry = source_registry
         self._device_registry = device_registry
@@ -56,14 +66,20 @@ class PlaybackCoordinator:
         for _ in range(attempts):
             resolved = await plugin.resolve(request)
             try:
-                plan = self._delivery_adapter.prepare_plan(resolved, context=request.context)
+                plan = self._delivery_adapter.prepare_plan(
+                    resolved, context=request.context
+                )
             except UndeliverableStreamError:
                 raise
             except ExpiredStreamError as exc:
                 last_expired_error = exc
                 continue
 
-            dispatch_result, used_prepared, outcome = await self._dispatch_with_adaptive_delivery(
+            (
+                dispatch_result,
+                used_prepared,
+                outcome,
+            ) = await self._dispatch_with_adaptive_delivery(
                 plan=plan,
                 profile=profile,
                 capability=capability,
@@ -126,7 +142,9 @@ class PlaybackCoordinator:
     async def resume(self, device_id: str) -> dict:
         # compatibility_layer: current transports expose pause only.
         # Xiaomi device pause command behaves as pause/resume toggle on supported models.
-        return await self._dispatch_action("resume", device_id, transport_action="pause")
+        return await self._dispatch_action(
+            "resume", device_id, transport_action="pause"
+        )
 
     async def tts(self, device_id: str, text: str) -> dict:
         return await self._dispatch_action("tts", device_id, text=text)
@@ -153,7 +171,12 @@ class PlaybackCoordinator:
     ) -> dict:
         profile = self._device_registry.get_profile(device_id)
         capability = self._device_registry.get_capability_matrix(device_id)
-        LOG.info("core_chain action=%s device_id=%s request_id=control-%s", action, device_id, device_id)
+        LOG.info(
+            "core_chain action=%s device_id=%s request_id=control-%s",
+            action,
+            device_id,
+            device_id,
+        )
         routed_action = transport_action or action
         try:
             dispatch_result = await self._transport_router.dispatch(
@@ -188,32 +211,48 @@ class PlaybackCoordinator:
         request_context: dict[str, Any],
     ) -> tuple[Any, PreparedStream, PlaybackOutcome]:
         attempts: list[PlaybackAttempt] = []
-        first = await self._dispatch_single(plan.primary, profile, capability, device_id, request_context)
+        first = await self._dispatch_single(
+            plan.primary, profile, capability, device_id, request_context
+        )
         attempts.append(first[2])
         if self._attempt_passed(first[2]):
-            return first[0], first[1], PlaybackOutcome(
-                accepted=True,
-                started=first[2].started,
-                final_path=first[2].path,
-                fallback_triggered=False,
-                attempts=attempts,
+            return (
+                first[0],
+                first[1],
+                PlaybackOutcome(
+                    accepted=True,
+                    started=first[2].started,
+                    final_path=first[2].path,
+                    fallback_triggered=False,
+                    attempts=attempts,
+                ),
             )
 
         if plan.fallback is None:
-            raise TransportError("playback command accepted but device did not start playing")
-
-        second = await self._dispatch_single(plan.fallback, profile, capability, device_id, request_context)
-        attempts.append(second[2])
-        if self._attempt_passed(second[2]):
-            return second[0], second[1], PlaybackOutcome(
-                accepted=True,
-                started=second[2].started,
-                final_path=second[2].path,
-                fallback_triggered=True,
-                attempts=attempts,
+            raise TransportError(
+                "playback command accepted but device did not start playing"
             )
 
-        raise TransportError("playback command accepted but both direct and proxy paths failed to start")
+        second = await self._dispatch_single(
+            plan.fallback, profile, capability, device_id, request_context
+        )
+        attempts.append(second[2])
+        if self._attempt_passed(second[2]):
+            return (
+                second[0],
+                second[1],
+                PlaybackOutcome(
+                    accepted=True,
+                    started=second[2].started,
+                    final_path=second[2].path,
+                    fallback_triggered=True,
+                    attempts=attempts,
+                ),
+            )
+
+        raise TransportError(
+            "playback command accepted but both direct and proxy paths failed to start"
+        )
 
     async def _dispatch_single(
         self,
@@ -248,9 +287,13 @@ class PlaybackCoordinator:
 
     @staticmethod
     def _attempt_passed(attempt: PlaybackAttempt) -> bool:
-        return bool(attempt.accepted and (attempt.started is True or attempt.started is None))
+        return bool(
+            attempt.accepted and (attempt.started is True or attempt.started is None)
+        )
 
-    async def _confirm_playback_started(self, device_id: str, request_context: dict[str, Any]) -> bool | None:
+    async def _confirm_playback_started(
+        self, device_id: str, request_context: dict[str, Any]
+    ) -> bool | None:
         if self._playback_status_provider is None:
             return None
         if request_context.get("confirm_start", True) is False:
@@ -258,8 +301,18 @@ class PlaybackCoordinator:
 
         retries = max(0, int(request_context.get("confirm_start_retries", 2)))
         delay_ms = max(0, int(request_context.get("confirm_start_delay_ms", 1200)))
-        interval_ms = max(100, int(request_context.get("confirm_start_interval_ms", 600)))
+        interval_ms = max(
+            100, int(request_context.get("confirm_start_interval_ms", 600))
+        )
 
+        LOG.info(
+            "play_start_confirmation_attempted device_id=%s confirm_start=%s retries=%d delay_ms=%d interval_ms=%d",
+            device_id,
+            str(bool(request_context.get("confirm_start", True))).lower(),
+            retries,
+            delay_ms,
+            interval_ms,
+        )
         await asyncio.sleep(delay_ms / 1000)
         saw_true = False
         saw_false = False
@@ -268,7 +321,11 @@ class PlaybackCoordinator:
             try:
                 status = await self._playback_status_provider(device_id)
             except Exception as exc:
-                LOG.warning("core_chain status_probe_failed device_id=%s error=%s", device_id, exc.__class__.__name__)
+                LOG.warning(
+                    "core_chain status_probe_failed device_id=%s error=%s",
+                    device_id,
+                    exc.__class__.__name__,
+                )
                 return None
             started = self._status_started(status)
             if started is True:
@@ -280,11 +337,23 @@ class PlaybackCoordinator:
             if idx < retries:
                 await asyncio.sleep(interval_ms / 1000)
         if saw_drop_after_true:
+            LOG.info(
+                "play_start_confirmation_result device_id=%s started=false", device_id
+            )
             return False
         if saw_true:
+            LOG.info(
+                "play_start_confirmation_result device_id=%s started=true", device_id
+            )
             return True
         if saw_false:
+            LOG.info(
+                "play_start_confirmation_result device_id=%s started=false", device_id
+            )
             return False
+        LOG.info(
+            "play_start_confirmation_result device_id=%s started=unknown", device_id
+        )
         return None
 
     @staticmethod

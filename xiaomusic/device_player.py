@@ -357,8 +357,7 @@ class XiaoMusicDevice:
         # 初始检查逻辑
         if not search_key and not name:
             if self.check_play_next():
-                await self._play_next()
-                return
+                return await self._play_next()
             else:
                 name = self.get_cur_music()
 
@@ -379,11 +378,10 @@ class XiaoMusicDevice:
             if not await self._check_and_download_music(
                 name, search_key, allow_download
             ):
-                return
+                return False
 
             # 播放歌曲
-            await self._playmusic(name)
-            return
+            return await self._playmusic(name)
 
         name = names[0]
         if (not preserve_playlist) and (name not in self._play_list):
@@ -395,7 +393,7 @@ class XiaoMusicDevice:
             f"当前播放列表为：{list2str(self._play_list, self.config.verbose)}"
         )
         # 本地存在歌曲，直接播放
-        await self._playmusic(name)
+        return await self._playmusic(name)
 
     async def _play(self, name="", search_key="", preserve_playlist=False):
         """播放歌曲（内部实现）- 支持下载"""
@@ -431,9 +429,9 @@ class XiaoMusicDevice:
         self.log.info(f"_play_next. name:{name}, cur_music:{self.get_cur_music()}")
         if name == "":
             self.log.info("本地没有歌曲")
-            return
+            return False
         self._last_cmd = "play_next"
-        await self._play(name, preserve_playlist=manual)
+        return await self._play(name, preserve_playlist=manual)
 
     async def play_prev(self):
         """播放上一首（外部接口）"""
@@ -457,9 +455,9 @@ class XiaoMusicDevice:
         self.log.info(f"_play_prev. name:{name}, cur_music:{self.get_cur_music()}")
         if name == "":
             await self.do_tts("本地没有歌曲")
-            return
+            return False
         self._last_cmd = "play_prev"
-        await self._play(name, preserve_playlist=manual)
+        return await self._play(name, preserve_playlist=manual)
 
     async def playlocal(self, name=""):
         """播放本地歌曲 - 不下载"""
@@ -509,6 +507,20 @@ class XiaoMusicDevice:
         self.log.info(f"播放 {url}")
 
         results = await self.group_player_play(url, name)
+
+        started = await self._confirm_playback_started(name, sid)
+        self.log.info(
+            "play_start_confirmation_result(did=%s, session_id=%s, started=%s)",
+            self.did,
+            sid,
+            "unknown" if started is None else str(started).lower(),
+        )
+        if started is False:
+            await self._handle_play_failure(
+                name=name, sid=sid, reason="play_start_not_confirmed"
+            )
+            return False
+
         jellyfin_mode = (
             getattr(self.config, "jellyfin_proxy_mode", "auto") or "auto"
         ).lower()
@@ -563,7 +575,7 @@ class XiaoMusicDevice:
                 self.log.warning("proxy fallback failed: %s", e)
                 return ""
 
-        if all(ele is None for ele in results):
+        if all(ele is None for ele in results) and started is False:
             if jellyfin_auto_candidate:
                 proxy_url = await _try_proxy_fallback("player_play_failed")
                 if proxy_url:
@@ -573,12 +585,12 @@ class XiaoMusicDevice:
                     await self._handle_play_failure(
                         name=name, sid=sid, reason="player_play_failed"
                     )
-                    return
+                    return False
             else:
                 await self._handle_play_failure(
                     name=name, sid=sid, reason="player_play_failed"
                 )
-                return
+                return False
             # Proxy fallback succeeded; continue with the normal success path.
 
         # Even if the API call succeeds, the speaker may not be able to reach a
@@ -619,7 +631,7 @@ class XiaoMusicDevice:
             # Probe duration from player status so UI can recover from 00:00.
             self._start_duration_probe(name, sid)
             self.log.info(f"【{name}】不会设置下一首歌的定时器")
-            return
+            return True
 
         # 计算自动添加歌曲的延迟时间，为当前歌曲时长的一半，但不超过60秒
         if sec > 30:
@@ -640,6 +652,52 @@ class XiaoMusicDevice:
         # 发布设备配置变更事件
         if self.event_bus:
             self.event_bus.publish(DEVICE_CONFIG_CHANGED)
+        return True
+
+    async def _confirm_playback_started(self, name: str, sid: int) -> bool | None:
+        """确认音箱已真正开始播放。"""
+        delay_sec = 1.2
+        retries = 2
+        interval_sec = 0.6
+        self.log.info(
+            "play_start_confirmation_attempted(did=%s, session_id=%s, retries=%d, delay_ms=%d, interval_ms=%d)",
+            self.did,
+            sid,
+            retries,
+            int(delay_sec * 1000),
+            int(interval_sec * 1000),
+        )
+        await asyncio.sleep(delay_sec)
+        saw_true = False
+        saw_false = False
+        saw_drop_after_true = False
+        for idx in range(retries + 1):
+            try:
+                started = await self.get_if_xiaoai_is_playing()
+            except Exception as e:
+                self.log.warning(
+                    "play_start_confirmation_probe_failed(did=%s, session_id=%s, error=%s)",
+                    self.did,
+                    sid,
+                    e.__class__.__name__,
+                )
+                return None
+            if started:
+                saw_true = True
+            elif saw_true:
+                saw_drop_after_true = True
+                saw_false = True
+            else:
+                saw_false = True
+            if idx < retries:
+                await asyncio.sleep(interval_sec)
+        if saw_drop_after_true:
+            return False
+        if saw_true:
+            return True
+        if saw_false:
+            return False
+        return None
 
     async def do_tts(self, value):
         """执行TTS（文字转语音）"""
@@ -1257,7 +1315,7 @@ class XiaoMusicDevice:
         if not music_name:
             music_name = self.device.playlist2music.get(list_name, "")
         self.log.info(f"开始播放列表{list_name} {music_name}")
-        await self._play(music_name)
+        return await self._play(music_name)
 
     async def stop(self, arg1=""):
         """停止播放"""
