@@ -323,22 +323,47 @@ async def auth_status():
 
     status_reason = "healthy"
     status_reason_detail = ""
+    status_mapping_source = "healthy"
+    manual_login_required_reason = ""
+    runtime_not_ready_reason = ""
     if bool(auth_state.get("locked", False)):
-        status_reason = "manual_login_required"
-        status_reason_detail = str(auth_state.get("lock_reason", "") or "auth locked")
+        if bool(auth_state.get("need_qr_scan", False)) or bool(
+            auth_state.get("long_term_expired", False)
+        ) or bool(auth_state.get("user_action_required", False)):
+            status_reason = "manual_login_required"
+            manual_login_required_reason = (
+                str(auth_state.get("lock_transition_reason", "") or "manual auth required")
+            )
+            status_reason_detail = str(
+                auth_state.get("lock_reason", "") or manual_login_required_reason
+            )
+            status_mapping_source = "locked_manual"
+        else:
+            status_reason = "temporarily_locked"
+            status_reason_detail = str(
+                auth_state.get("lock_transition_reason", "")
+                or auth_state.get("lock_reason", "")
+                or f"retry threshold reached ({auth_state.get('lock_counter', 0)}/{auth_state.get('lock_counter_threshold', 0)})"
+            )
+            status_mapping_source = "locked_temporary"
     elif not persistent_auth_available:
         status_reason = "persistent_auth_missing"
         status_reason_detail = "all long-lived auth fields missing from token"
+        status_mapping_source = "persistent_auth_missing"
     elif persistent_auth_available and not short_session_available:
         if rebuild_failed:
             status_reason = "short_session_rebuild_failed"
             status_reason_detail = f"rebuild failed: {rebuild_error_code}"
+            status_mapping_source = "short_session_rebuild_failed"
         else:
             status_reason = "short_session_missing"
             status_reason_detail = "short-lived session tokens missing"
+            status_mapping_source = "short_session_missing"
     elif persistent_auth_available and short_session_available and not runtime_ready:
         status_reason = "runtime_not_ready"
-        status_reason_detail = "runtime auth ready but not verified"
+        runtime_not_ready_reason = "runtime auth ready but not verified"
+        status_reason_detail = runtime_not_ready_reason
+        status_mapping_source = "runtime_not_ready"
 
     return api_response.ok(
         {
@@ -352,6 +377,9 @@ async def auth_status():
             "short_session_available": short_session_available,
             "status_reason": status_reason,
             "status_reason_detail": status_reason_detail,
+            "status_mapping_source": status_mapping_source,
+            "manual_login_required_reason": manual_login_required_reason,
+            "runtime_not_ready_reason": runtime_not_ready_reason,
             "rebuild_failed": rebuild_failed,
             "rebuild_error_code": rebuild_error_code,
             "rebuild_failed_reason": rebuild_failed_reason[:200] if rebuild_failed_reason else "",
@@ -361,6 +389,9 @@ async def auth_status():
             "auth_locked": bool(auth_state.get("locked", False)),
             "auth_lock_until": auth_state.get("locked_until_ts"),
             "auth_lock_reason": auth_state.get("lock_reason", ""),
+            "auth_lock_transition_reason": auth_state.get("lock_transition_reason", ""),
+            "auth_lock_counter": auth_state.get("lock_counter", 0),
+            "auth_lock_counter_threshold": auth_state.get("lock_counter_threshold", 0),
         },
         contract="success_error",
     )

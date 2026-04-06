@@ -249,9 +249,23 @@ async def test_status_reason_short_session_rebuild_failed(monkeypatch):
                 "last_auth_recovery_flow": {"result": "failed"},
             }
 
+    class _FakeTokenStore:
+        path = None
+
+        @staticmethod
+        def get():
+            return {
+                "userId": "test",
+                "passToken": "test",
+                "psecurity": "test",
+                "ssecurity": "test",
+                "cUserId": "test",
+                "deviceId": "test",
+            }
+
     class _XM:
         auth_manager = _Auth()
-        token_store = None
+        token_store = _FakeTokenStore()
 
     async def _fake_runtime_ready():
         return False
@@ -264,11 +278,10 @@ async def test_status_reason_short_session_rebuild_failed(monkeypatch):
     monkeypatch.setattr(system, "qrcode_login_error", "")
 
     out = await system.auth_status()
-    data = _parse_response(out)
-    assert data["code"] == 0
-    assert data["status_reason"] == "short_session_rebuild_failed"
-    assert data["rebuild_failed"] is True
-    assert "redirect_http_401" in str(data["rebuild_error_code"])
+    assert out["success"] is True
+    assert out["status_reason"] == "short_session_rebuild_failed"
+    assert out["rebuild_failed"] is True
+    assert "redirect_http_401" in str(out["rebuild_error_code"])
 
 
 @pytest.mark.asyncio
@@ -292,9 +305,23 @@ async def test_status_reason_short_session_missing_no_failure_recorded(monkeypat
                 "last_auth_recovery_flow": {},
             }
 
+    class _FakeTokenStore:
+        path = None
+
+        @staticmethod
+        def get():
+            return {
+                "userId": "test",
+                "passToken": "test",
+                "psecurity": "test",
+                "ssecurity": "test",
+                "cUserId": "test",
+                "deviceId": "test",
+            }
+
     class _XM:
         auth_manager = _Auth()
-        token_store = None
+        token_store = _FakeTokenStore()
 
     async def _fake_runtime_ready():
         return False
@@ -307,9 +334,9 @@ async def test_status_reason_short_session_missing_no_failure_recorded(monkeypat
     monkeypatch.setattr(system, "qrcode_login_error", "")
 
     out = await system.auth_status()
-    assert out["code"] == 0
-    assert out["data"]["status_reason"] == "short_session_rebuild_failed"
-    assert out["data"]["rebuild_failed"] is True
+    assert out["success"] is True
+    assert out["status_reason"] == "short_session_missing"
+    assert out["rebuild_failed"] is False
 
 
 @pytest.mark.asyncio
@@ -355,9 +382,62 @@ async def test_status_reason_persistent_auth_missing(monkeypatch):
     monkeypatch.setattr(system, "qrcode_login_error", "")
 
     out = await system.auth_status()
-    assert out["code"] == 0
-    assert out["data"]["status_reason"] == "persistent_auth_missing"
-    assert out["data"]["persistent_auth_available"] is False
+    assert out["success"] is True
+    assert out["status_reason"] == "persistent_auth_missing"
+    assert out["persistent_auth_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_status_reason_temporarily_locked_when_not_manual(monkeypatch):
+    pytest.importorskip("qrcode")
+    from xiaomusic.api.routers import system
+
+    class _Auth:
+        @staticmethod
+        def auth_status_snapshot():
+            return {
+                "mode": "locked",
+                "locked": True,
+                "lock_reason": "retry threshold reached",
+                "locked_until_ts": 9999999999,
+                "lock_transition_reason": "ensure_auth:verify:runtime_error:threshold_reached",
+                "lock_counter": 3,
+                "lock_counter_threshold": 3,
+                "need_qr_scan": False,
+                "long_term_expired": False,
+                "user_action_required": False,
+            }
+
+        @staticmethod
+        def auth_debug_state():
+            return {"last_auth_error": "retry threshold reached"}
+
+        @staticmethod
+        def auth_short_session_rebuild_debug_state():
+            return {
+                "last_short_session_rebuild": {"result": "failed"},
+                "last_auth_recovery_flow": {"result": "failed"},
+            }
+
+    class _XM:
+        auth_manager = _Auth()
+        token_store = None
+
+    async def _fake_runtime_ready():
+        return False
+
+    monkeypatch.setattr(system, "_runtime_auth_ready", _fake_runtime_ready)
+    monkeypatch.setattr(system, "xiaomusic", _XM())
+    monkeypatch.setattr(system, "config", _FakeConfig())
+    monkeypatch.setattr(system, "qrcode_login_task", None)
+    monkeypatch.setattr(system, "qrcode_login_started_at", 0.0)
+    monkeypatch.setattr(system, "qrcode_login_error", "")
+
+    out = await system.auth_status()
+    assert out["success"] is True
+    assert out["status_reason"] == "temporarily_locked"
+    assert out["status_mapping_source"] == "locked_temporary"
+    assert out["auth_locked"] is True
 
 
 @pytest.mark.asyncio
@@ -368,7 +448,18 @@ async def test_status_reason_manual_login_required(monkeypatch):
     class _Auth:
         @staticmethod
         def auth_status_snapshot():
-            return {"mode": "locked", "locked": True, "lock_reason": "too many failures", "locked_until_ts": 9999999999}
+            return {
+                "mode": "locked",
+                "locked": True,
+                "lock_reason": "too many failures",
+                "locked_until_ts": 9999999999,
+                "lock_transition_reason": "qrcode required",
+                "lock_counter": 3,
+                "lock_counter_threshold": 3,
+                "need_qr_scan": True,
+                "long_term_expired": True,
+                "user_action_required": True,
+            }
 
         @staticmethod
         def auth_debug_state():
@@ -396,9 +487,10 @@ async def test_status_reason_manual_login_required(monkeypatch):
     monkeypatch.setattr(system, "qrcode_login_error", "")
 
     out = await system.auth_status()
-    assert out["code"] == 0
-    assert out["data"]["status_reason"] == "manual_login_required"
-    assert out["data"]["auth_locked"] is True
+    assert out["success"] is True
+    assert out["status_reason"] == "manual_login_required"
+    assert out["status_mapping_source"] == "locked_manual"
+    assert out["auth_locked"] is True
 
 
 @pytest.mark.asyncio
@@ -452,12 +544,12 @@ async def test_status_reason_runtime_not_ready(monkeypatch):
     monkeypatch.setattr(system, "qrcode_login_error", "")
 
     out = await system.auth_status()
-    assert out["code"] == 0
-    assert out["data"]["status_reason"] == "runtime_not_ready"
-    assert out["data"]["short_session_available"] is True
-    assert out["data"]["persistent_auth_available"] is True
-    assert out["data"]["runtime_auth_ready"] is False
-    assert out["data"]["rebuild_failed"] is False
+    assert out["success"] is True
+    assert out["status_reason"] == "runtime_not_ready"
+    assert out["short_session_available"] is True
+    assert out["persistent_auth_available"] is True
+    assert out["runtime_auth_ready"] is False
+    assert out["rebuild_failed"] is False
 
 
 class _FakeConfig:

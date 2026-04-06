@@ -227,6 +227,94 @@ class TestSimpleAuthManager:
         assert result is True
         assert am._state == am.STATE_HEALTHY
 
+    @pytest.mark.asyncio
+    async def test_keepalive_probe_failure_does_not_increment_lock(self, auth_manager):
+        am, _, _ = auth_manager
+
+        class _ProbeFailService:
+            async def device_list(self):
+                raise RuntimeError("connection timeout")
+
+        am.mina_service = _ProbeFailService()
+        am._state = am.STATE_HEALTHY
+
+        result = await am.ensure_auth()
+        assert result is False
+        assert am._state == am.STATE_DEGRADED
+        assert am._probe_failure_count == 1
+        assert am._lock_counter == 0
+        assert am._retry_count_effective == 0
+
+    @pytest.mark.asyncio
+    async def test_network_error_does_not_push_lock_counter(self, auth_manager, mock_miservice):
+        am, _, _ = auth_manager
+        am._state = am.STATE_DEGRADED
+
+        class _NetworkFailService:
+            async def device_list(self):
+                raise RuntimeError("connection timeout")
+
+        mock_mina = _NetworkFailService()
+        mock_miio = MockMiIOService()
+        mock_miservice["MiNAService"].return_value = mock_mina
+        mock_miservice["MiIOService"].return_value = mock_miio
+
+        result = await am.ensure_auth(force=True)
+        assert result is False
+        assert am._state == am.STATE_DEGRADED
+        assert am._retry_count > 0
+        assert am._retry_count_effective == 0
+        assert am._lock_counter == 0
+
+    @pytest.mark.asyncio
+    async def test_runtime_failure_does_not_push_lock_counter(self, auth_manager, mock_miservice):
+        am, _, _ = auth_manager
+        am._state = am.STATE_DEGRADED
+
+        class _RuntimeFailService:
+            async def device_list(self):
+                raise RuntimeError("boom")
+
+        mock_mina = _RuntimeFailService()
+        mock_miio = MockMiIOService()
+        mock_miservice["MiNAService"].return_value = mock_mina
+        mock_miservice["MiIOService"].return_value = mock_miio
+
+        result = await am.ensure_auth(force=True)
+        assert result is False
+        assert am._state == am.STATE_DEGRADED
+        assert am._retry_count > 0
+        assert am._retry_count_effective == 0
+        assert am._lock_counter == 0
+
+    @pytest.mark.asyncio
+    async def test_auth_error_only_locks_after_continuous_effective_failures(
+        self, auth_manager, mock_miservice
+    ):
+        am, _, _ = auth_manager
+        am._state = am.STATE_DEGRADED
+
+        class _ExpiredService:
+            async def device_list(self):
+                raise RuntimeError("passport token expired")
+
+        mock_mina = _ExpiredService()
+        mock_miio = MockMiIOService()
+        mock_miservice["MiNAService"].return_value = mock_mina
+        mock_miservice["MiIOService"].return_value = mock_miio
+
+        for _ in range(am._lock_counter_threshold - 1):
+            result = await am.ensure_auth(force=True)
+            assert result is False
+            assert am._state == am.STATE_DEGRADED
+            assert am._lock_counter < am._lock_counter_threshold
+
+        result = await am.ensure_auth(force=True)
+        assert result is False
+        assert am._state == am.STATE_LOCKED
+        assert am._lock_counter == am._lock_counter_threshold
+        assert am.is_auth_locked() is True
+
     def test_auth_status_snapshot(self, auth_manager):
         """测试状态快照"""
         am, _, _ = auth_manager

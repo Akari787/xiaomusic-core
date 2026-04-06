@@ -203,7 +203,30 @@ class SimpleAuthManager:
 
         # 重试计数
         self._retry_count: int = 0
+        self._retry_count_effective: int = 0
+        self._lock_counter: int = 0
         self._max_retries: int = 3
+        self._lock_counter_threshold: int = self._max_retries
+        self._probe_failure_count: int = 0
+        self._recovery_failure_count: int = 0
+        self._last_retry_count_before: int = 0
+        self._last_retry_count_after: int = 0
+        self._last_retry_count_effective: int = 0
+        self._last_retry_increment_reason: str = ""
+        self._last_lock_transition_reason: str = ""
+        self._last_status_mapping_source: str = ""
+        self._last_manual_login_required_reason: str = ""
+        self._last_runtime_not_ready_reason: str = ""
+        self._health_probe_attempted: bool = False
+        self._keepalive_probe_attempted: bool = False
+        self._background_recovery_attempted: bool = False
+        self._background_recovery_result: str = ""
+        self._background_recovery_error: str = ""
+        self._last_health_probe_result: str = ""
+        self._last_health_probe_error: str = ""
+        self._last_keepalive_probe_result: str = ""
+        self._last_keepalive_probe_error: str = ""
+        self._last_degraded_entry_reason: str = ""
 
         # 设备ID
         self._cur_did = None
@@ -396,24 +419,37 @@ class SimpleAuthManager:
             if self.mina_service is None:
                 self._state = self.STATE_DEGRADED
                 self._last_error = "mina service unavailable"
+                self._probe_failure_count += 1
+                self._last_health_probe_result = "mina_service_missing"
+                self._last_health_probe_error = self._last_error
+                self._last_degraded_entry_reason = "mina_service_missing"
                 return await self._try_login(
                     reason=reason or "ensure_auth",
                     preserve_healthy_runtime=preserve_healthy_runtime,
                 )
             try:
+                self._health_probe_attempted = True
                 await self.mina_service.device_list()
                 self._last_ok_ts = time.time()
+                self._last_health_probe_result = "ok"
+                self._last_health_probe_error = ""
                 return True
             except Exception as e:
                 self._last_error = str(e)[:200]
+                self._probe_failure_count += 1
+                self._last_health_probe_error = self._last_error
                 if is_network_error(exc=e):
                     self._state = self.STATE_DEGRADED
+                    self._last_health_probe_result = "network_error"
+                    self._last_degraded_entry_reason = "health_probe_network_error"
                     self._start_cooldown()
                     return False
                 self._state = self.STATE_DEGRADED
+                self._last_health_probe_result = "auth_error"
                 self._last_recovery_stage = "probe"
                 self._last_recovery_error_code = "auth_error"
                 self._last_recovery_error_message = self._last_error
+                self._last_degraded_entry_reason = "health_probe_auth_error"
                 return await self._try_login(
                     reason=reason or "ensure_auth",
                     preserve_healthy_runtime=preserve_healthy_runtime,
@@ -437,10 +473,14 @@ class SimpleAuthManager:
                 self._state = self.STATE_HEALTHY
                 return True
             else:
-                # 恢复失败，先进入降级并根据重试次数决定是否锁定
-                if self._retry_count >= self._max_retries:
+                # 恢复失败，仅在有效恢复失败累计到阈值时才锁定
+                if self._lock_counter >= self._lock_counter_threshold:
                     self._state = self.STATE_LOCKED
                     self._locked_until = time.time() + 300  # 锁定5分钟
+                    self._last_lock_transition_reason = (
+                        self._last_lock_transition_reason
+                        or f"ensure_auth:{self._last_recovery_stage}:{self._last_recovery_error_code}"
+                    )
                 else:
                     self._state = self.STATE_DEGRADED
                 return False
@@ -465,6 +505,8 @@ class SimpleAuthManager:
         previous_locked_until = self._locked_until
         previous_cooldown_until = self._cooldown_until
         previous_retry_count = self._retry_count
+        previous_retry_count_effective = self._retry_count_effective
+        previous_lock_counter = self._lock_counter
         runtime_swap_attempted = False
         runtime_swap_applied = False
         verify_attempted = False
@@ -577,11 +619,17 @@ class SimpleAuthManager:
             self._last_login_ts = time.time()
             self._last_error = ""
             self._retry_count = 0
+            self._retry_count_effective = 0
+            self._lock_counter = 0
+            self._probe_failure_count = 0
+            self._recovery_failure_count = 0
             self._state = self.STATE_HEALTHY
             self._last_recovery_result = "ok"
             self._last_recovery_stage = "verify"
             self._last_recovery_error_code = ""
             self._last_recovery_error_message = ""
+            self._last_lock_transition_reason = ""
+            self._last_retry_increment_reason = ""
             self._last_login_trace = {
                 **self._last_login_trace,
                 "stage": "post_login_runtime_seed",
@@ -628,18 +676,32 @@ class SimpleAuthManager:
                 **failure_classification,
             }
 
+            self._recovery_failure_count += 1
+            counted, increment_reason = self._should_count_lock_failure(
+                failure_classification, self._last_recovery_stage
+            )
+            self._apply_retry_result(
+                counted=counted,
+                reason=f"{self._last_recovery_stage}:{increment_reason}",
+                failure_classification=failure_classification,
+            )
+
             if preserve_healthy_runtime and previous_state == self.STATE_HEALTHY:
                 self._state = previous_state
                 self._locked_until = previous_locked_until
                 self._cooldown_until = previous_cooldown_until
                 self._retry_count = previous_retry_count
+                self._retry_count_effective = previous_retry_count_effective
+                self._lock_counter = previous_lock_counter
                 return False
 
-            self._retry_count += 1
             self._state = self.STATE_DEGRADED
-            if self._retry_count >= self._max_retries:
+            if counted and self._lock_counter >= self._lock_counter_threshold:
                 self._state = self.STATE_LOCKED
                 self._locked_until = time.time() + 300
+                self._last_lock_transition_reason = (
+                    f"{self._last_recovery_stage}:{increment_reason}:threshold_reached"
+                )
             else:
                 self._start_cooldown()
             return False
@@ -647,6 +709,51 @@ class SimpleAuthManager:
     def _start_cooldown(self):
         """开始冷却期"""
         self._cooldown_until = time.time() + self._cooldown_sec
+
+    def _should_count_lock_failure(
+        self, failure_classification: dict[str, Any], stage: str = ""
+    ) -> tuple[bool, str]:
+        """判定此次失败是否应该推进 lock 计数。"""
+        error_type = str(failure_classification.get("error_type", "") or "")
+        long_term_expired = bool(failure_classification.get("long_term_expired"))
+        need_qr_scan = bool(failure_classification.get("need_qr_scan"))
+        user_action_required = bool(failure_classification.get("user_action_required"))
+
+        # 探测失败、网络错误、普通 runtime 错误都不直接推进 lock。
+        if error_type in ("network_error", "runtime_error"):
+            return False, error_type or "runtime_error"
+
+        # 只有明确的人为介入/长周期认证失效才推进 lock。
+        if error_type == "missing_long_term_auth":
+            return True, error_type
+        if error_type == "auth_error" and (
+            long_term_expired or need_qr_scan or user_action_required
+        ):
+            return True, error_type
+
+        # 其它失败先只降级，不推进锁。
+        _ = stage
+        return False, error_type or "unknown_failure"
+
+    def _apply_retry_result(
+        self,
+        *,
+        counted: bool,
+        reason: str,
+        failure_classification: dict[str, Any],
+    ) -> None:
+        """记录 retry / lock 的最小调试状态。"""
+        self._last_retry_count_before = self._retry_count
+        self._retry_count += 1
+        self._last_retry_count_after = self._retry_count
+        if counted:
+            self._retry_count_effective += 1
+            self._lock_counter = self._retry_count_effective
+        self._last_retry_count_effective = self._retry_count_effective
+        self._last_retry_increment_reason = reason
+        self._last_status_mapping_source = str(
+            failure_classification.get("error_type", "") or reason or "unknown"
+        )
 
     def _persist_auth_data(self, auth_data: dict, mi_account, reason: str = "") -> None:
         """持久化认证数据"""
@@ -881,26 +988,42 @@ class SimpleAuthManager:
             return
 
         async def _do_recovery():
+            self._background_recovery_attempted = True
             try:
                 success = await self._try_login()
                 if success:
+                    self._background_recovery_result = "ok"
+                    self._background_recovery_error = ""
                     self._state = self.STATE_HEALTHY
                     self.log.info("后台恢复成功")
                 else:
-                    if self._retry_count >= self._max_retries:
+                    self._background_recovery_result = "failed"
+                    self._background_recovery_error = self._last_error
+                    if self._lock_counter >= self._lock_counter_threshold:
                         self._state = self.STATE_LOCKED
                         self._locked_until = time.time() + 300
+                        self._last_lock_transition_reason = (
+                            self._last_lock_transition_reason
+                            or f"background_recovery:{self._last_recovery_stage}:{self._last_recovery_error_code}"
+                        )
                         self.log.warning("后台恢复失败，已进入锁定状态")
                     else:
                         self._state = self.STATE_DEGRADED
                         self._start_cooldown()
                         self.log.warning("后台恢复失败，保持降级并进入冷却")
             except Exception as e:
+                self._background_recovery_result = "exception"
+                self._background_recovery_error = str(e)[:200]
                 self.log.error(f"后台恢复异常: {e}")
-                self._retry_count += 1
-                if self._retry_count >= self._max_retries:
+                self._recovery_failure_count += 1
+                self._last_status_mapping_source = "background_recovery_exception"
+                if self._lock_counter >= self._lock_counter_threshold:
                     self._state = self.STATE_LOCKED
                     self._locked_until = time.time() + 300
+                    self._last_lock_transition_reason = (
+                        self._last_lock_transition_reason
+                        or f"background_recovery_exception:{type(e).__name__}"
+                    )
                 else:
                     self._state = self.STATE_DEGRADED
                     self._start_cooldown()
@@ -941,16 +1064,26 @@ class SimpleAuthManager:
 
                 # 检查认证状态
                 if not await self.ensure_auth():
+                    self._last_keepalive_probe_result = "ensure_auth_failed"
+                    self._last_keepalive_probe_error = str(self._last_error or "")[:200]
                     self.log.warning("Keepalive: 认证不健康，触发恢复")
                     # 不等待恢复完成，下一轮再检查
                 else:
                     # 认证健康，尝试调用 device_list 保持连接
                     try:
+                        self._keepalive_probe_attempted = True
+                        self._last_keepalive_probe_result = "ok"
+                        self._last_keepalive_probe_error = ""
                         await self.mina_service.device_list()
                         self._last_ok_ts = time.time()
                     except Exception as e:
+                        self._last_keepalive_probe_result = "probe_failed"
+                        self._last_keepalive_probe_error = str(e)[:200]
+                        self._probe_failure_count += 1
+                        self._last_degraded_entry_reason = "keepalive_probe_failed"
                         self.log.warning(f"Keepalive probe failed: {e}")
                         self._state = self.STATE_DEGRADED
+                        self._start_cooldown()
 
             except asyncio.CancelledError:
                 break
@@ -1139,6 +1272,21 @@ class SimpleAuthManager:
             "terminal_error_code": self._last_recovery_error_code,
             "terminal_error_message": self._last_recovery_error_message,
             "retry_count": self._retry_count,
+            "retry_count_effective": self._retry_count_effective,
+            "lock_counter": self._lock_counter,
+            "lock_counter_threshold": self._lock_counter_threshold,
+            "probe_failure_count": self._probe_failure_count,
+            "recovery_failure_count": self._recovery_failure_count,
+            "health_probe_attempted": self._health_probe_attempted,
+            "health_probe_result": self._last_health_probe_result,
+            "health_probe_error": self._last_health_probe_error,
+            "keepalive_probe_attempted": self._keepalive_probe_attempted,
+            "keepalive_probe_result": self._last_keepalive_probe_result,
+            "keepalive_probe_error": self._last_keepalive_probe_error,
+            "background_recovery_attempted": self._background_recovery_attempted,
+            "background_recovery_result": self._background_recovery_result,
+            "background_recovery_error": self._background_recovery_error,
+            "lock_transition_reason": self._last_lock_transition_reason,
             "locked_until": int(self._locked_until * 1000)
             if self._locked_until > 0
             else 0,
@@ -1194,6 +1342,9 @@ class SimpleAuthManager:
             if self._locked_until > 0
             else 0,
             "lock_reason": self._last_error,
+            "lock_transition_reason": self._last_lock_transition_reason,
+            "lock_counter": self._lock_counter,
+            "lock_counter_threshold": self._lock_counter_threshold,
             "last_ok_ts": int(self._last_ok_ts * 1000) if self._last_ok_ts > 0 else 0,
             "cooldown_until_ts": int(self._cooldown_until * 1000)
             if self._cooldown_until > 0
@@ -1203,12 +1354,19 @@ class SimpleAuthManager:
                 auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
             ),
             "retry_count": self._retry_count,
+            "retry_count_effective": self._retry_count_effective,
+            "probe_failure_count": self._probe_failure_count,
+            "recovery_failure_count": self._recovery_failure_count,
             "error_type": self._last_recovery_error_code,
             "need_qr_scan": bool(self._last_login_trace.get("need_qr_scan")),
             "user_action_required": bool(
                 self._last_login_trace.get("user_action_required")
             ),
             "long_term_expired": bool(self._last_login_trace.get("long_term_expired")),
+            "degraded_entry_reason": self._last_degraded_entry_reason,
+            "status_mapping_source": self._last_status_mapping_source,
+            "manual_login_required_reason": self._last_manual_login_required_reason,
+            "runtime_not_ready_reason": self._last_runtime_not_ready_reason,
         }
 
     def auth_debug_state(self) -> dict[str, Any]:
@@ -1219,6 +1377,11 @@ class SimpleAuthManager:
             "state": self._state,
             "auth_mode": self._state,
             "retry_count": self._retry_count,
+            "retry_count_effective": self._retry_count_effective,
+            "lock_counter": self._lock_counter,
+            "lock_counter_threshold": self._lock_counter_threshold,
+            "probe_failure_count": self._probe_failure_count,
+            "recovery_failure_count": self._recovery_failure_count,
             "last_ok_ts": int(self._last_ok_ts * 1000) if self._last_ok_ts > 0 else 0,
             "last_login_ts": int(self._last_login_ts * 1000)
             if self._last_login_ts > 0
@@ -1239,6 +1402,10 @@ class SimpleAuthManager:
                 self._last_login_trace.get("user_action_required")
             ),
             "long_term_expired": bool(self._last_login_trace.get("long_term_expired")),
+            "degraded_entry_reason": self._last_degraded_entry_reason,
+            "status_mapping_source": self._last_status_mapping_source,
+            "manual_login_required_reason": self._last_manual_login_required_reason,
+            "runtime_not_ready_reason": self._last_runtime_not_ready_reason,
         }
 
     def clear_auth_lock(self, reason: str = "", mode: str = "degraded"):
