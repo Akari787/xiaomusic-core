@@ -201,6 +201,13 @@ async def test_manual_reload_failure_preserves_healthy_runtime(auth_manager):
         mock_account.return_value = MagicMock()
         mock_account.return_value.token = {}
 
+        def _factory(*args, **kwargs):  # noqa: ARG001
+            if not args and not kwargs:
+                raise TypeError()
+            return mock_account.return_value
+
+        mock_account.side_effect = _factory
+
         async def _login(*args, **kwargs):  # noqa: ARG001
             mock_account.return_value.token["micoapi"] = ("ssecurity", "service-token")
             mock_account.return_value.token["serviceToken"] = "service-token"
@@ -223,6 +230,46 @@ async def test_manual_reload_failure_preserves_healthy_runtime(auth_manager):
     assert out["need_qr_scan"] is False
     assert out["user_action_required"] is False
     assert out["long_term_expired"] is False
+
+
+@pytest.mark.asyncio
+async def test_try_login_uses_fresh_login_session(auth_manager):
+    manager, _ = auth_manager
+    old_session = manager.mi_session
+    with (
+        patch("xiaomusic.auth.MiAccount") as mock_account,
+        patch("xiaomusic.auth.MiNAService", return_value=_FailingRuntime()),
+        patch("xiaomusic.auth.MiIOService", return_value=object()),
+    ):
+        mock_account.return_value = MagicMock()
+        mock_account.return_value.token = {}
+
+        def _factory(*args, **kwargs):  # noqa: ARG001
+            if not args and not kwargs:
+                raise TypeError()
+            return mock_account.return_value
+
+        mock_account.side_effect = _factory
+
+        async def _login(*args, **kwargs):  # noqa: ARG001
+            mock_account.return_value.token["micoapi"] = ("ssecurity", "service-token")
+            mock_account.return_value.token["serviceToken"] = "service-token"
+            mock_account.return_value.token["yetAnotherServiceToken"] = "service-token"
+            return True
+
+        mock_account.return_value.login = AsyncMock(side_effect=_login)
+        out = await manager._try_login(
+            reason="ut-fresh-session", preserve_healthy_runtime=False
+        )
+
+    assert out is False
+    assert manager.mi_session is old_session
+    assert manager._last_login_trace["login_result"] is True
+    assert manager._last_login_trace["verify_attempted"] is True
+    assert manager._last_login_trace["runtime_swap_attempted"] is True
+    assert manager._last_login_trace["runtime_swap_applied"] is False
+    assert mock_account.call_args is not None
+    assert mock_account.call_args.args[0] is not old_session
 
 
 @pytest.mark.asyncio

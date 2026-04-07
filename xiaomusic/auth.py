@@ -508,6 +508,7 @@ class SimpleAuthManager:
         previous_retry_count_effective = self._retry_count_effective
         previous_lock_counter = self._lock_counter
         auth_data = self._get_auth_data()
+        old_mi_session = self.mi_session
         runtime_swap_attempted = False
         runtime_swap_applied = False
         verify_attempted = False
@@ -554,11 +555,14 @@ class SimpleAuthManager:
                 )
                 return False
 
+            login_session = ClientSession()
+            login_session_used = False
             try:
                 new_account = MiAccount()
             except TypeError:
+                login_session_used = True
                 new_account = MiAccount(
-                    self.mi_session,
+                    login_session,
                     user_id,
                     "",
                     str(self.mi_token_home),
@@ -708,6 +712,19 @@ class SimpleAuthManager:
             self.mina_service = new_mina_service
             self.miio_service = new_miio_service
             self.login_account = new_account
+            if login_session_used:
+                self.mi_session = login_session
+                self.cookie_jar = self.mi_session.cookie_jar
+                if old_mi_session is not login_session:
+                    try:
+                        await old_mi_session.close()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    await login_session.close()
+                except Exception:
+                    pass
             self.login_signature = self._get_login_signature()
             self._last_ok_ts = time.time()
             self._last_login_ts = time.time()
@@ -792,6 +809,11 @@ class SimpleAuthManager:
                 "login_error_text": login_error_text,
                 **failure_classification,
             }
+
+            try:
+                await login_session.close()
+            except Exception:
+                pass
 
             self._recovery_failure_count += 1
             counted, increment_reason = self._should_count_lock_failure(
