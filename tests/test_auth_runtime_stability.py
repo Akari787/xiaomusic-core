@@ -200,16 +200,25 @@ async def test_manual_reload_failure_preserves_healthy_runtime(auth_manager):
     ):
         mock_account.return_value = MagicMock()
         mock_account.return_value.token = {}
-        mock_account.return_value.login = AsyncMock(return_value=None)
+
+        async def _login(*args, **kwargs):  # noqa: ARG001
+            mock_account.return_value.token["micoapi"] = ("ssecurity", "service-token")
+            mock_account.return_value.token["serviceToken"] = "service-token"
+            mock_account.return_value.token["yetAnotherServiceToken"] = "service-token"
+            return True
+
+        mock_account.return_value.login = AsyncMock(side_effect=_login)
         out = await manager.manual_reload_runtime(reason="ut-runtime-reload")
 
     assert out["refreshed"] is False
     assert out["runtime_auth_ready"] is True
     assert out["state_before"] == manager.STATE_HEALTHY
     assert out["state_after"] == manager.STATE_HEALTHY
-    assert out["verify_attempted"] is True
-    assert out["runtime_swap_attempted"] is True
-    assert out["runtime_swap_applied"] is False
+    trace = manager._last_login_trace
+    assert trace["login_result"] is True
+    assert trace["verify_attempted"] is True
+    assert trace["runtime_swap_attempted"] is True
+    assert trace["runtime_swap_applied"] is False
     assert manager.mina_service is old_runtime
     assert out["need_qr_scan"] is False
     assert out["user_action_required"] is False
@@ -227,7 +236,14 @@ async def test_try_login_verify_failure_keeps_existing_runtime(auth_manager):
     ):
         mock_account.return_value = MagicMock()
         mock_account.return_value.token = {}
-        mock_account.return_value.login = AsyncMock(return_value=None)
+
+        async def _login(*args, **kwargs):  # noqa: ARG001
+            mock_account.return_value.token["micoapi"] = ("ssecurity", "service-token")
+            mock_account.return_value.token["serviceToken"] = "service-token"
+            mock_account.return_value.token["yetAnotherServiceToken"] = "service-token"
+            return True
+
+        mock_account.return_value.login = AsyncMock(side_effect=_login)
         out = await manager._try_login(
             reason="ut-try-login", preserve_healthy_runtime=False
         )
@@ -235,9 +251,37 @@ async def test_try_login_verify_failure_keeps_existing_runtime(auth_manager):
     assert out is False
     assert manager.mina_service is old_runtime
     assert manager._state in {manager.STATE_DEGRADED, manager.STATE_LOCKED}
+    assert manager._last_login_trace["login_result"] is True
     assert manager._last_login_trace["runtime_swap_attempted"] is True
     assert manager._last_login_trace["runtime_swap_applied"] is False
     assert manager._last_login_trace["verify_attempted"] is True
+    assert manager._last_login_trace["verify_method"] == "device_list"
+    assert manager._last_login_trace["candidate_runtime_account_ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_try_login_login_failure_stops_before_verify(auth_manager):
+    manager, _ = auth_manager
+    with (
+        patch("xiaomusic.auth.MiAccount") as mock_account,
+        patch("xiaomusic.auth.MiNAService") as mock_mina,
+        patch("xiaomusic.auth.MiIOService") as mock_miio,
+    ):
+        mock_account.return_value = MagicMock()
+        mock_account.return_value.token = {}
+        mock_account.return_value.login = AsyncMock(return_value=False)
+
+        out = await manager._try_login(reason="ut-login-failed", preserve_healthy_runtime=False)
+
+    assert out is False
+    assert manager._last_recovery_stage == "login"
+    assert manager._last_login_trace["login_result"] is False
+    assert manager._last_login_trace["verify_attempted"] is False
+    assert manager._last_login_trace["runtime_swap_attempted"] is False
+    assert manager._last_login_trace["candidate_runtime_account_ready"] is False
+    assert manager._last_login_trace["token_changed_after_login"] is False
+    assert mock_mina.call_count == 0
+    assert mock_miio.call_count == 0
 
 
 @pytest.mark.asyncio

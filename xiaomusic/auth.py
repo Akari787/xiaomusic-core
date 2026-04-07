@@ -507,11 +507,22 @@ class SimpleAuthManager:
         previous_retry_count = self._retry_count
         previous_retry_count_effective = self._retry_count_effective
         previous_lock_counter = self._lock_counter
+        auth_data = self._get_auth_data()
         runtime_swap_attempted = False
         runtime_swap_applied = False
         verify_attempted = False
+        verify_method = "device_list"
         verify_error_text = ""
         login_error_text = ""
+        login_result = False
+        token_changed_after_login = False
+        candidate_runtime_account_ready = False
+        candidate_runtime_cookie_ready = False
+        pre_login_serviceToken_present = bool(auth_data.get("serviceToken"))
+        pre_login_yetAnotherServiceToken_present = bool(
+            auth_data.get("yetAnotherServiceToken")
+        )
+        pre_login_micoapi_present = bool(auth_data.get("micoapi"))
         failure_classification: dict[str, Any] = {
             "error_type": "runtime_error",
             "long_term_expired": False,
@@ -520,7 +531,6 @@ class SimpleAuthManager:
         }
 
         try:
-            auth_data = self._get_auth_data()
             if not auth_data:
                 self._last_error = "no auth data"
                 self._last_recovery_result = "failed"
@@ -555,6 +565,47 @@ class SimpleAuthManager:
                 )
 
             self.set_token(new_account)
+
+            def _snapshot_runtime_token_state(account):
+                token = dict(getattr(account, "token", {}) or {})
+                micoapi_value = token.get("micoapi")
+                has_micoapi = bool(
+                    isinstance(micoapi_value, (tuple, list))
+                    and len(micoapi_value) >= 2
+                    and micoapi_value[0]
+                    and micoapi_value[1]
+                )
+                cookie_ready = False
+                try:
+                    session = getattr(account, "session", None)
+                    cookie_jar = getattr(session, "cookie_jar", None)
+                    if cookie_jar is not None:
+                        cookie_ready = bool(
+                            cookie_jar.filter_cookies("https://api2.mina.mi.com")
+                        )
+                except Exception:
+                    cookie_ready = False
+                return {
+                    "has_passToken": bool(token.get("passToken")),
+                    "has_yetAnotherServiceToken": bool(token.get("yetAnotherServiceToken")),
+                    "has_serviceToken": bool(token.get("serviceToken")),
+                    "has_micoapi": has_micoapi,
+                    "cookie_ready": cookie_ready,
+                    "signature": (
+                        bool(token.get("passToken")),
+                        bool(token.get("userId")),
+                        bool(token.get("deviceId")),
+                        bool(token.get("psecurity")),
+                        bool(token.get("ssecurity")),
+                        bool(token.get("cUserId")),
+                        bool(token.get("serviceToken")),
+                        bool(token.get("yetAnotherServiceToken")),
+                        has_micoapi,
+                        cookie_ready,
+                    ),
+                }
+
+            pre_login_snapshot = _snapshot_runtime_token_state(new_account)
             self._last_login_trace = {
                 "stage": "login_input_snapshot",
                 "reason": reason,
@@ -564,20 +615,31 @@ class SimpleAuthManager:
                 "has_userId": bool(auth_data.get("userId")),
                 "has_cUserId": bool(auth_data.get("cUserId")),
                 "has_deviceId": bool(auth_data.get("deviceId")),
-                "has_serviceToken": bool(auth_data.get("serviceToken")),
-                "has_yetAnotherServiceToken": bool(
-                    auth_data.get("yetAnotherServiceToken")
-                ),
+                "has_serviceToken": pre_login_serviceToken_present,
+                "has_yetAnotherServiceToken": pre_login_yetAnotherServiceToken_present,
+                "pre_login_serviceToken_present": pre_login_serviceToken_present,
+                "pre_login_yetAnotherServiceToken_present": pre_login_yetAnotherServiceToken_present,
+                "pre_login_micoapi_present": pre_login_micoapi_present,
+                "post_login_serviceToken_present": False,
+                "post_login_yetAnotherServiceToken_present": False,
+                "post_login_micoapi_present": False,
+                "token_changed_after_login": False,
+                "candidate_runtime_account_ready": False,
+                "candidate_runtime_cookie_ready": False,
+                "login_result": False,
+                "login_error": "",
+                "verify_method": verify_method,
                 "ts": int(time.time() * 1000),
                 "runtime_swap_attempted": False,
                 "runtime_swap_applied": False,
                 "verify_attempted": False,
                 "verify_error_text": "",
+                "verify_auth_failure_detected": False,
                 "login_error_text": "",
             }
 
             try:
-                await new_account.login("micoapi")
+                login_result = bool(await new_account.login("micoapi"))
             except Exception as login_err:
                 login_error_text = str(login_err)[:200]
                 self.log.warning(f"login failed, trying direct: {login_err}")
@@ -586,8 +648,40 @@ class SimpleAuthManager:
                     "stage": "login_http_exchange",
                     "result": "failed",
                     "error": login_error_text,
+                    "login_error": login_error_text,
                     "login_error_text": login_error_text,
                 }
+            else:
+                if not login_result:
+                    login_error_text = "login returned false"
+
+            post_login_snapshot = _snapshot_runtime_token_state(new_account)
+            token_changed_after_login = (
+                pre_login_snapshot["signature"] != post_login_snapshot["signature"]
+            )
+            candidate_runtime_account_ready = bool(
+                login_result
+                and post_login_snapshot["has_micoapi"]
+                and post_login_snapshot["has_serviceToken"]
+            )
+            candidate_runtime_cookie_ready = bool(
+                login_result and post_login_snapshot["cookie_ready"]
+            )
+            self._last_login_trace = {
+                **self._last_login_trace,
+                "login_result": bool(login_result),
+                "login_error": login_error_text,
+                "post_login_serviceToken_present": post_login_snapshot["has_serviceToken"],
+                "post_login_yetAnotherServiceToken_present": post_login_snapshot["has_yetAnotherServiceToken"],
+                "post_login_micoapi_present": post_login_snapshot["has_micoapi"],
+                "token_changed_after_login": token_changed_after_login,
+                "candidate_runtime_account_ready": candidate_runtime_account_ready,
+                "candidate_runtime_cookie_ready": candidate_runtime_cookie_ready,
+            }
+
+            if not candidate_runtime_account_ready:
+                self._last_error = "Login failed"
+                raise RuntimeError(login_error_text or self._last_error)
 
             try:
                 new_mina_service = MiNAService(new_account)
@@ -634,6 +728,23 @@ class SimpleAuthManager:
                 **self._last_login_trace,
                 "stage": "post_login_runtime_seed",
                 "result": "ok",
+                "login_result": bool(login_result),
+                "login_error": login_error_text,
+                "post_login_serviceToken_present": bool(
+                    new_account.token.get("serviceToken")
+                ),
+                "post_login_yetAnotherServiceToken_present": bool(
+                    new_account.token.get("yetAnotherServiceToken")
+                ),
+                "post_login_micoapi_present": bool(
+                    isinstance(new_account.token.get("micoapi"), (tuple, list))
+                    and len(new_account.token.get("micoapi", (None, None))) >= 2
+                    and bool(new_account.token.get("micoapi", (None, None))[0])
+                    and bool(new_account.token.get("micoapi", (None, None))[1])
+                ),
+                "token_changed_after_login": token_changed_after_login,
+                "candidate_runtime_account_ready": candidate_runtime_account_ready,
+                "candidate_runtime_cookie_ready": candidate_runtime_cookie_ready,
                 "runtime_seed_has_serviceToken": bool(
                     new_account.token.get("serviceToken")
                 ),
@@ -645,8 +756,10 @@ class SimpleAuthManager:
                 ),
                 "runtime_swap_attempted": runtime_swap_attempted,
                 "runtime_swap_applied": True,
+                "verify_method": verify_method,
                 "verify_attempted": verify_attempted,
                 "verify_error_text": "",
+                "verify_auth_failure_detected": False,
                 "login_error_text": login_error_text,
             }
 
@@ -670,8 +783,12 @@ class SimpleAuthManager:
                 "result": "failed",
                 "runtime_swap_attempted": runtime_swap_attempted,
                 "runtime_swap_applied": False,
+                "verify_method": verify_method,
                 "verify_attempted": verify_attempted,
                 "verify_error_text": verify_error_text or self._last_error,
+                "verify_auth_failure_detected": bool(
+                    verify_attempted and not runtime_swap_applied
+                ),
                 "login_error_text": login_error_text,
                 **failure_classification,
             }
