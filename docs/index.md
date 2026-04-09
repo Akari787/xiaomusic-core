@@ -27,3 +27,20 @@ features:
   - title: Jellyfin 联动
     details: 支持 Jellyfin 搜索与歌单同步
 ---
+
+## 当前 auth 主线阅读路径
+
+建议按以下顺序阅读当前 auth 文档：
+
+1. [认证运行时恢复规范](/spec/auth_runtime_recovery)
+2. [认证运行时恢复路径规范](/spec/auth_runtime_reload_recovery_path)
+3. [fresh session 主路径验收收口](/implementation/auth_fresh_session_runtime_recovery_acceptance)
+4. [spec rebuild 验收矩阵](/implementation/spec_rebuild_acceptance_matrix_2026-04-09)
+5. [v1.0.10 发布说明](/release/v1.0.10)
+
+当前阅读路径的目的：
+
+- 先理解当前 auth 主线
+- 再理解 `_try_login()` / runtime reload 的阶段边界
+- 再看本轮已确认通过的是哪一层
+- 最后看 spec rebuild 当前哪些仍未覆盖

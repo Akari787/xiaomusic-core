@@ -1,3 +1,35 @@
+## v1.0.10 (2026-04-09)
+
+### 发布收口
+
+- 版本号提升到 `1.0.10`，`pyproject.toml`、`xiaomusic/__init__.py` 与对外版本展示入口继续统一到同一版本来源。
+- 新增 `docs/release/v1.0.10.md` 与 `docs/release/v1.0.10_checklist.md`，固定本次发布说明与发布前核对项。
+
+### Auth 主线对齐
+
+- 将 auth 主线文档收口到当前真实实现：`_try_login()` → fresh session login → candidate runtime readiness → verify → runtime swap。
+- 明确 `login-stage failure` 与 `verify-stage failure` 的区分，以及 verify 失败不得污染旧 runtime。
+- 新增 `docs/implementation/auth_fresh_session_runtime_recovery_acceptance.md`，将本轮已确认通过的 fresh session `_try_login()` 主路径稳定性独立收口。
+
+### Playback 与验收口径收口
+
+- 保持 `local_library` / `direct_url` 首轮 start confirmation 的局部验收口径，不扩写为 playback 全量长期稳定。
+- 新增 `docs/implementation/spec_rebuild_acceptance_matrix_2026-04-09.md`，把当前已覆盖 / 未覆盖范围与下一阶段优先级固定为正式矩阵。
+
+### 本版本已确认范围
+
+- fresh session 修补后的 `_try_login()` 主路径稳定。
+- status/debug 在本轮观察内业务结论一致。
+- playback 首轮 start confirmation（`local_library` / `direct_url`）已有局部实机证据。
+
+### 本版本未覆盖范围
+
+- spec rebuild 全量。
+- auto runtime reload 全量。
+- singleflight / fallback 全量。
+- auth/playback 交叉边界。
+- 极端网络扰动。
+
 ## v1.0.9 (2026-03-25)
 
 ### 后端：统一播放状态快照与 SSE 实时推送
