@@ -1,21 +1,29 @@
 # 认证恢复状态机规范
 
-版本：v1.0
-状态：行为冻结文档
-最后更新：2026-03-28
+版本：v1.1  
+状态：行为冻结文档  
+最后更新：2026-04-09  
 适用范围：`xiaomusic/auth.py` 内认证错误判定、恢复链路与状态转移
 
 ---
 
 ## 1. 文档目的
 
-本文档冻结 `xiaomusic/auth.py` 当前认证恢复链的真实行为，用于：
+本文档冻结当前 `auth.py` 恢复状态机的真实行为边界，并同步当前已知验收结论。
 
-- 为后续 singleflight 实机验收提供统一行为基线
-- 校正旧文档中与当前实现不一致的表述
-- 为未来是否拆分 AuthRecoveryCoordinator 提供行为约束前提
+本文档解决：
 
-本文档是"现状约束文档"，不是未来重构设计稿。
+- probe failure / auth error / manual login 之间的语义边界
+- suspect / non-destructive recovery / clear+rebuild / runtime reload 的关系
+- locked / manual login required 的收紧条件
+- 当前 fresh session 修补后的主路径结论属于哪一层
+
+本文档不解决：
+
+- spec rebuild 全量验收
+- singleflight 全量实机闭环
+- fallback 全量验收
+- auth / playback 交叉边界
 
 ---
 
@@ -26,17 +34,15 @@
 - auth.py 内认证错误判定逻辑
 - suspect 状态与升级条件
 - non-destructive recovery（Phase A / Phase B）
-- strong evidence 定义与升级条件
 - clear short session 与 rebuild 流程
-- auth_mode 状态转移
-- singleflight leader/follower 机制
+- runtime reload / `_try_login()` 主路径与状态转移
+- auth_mode：healthy / degraded / locked
 
 ### 2.2 非目标
 
-- 不讨论未来插件化架构
-- 不讨论完整重构方案
-- 不替代 `docs/api/api_v1_spec.md`
-- 不替代 `docs/spec/auth_runtime_recovery.md` 中的历史背景描述
+- 不讨论未来大重构方案
+- 不替代 `docs/spec/auth_runtime_recovery.md` 的主线路径说明
+- 不把局部通过扩写成 spec rebuild 全量通过
 
 ---
 
@@ -44,41 +50,29 @@
 
 当前自动恢复不是单一路径，而是分层恢复链：
 
-```
+```text
 auth_call 捕获 auth error
     ↓
 判断 should_clear_short_session
     ├─ first_suspect → non-destructive recovery
-    │       ├─ Phase A (runtime rebuild with existing short session)
+    │       ├─ Phase A（基于现有 short session 的 runtime rebuild / verify）
     │       │       ├─ success → 重试原请求
-    │       │       └─ verify_failed + auth_failure_detected → strong evidence → 升级到 clear+rebuild
-    │       └─ Phase B (轻量 verify)
+    │       │       └─ strong evidence → 升级到 clear+rebuild
+    │       └─ Phase B（轻量 verify）
     │               ├─ success → 重试原请求
     │               └─ failed → 抛出错误，不 clear
     │
-    ├─ consecutive_auth_error_same_ctx → clear+rebuild (leader)
-    └─ consecutive_auth_error_multiple → clear+rebuild (leader)
-
-clear+rebuild 路径:
-    _clear_short_lived_session
-        ↓
-    ensure_logged_in(prefer_refresh=True)
-        ↓
-    _rebuild_short_session_from_persistent_auth
-        ↓
-    rebuild_services (runtime rebind)
-        ↓
-    verify
-        ↓
-    success → 重试原请求
+    ├─ consecutive_auth_error_* → clear+rebuild（受 singleflight 保护）
+    └─ degraded + token available → runtime reload / `_try_login()` 主路径
 ```
 
 关键区分：
 
-- **首次 auth error**：不立即 clear short session，走 non-destructive recovery
-- **suspect 状态**：记录首次错误，等待升级条件
-- **strong evidence**：Phase A verify 失败且检测到认证失败，同一轮内升级到 clear+rebuild
-- **consecutive error**：同一 ctx 连续错误或窗口内多次错误，直接进入 clear+rebuild
+- **probe failure 只是退化触发器，不等于 manual login**
+- **进入 degraded 不等于进入 locked**
+- **manual_login_required 只应在有强人工介入证据时成立**
+- **当前 fresh session 修补已经消除了“复用旧 session 导致 `login(false)`”这一类主断点**
+- **以上只覆盖当前主路径，不覆盖全部恢复分支**
 
 ---
 
@@ -87,27 +81,43 @@ clear+rebuild 路径:
 ### 4.1 healthy
 
 - 语义：认证状态正常，业务请求可正常执行
-- 进入条件：`ensure_logged_in` 成功完成（rebuild + rebind + verify 全部成功）
-- 退出条件：auth error 发生
+- 进入条件：恢复链成功完成，runtime 可用
+- 退出条件：auth error 或 probe failure 触发退化判定
 
 ### 4.2 degraded
 
-- 语义：认证状态异常，部分能力可能不可用
+- 语义：认证状态异常，部分能力可能不可用，但仍优先尝试自动恢复
 - 进入条件：
   - `ensure_logged_in` 失败
-  - keepalive 验证失败
+  - keepalive / verify / probe 失败
+  - runtime reload / `_try_login()` 主路径失败但未达到 locked 条件
 - 退出条件：恢复成功后转为 healthy
+
+**重要**：probe failure 只是 degraded 的触发器，不等于 manual login required。
 
 ### 4.3 locked
 
 - 语义：认证锁定，需要人工干预（扫码登录）
-- 进入条件：长期态必需字段缺失或不完整，导致 persistent auth 不可用时，恢复失败后可能进入 locked
-- 判定依据：`_has_persistent_auth_fields` 返回 False（当前实现检查 `passToken`、`psecurity`、`ssecurity` 等关键字段是否存在）
-- 退出条件：
-  - 扫码登录后调用 `clear_auth_lock`
-  - 锁定超时后自动转为 degraded
+- 进入条件：长期态必需字段缺失或等价硬故障，自动恢复前提已不成立
+- 不应由以下情况直接触发：
+  - 单次 probe failure
+  - 单次 login-stage failure
+  - 单次 verify-stage failure
+  - 单次 network error
 
-**重要**：locked 不是短期 token 失效后的默认结果。只有在长期态缺失或等价硬故障导致恢复失败时才应进入 locked。
+### 4.4 manual_login_required
+
+`manual_login_required` 的语义已经收紧：
+
+- 只在有**强人工介入证据**时成立
+- 例如长期态缺失、locked 已成立、或高层策略已明确要求扫码
+
+以下情况**不应**直接写成 `manual_login_required=true`：
+
+- degraded
+- 单次 runtime verify 失败
+- `_try_login()` 主路径中的一次失败
+- auto runtime reload 的一次失败
 
 ---
 
@@ -115,255 +125,164 @@ clear+rebuild 路径:
 
 ### 5.1 错误分类
 
-`auth_call` 捕获异常后进行分流：
+`auth_call` 捕获异常后的分流仍然是：
 
 | 错误类型 | 处理方式 |
 |----------|----------|
-| network error (`is_network_error`) | 直接抛出，不进入恢复链 |
-| 非严格 auth error (`!is_auth_error_strict`) | 直接抛出，不进入恢复链 |
-| 严格 auth error (`is_auth_error_strict`) | 进入 suspect 判定与恢复链 |
+| network error | 直接抛出，不进入 auth 恢复主链 |
+| 非严格 auth error | 直接抛出，不进入恢复链 |
+| 严格 auth error | 进入 suspect 判定与恢复链 |
 
-### 5.2 `_should_clear_short_session_on_auth_error` 行为
+### 5.2 suspect 语义
 
-该方法决定是否立即 clear short session：
+suspect 的目的仍然是：
 
-| 条件 | 返回值 | 说明 |
-|------|--------|------|
-| 同一 ctx 短时间内连续错误，streak >= 1 | `(True, "consecutive_auth_error_same_ctx")` | 升级到 clear |
-| 不同 ctx 但在窗口内连续错误，streak >= 2 | `(True, "consecutive_auth_error_multiple")` | 升级到 clear |
-| 第一次或窗口外的错误 | `(False, "first_suspect")` | 走 non-destructive recovery |
+- 避免首次 auth error 就立即 clear short session
+- 把首次异常与连续异常区分开
+- 为 non-destructive recovery 提供缓冲层
 
-### 5.3 suspect 计数机制
+### 5.3 升级条件
 
-- `_auth_error_suspect_streak`：连续 auth error 计数
-- `_last_auth_error_suspect_ts`：上次 auth error 时间戳
-- `_last_auth_error_suspect_ctx`：上次 auth error 上下文
-- `_auth_error_suspect_window_sec`：suspect 窗口时间（默认 30 秒）
-
-**核心语义**：suspect 计数是为了避免首次 auth error 立即 clear short session。只有在短时间内连续出现 auth error 时才升级为 clear。
-
-### 5.4 suspect 重置时机
-
-- clear short session 执行后，当前实现会显式调用 `_reset_auth_error_suspect()` 重置 suspect 状态
-- non-destructive recovery 成功后，当前实现没有显式 reset suspect；这是当前实现现状，不代表必然行为规范
+- `first_suspect`：优先走 non-destructive recovery
+- `consecutive_auth_error_*`：升级到 clear+rebuild
+- strong evidence：在同一轮内从 Phase A 升级到 clear+rebuild
 
 ---
 
 ## 6. non-destructive recovery 规范
 
-non-destructive recovery 是首次/保守阶段的优先恢复路径，不 clear short session，不 mark_session_invalid。
+### 6.1 Phase A
 
-### 6.1 Phase A：runtime rebuild with existing short session
+目标：
 
-**目标**：使用 auth.json 中已有的 short session 重建 runtime 对象
+- 使用 auth.json 中已有 short session 重建 runtime
+- 优先验证“现有 short session 是否还能撑起 runtime”
 
-**流程**：
+当前语义：
 
-1. 重新读取 auth.json / token_store
-2. 检查是否存在 short session（`serviceToken` 或 `yetAnotherServiceToken`）
-3. 检查是否存在 `userId`
-4. 创建新的 MiAccount 实例
-5. 注入已有 token（`token["micoapi"] = (ssecurity, serviceToken)`）
-6. 创建新的 MiNAService
-7. 调用 `device_list()` 验证
-8. 成功则原子替换当前 runtime 引用
-9. 失败则丢弃临时对象，不影响当前 runtime
+- success：重试原请求
+- verify 失败且 auth failure detected：可升级为 strong evidence
+- 失败但证据不足：不立即 clear
 
-**失败时不 clear short session，不写空 auth.json。**
+### 6.2 Phase B
 
-**失败原因分类**：
+目标：
 
-| reason | 语义 | 是否 strong evidence |
-|--------|------|---------------------|
-| `no_existing_short_session` | auth.json 缺少 serviceToken | 否 |
-| `missing_userId` | auth.json 缺少 userId | 否 |
-| `verify_failed` + `auth_failure_detected=true` | 验证失败且检测到认证错误 | **是** |
-| `verify_failed` + `auth_failure_detected=false` | 验证失败但非认证错误 | 否 |
-| `exception` | 未知异常 | 否 |
+- 对当前 runtime 做轻量 verify
+- 不修改状态，只做保守验证
 
-### 6.2 Phase B：轻量 runtime verify
+当前语义：
 
-**目标**：在 Phase A 失败且非 strong evidence 时，尝试轻量验证当前 runtime
-
-**流程**：
-
-1. 重新加载 token_store
-2. 检查 short session 是否存在
-3. 调用 `_verify_runtime_auth_ready()` 验证当前 runtime
-4. 成功则返回 `runtime_verified`
-5. 失败则返回 `all_attempts_failed`
-
-**Phase B 不修改任何状态，只是验证当前 runtime 是否仍然可用。**
-
-**Phase B 不等于 clear+rebuild。**
+- success：重试原请求
+- failed：抛错，不 clear，不直接导向 manual login
 
 ---
 
-## 7. strong evidence 定义与升级条件
+## 7. clear + rebuild 与 runtime reload 的关系
 
-### 7.1 strong evidence 判定条件
+### 7.1 clear + rebuild
 
-`_is_strong_short_session_invalidation_evidence` 返回 True 的条件：
+clear + rebuild 仍用于：
 
-1. `reason` 包含 `verify_failed`
-2. `auth_failure_detected` 为 True（或 detail 文本匹配认证失败关键词）
+- short session 已被判定需要清理
+- 进入 persistent-auth rebuild 主链
 
-### 7.2 属于 strong evidence 的场景
+### 7.2 runtime reload / `_try_login()`
 
-- Phase A verify 失败且检测到 Mina auth failure（`login failed`、`401`、`70016`）
+runtime reload / `_try_login()` 当前需要按阶段理解：
 
-### 7.3 不属于 strong evidence 的场景
+1. token load
+2. fresh session login
+3. candidate runtime readiness
+4. verify
+5. runtime swap
 
-| 场景 | 说明 |
-|------|------|
-| `no_existing_short_session` | 缺少 short session，不是"short session 失效" |
-| `missing_userId` | 缺少 userId，不是认证失败 |
-| `exception` | 未知异常，无法判断是否为认证错误 |
-| `verify_failed` 但 `auth_failure_detected=false` | 验证失败但非认证错误（如网络错误） |
+关键约束：
 
-### 7.4 升级行为
+- `login_result=false` 不得继续 verify
+- `candidate_runtime_account_ready=false` / `candidate_runtime_cookie_ready=false` 不得继续 verify
+- verify 失败不得污染旧 runtime
 
-当检测到 strong evidence 时：
+### 7.3 当前主修补点
 
-1. 返回 `(False, detail, True)` 给 `_attempt_non_destructive_auth_recovery`
-2. `_attempt_non_destructive_auth_recovery` 返回 `escalate_to_clear=True`
-3. `auth_call` 进入 clear+rebuild 路径（同一轮内）
+当前主修补点已经从“verify 失败”进一步收口到：
 
----
+- login-stage 与 verify-stage 可以区分
+- 恢复场景复用旧 session 会导致 `login(false)`
+- 改为 fresh session 后，该类主断点已被消除
 
-## 8. clear short session 与 rebuild 规范
+但这只代表：
 
-### 8.1 clear 的对象
+- **fresh session 修补后的 `_try_login()` 主路径已恢复稳定**
 
-**runtime 注入态**：
+不代表：
 
-- 清除 `mina_service.account.token["micoapi"]`
-- 清除 `miio_service.account.token["micoapi"]`
-
-**auth.json / token_store 中的 short session 字段**：
-
-- `serviceToken`
-- `yetAnotherServiceToken`
-
-**保留的长期态字段**：
-
-- `passToken`
-- `psecurity`
-- `ssecurity`
-- `userId`
-- `cUserId`
-- `deviceId`
-
-### 8.2 clear 后的 rebuild 主链
-
-clear 后进入 `ensure_logged_in(prefer_refresh=True)`：
-
-```
-_clear_short_lived_session(clear_reason)
-    ↓
-_rebuild_short_session_from_persistent_auth(reason)
-    ├─ persistent_auth_login (primary path: 使用长期态重建短期态)
-    └─ refresh_token_fallback (如果 persistent 失败)
-    ↓
-rebuild_services(reason, allow_login_fallback=False)
-    └─ runtime rebind (重新初始化 mina_service / miio_service)
-    ↓
-_verify_runtime_auth_ready()
-    └─ 调用 device_list 验证
-```
-
-注意：`_rebuild_short_session_from_persistent_auth` 内部包含 primary path 与 refresh fallback，不是单一路径。
-
-### 8.3 rebuild 成功/失败后的状态变化
-
-| 结果 | auth_mode | 说明 |
-|------|-----------|------|
-| rebuild 成功 | healthy | 恢复完成 |
-| rebuild 失败但有长期态 | degraded | 下次重试可能恢复 |
-| rebuild 失败且无长期态 | locked | 需要人工扫码登录 |
-
-rebuild 失败时最终可能进入 degraded 或 locked，而不是默认回到 healthy。恢复主链不是"唯一成功路径"，而是当前实现的主要恢复路径。
+- 所有 rebuild 分支都已通过
+- auto runtime reload 全量通过
+- singleflight / fallback / cross-boundary 全量通过
 
 ---
 
-## 9. runtime reload 与自动恢复的边界
+## 8. 状态转移口径
 
-### 9.1 runtime reload 入口家族
+### 8.1 degraded → healthy
 
-- 接口：`POST /api/auth/refresh`、`POST /api/auth/refresh_runtime`
-- 语义：从磁盘重新加载 auth.json，重建 runtime
-- 手动按钮与自动调度共享同一 runtime reload 核心链路
-- 自动入口来自 `init_all_data()` / `keepalive_loop()`，不是新的恢复状态机
+适用于：
 
-### 9.2 扫码登录后从磁盘重建 runtime
+- runtime reload / `_try_login()` 成功
+- clear+rebuild 成功
+- non-destructive recovery 成功
 
-用户完成扫码登录后：
+### 8.2 degraded → locked
 
-1. 新的 auth token 已持久化到 auth.json
-2. 若 runtime 尚未 ready，系统会自动尝试一次 runtime reload
-3. 也可以显式调用 `POST /api/auth/refresh` 或 `POST /api/auth/refresh_runtime`
-4. 系统从磁盘重载认证状态
-5. 执行 runtime rebind
-6. 执行 verify
+只在：
 
-**手动入口与自动触发入口复用同一 runtime reload 核心链路，只是触发来源不同。**
+- 长期态缺失
+- 或等价硬故障导致自动恢复前提已经不存在
 
-### 9.3 runtime reload 自动触发条件
+### 8.3 degraded ≠ manual login required
 
-- `auth_mode=degraded`
-- `persistent_auth_available=true`
-- `short_session_available=true`
-- 当前不存在进行中的同类恢复
-- 不在 cooldown / backoff 窗口内
+当前口径必须保持：
 
-### 9.4 runtime reload 结果分流
-
-- `runtime_auth_ready=true`：进入 `healthy`
-- `verify_auth_failure_detected=true`：认为 short session 已被证伪，handoff 到既有 short-session 恢复链
-- 网络/连接错误：保留 `degraded`，进入 cooldown / backoff，不误入 auth handoff
+- degraded 只是“自动恢复仍有机会”的状态
+- manual login required 是更高阈值结论
 
 ---
 
-## 10. 可观测性与日志事件
+## 9. 可观测性与验收用途
 
-### 10.1 关键事件
+后续验收至少应关注：
 
-| 事件名称 | 用途 |
-|----------|------|
-| `auth_short_session_clear_decision` | 记录 clear 决策：是否执行、决策原因、suspect streak |
-| `auth_non_destructive_recovery` | 记录非破坏性恢复：Phase A/B、成功/失败、是否 strong evidence |
-| `auth_runtime_rebuild_with_existing_short_session` | 记录 Phase A 细节：创建对象、验证结果、swap 结果 |
-| `auth_recovery_singleflight` | 记录 singleflight：leader/follower、backoff、开始/结束 |
-| `auth_recovery_flow` | 记录完整恢复流程：初始状态、rebuild 策略、rebind 结果、verify 结果 |
-| `auth_cookie_rebuild` / `auth_persistent_auth_relogin` | 记录 persistent-auth 重建过程 |
-| `auth_runtime_reload` | 记录 runtime reload：token_store 状态、service 重建、verify 结果、自动触发/hand-off |
-| `auth_mode_transition` | 记录 auth_mode 状态转移 |
-
-### 10.2 验收用途
-
-对下一次 24h 掉线做实机验收时，应关注：
-
-1. `auth_short_session_clear_decision` 中的 `decision_reason`：判断是 first_suspect 还是 consecutive error
-2. `auth_non_destructive_recovery` 中的 `phase` 和 `strong_invalidation_evidence`：判断 Phase A 是否失败、是否升级
-3. `auth_recovery_singleflight` 中的 `role`：判断是否有多路并发 recovery
-4. `auth_recovery_flow` 中的 `result` 和 `used_rebuild_strategy`：判断 rebuild 是否成功
-5. `auth_runtime_reload` 中的 `auto_runtime_reload_triggered` / `verify_auth_failure_detected` / `recovery_chain_handoff`：判断自动 runtime reload 是否正确分流
+- `auth_short_session_clear_decision`
+- `auth_non_destructive_recovery`
+- `auth_recovery_singleflight`
+- `auth_runtime_reload`
+- `auth_mode_transition`
+- `_try_login()` trace 中的：
+  - `login_result`
+  - `candidate_runtime_account_ready`
+  - `candidate_runtime_cookie_ready`
+  - `verify_attempted`
+  - `verify_error_text`
+  - `runtime_swap_attempted`
+  - `runtime_swap_applied`
 
 ---
 
-## 11. 当前已知边界
+## 10. 当前已知边界
 
-1. **Xiaomi 云端风控不可消除**：`70016` 等风控错误仍可能发生
-2. **系统目标是可恢复、可观测、可预测，而不是零失败**
-3. **本文档描述的是当前实现基线，不代表未来永久架构**
-4. **singleflight 是否在线上真正完全生效，仍需后续实机验收确认**
-5. **Phase A 成功依赖 auth.json 中已有有效的 short session**：如果 short session 已过期，Phase A 会失败
-6. **本文档同时包含"当前代码已实现行为"与"当前验收应验证的行为约束"**：对尚未完成实机闭环验证的内容，不应视为线上已证明事实
+1. Xiaomi 云端风控仍不可消除
+2. 系统目标仍是可恢复、可观测、可预测，而不是零失败
+3. 当前 fresh session 修补只覆盖 `_try_login()` 主路径
+4. singleflight 是否已在线上充分闭环，仍需独立验收
+5. fallback path 仍需独立验收，不应借主路径结论代替
+6. auth / playback 交叉边界仍未纳入本轮通过范围
 
 ---
 
-## 12. 与现有文档关系
+## 11. 与现有文档关系
 
-- 本文档用于补充并校正 `docs/spec/auth_runtime_recovery.md` 中与当前实现不一致的部分
-- 旧文档中的历史背景保留，但**当前实现行为以本文档为准**
-- 旧文档中"唯一允许顺序 = clear short session → persistent-auth login → runtime rebind → verify"的表述已不准确，当前实现存在 non-destructive recovery 作为前置路径
+- 当前 auth runtime 主线路径，以 `docs/spec/auth_runtime_recovery.md` 为主
+- 当前 runtime reload / `_try_login()` 阶段边界，以 `docs/spec/auth_runtime_reload_recovery_path.md` 为主
+- 当前 auto runtime reload 验收边界，以 `docs/spec/auth_auto_runtime_reload_acceptance.md` 为主
+- 本文档负责状态机语义收口，不提供 spec rebuild 总通过结论

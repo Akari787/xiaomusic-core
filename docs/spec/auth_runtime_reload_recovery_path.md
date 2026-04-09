@@ -1,35 +1,30 @@
 # 认证运行时恢复路径规范
 
-版本：v1.0
-状态：1.0.9 专项约束文档
-最后更新：2026-03-29
-适用范围：`xiaomusic/auth.py` 内 runtime reload / runtime rebind / verify 路径的行为边界
+版本：v1.1  
+状态：1.0.9 专项约束文档  
+最后更新：2026-04-09  
+适用范围：`xiaomusic/auth.py` 内 runtime reload / `_try_login()` / runtime rebind / verify 路径的行为边界
 
 ---
 
 ## 1. 文档目的
 
-当前自动恢复失败的主要矛盾已从 short session rebuild 进一步转移到 runtime reload 闭环。
-
-- primary / fallback 路径负责获取 token
-- short session rebuild 负责"盘上没有 short session"的场景
-- runtime reload 负责"盘上已有 short session，但运行时未恢复"的场景
-
-当前新暴露的主问题：
-
- - UI 显示"登录待恢复"而非"未登录"
- - 这类状态现在会自动尝试一次 runtime reload，而不是只等用户点击按钮
-- `persistent_auth_available=true`、`short_session_available=true`
-- 但 `runtime_seed_has_serviceToken=false`、`mina_service_rebuilt=false`、`verify_result=failed`
+本文档描述当前 runtime 恢复主路径的阶段边界、失败分类与可观测性要求。
 
 本文档解决：
-- runtime reload 的定位、入口条件、执行边界、结果分类、可观测性要求
+
+- runtime reload / login / verify / runtime swap 的阶段定义
+- login-stage failure 与 verify-stage failure 的区分
+- 候选 runtime 进入 verify 的前置条件
+- 本轮已确认通过的是哪一层，不是哪一层
 
 本文档不解决：
-- 为什么 Xiaomi 云端返回 401
-- short session rebuild 的规范（已有 `auth_recovery_fallback_path.md`）
-- QR 登录流程本身
-- 整套 auth.py 模块拆分
+
+- fallback path 的独立验收
+- singleflight 的实机闭环
+- auto runtime reload 全量验收
+- auth / playback 交叉边界
+- spec rebuild 全量结论
 
 ---
 
@@ -37,300 +32,238 @@
 
 | 术语 | 定义 |
 |------|------|
-| runtime reload | 从磁盘已存在的 auth 数据重建运行时状态的完整流程 |
-| runtime seed | 运行时初始化所需的认证种子数据（serviceToken、ssecurity 等） |
-| runtime rebind | 重新初始化 mina_service / miio_service 实例 |
-| verify | 调用 device_list 验证运行时可用性 |
-| runtime reload trigger | runtime reload 的触发方式（手动或自动） |
-| manual refresh runtime | 用户手动触发的运行时刷新（`POST /api/auth/refresh_runtime`） |
-| auto runtime reload | 受控自动触发的 runtime reload |
-| 登录待恢复 / login pending recovery | long-lived auth 和 short session 均在，但运行时未 ready 的状态 |
-| short session available | 盘上存在 serviceToken 或 yetAnotherServiceToken |
-| persistent auth available | 盘上存在长期态字段（passToken、psecurity、ssecurity 等） |
-| degraded | 认证状态异常，部分能力可能不可用 |
-| locked | 认证锁定，需要人工干预（扫码登录） |
+| runtime reload | 从磁盘与当前认证材料出发，重建 runtime 的完整恢复流程 |
+| `_try_login()` | 当前 auth runtime 恢复核心路径之一 |
+| token load | 读取 token_store / auth.json / 登录输入快照 |
+| fresh session login | 使用 fresh `ClientSession` 的 `MiAccount.login("micoapi")` |
+| candidate runtime | 本轮登录成功后构建但尚未应用的候选 runtime |
+| candidate runtime readiness | 候选 runtime 的 account / cookie ready 判定 |
+| verify | 调用 `device_list` 等方式验证候选 runtime 是否可用 |
+| runtime swap | 将候选 runtime 原子应用到当前运行态 |
+| login-stage failure | 失败发生在 login 或进入 verify 前的准备阶段 |
+| verify-stage failure | 登录成功且候选 runtime ready 后，失败发生在 verify 阶段 |
 
-**本文档中的 runtime reload 专指**：`manual_reload_runtime` 及其调用链；触发可以来自手动按钮，也可以来自受控自动调度。
+**本文档中的 runtime reload 包含 `_try_login()` 主路径。**
 
 **不包括**：
-- short session rebuild（`_rebuild_short_session_from_persistent_auth`）
-- primary path（`miaccount_persistent_auth_login`）
-- fallback path（`mijia_persistent_auth_login`）
+
+- short session rebuild 的完整分支验收
+- primary / fallback 的全链验收
 - manual QR login 本身
 
 ---
 
 ## 3. 当前已知链路事实
 
-以下为本文档的现实前提，不是推测：
+以下为当前仓库与本轮验收口径已确认的现实前提：
 
-1. short session 已在盘上
-   - `disk_has_serviceToken=true`
-   - `disk_has_yetAnotherServiceToken=true`
+1. `_try_login()` 已暴露出明确的阶段化观测字段，包括：
+   - `login_result`
+   - `token_changed_after_login`
+   - `candidate_runtime_account_ready`
+   - `candidate_runtime_cookie_ready`
+   - `verify_attempted`
+   - `verify_error_text`
+   - `runtime_swap_attempted`
+   - `runtime_swap_applied`
 
-2. 但 runtime seed 不完整
-   - `runtime_seed_has_serviceToken=false`
+2. 当前实现已经可以区分：
+   - login-stage failure
+   - verify-stage failure
 
-3. service 实例未重建成功
-   - `mina_service_rebuilt=false`
+3. 当前主路径修补点已经收口到：
+   - **恢复登录前复用旧 session 会导致 `login_result=false`**
+   - 改为 **fresh session login** 后，live 观察已恢复 healthy
 
-4. verify 失败
-   - `verify_result=failed`
+4. 本轮 >24h 观察确认的是：
+   - fresh session 修补后的 `_try_login()` 主路径稳定
 
-5. 系统状态表现为
-    - `auth_mode=degraded`
-    - UI 显示"登录待恢复"
-    - 后端会在满足条件时自动调度一次 runtime reload
-
-6. 当前问题不是 token writeback，而是运行时恢复闭环未完成
-
----
-
-## 4. runtime reload path 的定位
-
-- runtime reload 不是 short session rebuild
-- runtime reload 不是 primary / fallback
-- runtime reload 的职责是：
-  - 从盘上已存在的 auth 数据重建 runtime
-  - 建立 runtime seed
-  - 重建 mina_service / miio_service
-  - 执行 verify
-- runtime reload 不是 manual login 本身
-- runtime reload 是"登录后待恢复态"的恢复闭环核心路径
+5. 以上结论只覆盖当前主路径，不覆盖 spec rebuild 全量
 
 ---
 
-## 5. runtime reload 的入口条件
+## 4. 当前主路径阶段定义
 
-### 5.1 允许进入的条件
+### 4.1 阶段顺序
 
-| 条件 | 说明 |
-|------|------|
-| `persistent_auth_available=true` | 长期态仍在 |
-| `short_session_available=true` | short session 已在盘上 |
-| auth 数据已在盘上 | token_store 可加载 |
-| 当前运行时未 ready | `runtime_auth_ready=false` |
-| `auth_mode=degraded` | 处于登录待恢复语义 |
-| 当前没有进行中的同类恢复 | 受 singleflight / recovery gate 保护 |
-| 不在 cooldown/backoff 中 | 避免恢复风暴 |
+当前 runtime 恢复主路径按以下阶段定义：
 
-当前触发上下文：
-- `manual_refresh_runtime`（用户手动点击"刷新运行时"）
-- `init_all_data()` / `keepalive_loop()` 的受控自动触发
+| 阶段 | 说明 | 关键字段 |
+|------|------|----------|
+| token load | 重新加载 token_store / auth.json，准备登录输入 | `token_store_reloaded`、磁盘 token 可见性 |
+| fresh session login | 使用 fresh `ClientSession` 创建新 `MiAccount`，执行 `login("micoapi")` | `login_result`、`token_changed_after_login` |
+| candidate runtime readiness | 检查候选 runtime 的 account / cookie 是否 ready | `candidate_runtime_account_ready`、`candidate_runtime_cookie_ready` |
+| verify | 对候选 runtime 执行可用性验证 | `verify_attempted`、`verify_error_text` |
+| runtime swap | 仅在 verify 成功后进行原子替换 | `runtime_swap_attempted`、`runtime_swap_applied` |
 
-### 5.2 禁止进入的条件
+### 4.2 阶段流转约束
 
-| 条件 | 说明 |
-|------|------|
-| 缺少 short session | 应走 short session rebuild 路径 |
-| 缺少长期态字段 | 应走 primary / fallback 路径或进入 locked |
-| 已进入 locked | 需要人工干预 |
-| 当前运行时已经 ready | 无需重复 reload |
-| short session rebuild 尚未完成 | 不应误入 runtime reload |
+- 只有 `login_result=true`，才允许进入 candidate runtime readiness
+- 只有 `candidate_runtime_account_ready=true` 且 `candidate_runtime_cookie_ready=true`，才允许进入 verify
+- 只有 verify 成功，才允许 `runtime_swap_applied=true`
 
 ---
 
-## 6. runtime reload 的执行边界
+## 5. 明确的禁止条件
 
-### 6.1 可以做的事
+### 5.1 login 失败后不得继续 verify
 
-| 行为 | 说明 |
-|------|------|
-| 从磁盘重新加载 auth 数据 | `token_store.reload_from_disk()` |
-| 检查 disk token presence | `disk_has_serviceToken` / `disk_has_yetAnotherServiceToken` |
-| 建立 runtime seed | 基于盘上 token 初始化运行时认证种子 |
-| 重建 mina_service / miio_service | `rebuild_services()` |
-| 执行 verify | 调用 device_list 验证 |
-| 在成功时进入 healthy | `auth_mode=healthy` |
-| 在失败时保留 degraded | 并暴露明确原因 |
+当：
 
-### 6.2 不能做的事
+- `login_result=false`
 
-| 行为 | 说明 |
-|------|------|
-| 不得隐式重建 short session | runtime reload 不负责 token 获取 |
-| 不得把 short session 缺失伪装成 runtime rebind 失败 | 应用 `short_session_missing_for_runtime_reload` |
-| 不得在 runtime seed 不完整时伪装成 runtime ready | 应暴露 `runtime_seed_incomplete` |
-| 不得隐式切换成 manual login | runtime reload 失败不等于立即 manual login |
-| 不得绕过统一认证状态语义 | 必须通过 `rebuild_services` |
-| 不得因为 runtime reload 失败就清掉长期态 | 失败应停在 degraded |
+则：
 
-### 6.3 明确的阶段边界
+- `verify_attempted` 必须为 `false`
+- `runtime_swap_attempted` 不应进入真正应用阶段
+- `runtime_swap_applied` 必须为 `false`
 
-runtime reload 必须拆分为以下阶段，不得混写为一个模糊失败：
+### 5.2 candidate runtime 未 ready 时不得继续 verify
 
-| 阶段 | 说明 |
-|------|------|
-| 磁盘态检查 | `token_store_reloaded`、`disk_has_serviceToken` |
-| runtime seed 建立 | 基于盘上 token 初始化认证种子 |
-| service 实例重建 | `mina_service_rebuilt`、`miio_service_rebuilt` |
-| verify | 调用 device_list 验证运行时可用性 |
-| device map refresh | 更新设备信息 |
+当任一条件成立：
 
----
+- `candidate_runtime_account_ready=false`
+- `candidate_runtime_cookie_ready=false`
 
-## 7. "登录待恢复"状态定义
+则：
 
-### 7.1 状态语义
+- 不得继续进入 verify
+- 不得把这类失败伪装成 verify-stage failure
 
-"登录待恢复"不是"未登录"。
+### 5.3 verify 失败时不得污染旧 runtime
 
-它表示：
-- 至少长期态已在
-- 可能 short session 已在盘上
-- 但运行时尚未 ready
-- 当前实现会在满足条件时自动尝试一次 runtime reload
+当：
 
-### 7.2 对应后端状态
+- `verify_attempted=true`
+- verify 失败
 
-| 字段 | 典型值 |
-|------|--------|
-| `auth_mode` | `degraded` |
-| `persistent_auth_available` | `true` |
-| `short_session_available` | `true` |
-| `runtime_rebind_result` | `failed` 或未执行 |
-| `verify_result` | `failed` 或未执行 |
-| `auto_runtime_reload_triggered` | `true` 或未触发 |
+则：
 
-### 7.3 UI 显示约束
-
-- UI 显示"刷新运行时"时，后端应处于上述状态
-- 这些状态现在也可能由自动调度进入，不再必须等待人工点击
-- 以下状态不应显示为"登录待恢复"：
-  - `locked`（应显示"需要重新登录"）
-  - `persistent_auth_available=false`（应显示"需要重新登录"）
-  - `short_session_available=false`（应显示"登录中"或类似）
+- 候选 runtime 必须被丢弃
+- `runtime_swap_applied=false`
+- 旧 runtime 必须保持不被污染
 
 ---
 
-## 8. runtime reload 的结果分类
+## 6. 失败分类
 
-### 8.1 结果分类表
+### 6.1 login-stage failure
 
-| error_code | 含义 | 发生阶段 | 允许重试 | 应保持 degraded | 应建议 manual login |
-|------------|------|----------|----------|-----------------|---------------------|
-| `""` (ok) | 成功恢复运行时 | - | - | 否 | 否 |
-| `missing_long_lived_auth_fields` | 长期态字段缺失 | 磁盘检查 | 否 | 是 | 是 |
-| `short_session_missing_for_runtime_reload` | short session 缺失 | 磁盘检查 | 否 | 是 | 视情况 |
-| `runtime_seed_incomplete` | runtime seed 不完整 | seed 建立 | 短期可重试 | 是 | 否 |
-| `runtime_rebind_failed` | service 实例重建失败 | rebind | 短期可重试 | 是 | 否 |
-| `runtime_verify_failed` | device_list 验证失败 | verify | 短期可重试 | 是 | 视情况 |
-| `RuntimeError` 等 | 未知异常 | 任意阶段 | 短期可重试 | 是 | 否 |
+典型特征：
 
-### 8.2 特别区分
+- `login_result=false`，或
+- login 虽成功，但 `candidate_runtime_account_ready=false` / `candidate_runtime_cookie_ready=false`
 
-- **token 缺失导致不能开始**：`missing_long_lived_auth_fields`、`short_session_missing_for_runtime_reload`
-- **token 存在但 seed 不完整**：`runtime_seed_incomplete`
-- **service 重建失败**：`runtime_rebind_failed`
-- **verify 失败**：`runtime_verify_failed`
+应归类为：
 
-### 8.3 失败类型约束
+- 登录阶段失败
+- 候选 runtime 准备阶段失败
 
-- `verify_auth_failure_detected=true`：表示现有 short session 已被 MiNA 证伪，runtime reload 应 handoff 到既有 short-session 恢复链
-- 网络/连接错误：例如 timeout、`Cannot connect to host`、DNS 失败等，不应被当作 auth failure，应该保留 degraded 并进入 cooldown/backoff
-- 其它 runtime 失败：保留阶段化错误码，不要混成 `runtime_verify_failed`
+不应归类为：
 
----
+- verify-stage failure
 
-## 9. runtime reload 与其他路径的边界关系
+### 6.2 verify-stage failure
 
-### 9.1 与 short session rebuild 的边界
+典型特征：
 
-- short session rebuild 解决"盘上没有 short session"
-- runtime reload 解决"盘上有 short session，但 runtime 未恢复"
-- 两者不是同一路径
-- 不能混用错误码
+- `login_result=true`
+- `candidate_runtime_account_ready=true`
+- `candidate_runtime_cookie_ready=true`
+- `verify_attempted=true`
+- `runtime_swap_applied=false`
 
-### 9.2 与 primary / fallback 的边界
+语义：
 
-- primary / fallback 负责拿 token
-- runtime reload 负责消费盘上已有 token 重建运行时
-- primary/fallback 失败不应伪装成 runtime reload 失败
-- runtime reload 失败不应反向覆盖 primary/fallback 分类
+- 登录成功，候选 runtime 具备进入 verify 的条件
+- 失败发生在 verify 阶段
 
-### 9.3 与 manual login 的边界
+### 6.3 当前修补点的现实归因
 
-- manual login 可更新认证态
-- 但 manual login 成功不等于 runtime ready
-- runtime reload 是 manual login 后闭环的重要后续阶段
-- manual login 本身不属于 runtime reload
+当前主修补点不是“所有 verify 失败都已解决”，而是：
 
-### 9.4 与 degraded / locked 的边界
+- 旧行为中恢复登录复用旧 session，可能直接导致 `login_result=false`
+- 现在改为 fresh session login 后，主路径已恢复健康
 
-- runtime reload 失败通常应停在 degraded
-- 只有长期态缺失或人工干预必要时才讨论 locked
-- 不能因为一次 verify 失败就直接进入 locked
+因此，本轮通过的是：
 
-### 9.5 与自动 runtime reload 的边界
+- fresh session 修补后的 `_try_login()` 主路径稳定
 
-- 自动 runtime reload 只是触发方式，不改变 runtime reload 的阶段语义
-- 自动触发必须满足 `degraded + persistent_auth_available + short_session_available + 无同类恢复 + 无 backoff`
-- 自动触发失败后应进入 cooldown/backoff，避免恢复风暴
-- 自动触发和手动 `refresh_runtime` 共享同一 runtime reload 核心链路
+不是：
+
+- runtime reload 所有失败都已消失
+- verify 全量问题已清零
 
 ---
 
-## 10. 可观测性要求
+## 7. 可观测性要求
 
-### 10.1 必须稳定暴露的字段
+### 7.1 必须稳定暴露的字段
 
 | 字段 | 说明 |
 |------|------|
-| `token_store_reloaded` | 是否成功重新加载 token_store |
-| `disk_has_serviceToken` | 盘上是否存在 serviceToken |
-| `disk_has_yetAnotherServiceToken` | 盘上是否存在 yetAnotherServiceToken |
-| `runtime_seed_has_serviceToken` | runtime seed 中是否有 serviceToken |
-| `mina_service_rebuilt` | mina_service 是否重建成功 |
-| `miio_service_rebuilt` | miio_service 是否重建成功 |
-| `device_map_refreshed` | device map 是否刷新成功 |
-| `verify_result` | verify 结果（`ok` / `failed`） |
-| `error_code` | 错误分类码 |
-| `error_message` | 错误描述 |
-| `auto_runtime_reload_triggered` | 是否由自动调度触发 |
-| `auto_runtime_reload_source` | 触发来源（`init_all_data` / `keepalive`） |
-| `auto_runtime_reload_result` | 自动触发结果 |
-| `auto_runtime_reload_skipped_reason` | 未触发或跳过原因 |
-| `auto_runtime_reload_backoff_until` | 自动触发冷却截止时间 |
-| `recovery_chain_handoff` | verify auth failure 后是否 handoff 到短期态恢复链 |
-| `short_session_invalidated_after_verify` | verify 证伪后是否清理 short session |
+| `login_result` | 登录是否成功 |
+| `token_changed_after_login` | 登录后 token 是否变化 |
+| `candidate_runtime_account_ready` | 候选 runtime 的 account 是否 ready |
+| `candidate_runtime_cookie_ready` | 候选 runtime 的 cookie 是否 ready |
+| `verify_attempted` | 是否进入 verify |
+| `verify_error_text` | verify 错误文本 |
+| `runtime_swap_attempted` | 是否尝试 runtime swap |
+| `runtime_swap_applied` | 是否应用 runtime swap |
+| `recovery_failure_count` | 恢复失败计数 |
 
-### 10.2 关键约束
+### 7.2 关键约束
 
-- 不能让"登录待恢复"再次回到黑盒状态
-- 必须能区分是 token 缺、seed 缺、service 没建起来、还是 verify 失败
-- `runtime_seed_has_serviceToken` 是判断 seed 是否完整的关键指标
+- 必须能区分 login-stage failure 与 verify-stage failure
+- 必须能判断 verify 是否真正发生
+- 必须能判断 verify 失败后是否污染旧 runtime
+- 不允许把 fresh session 主路径通过写成 general rebuild 全量通过
 
 ---
 
-## 11. 最小侵入修补约束
+## 8. 与 auto runtime reload 的边界
 
-后续修补应遵守：
+- auto runtime reload 只是触发方式
+- 不改变 `_try_login()` 主路径的阶段语义
+- 当前本轮已确认的是 `_try_login()` 主路径稳定
+- **不是 auto runtime reload 全量边界已完成验收**
 
-| 约束 | 说明 |
-|------|------|
-| 优先增强 runtime reload 闭环的稳定性与可观测性 | 细化错误分类 |
-| 不应大改 auth state machine | 保持 `degraded` / `locked` 语义不变 |
-| 不应重写 singleflight | singleflight 约束由 `auth_recovery_singleflight.md` 定义 |
-| 不应把 runtime reload 和 short session rebuild 混在一起 | 两者是不同路径 |
-| 不应因为修 runtime reload 而破坏 primary/fallback 已收口的行为 | 已收口的错误分类应保留 |
-| 不应先改 UI，再倒推后端 | 应先明确后端状态定义 |
+未覆盖范围仍包括：
 
-可写的后续方向类型（仅作为约束，不是实现）：
-- 明确 runtime seed 不完整的稳定错误码
-- 明确"登录待恢复"的后端判定
-- 明确扫码登录成功后是否应该自动触发 runtime reload
-- 明确 verify 失败后的终态
-
-但不要写成具体代码方案。
+- auto trigger 全边界
+- singleflight 实机闭环
+- fallback 独立验收
+- auth / playback 交叉边界
+- 极端网络扰动
 
 ---
 
-## 12. 非目标
+## 9. 当前验收结论边界
+
+### 9.1 已确认通过
+
+- fresh session 修补后的 `_try_login()` 主路径在 >24h 窗口内稳定
+
+### 9.2 适用范围
+
+- 当前主路径
+- 当前阶段化观测字段
+- login-stage / verify-stage 已可区分这一层
+
+### 9.3 不可外推范围
+
+- spec rebuild 全量通过
+- auto runtime reload 全量通过
+- singleflight / fallback / cross-boundary 全量通过
+
+---
+
+## 10. 非目标
 
 本文档不解决：
 
-- 不解决 Xiaomi 云端为什么返回 401
-- 不解决 miservice 依赖内部实现
-- 不解决二维码 UI 交互设计
-- 不解决整个 auth.py 模块拆分
-- 不解决大规模重构方案
+- Xiaomi 云端为什么返回 401
+- fallback path 的成功率问题
+- manual QR login 交互
+- 整个 auth.py 模块拆分
+- 大规模重构方案
