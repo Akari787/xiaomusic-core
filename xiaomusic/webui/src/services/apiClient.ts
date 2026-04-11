@@ -31,10 +31,22 @@ export async function apiPostJson<T>(path: string, payload: unknown): Promise<T>
   });
 }
 
+export async function apiPutJson<T>(path: string, payload: unknown): Promise<T> {
+  return await requestJson<T>(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function apiGet<T = unknown>(path: string): Promise<ApiResponse<T>> {
   return await apiGetJson<ApiResponse<T>>(path);
 }
 
 export async function apiPost<T = unknown>(path: string, payload: unknown): Promise<ApiResponse<T>> {
   return await apiPostJson<ApiResponse<T>>(path, payload);
+}
+
+export async function apiPut<T = unknown>(path: string, payload: unknown): Promise<ApiResponse<T>> {
+  return await apiPutJson<ApiResponse<T>>(path, payload);
 }

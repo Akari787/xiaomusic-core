@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from xiaomusic import __version__
@@ -67,6 +68,10 @@ def _get_facade() -> PlaybackFacade:
     if _facade is None:
         _facade = PlaybackFacade(_get_xiaomusic(), runtime_provider=get_runtime)
     return _facade
+
+
+def _get_source_plugin_manager():
+    return _get_facade()._get_source_plugin_manager()
 
 
 def _next_request_id(raw: str | None = None) -> str:
@@ -200,6 +205,39 @@ def _map_structured_endpoint_exception(
         ),
     ):
         return _map_api_exception(exc, request_id)
+    if isinstance(exc, PermissionError):
+        return _api_response(
+            40301,
+            str(exc),
+            {
+                "error_type": exc.__class__.__name__,
+                "error_code": "E_FORBIDDEN",
+                "stage": default_stage,
+            },
+            request_id,
+        )
+    if isinstance(exc, FileNotFoundError):
+        return _api_response(
+            40401,
+            str(exc),
+            {
+                "error_type": exc.__class__.__name__,
+                "error_code": "E_NOT_FOUND",
+                "stage": default_stage,
+            },
+            request_id,
+        )
+    if isinstance(exc, ValueError):
+        return _api_response(
+            40001,
+            str(exc),
+            {
+                "error_type": exc.__class__.__name__,
+                "error_code": "E_INVALID_REQUEST",
+                "stage": default_stage,
+            },
+            request_id,
+        )
     return _api_response(
         10000,
         default_message,
@@ -497,6 +535,115 @@ async def api_v1_devices():
         )
 
 
+@router.get("/api/v1/sources")
+async def api_v1_sources(request_id: str | None = None):
+    rid = _next_request_id(request_id)
+    try:
+        manager = _get_source_plugin_manager()
+        return _api_ok(
+            {
+                "registry_version": int(manager.registry_version),
+                "sources": manager.describe_plugins(),
+            },
+            request_id=rid,
+        )
+    except Exception as exc:
+        return _map_structured_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_SOURCES_QUERY_FAILED",
+            default_stage="system",
+            default_message="sources query failed",
+        )
+
+
+@router.post("/api/v1/sources/reload")
+async def api_v1_sources_reload(request_id: str | None = None):
+    rid = _next_request_id(request_id)
+    try:
+        manager = _get_source_plugin_manager()
+        return _api_ok(manager.reload_summary(), request_id=rid)
+    except Exception as exc:
+        return _map_structured_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_SOURCES_RELOAD_FAILED",
+            default_stage="system",
+            default_message="sources reload failed",
+        )
+
+
+@router.post("/api/v1/sources/upload")
+async def api_v1_sources_upload(
+    file: UploadFile = File(...), request_id: str | None = None
+):
+    rid = _next_request_id(request_id)
+    try:
+        content = await file.read()
+        manager = _get_source_plugin_manager()
+        item = manager.upload_plugin(file.filename or "", content)
+        return _api_ok(item, request_id=rid)
+    except Exception as exc:
+        return _map_structured_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_SOURCES_UPLOAD_FAILED",
+            default_stage="system",
+            default_message="sources upload failed",
+        )
+
+
+@router.delete("/api/v1/sources/{name}")
+async def api_v1_sources_delete(name: str, request_id: str | None = None):
+    rid = _next_request_id(request_id)
+    try:
+        manager = _get_source_plugin_manager()
+        result = manager.uninstall_plugin(name)
+        return _api_ok(result, request_id=rid)
+    except Exception as exc:
+        return _map_structured_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_SOURCES_DELETE_FAILED",
+            default_stage="system",
+            default_message="sources delete failed",
+        )
+
+
+@router.put("/api/v1/sources/{name}/enable")
+async def api_v1_sources_enable(name: str, request_id: str | None = None):
+    rid = _next_request_id(request_id)
+    try:
+        manager = _get_source_plugin_manager()
+        item = manager.enable_plugin(name)
+        return _api_ok(item, request_id=rid)
+    except Exception as exc:
+        return _map_structured_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_SOURCES_ENABLE_FAILED",
+            default_stage="system",
+            default_message="sources enable failed",
+        )
+
+
+@router.put("/api/v1/sources/{name}/disable")
+async def api_v1_sources_disable(name: str, request_id: str | None = None):
+    rid = _next_request_id(request_id)
+    try:
+        manager = _get_source_plugin_manager()
+        item = manager.disable_plugin(name)
+        return _api_ok(item, request_id=rid)
+    except Exception as exc:
+        return _map_structured_endpoint_exception(
+            exc,
+            rid,
+            default_error_code="E_SOURCES_DISABLE_FAILED",
+            default_stage="system",
+            default_message="sources disable failed",
+        )
+
+
 @router.get("/api/v1/system/status")
 async def api_v1_system_status():
     request_id = _next_request_id(None)
@@ -595,6 +742,27 @@ async def api_v1_system_settings_item(data: SystemSettingItemUpdateRequest):
             default_stage="system",
             default_message="system setting update failed",
         )
+
+
+@router.get("/api/v1/auth/status")
+async def api_v1_auth_status(request_id: str | None = None):
+    rid = _next_request_id(request_id)
+    try:
+        runtime_auth_ready = await _runtime_auth_ready_v1()
+        am = getattr(_get_xiaomusic(), "auth_manager", None)
+        if am is not None and hasattr(am, "map_auth_public_status"):
+            data = am.map_auth_public_status(runtime_auth_ready=runtime_auth_ready)
+        else:
+            data = {
+                "status": "unknown",
+                "auth_mode": "unknown",
+                "status_reason": "unknown",
+                "recovery_failure_count": 0,
+            }
+        data["generated_at_ms"] = int(time.time() * 1000)
+        return _api_ok(data, request_id=rid)
+    except Exception as exc:
+        return _map_api_exception(exc, rid)
 
 
 # diagnostic endpoint - not in v1 whitelist, exclude from public schema

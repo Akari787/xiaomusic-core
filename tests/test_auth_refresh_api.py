@@ -106,8 +106,34 @@ async def test_auth_status_exposes_recovery_distinction(monkeypatch, tmp_path):
         @staticmethod
         def auth_short_session_rebuild_debug_state():
             return {
-                "last_short_session_rebuild": {"result": "ok"},
+                "last_short_session_rebuild": {"result": "failed", "error_code": "redirect_http_401"},
                 "last_auth_recovery_flow": {},
+            }
+
+        @staticmethod
+        def map_auth_public_status(runtime_auth_ready: bool | None = None):
+            return {
+                "status": "degraded",
+                "auth_mode": "degraded",
+                "status_reason": "short_session_rebuild_failed",
+                "status_reason_detail": "rebuild failed: redirect_http_401",
+                "status_mapping_source": "short_session_rebuild_failed",
+                "recovery_failure_count": 0,
+                "persistent_auth_available": True,
+                "short_session_available": False,
+                "runtime_auth_ready": bool(runtime_auth_ready),
+                "auth_locked": False,
+                "auth_lock_until": 0,
+                "auth_lock_reason": "",
+                "auth_lock_transition_reason": "",
+                "auth_lock_counter": 0,
+                "auth_lock_counter_threshold": 0,
+                "manual_login_required_reason": "",
+                "runtime_not_ready_reason": "",
+                "last_error": "missing short session token; rebuild from long auth required",
+                "rebuild_failed": True,
+                "rebuild_error_code": "redirect_http_401",
+                "rebuild_failed_reason": "redirect_http_401",
             }
 
     class _XM:

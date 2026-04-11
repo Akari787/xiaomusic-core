@@ -33,6 +33,13 @@ def test_api_v1_routes_whitelist_only():
         ("GET", "/api/v1/library/music-info"),
         ("GET", "/api/v1/search/online"),
         ("GET", "/api/v1/devices"),
+        ("GET", "/api/v1/auth/status"),
+        ("GET", "/api/v1/sources"),
+        ("POST", "/api/v1/sources/reload"),
+        ("POST", "/api/v1/sources/upload"),
+        ("DELETE", "/api/v1/sources/{name}"),
+        ("PUT", "/api/v1/sources/{name}/enable"),
+        ("PUT", "/api/v1/sources/{name}/disable"),
         ("GET", "/api/v1/system/status"),
         ("GET", "/api/v1/system/settings"),
         ("POST", "/api/v1/system/settings"),
@@ -44,6 +51,7 @@ def test_api_v1_routes_whitelist_only():
         ("GET", "/api/v1/debug/auth_short_session_rebuild_state"),
         ("GET", "/api/v1/debug/auth_runtime_reload_state"),
         ("GET", "/api/v1/player/state"),
+        ("GET", "/api/v1/player/stream"),
     }
     assert routes == expected
 
@@ -73,15 +81,17 @@ async def test_v1_response_has_unified_top_level_fields(monkeypatch):
                 "extra": {},
             }
 
-        async def player_state(self, device_id: str, request_id: str | None = None):
-            _ = request_id
+        async def build_player_state_snapshot(self, device_id: str):
             return {
                 "device_id": device_id,
-                "is_playing": True,
-                "cur_music": "song",
-                "offset": 3,
-                "duration": 30,
-                "request_id": "rid-state",
+                "revision": 1,
+                "play_session_id": "sess-1",
+                "transport_state": "playing",
+                "track": {"id": "track-1", "title": "song"},
+                "context": None,
+                "position_ms": 3000,
+                "duration_ms": 30000,
+                "snapshot_at_ms": 1710000000000,
             }
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())

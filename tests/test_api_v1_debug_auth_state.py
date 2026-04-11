@@ -249,6 +249,32 @@ async def test_status_reason_short_session_rebuild_failed(monkeypatch):
                 "last_auth_recovery_flow": {"result": "failed"},
             }
 
+        @staticmethod
+        def map_auth_public_status(runtime_auth_ready: bool | None = None):
+            return {
+                "status": "degraded",
+                "auth_mode": "degraded",
+                "status_reason": "short_session_rebuild_failed",
+                "status_reason_detail": "rebuild failed: redirect_http_401",
+                "status_mapping_source": "short_session_rebuild_failed",
+                "recovery_failure_count": 0,
+                "persistent_auth_available": True,
+                "short_session_available": False,
+                "runtime_auth_ready": bool(runtime_auth_ready),
+                "auth_locked": False,
+                "auth_lock_until": 0,
+                "auth_lock_reason": "",
+                "auth_lock_transition_reason": "",
+                "auth_lock_counter": 0,
+                "auth_lock_counter_threshold": 0,
+                "manual_login_required_reason": "",
+                "runtime_not_ready_reason": "",
+                "last_error": "",
+                "rebuild_failed": True,
+                "rebuild_error_code": "redirect_http_401",
+                "rebuild_failed_reason": "redirect_http_401",
+            }
+
     class _FakeTokenStore:
         path = None
 
@@ -303,6 +329,32 @@ async def test_status_reason_short_session_missing_no_failure_recorded(monkeypat
             return {
                 "last_short_session_rebuild": {"result": "ok"},
                 "last_auth_recovery_flow": {},
+            }
+
+        @staticmethod
+        def map_auth_public_status(runtime_auth_ready: bool | None = None):
+            return {
+                "status": "degraded",
+                "auth_mode": "degraded",
+                "status_reason": "short_session_missing",
+                "status_reason_detail": "short-lived session tokens missing",
+                "status_mapping_source": "short_session_missing",
+                "recovery_failure_count": 0,
+                "persistent_auth_available": True,
+                "short_session_available": False,
+                "runtime_auth_ready": bool(runtime_auth_ready),
+                "auth_locked": False,
+                "auth_lock_until": 0,
+                "auth_lock_reason": "",
+                "auth_lock_transition_reason": "",
+                "auth_lock_counter": 0,
+                "auth_lock_counter_threshold": 0,
+                "manual_login_required_reason": "",
+                "runtime_not_ready_reason": "",
+                "last_error": "",
+                "rebuild_failed": False,
+                "rebuild_error_code": "",
+                "rebuild_failed_reason": "",
             }
 
     class _FakeTokenStore:
@@ -367,6 +419,32 @@ async def test_status_reason_persistent_auth_missing(monkeypatch):
                 "last_auth_recovery_flow": {"result": "failed"},
             }
 
+        @staticmethod
+        def map_auth_public_status(runtime_auth_ready: bool | None = None):
+            return {
+                "status": "degraded",
+                "auth_mode": "degraded",
+                "status_reason": "persistent_auth_missing",
+                "status_reason_detail": "all long-lived auth fields missing from token",
+                "status_mapping_source": "persistent_auth_missing",
+                "recovery_failure_count": 0,
+                "persistent_auth_available": False,
+                "short_session_available": False,
+                "runtime_auth_ready": bool(runtime_auth_ready),
+                "auth_locked": False,
+                "auth_lock_until": 0,
+                "auth_lock_reason": "",
+                "auth_lock_transition_reason": "",
+                "auth_lock_counter": 0,
+                "auth_lock_counter_threshold": 0,
+                "manual_login_required_reason": "",
+                "runtime_not_ready_reason": "",
+                "last_error": "",
+                "rebuild_failed": True,
+                "rebuild_error_code": "",
+                "rebuild_failed_reason": "",
+            }
+
     class _XM:
         auth_manager = _Auth()
         token_store = _FakeTokenStore()
@@ -417,6 +495,32 @@ async def test_status_reason_temporarily_locked_when_not_manual(monkeypatch):
             return {
                 "last_short_session_rebuild": {"result": "failed"},
                 "last_auth_recovery_flow": {"result": "failed"},
+            }
+
+        @staticmethod
+        def map_auth_public_status(runtime_auth_ready: bool | None = None):
+            return {
+                "status": "failed",
+                "auth_mode": "locked",
+                "status_reason": "temporarily_locked",
+                "status_reason_detail": "retry threshold reached",
+                "status_mapping_source": "locked_temporary",
+                "recovery_failure_count": 0,
+                "persistent_auth_available": False,
+                "short_session_available": False,
+                "runtime_auth_ready": bool(runtime_auth_ready),
+                "auth_locked": True,
+                "auth_lock_until": 9999999999,
+                "auth_lock_reason": "retry threshold reached",
+                "auth_lock_transition_reason": "ensure_auth:verify:runtime_error:threshold_reached",
+                "auth_lock_counter": 3,
+                "auth_lock_counter_threshold": 3,
+                "manual_login_required_reason": "",
+                "runtime_not_ready_reason": "",
+                "last_error": "retry threshold reached",
+                "rebuild_failed": True,
+                "rebuild_error_code": "",
+                "rebuild_failed_reason": "",
             }
 
     class _XM:
@@ -470,6 +574,32 @@ async def test_status_reason_manual_login_required(monkeypatch):
             return {
                 "last_short_session_rebuild": {"result": "failed"},
                 "last_auth_recovery_flow": {"result": "failed"},
+            }
+
+        @staticmethod
+        def map_auth_public_status(runtime_auth_ready: bool | None = None):
+            return {
+                "status": "failed",
+                "auth_mode": "locked",
+                "status_reason": "manual_login_required",
+                "status_reason_detail": "too many failures",
+                "status_mapping_source": "locked_manual",
+                "recovery_failure_count": 0,
+                "persistent_auth_available": False,
+                "short_session_available": False,
+                "runtime_auth_ready": bool(runtime_auth_ready),
+                "auth_locked": True,
+                "auth_lock_until": 9999999999,
+                "auth_lock_reason": "too many failures",
+                "auth_lock_transition_reason": "qrcode required",
+                "auth_lock_counter": 3,
+                "auth_lock_counter_threshold": 3,
+                "manual_login_required_reason": "qrcode required",
+                "runtime_not_ready_reason": "",
+                "last_error": "too many failures",
+                "rebuild_failed": True,
+                "rebuild_error_code": "",
+                "rebuild_failed_reason": "",
             }
 
     class _XM:
@@ -527,6 +657,32 @@ async def test_status_reason_runtime_not_ready(monkeypatch):
             return {
                 "last_short_session_rebuild": {"result": "ok"},
                 "last_auth_recovery_flow": {"result": "ok"},
+            }
+
+        @staticmethod
+        def map_auth_public_status(runtime_auth_ready: bool | None = None):
+            return {
+                "status": "degraded",
+                "auth_mode": "degraded",
+                "status_reason": "runtime_not_ready",
+                "status_reason_detail": "runtime auth ready but not verified",
+                "status_mapping_source": "runtime_not_ready",
+                "recovery_failure_count": 0,
+                "persistent_auth_available": True,
+                "short_session_available": True,
+                "runtime_auth_ready": bool(runtime_auth_ready),
+                "auth_locked": False,
+                "auth_lock_until": 0,
+                "auth_lock_reason": "",
+                "auth_lock_transition_reason": "",
+                "auth_lock_counter": 0,
+                "auth_lock_counter_threshold": 0,
+                "manual_login_required_reason": "",
+                "runtime_not_ready_reason": "runtime auth ready but not verified",
+                "last_error": "",
+                "rebuild_failed": False,
+                "rebuild_error_code": "",
+                "rebuild_failed_reason": "",
             }
 
     class _XM:

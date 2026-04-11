@@ -155,7 +155,12 @@ class PlayOptions:
             if payload_title:
                 context[OPT_TITLE] = payload_title
 
-        if source_hint == "local_library" and self.title:
+        if source_hint == "local_library":
+            if self.title:
+                context[OPT_TITLE] = self.title
+            if isinstance(self.source_payload, dict):
+                context[OPT_SOURCE_PAYLOAD] = self.source_payload
+        if self.title and OPT_TITLE not in context:
             context[OPT_TITLE] = self.title
         if isinstance(self.context_hint, dict):
             context["context_hint"] = self.context_hint

@@ -16,11 +16,34 @@ class LocalLibrarySourcePlugin(SourcePlugin):
     def __init__(self, music_library) -> None:
         self._music_library = music_library
 
+    @staticmethod
+    def _playlist_payload(request: MediaRequest) -> tuple[bool, dict, dict]:
+        context = request.context if isinstance(request.context, dict) else {}
+        payload = context.get("source_payload")
+        if not isinstance(payload, dict):
+            payload = {}
+        context_hint = context.get("context_hint")
+        if not isinstance(context_hint, dict):
+            context_hint = {}
+        context_type = str(
+            context_hint.get("context_type") or payload.get("context_type") or ""
+        ).strip().lower()
+        playlist_name = str(
+            payload.get("playlist_name")
+            or context_hint.get("context_name")
+            or context_hint.get("context_id")
+            or payload.get("context_name")
+            or ""
+        ).strip()
+        return context_type == "playlist" or bool(playlist_name), payload, context_hint
+
     def can_resolve(self, request: MediaRequest) -> bool:
         if request.source_hint == self.name:
             return True
-        payload = request.context.get("source_payload")
+        is_playlist_context, payload, _ = self._playlist_payload(request)
         if isinstance(payload, dict) and str(payload.get("source") or "").lower() == self.name:
+            return True
+        if is_playlist_context:
             return True
         query = str(request.query or "").strip()
         if not query:
@@ -34,28 +57,43 @@ class LocalLibrarySourcePlugin(SourcePlugin):
         return False
 
     async def resolve(self, request: MediaRequest) -> ResolvedMedia:
-        payload = request.context.get("source_payload") if isinstance(request.context, dict) else {}
-        if not isinstance(payload, dict):
-            payload = {}
+        is_playlist_context, payload, context_hint = self._playlist_payload(request)
 
         raw_query = str(request.query or "").strip()
         candidate = str(
             payload.get("music_name")
+            or payload.get("track_name")
             or payload.get("track_id")
             or payload.get("path")
             or payload.get("name")
             or raw_query
             or ""
-        )
+        ).strip()
         if not candidate:
             raise SourceResolveError("local library query is required")
 
-        title = str(request.context.get("title") or payload.get("name") or payload.get("title") or candidate)
+        playlist_name = str(
+            payload.get("playlist_name")
+            or context_hint.get("context_name")
+            or context_hint.get("context_id")
+            or payload.get("context_name")
+            or ""
+        ).strip()
+        title = str(
+            request.context.get("title")
+            or payload.get("music_name")
+            or payload.get("track_name")
+            or payload.get("name")
+            or payload.get("title")
+            or candidate
+        ).strip()
+        media_id = str(payload.get("track_id") or request.request_id)
+
         path_candidate = self._candidate_path(candidate)
         if path_candidate:
             final_path = self._validate_path(path_candidate)
             return ResolvedMedia(
-                media_id=request.request_id,
+                media_id=media_id,
                 source=self.name,
                 title=title,
                 stream_url=self._music_library._get_file_url(str(final_path)),
@@ -69,7 +107,7 @@ class LocalLibrarySourcePlugin(SourcePlugin):
             if not filename:
                 raise SourceResolveError(f"local library file missing: {candidate}")
             return ResolvedMedia(
-                media_id=request.request_id,
+                media_id=media_id,
                 source=self.name,
                 title=title,
                 stream_url=self._music_library._get_file_url(filename),
@@ -83,16 +121,21 @@ class LocalLibrarySourcePlugin(SourcePlugin):
             if name in self._music_library.all_music and not self._music_library.is_web_music(name):
                 filename = self._music_library.get_filename(name)
                 if filename:
+                    resolved_title = title if is_playlist_context and title else str(name)
                     return ResolvedMedia(
-                        media_id=request.request_id,
+                        media_id=media_id,
                         source=self.name,
-                        title=str(name),
+                        title=resolved_title,
                         stream_url=self._music_library._get_file_url(filename),
                         headers={},
                         expires_at=None,
                         is_live=False,
                     )
 
+        if is_playlist_context and playlist_name:
+            raise SourceResolveError(
+                f"local library media not found in playlist {playlist_name}: {candidate}"
+            )
         raise SourceResolveError(f"local library media not found: {candidate}")
 
     @staticmethod

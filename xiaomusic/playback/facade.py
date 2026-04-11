@@ -6,6 +6,7 @@ import hashlib
 import logging
 import time
 from dataclasses import asdict, is_dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
@@ -14,6 +15,7 @@ from xiaomusic.adapters.miio import MiioTransport
 from xiaomusic.adapters.sources import register_default_source_plugins
 from xiaomusic.constants.api_fields import DEVICE_ID, REQUEST_ID
 from xiaomusic.core.coordinator import PlaybackCoordinator
+from xiaomusic.managers.source_plugin_manager import SourcePluginManager
 from xiaomusic.core.delivery import DeliveryAdapter
 from xiaomusic.core.device import DeviceRegistry
 from xiaomusic.core.errors import (
@@ -22,7 +24,6 @@ from xiaomusic.core.errors import (
     TransportError,
 )
 from xiaomusic.core.models import MediaRequest, PlayOptions
-from xiaomusic.core.source import SourceRegistry
 from xiaomusic.core.transport import TransportPolicy, TransportRouter
 
 
@@ -59,20 +60,50 @@ class PlaybackFacade:
     """Keep API layer thin while exposing stable runtime methods."""
 
     def __init__(
-        self, xiaomusic, runtime_provider: Callable[[], Any] | None = None
+        self,
+        xiaomusic,
+        runtime_provider: Callable[[], Any] | None = None,
+        source_plugin_manager: SourcePluginManager | None = None,
     ) -> None:
         self.xiaomusic = xiaomusic
         self._runtime_provider = runtime_provider
         self._core_coordinator: PlaybackCoordinator | None = None
+        self._core_registry_version: int | None = None
+        self._device_track_source_hints: dict[str, dict[str, str]] = {}
+        self._source_plugin_manager = source_plugin_manager or getattr(
+            self.xiaomusic, "source_plugin_manager", None
+        )
+
+    def _get_source_plugin_manager(self) -> SourcePluginManager:
+        if self._source_plugin_manager is not None:
+            return self._source_plugin_manager
+        config = getattr(self.xiaomusic, "config", None)
+        conf_path = getattr(config, "conf_path", ".") if config is not None else "."
+        manager = SourcePluginManager(
+            register_defaults=lambda registry: register_default_source_plugins(
+                registry,
+                self.xiaomusic,
+                runtime_provider=self._runtime_provider,
+            ),
+            plugins_dir=str(Path(conf_path) / "source_plugins"),
+        )
+        setattr(self.xiaomusic, "source_plugin_manager", manager)
+        self._source_plugin_manager = manager
+        return manager
 
     def _core(self) -> PlaybackCoordinator:
-        if self._core_coordinator is not None:
+        if self._core_coordinator is not None and self._core_registry_version is None:
             return self._core_coordinator
 
-        source_registry = SourceRegistry()
-        register_default_source_plugins(
-            source_registry, self.xiaomusic, runtime_provider=self._runtime_provider
-        )
+        source_plugin_manager = self._get_source_plugin_manager()
+        registry_version = source_plugin_manager.registry_version
+        if (
+            self._core_coordinator is not None
+            and self._core_registry_version == registry_version
+        ):
+            return self._core_coordinator
+
+        source_registry = source_plugin_manager.get_active_registry()
         device_registry = DeviceRegistry(self.xiaomusic)
         proxy_builder: Callable[[str, str], str] | None = None
         raw_proxy_builder = getattr(
@@ -93,6 +124,7 @@ class PlaybackFacade:
             transport_router=router,
             playback_status_provider=getattr(self.xiaomusic, "get_player_status", None),
         )
+        self._core_registry_version = registry_version
         return self._core_coordinator
 
     @staticmethod
@@ -116,6 +148,120 @@ class PlaybackFacade:
         if not did:
             raise InvalidRequestError("device_id is required")
         return did
+
+    @staticmethod
+    def _normalize_track_source_value(source: Any) -> str | None:
+        value = str(source or "").strip().lower()
+        if value in {"local_library", "jellyfin", "site_media", "direct_url"}:
+            return value
+        return None
+
+    def _remember_device_track_source(
+        self,
+        *,
+        device_id: str,
+        source: str | None,
+        track_title: str = "",
+        context_id: str = "",
+        play_session_id: str = "",
+    ) -> None:
+        normalized = self._normalize_track_source_value(source)
+        if normalized is None:
+            return
+        self._device_track_source_hints[device_id] = {
+            "source": normalized,
+            "track_title": str(track_title or "").strip(),
+            "context_id": str(context_id or "").strip(),
+            "play_session_id": str(play_session_id or "").strip(),
+        }
+
+    def _resolve_context_source(self, context_id: str) -> str | None:
+        playlist_name = str(context_id or "").strip()
+        if not playlist_name:
+            return None
+
+        config = getattr(self.xiaomusic, "config", None)
+        raw_music_list_json = getattr(config, "music_list_json", "") if config else ""
+        if not raw_music_list_json:
+            return None
+
+        try:
+            import json
+
+            music_lists = json.loads(raw_music_list_json)
+        except Exception:
+            return None
+
+        if not isinstance(music_lists, list):
+            return None
+
+        for item in music_lists:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("name") or "").strip() != playlist_name:
+                continue
+            return self._normalize_track_source_value(item.get("source"))
+        return None
+
+    def _infer_local_library_source(self, track_title: str) -> str | None:
+        title = str(track_title or "").strip()
+        if not title:
+            return None
+
+        music_library = getattr(self.xiaomusic, "music_library", None)
+        all_music = getattr(music_library, "all_music", None)
+        if not isinstance(all_music, dict) or title not in all_music:
+            return None
+
+        is_web_music = getattr(music_library, "is_web_music", None)
+        if callable(is_web_music):
+            try:
+                if is_web_music(title):
+                    return None
+            except Exception:
+                return None
+        return "local_library"
+
+    def _resolve_track_source(
+        self,
+        *,
+        device_id: str,
+        track_title: str,
+        context_id: str,
+        raw_source: Any,
+        play_session_id: str = "",
+    ) -> str | None:
+        context_source = self._resolve_context_source(context_id)
+        if context_source is not None:
+            return context_source
+
+        cached = self._device_track_source_hints.get(device_id)
+        if isinstance(cached, dict):
+            cached_source = self._normalize_track_source_value(cached.get("source"))
+            cached_title = str(cached.get("track_title") or "").strip()
+            cached_context_id = str(cached.get("context_id") or "").strip()
+            cached_play_session_id = str(cached.get("play_session_id") or "").strip()
+            if cached_source is not None and (
+                (context_id and cached_context_id == context_id)
+                or (track_title and cached_title == track_title)
+                or (
+                    play_session_id
+                    and cached_play_session_id == play_session_id
+                    and not self._normalize_track_source_value(raw_source)
+                )
+            ):
+                return cached_source
+
+        local_source = self._infer_local_library_source(track_title)
+        if local_source is not None:
+            return local_source
+
+        normalized_raw = self._normalize_track_source_value(raw_source)
+        if normalized_raw is not None:
+            return normalized_raw
+
+        raw_value = str(raw_source or "").strip()
+        return raw_value or None
 
     @staticmethod
     def _validate_query(query: str) -> str:
@@ -145,7 +291,11 @@ class PlaybackFacade:
             or ""
         ).strip()
         music_name = str(
-            payload.get("music_name") or payload.get("track_name") or query or ""
+            payload.get("music_name")
+            or payload.get("track_name")
+            or options.title
+            or query
+            or ""
         ).strip()
         if context_type != "playlist" or not playlist_name or not music_name:
             return None
@@ -168,6 +318,55 @@ class PlaybackFacade:
             raise DeviceNotFoundError("device not found")
 
         request_id_value = str(request_id or uuid4().hex[:16])
+        playlist_context = (
+            self._playlist_context(opts, q)
+            if normalized_hint == "local_library"
+            else None
+        )
+        if playlist_context is not None:
+            playlist_name, music_name = playlist_context
+            merged_source_payload = (
+                dict(opts.source_payload) if isinstance(opts.source_payload, dict) else {}
+            )
+            merged_source_payload.update(
+                {
+                    "source": "local_library",
+                    "context_type": "playlist",
+                    "playlist_name": playlist_name,
+                    "context_name": playlist_name,
+                    "music_name": music_name,
+                    "track_name": music_name,
+                }
+            )
+            merged_context_hint = (
+                dict(opts.context_hint) if isinstance(opts.context_hint, dict) else {}
+            )
+            merged_context_hint.update(
+                {
+                    "context_type": "playlist",
+                    "context_id": playlist_name,
+                    "context_name": playlist_name,
+                }
+            )
+            opts = PlayOptions(
+                start_position=opts.start_position,
+                shuffle=opts.shuffle,
+                loop=opts.loop,
+                volume=opts.volume,
+                timeout=opts.timeout,
+                resolve_timeout_seconds=opts.resolve_timeout_seconds,
+                no_cache=opts.no_cache,
+                prefer_proxy=opts.prefer_proxy,
+                confirm_start=opts.confirm_start,
+                confirm_start_delay_ms=opts.confirm_start_delay_ms,
+                confirm_start_retries=opts.confirm_start_retries,
+                confirm_start_interval_ms=opts.confirm_start_interval_ms,
+                source_payload=merged_source_payload,
+                context_hint=merged_context_hint,
+                media_id=opts.media_id,
+                title=music_name,
+            )
+
         req = MediaRequest.from_payload(
             request_id=request_id_value,
             source_hint=normalized_hint,
@@ -176,70 +375,6 @@ class PlaybackFacade:
             options=opts,
             include_prefer_proxy=True,
         )
-        playlist_context = (
-            self._playlist_context(opts, q)
-            if normalized_hint == "local_library"
-            else None
-        )
-        if playlist_context is not None:
-            playlist_name, music_name = playlist_context
-            logger = getattr(self.xiaomusic, "log", LOG)
-            logger.info(
-                "play_command_attempted device_id=%s source_plugin=local_library request_id=%s music_name=%s search_key=%s",
-                did,
-                request_id_value,
-                music_name,
-                q,
-            )
-            started = await self.xiaomusic.do_play_music_list(
-                did, playlist_name, music_name
-            )
-            logger.info(
-                "play_start_confirmation_result device_id=%s source_plugin=local_library request_id=%s started=%s",
-                did,
-                request_id_value,
-                str(started).lower() if started is not None else "unknown",
-            )
-            if started is False:
-                self._record_playback_capability_verify(
-                    result="failed",
-                    verify_method="playlist_context_play",
-                    playback_capability_level="runtime_playlist_context",
-                    transport="device_player",
-                    error_code="dispatch_not_started",
-                    error_message="accepted=True started=False",
-                )
-                raise TransportError(
-                    "playback command accepted but device did not start playing"
-                )
-            self._record_playback_capability_verify(
-                result="ok",
-                verify_method="playlist_context_play",
-                playback_capability_level="runtime_playlist_context",
-                transport="device_player",
-                error_code="",
-                error_message=f"accepted=True started={started}",
-            )
-            return {
-                "status": "playing",
-                DEVICE_ID: did,
-                "source_plugin": "local_library",
-                "transport": "device_player",
-                REQUEST_ID: request_id_value,
-                "media": {
-                    "media_id": request_id_value,
-                    "title": music_name,
-                    "stream_url": "",
-                    "is_live": False,
-                },
-                "extra": {
-                    "playback_context": {
-                        "context_type": "playlist",
-                        "context_name": playlist_name,
-                        "music_name": music_name,
-                    }
-                },
-            }
 
         try:
             result = await self._core().play(req, device_id=did)
@@ -271,6 +406,24 @@ class PlaybackFacade:
             transport=dispatch.transport,
             error_code="" if started else "dispatch_not_started",
             error_message=f"accepted={accepted} started={started}",
+        )
+        playlist_context = self._playlist_context(opts, resolved.title)
+        current_play_session_id = ""
+        try:
+            device_player = getattr(
+                getattr(self.xiaomusic, "device_manager", None), "devices", {}
+            ).get(did)
+            if device_player is not None:
+                sid = getattr(device_player, "_play_session_id", 0)
+                current_play_session_id = f"sess_{sid}"
+        except Exception:
+            current_play_session_id = ""
+        self._remember_device_track_source(
+            device_id=did,
+            source=resolved.source or prepared.source,
+            track_title=resolved.title,
+            context_id=playlist_context[0] if playlist_context is not None else "",
+            play_session_id=current_play_session_id,
         )
         return {
             "status": "playing",
@@ -483,6 +636,12 @@ class PlaybackFacade:
     async def player_state(
         self, device_id: str, request_id: str | None = None
     ) -> dict[str, Any]:
+        """@deprecated Use build_player_state_snapshot() for all authoritative state output.
+
+        This legacy compatibility projection is retained only for direct callers and
+        tests that have not yet migrated. Public API paths MUST use
+        build_player_state_snapshot().
+        """
         did = self._validate_device_id(device_id)
         if not bool(getattr(self.xiaomusic, "did_exist", lambda _did: False)(did)):
             raise DeviceNotFoundError("device not found")
@@ -670,6 +829,7 @@ class PlaybackFacade:
         track_title = ""
         track_artist: str | None = None
         track_album: str | None = None
+        raw_track_source: str | None = None
         track_source: str | None = None
         position_ms = 0
         duration_ms = 0
@@ -708,7 +868,7 @@ class PlaybackFacade:
                         track_album = str(album)
                     source = detail.get("source")
                     if source:
-                        track_source = str(source)
+                        raw_track_source = str(source)
 
                     try:
                         detail_pos = float(detail.get("position") or 0)
@@ -766,6 +926,22 @@ class PlaybackFacade:
         except Exception:
             cur_playlist = ""
 
+        play_session_id = ""
+        if device_player:
+            try:
+                sid = getattr(device_player, "_play_session_id", 0)
+                play_session_id = f"sess_{sid}"
+            except (ValueError, AttributeError):
+                play_session_id = ""
+
+        track_source = self._resolve_track_source(
+            device_id=did,
+            track_title=track_title,
+            context_id=cur_playlist,
+            raw_source=raw_track_source,
+            play_session_id=play_session_id,
+        )
+
         current_index: int | None = None
         if device_player:
             try:
@@ -802,14 +978,6 @@ class PlaybackFacade:
                 "name": cur_playlist or "播放列表",
                 "current_index": current_index,
             }
-
-        play_session_id = ""
-        if device_player:
-            try:
-                sid = getattr(device_player, "_play_session_id", 0)
-                play_session_id = f"sess_{sid}"
-            except (ValueError, AttributeError):
-                play_session_id = ""
 
         track_id = ""
         if track_title or current_index is not None or cur_playlist:

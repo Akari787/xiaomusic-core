@@ -1,5 +1,7 @@
 import pytest
 
+from xiaomusic.relay.url_classifier import UrlClassifier
+
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
@@ -50,11 +52,34 @@ import pytest
     ],
 )
 def test_url_classifier_cases(raw_url, site, kind_hint, normalized):
-    from xiaomusic.relay.url_classifier import UrlClassifier  # noqa: PLC0415
-
     info = UrlClassifier().classify(raw_url)
 
     assert info.site == site
     assert info.kind_hint == kind_hint
     assert info.normalized_url == normalized
     assert info.original_url == raw_url
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "raw_url",
+    [
+        "http://192.168.7.4:30013/Audio/aa05e8ae29761e44e505f2a9b1816eb8/stream.mp3?api_key=demo",
+        "http://192.168.7.4:30013/Audio/aa05e8ae29761e44e505f2a9b1816eb8/stream?static=true",
+    ],
+)
+def test_url_classifier_recognizes_jellyfin_audio_stream_urls(raw_url):
+    info = UrlClassifier(jellyfin_base_url="http://192.168.7.4:30013").classify(raw_url)
+
+    assert info.site == "jellyfin"
+    assert info.kind_hint == "audio_stream"
+    assert info.normalized_url == raw_url
+
+
+@pytest.mark.unit
+def test_url_classifier_does_not_mark_non_matching_host_as_jellyfin():
+    info = UrlClassifier(jellyfin_base_url="http://192.168.7.4:30013").classify(
+        "http://192.168.7.99:30013/Audio/aa05e8ae29761e44e505f2a9b1816eb8/stream.mp3?api_key=demo"
+    )
+
+    assert info.site == "unknown"

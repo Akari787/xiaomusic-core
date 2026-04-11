@@ -13,6 +13,7 @@ import json
 import os
 import time
 from typing import Any, Callable, TypeVar
+from urllib.parse import parse_qs, urlsplit
 
 from aiohttp import ClientSession
 from miservice import MiAccount, MiIOService, MiNAService
@@ -246,6 +247,7 @@ class SimpleAuthManager:
         self._last_runtime_reload_state: dict[str, Any] = {}
         self._last_auto_runtime_reload_state: dict[str, Any] = {}
         self._last_short_session_rebuild_state: dict[str, Any] = {}
+        self._last_auth_recovery_flow_state: dict[str, Any] = {}
 
     def _get_random_device_id(self) -> str:
         """生成随机设备ID"""
@@ -516,6 +518,7 @@ class SimpleAuthManager:
         verify_error_text = ""
         login_error_text = ""
         login_result = False
+        login_session = None
         token_changed_after_login = False
         candidate_runtime_account_ready = False
         candidate_runtime_cookie_ready = False
@@ -554,6 +557,75 @@ class SimpleAuthManager:
                     self._last_error, auth_data
                 )
                 return False
+
+            if self._has_persistent_auth_fields(auth_data) and not (
+                auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
+            ):
+                rebuild_out = await self.rebuild_short_session_from_persistent_auth(
+                    reason=reason or "ensure_auth"
+                )
+                if rebuild_out.get("ok"):
+                    self._last_ok_ts = time.time()
+                    self._last_login_ts = time.time()
+                    self._last_error = ""
+                    self._retry_count = 0
+                    self._retry_count_effective = 0
+                    self._lock_counter = 0
+                    self._probe_failure_count = 0
+                    self._recovery_failure_count = 0
+                    self._state = self.STATE_HEALTHY
+                    self._last_recovery_result = "ok"
+                    self._last_recovery_stage = "verify"
+                    self._last_recovery_error_code = ""
+                    self._last_recovery_error_message = ""
+                    self._last_lock_transition_reason = ""
+                    self._last_retry_increment_reason = ""
+                    self._last_login_trace = {
+                        **self._last_login_trace,
+                        "stage": "short_session_rebuild",
+                        "result": "ok",
+                        "reason": reason,
+                        "used_path": rebuild_out.get("used_path", ""),
+                        "login_result": False,
+                        "runtime_swap_attempted": True,
+                        "runtime_swap_applied": True,
+                        "verify_attempted": True,
+                        "verify_method": verify_method,
+                        "verify_error_text": "",
+                        "verify_auth_failure_detected": False,
+                    }
+                    self.log.info("短期会话重建成功")
+                    return True
+                self._last_error = str(
+                    rebuild_out.get("failed_reason")
+                    or rebuild_out.get("error_code")
+                    or "short session rebuild failed"
+                )[:200]
+                self._last_recovery_result = "failed"
+                self._last_recovery_stage = "short_session_rebuild"
+                self._last_recovery_error_code = str(
+                    rebuild_out.get("error_code") or "short_session_rebuild_failed"
+                )
+                self._last_recovery_error_message = self._last_error
+                self._last_login_trace = {
+                    **self._last_login_trace,
+                    "stage": "short_session_rebuild",
+                    "result": "failed",
+                    "reason": reason,
+                    "used_path": rebuild_out.get("used_path", ""),
+                    "login_result": False,
+                    "runtime_swap_attempted": bool(
+                        rebuild_out.get("runtime_rebind_result") not in ("", "skipped")
+                    ),
+                    "runtime_swap_applied": False,
+                    "verify_attempted": bool(
+                        rebuild_out.get("verify_result") not in ("", "skipped")
+                    ),
+                    "verify_method": verify_method,
+                    "verify_error_text": self._last_error,
+                    "verify_auth_failure_detected": False,
+                }
+                raise RuntimeError(self._last_error)
 
             login_session = ClientSession()
             login_session_used = False
@@ -810,10 +882,11 @@ class SimpleAuthManager:
                 **failure_classification,
             }
 
-            try:
-                await login_session.close()
-            except Exception:
-                pass
+            if login_session is not None:
+                try:
+                    await login_session.close()
+                except Exception:
+                    pass
 
             self._recovery_failure_count += 1
             counted, increment_reason = self._should_count_lock_failure(
@@ -925,6 +998,510 @@ class SimpleAuthManager:
 
         self.token_store.update(merged, reason=reason or "login")
         self.token_store.flush()
+
+    def _record_short_session_rebuild_state(self, payload: dict[str, Any]) -> None:
+        state = dict(payload or {})
+        state["ts"] = int(time.time() * 1000)
+        self._last_short_session_rebuild_state = state
+
+    def _record_auth_recovery_flow_state(self, payload: dict[str, Any]) -> None:
+        state = dict(payload or {})
+        self._last_auth_recovery_flow_state = state
+
+    async def _try_miaccount_persistent_auth_relogin(
+        self, before: dict[str, Any] | None = None, reason: str = "", sid: str = "micoapi"
+    ) -> dict[str, Any]:
+        auth_data = dict(before or {})
+        if not self._has_persistent_auth_fields(auth_data):
+            return {
+                "ok": False,
+                "used_path": "miaccount_persistent_auth_login",
+                "error_code": "missing_persistent_auth_fields",
+                "failed_reason": "missing_persistent_auth_fields",
+                "error_message": "missing_persistent_auth_fields",
+                "http_stage": "serviceLogin",
+                "writeback_target": "none",
+                "sid": sid,
+                "diagnostic": {
+                    "reason": reason,
+                    "via": "miaccount_persistent_auth_login",
+                    "response_valid": False,
+                },
+            }
+
+        login_session = ClientSession()
+        login_session_used = False
+        try:
+            try:
+                account = MiAccount()
+            except TypeError:
+                login_session_used = True
+                account = MiAccount(
+                    login_session,
+                    auth_data.get("userId", ""),
+                    "",
+                    str(self.mi_token_home),
+                )
+            self.set_token(account)
+            resp = await account._serviceLogin(f"serviceLogin?sid={sid}&_json=true")
+            if not isinstance(resp, dict):
+                return {
+                    "ok": False,
+                    "used_path": "miaccount_persistent_auth_login",
+                    "error_code": "invalid_service_login_response",
+                    "failed_reason": "invalid_service_login_response",
+                    "error_message": "invalid_service_login_response",
+                    "http_stage": "serviceLogin",
+                    "writeback_target": "none",
+                    "sid": sid,
+                    "diagnostic": {
+                        "reason": reason,
+                        "via": "miaccount_persistent_auth_login",
+                        "response_valid": False,
+                    },
+                }
+
+            location = str(resp.get("location", "") or "")
+            nonce = resp.get("nonce")
+            if not nonce and location:
+                query = parse_qs(urlsplit(location).query)
+                nonce = (query.get("nonce") or [""])[0]
+            ssecurity = str(resp.get("ssecurity", "") or auth_data.get("ssecurity", "") or "")
+            diagnostic = {
+                "reason": reason,
+                "via": "miaccount_persistent_auth_login",
+                "service_login_code": resp.get("code"),
+                "has_location": bool(location),
+                "has_nonce": bool(nonce),
+                "has_ssecurity": bool(ssecurity),
+                "blocked_before_security_token_service": False,
+                "security_token_service_invoked": False,
+            }
+            if int(resp.get("code", -1)) != 0:
+                return {
+                    "ok": False,
+                    "used_path": "miaccount_persistent_auth_login",
+                    "error_code": "service_login_failed",
+                    "failed_reason": f"service_login_code_{resp.get('code')}",
+                    "error_message": str(resp),
+                    "http_stage": "serviceLogin",
+                    "writeback_target": "none",
+                    "sid": sid,
+                    "diagnostic": diagnostic,
+                }
+            if not location:
+                return {
+                    "ok": False,
+                    "used_path": "miaccount_persistent_auth_login",
+                    "error_code": "redirect_missing_location",
+                    "failed_reason": "service_login_response_missing_location",
+                    "error_message": "serviceLogin response missing location",
+                    "http_stage": "redirect",
+                    "writeback_target": "none",
+                    "sid": sid,
+                    "diagnostic": diagnostic,
+                }
+            if not nonce:
+                diagnostic["blocked_before_security_token_service"] = True
+                return {
+                    "ok": False,
+                    "used_path": "miaccount_persistent_auth_login",
+                    "error_code": "redirect_missing_nonce",
+                    "failed_reason": "service_login_response_missing_nonce",
+                    "error_message": "serviceLogin response missing nonce; skip _securityTokenService",
+                    "http_stage": "redirect",
+                    "writeback_target": "none",
+                    "sid": sid,
+                    "diagnostic": diagnostic,
+                }
+            if not ssecurity:
+                diagnostic["blocked_before_security_token_service"] = True
+                return {
+                    "ok": False,
+                    "used_path": "miaccount_persistent_auth_login",
+                    "error_code": "redirect_missing_ssecurity",
+                    "failed_reason": "service_login_response_missing_ssecurity",
+                    "error_message": "serviceLogin response missing ssecurity",
+                    "http_stage": "redirect",
+                    "writeback_target": "none",
+                    "sid": sid,
+                    "diagnostic": diagnostic,
+                }
+
+            diagnostic["security_token_service_invoked"] = True
+            try:
+                service_token = await account._securityTokenService(location, nonce, ssecurity)
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "used_path": "miaccount_persistent_auth_login",
+                    "error_code": "security_token_service_failed",
+                    "failed_reason": str(exc)[:200],
+                    "error_message": str(exc)[:200],
+                    "http_stage": "redirect",
+                    "writeback_target": "none",
+                    "sid": sid,
+                    "diagnostic": diagnostic,
+                }
+            if not service_token:
+                return {
+                    "ok": False,
+                    "used_path": "miaccount_persistent_auth_login",
+                    "error_code": "empty_service_token",
+                    "failed_reason": "empty_service_token",
+                    "error_message": "empty_service_token",
+                    "http_stage": "redirect",
+                    "writeback_target": "none",
+                    "sid": sid,
+                    "diagnostic": diagnostic,
+                }
+
+            if not getattr(account, "token", None):
+                account.token = {}
+            account.token["serviceToken"] = service_token
+            account.token["yetAnotherServiceToken"] = service_token
+            account.token[sid] = (ssecurity, service_token)
+            merged = dict(auth_data)
+            merged["ssecurity"] = ssecurity
+            merged["serviceToken"] = service_token
+            merged["yetAnotherServiceToken"] = service_token
+            merged["saveTime"] = int(time.time() * 1000)
+            if self.token_store is not None:
+                self.token_store.update(merged, reason=reason or "persistent_auth_relogin")
+                self.token_store.flush()
+                writeback_target = "token_store"
+            else:
+                writeback_target = "none"
+            return {
+                "ok": True,
+                "used_path": "miaccount_persistent_auth_login",
+                "serviceToken": service_token,
+                "yetAnotherServiceToken": service_token,
+                "ssecurity": ssecurity,
+                "sid": sid,
+                "http_stage": "redirect",
+                "writeback_target": writeback_target,
+                "diagnostic": diagnostic,
+            }
+        finally:
+            if not login_session_used:
+                try:
+                    await login_session.close()
+                except Exception:
+                    pass
+
+    async def _try_mijia_persistent_auth_relogin(
+        self, auth_dir: str | None = None, sid: str = "micoapi"
+    ) -> dict[str, Any]:
+        auth_data = self._get_auth_data()
+        if not self._has_persistent_auth_fields(auth_data):
+            return {
+                "ok": False,
+                "used_path": "mijia_persistent_auth_login",
+                "error_code": "missing_persistent_auth_fields",
+                "failed_reason": "missing_persistent_auth_fields",
+                "error_message": "missing_persistent_auth_fields",
+                "http_stage": "serviceLogin",
+                "writeback_target": "none",
+                "sid": sid,
+                "diagnostic": {
+                    "via": "mijia_persistent_auth_login",
+                    "response_valid": False,
+                },
+            }
+        try:
+            from xiaomusic.qrcode_login import MiJiaAPI
+
+            api = MiJiaAPI(
+                auth_data_path=auth_dir or os.path.dirname(self.auth_token_path),
+                token_store=self.token_store,
+            )
+            out = await asyncio.to_thread(
+                api.rebuild_service_cookies_from_persistent_auth, sid
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "used_path": "mijia_persistent_auth_login",
+                "error_code": "mijia_persistent_auth_login_failed",
+                "failed_reason": str(exc)[:200],
+                "error_message": str(exc)[:200],
+                "http_stage": "serviceLogin",
+                "writeback_target": "none",
+                "sid": sid,
+                "diagnostic": {
+                    "via": "mijia_persistent_auth_login",
+                    "response_valid": False,
+                },
+            }
+        if not isinstance(out, dict):
+            return {
+                "ok": False,
+                "used_path": "mijia_persistent_auth_login",
+                "error_code": "invalid_mijia_relogin_response",
+                "failed_reason": "invalid_mijia_relogin_response",
+                "error_message": "invalid_mijia_relogin_response",
+                "http_stage": "serviceLogin",
+                "writeback_target": "none",
+                "sid": sid,
+                "diagnostic": {
+                    "via": "mijia_persistent_auth_login",
+                    "response_valid": False,
+                },
+            }
+        latest = self._get_auth_data()
+        normalized = dict(out)
+        normalized.setdefault("used_path", "mijia_persistent_auth_login")
+        normalized.setdefault("sid", sid)
+        normalized.setdefault("diagnostic", {"via": "mijia_persistent_auth_login", "response_valid": True})
+        if normalized.get("ok"):
+            if latest.get("serviceToken"):
+                normalized["serviceToken"] = latest.get("serviceToken")
+            if latest.get("yetAnotherServiceToken"):
+                normalized["yetAnotherServiceToken"] = latest.get("yetAnotherServiceToken")
+            if latest.get("ssecurity"):
+                normalized["ssecurity"] = latest.get("ssecurity")
+        return normalized
+
+    async def _rebind_runtime_from_auth_data(self, auth_data: dict[str, Any]) -> dict[str, Any]:
+        try:
+            login_session = ClientSession()
+            login_session_used = False
+            try:
+                new_account = MiAccount()
+            except TypeError:
+                login_session_used = True
+                new_account = MiAccount(
+                    login_session,
+                    auth_data.get("userId", ""),
+                    "",
+                    str(self.mi_token_home),
+                )
+            self.set_token(new_account)
+            try:
+                new_mina_service = MiNAService(new_account)
+            except TypeError:
+                new_mina_service = MiNAService()
+            try:
+                new_miio_service = MiIOService(new_account)
+            except TypeError:
+                new_miio_service = MiIOService()
+            if login_session_used:
+                old_session = self.mi_session
+                self.mi_session = login_session
+                self.cookie_jar = self.mi_session.cookie_jar
+                if old_session is not login_session:
+                    try:
+                        await old_session.close()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    await login_session.close()
+                except Exception:
+                    pass
+            self.login_account = new_account
+            self.mina_service = new_mina_service
+            self.miio_service = new_miio_service
+            self.login_signature = self._get_login_signature()
+            return {"ok": True, "result": "ok"}
+        except Exception as exc:
+            return {
+                "ok": False,
+                "result": "failed",
+                "error_code": "runtime_rebind_failed",
+                "failed_reason": str(exc)[:200],
+            }
+
+    async def rebuild_short_session_from_persistent_auth(self, reason: str = "") -> dict[str, Any]:
+        auth_data = self._get_auth_data()
+        started_at = int(time.time() * 1000)
+        flow: dict[str, Any] = {
+            "reason": reason,
+            "started_at": started_at,
+            "primary_attempt": {"result": "skipped"},
+            "fallback_attempt": {"result": "skipped"},
+            "rebind": {"result": "skipped"},
+            "verify": {"result": "skipped"},
+            "result": "running",
+            "used_path": "",
+            "finished_at": 0,
+        }
+        if not self._has_persistent_auth_fields(auth_data):
+            out = {
+                "ok": False,
+                "result": "failed",
+                "used_path": "miaccount_persistent_auth_login",
+                "error_code": "missing_persistent_auth_fields",
+                "failed_reason": "missing_persistent_auth_fields",
+                "service_token_written": False,
+                "runtime_rebind_result": "skipped",
+                "verify_result": "skipped",
+            }
+            flow["primary_attempt"] = {
+                "attempt_at": started_at,
+                "used_path": "miaccount_persistent_auth_login",
+                "error_code": "missing_persistent_auth_fields",
+                "result": "failed",
+            }
+            flow["result"] = "failed"
+            flow["used_path"] = "miaccount_persistent_auth_login"
+            flow["finished_at"] = int(time.time() * 1000)
+            self._record_short_session_rebuild_state(out)
+            self._record_auth_recovery_flow_state(flow)
+            return out
+
+        primary = await self._try_miaccount_persistent_auth_relogin(
+            before=auth_data,
+            reason=reason,
+            sid="micoapi",
+        )
+        flow["primary_attempt"] = {
+            "attempt_at": int(time.time() * 1000),
+            "used_path": str(primary.get("used_path", "") or "miaccount_persistent_auth_login"),
+            "error_code": str(primary.get("error_code", "") or ""),
+            "result": "ok" if primary.get("ok") else "failed",
+        }
+
+        relogin = primary
+        if not bool(primary.get("ok", False)):
+            fallback = await self._try_mijia_persistent_auth_relogin(
+                auth_dir=os.path.dirname(self.auth_token_path),
+                sid="micoapi",
+            )
+            flow["fallback_attempt"] = {
+                "attempt_at": int(time.time() * 1000),
+                "used_path": str(fallback.get("used_path", "") or "mijia_persistent_auth_login"),
+                "error_code": str(fallback.get("error_code", "") or ""),
+                "result": "ok" if fallback.get("ok") else "failed",
+            }
+            if bool(fallback.get("ok", False)):
+                relogin = fallback
+            else:
+                relogin = fallback if fallback else primary
+
+        used_path = str(relogin.get("used_path", "") or "miaccount_persistent_auth_login")
+        flow["used_path"] = used_path
+        if not bool(relogin.get("ok", False)):
+            out = {
+                "ok": False,
+                "result": "failed",
+                "used_path": used_path,
+                "error_code": str(relogin.get("error_code", "persistent_auth_relogin_failed") or "persistent_auth_relogin_failed"),
+                "failed_reason": str(relogin.get("failed_reason", "persistent_auth_relogin_failed") or "persistent_auth_relogin_failed"),
+                "service_token_written": False,
+                "runtime_rebind_result": "skipped",
+                "verify_result": "skipped",
+            }
+            flow["result"] = "failed"
+            flow["finished_at"] = int(time.time() * 1000)
+            self._record_short_session_rebuild_state(out)
+            self._record_auth_recovery_flow_state(flow)
+            return out
+
+        latest_auth_data = self._get_auth_data()
+        merged = dict(auth_data)
+        merged.update(latest_auth_data)
+        for key in ("serviceToken", "yetAnotherServiceToken", "ssecurity", "cUserId", "deviceId", "userId", "passToken", "psecurity"):
+            if relogin.get(key):
+                merged[key] = relogin.get(key)
+        service_token_written = bool(
+            merged.get("serviceToken") or merged.get("yetAnotherServiceToken")
+        )
+        if self.token_store is not None and service_token_written:
+            merged["saveTime"] = int(time.time() * 1000)
+            self.token_store.update(merged, reason=reason or "short_session_rebuild")
+            self.token_store.flush()
+
+        if not service_token_written:
+            out = {
+                "ok": False,
+                "result": "failed",
+                "used_path": used_path,
+                "error_code": "service_token_not_written",
+                "failed_reason": "service_token_not_written",
+                "service_token_written": False,
+                "runtime_rebind_result": "skipped",
+                "verify_result": "skipped",
+            }
+            flow["result"] = "failed"
+            flow["finished_at"] = int(time.time() * 1000)
+            self._record_short_session_rebuild_state(out)
+            self._record_auth_recovery_flow_state(flow)
+            return out
+
+        rebind = await self._rebind_runtime_from_auth_data(merged)
+        flow["rebind"] = {
+            "attempt_at": int(time.time() * 1000),
+            "used_path": used_path,
+            "error_code": str(rebind.get("error_code", "") or ""),
+            "result": "ok" if rebind.get("ok") else "failed",
+        }
+        if not bool(rebind.get("ok", False)):
+            out = {
+                "ok": False,
+                "result": "failed",
+                "used_path": used_path,
+                "error_code": str(rebind.get("error_code", "runtime_rebind_failed") or "runtime_rebind_failed"),
+                "failed_reason": str(rebind.get("failed_reason", "runtime_rebind_failed") or "runtime_rebind_failed"),
+                "service_token_written": True,
+                "runtime_rebind_result": "failed",
+                "verify_result": "skipped",
+            }
+            flow["result"] = "failed"
+            flow["finished_at"] = int(time.time() * 1000)
+            self._record_short_session_rebuild_state(out)
+            self._record_auth_recovery_flow_state(flow)
+            return out
+
+        try:
+            if self.mina_service is None:
+                raise RuntimeError("mina service unavailable")
+            await self.mina_service.device_list()
+            self._last_ok_ts = time.time()
+            flow["verify"] = {
+                "attempt_at": int(time.time() * 1000),
+                "used_path": used_path,
+                "error_code": "",
+                "result": "ok",
+            }
+            out = {
+                "ok": True,
+                "result": "ok",
+                "used_path": used_path,
+                "error_code": "",
+                "failed_reason": "",
+                "service_token_written": True,
+                "runtime_rebind_result": "ok",
+                "verify_result": "ok",
+            }
+            flow["result"] = "ok"
+            flow["finished_at"] = int(time.time() * 1000)
+            self._record_short_session_rebuild_state(out)
+            self._record_auth_recovery_flow_state(flow)
+            return out
+        except Exception as exc:
+            flow["verify"] = {
+                "attempt_at": int(time.time() * 1000),
+                "used_path": used_path,
+                "error_code": "verify_failed",
+                "result": "failed",
+            }
+            out = {
+                "ok": False,
+                "result": "failed",
+                "used_path": used_path,
+                "error_code": "verify_failed",
+                "failed_reason": str(exc)[:200],
+                "service_token_written": True,
+                "runtime_rebind_result": "ok",
+                "verify_result": "failed",
+            }
+            flow["result"] = "failed"
+            flow["finished_at"] = int(time.time() * 1000)
+            self._record_short_session_rebuild_state(out)
+            self._record_auth_recovery_flow_state(flow)
+            return out
 
     def _get_auth_data(self) -> dict:
         """读取认证数据"""
@@ -1445,11 +2022,19 @@ class SimpleAuthManager:
 
     def auth_short_session_rebuild_debug_state(self) -> dict[str, Any]:
         """短期会话重建调试状态"""
+        flow = dict(self._last_auth_recovery_flow_state or {})
         return {
             "state": self._state,
             "cooldown_until": self._cooldown_until,
             "last_short_session_rebuild": self._last_short_session_rebuild_state,
-            "last_auth_recovery_flow": self._last_short_session_rebuild_state,
+            "last_persistent_auth_relogin": (
+                flow.get("fallback_attempt")
+                if str(flow.get("used_path", "")).startswith("mijia")
+                else flow.get("primary_attempt", {})
+            ),
+            "last_runtime_rebind": flow.get("rebind", {}),
+            "last_verify": flow.get("verify", {}),
+            "last_auth_recovery_flow": flow,
         }
 
     def auth_runtime_reload_debug_state(self) -> dict[str, Any]:
@@ -1465,6 +2050,177 @@ class SimpleAuthManager:
             "last_error": self._last_error,
         }
         return payload
+
+    def auth_public_status_snapshot(
+        self, runtime_auth_ready: bool | None = None
+    ) -> dict[str, Any]:
+        """聚合对外认证状态所需的最小快照。"""
+        status = self.auth_status_snapshot()
+        debug = self.auth_debug_state()
+        rebuild = self.auth_short_session_rebuild_debug_state()
+        last_rebuild = rebuild.get("last_short_session_rebuild", {})
+        last_flow = rebuild.get("last_auth_recovery_flow", {})
+        auth_mode = str(
+            status.get("auth_mode")
+            or status.get("mode")
+            or debug.get("auth_mode")
+            or debug.get("mode")
+            or self._state
+            or "unknown"
+        )
+        runtime_ready = (
+            bool(runtime_auth_ready)
+            if runtime_auth_ready is not None
+            else bool(self.mina_service is not None and self.login_signature == self._get_login_signature())
+        )
+        rebuild_error_code = str(
+            last_rebuild.get("error_code", "") or last_flow.get("error_code", "")
+        )
+        rebuild_failed_reason = str(
+            last_rebuild.get("failed_reason", "")
+            or last_rebuild.get("error_message", "")
+            or last_flow.get("failed_reason", "")
+            or last_flow.get("error_message", "")
+        )
+        rebuild_failed = (
+            str(last_rebuild.get("result", "")) == "failed"
+            or str(last_flow.get("result", "")) == "failed"
+        )
+        return {
+            "status_state": auth_mode,
+            "auth_mode": auth_mode,
+            "status_locked": bool(status.get("locked", False)),
+            "auth_locked": bool(status.get("locked", False)),
+            "auth_lock_until": int(status.get("locked_until_ts") or 0),
+            "auth_lock_reason": str(status.get("lock_reason", "") or ""),
+            "auth_lock_transition_reason": str(
+                status.get("lock_transition_reason", "") or ""
+            ),
+            "auth_lock_counter": int(status.get("lock_counter") or 0),
+            "auth_lock_counter_threshold": int(
+                status.get("lock_counter_threshold") or 0
+            ),
+            "persistent_auth_available": bool(
+                status.get("persistent_auth_available", False)
+            ),
+            "short_session_available": bool(
+                status.get("short_session_available", False)
+            ),
+            "runtime_auth_ready": runtime_ready,
+            "recovery_failure_count": int(status.get("recovery_failure_count") or 0),
+            "need_qr_scan": bool(status.get("need_qr_scan", False)),
+            "user_action_required": bool(status.get("user_action_required", False)),
+            "long_term_expired": bool(status.get("long_term_expired", False)),
+            "manual_login_required_reason": str(
+                status.get("manual_login_required_reason", "")
+                or debug.get("manual_login_required_reason", "")
+                or ""
+            ),
+            "runtime_not_ready_reason": str(
+                status.get("runtime_not_ready_reason", "")
+                or debug.get("runtime_not_ready_reason", "")
+                or ""
+            ),
+            "last_error": str(debug.get("last_auth_error", "") or self._last_error or ""),
+            "rebuild_failed": rebuild_failed,
+            "rebuild_error_code": rebuild_error_code,
+            "rebuild_failed_reason": rebuild_failed_reason[:200]
+            if rebuild_failed_reason
+            else "",
+        }
+
+    def map_auth_public_status(
+        self, runtime_auth_ready: bool | None = None
+    ) -> dict[str, Any]:
+        """将内部认证状态映射为对外稳定口径。"""
+        snapshot = self.auth_public_status_snapshot(runtime_auth_ready=runtime_auth_ready)
+        auth_mode = str(snapshot.get("auth_mode") or "unknown")
+        status_reason = "healthy"
+        status_reason_detail = ""
+        status_mapping_source = "healthy"
+        manual_login_required_reason = str(
+            snapshot.get("manual_login_required_reason", "") or ""
+        )
+        runtime_not_ready_reason = str(
+            snapshot.get("runtime_not_ready_reason", "") or ""
+        )
+
+        if bool(snapshot.get("auth_locked", False)):
+            if bool(snapshot.get("need_qr_scan", False)) or bool(
+                snapshot.get("long_term_expired", False)
+            ) or bool(snapshot.get("user_action_required", False)):
+                status_reason = "manual_login_required"
+                manual_login_required_reason = manual_login_required_reason or str(
+                    snapshot.get("auth_lock_transition_reason", "") or "manual auth required"
+                )
+                status_reason_detail = str(
+                    snapshot.get("auth_lock_reason", "") or manual_login_required_reason
+                )
+                status_mapping_source = "locked_manual"
+            else:
+                status_reason = "temporarily_locked"
+                status_reason_detail = str(
+                    snapshot.get("auth_lock_transition_reason", "")
+                    or snapshot.get("auth_lock_reason", "")
+                    or f"retry threshold reached ({snapshot.get('auth_lock_counter', 0)}/{snapshot.get('auth_lock_counter_threshold', 0)})"
+                )
+                status_mapping_source = "locked_temporary"
+        elif not bool(snapshot.get("persistent_auth_available", False)):
+            status_reason = "persistent_auth_missing"
+            status_reason_detail = "all long-lived auth fields missing from token"
+            status_mapping_source = "persistent_auth_missing"
+        elif bool(snapshot.get("persistent_auth_available", False)) and not bool(
+            snapshot.get("short_session_available", False)
+        ):
+            if bool(snapshot.get("rebuild_failed", False)):
+                status_reason = "short_session_rebuild_failed"
+                status_reason_detail = (
+                    f"rebuild failed: {snapshot.get('rebuild_error_code', '')}"
+                )
+                status_mapping_source = "short_session_rebuild_failed"
+            else:
+                status_reason = "short_session_missing"
+                status_reason_detail = "short-lived session tokens missing"
+                status_mapping_source = "short_session_missing"
+        elif bool(snapshot.get("persistent_auth_available", False)) and bool(
+            snapshot.get("short_session_available", False)
+        ) and not bool(snapshot.get("runtime_auth_ready", False)):
+            status_reason = "runtime_not_ready"
+            runtime_not_ready_reason = runtime_not_ready_reason or "runtime auth ready but not verified"
+            status_reason_detail = runtime_not_ready_reason
+            status_mapping_source = "runtime_not_ready"
+
+        public_status = "unknown"
+        if status_reason == "healthy":
+            public_status = "ok"
+        elif auth_mode == self.STATE_LOCKED:
+            public_status = "failed"
+        elif auth_mode in (self.STATE_HEALTHY, self.STATE_DEGRADED):
+            public_status = "degraded"
+
+        return {
+            "status": public_status,
+            "auth_mode": auth_mode,
+            "status_reason": status_reason,
+            "status_reason_detail": status_reason_detail,
+            "status_mapping_source": status_mapping_source,
+            "recovery_failure_count": int(snapshot.get("recovery_failure_count") or 0),
+            "persistent_auth_available": bool(snapshot.get("persistent_auth_available", False)),
+            "short_session_available": bool(snapshot.get("short_session_available", False)),
+            "runtime_auth_ready": bool(snapshot.get("runtime_auth_ready", False)),
+            "auth_locked": bool(snapshot.get("auth_locked", False)),
+            "auth_lock_until": int(snapshot.get("auth_lock_until") or 0),
+            "auth_lock_reason": str(snapshot.get("auth_lock_reason", "") or ""),
+            "auth_lock_transition_reason": str(snapshot.get("auth_lock_transition_reason", "") or ""),
+            "auth_lock_counter": int(snapshot.get("auth_lock_counter") or 0),
+            "auth_lock_counter_threshold": int(snapshot.get("auth_lock_counter_threshold") or 0),
+            "manual_login_required_reason": manual_login_required_reason,
+            "runtime_not_ready_reason": runtime_not_ready_reason,
+            "last_error": str(snapshot.get("last_error", "") or ""),
+            "rebuild_failed": bool(snapshot.get("rebuild_failed", False)),
+            "rebuild_error_code": str(snapshot.get("rebuild_error_code", "") or ""),
+            "rebuild_failed_reason": str(snapshot.get("rebuild_failed_reason", "") or ""),
+        }
 
     def auth_rebuild_debug_state(self) -> dict[str, Any]:
         """重建调试状态"""

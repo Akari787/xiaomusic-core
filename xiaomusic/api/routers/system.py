@@ -35,6 +35,7 @@ from xiaomusic.api import response as api_response
 from xiaomusic import (
     __version__,
 )
+from xiaomusic.diagnostics import build_runtime_diagnostics_view
 from xiaomusic.api.dependencies import (
     config,
     log,
@@ -54,15 +55,10 @@ router = APIRouter(dependencies=[Depends(verification)])
 
 @router.get("/diagnostics")
 async def diagnostics():
-    """Runtime diagnostics (startup self-check, keyword conflicts, etc.)."""
-    startup = getattr(xiaomusic, "startup_diagnostics", None)
+    """Unified startup/self-check diagnostics summary."""
+    auth_payload = await _build_auth_status_payload()
     return api_response.ok(
-        {
-            "startup": asdict(startup) if startup is not None else None,
-            "keyword_override_mode": getattr(config, "keyword_override_mode", "override"),
-            "keyword_conflicts": list(getattr(config, "keyword_conflicts", []) or []),
-            "last_download_result": getattr(xiaomusic, "last_download_result", None),
-        },
+        build_runtime_diagnostics_view(config, xiaomusic, auth_payload=auth_payload),
         contract="raw",
     )
 
@@ -241,9 +237,7 @@ async def getsetting(need_device_list: bool = False):
     return api_response.ok(data, contract="raw")
 
 
-# Internal API - 仅供 WebUI/内部认证流程使用，不承诺兼容性。
-@router.get("/api/auth/status")
-async def auth_status():
+async def _build_auth_status_payload() -> dict:
     global qrcode_login_task
     global qrcode_login_started_at
     global qrcode_login_error
@@ -290,7 +284,6 @@ async def auth_status():
             auth_debug = am.auth_debug_state()
     except Exception:
         auth_debug = {}
-    rebuild_debug = {}
     rebuild_failed = False
     rebuild_error_code = ""
     rebuild_failed_reason = ""
@@ -311,7 +304,7 @@ async def auth_status():
                 or last_flow.get("error_message", "")
             )
     except Exception:
-        rebuild_debug = {}
+        pass
     if login_in_progress:
         expire_after = int(getattr(config, "qrcode_timeout", 120)) + 15
         if qrcode_login_started_at > 0 and (time.time() - qrcode_login_started_at) > expire_after:
@@ -321,78 +314,55 @@ async def auth_status():
                 pass
             login_in_progress = False
 
-    status_reason = "healthy"
-    status_reason_detail = ""
-    status_mapping_source = "healthy"
-    manual_login_required_reason = ""
-    runtime_not_ready_reason = ""
-    if bool(auth_state.get("locked", False)):
-        if bool(auth_state.get("need_qr_scan", False)) or bool(
-            auth_state.get("long_term_expired", False)
-        ) or bool(auth_state.get("user_action_required", False)):
-            status_reason = "manual_login_required"
-            manual_login_required_reason = (
-                str(auth_state.get("lock_transition_reason", "") or "manual auth required")
-            )
-            status_reason_detail = str(
-                auth_state.get("lock_reason", "") or manual_login_required_reason
-            )
-            status_mapping_source = "locked_manual"
-        else:
-            status_reason = "temporarily_locked"
-            status_reason_detail = str(
-                auth_state.get("lock_transition_reason", "")
-                or auth_state.get("lock_reason", "")
-                or f"retry threshold reached ({auth_state.get('lock_counter', 0)}/{auth_state.get('lock_counter_threshold', 0)})"
-            )
-            status_mapping_source = "locked_temporary"
-    elif not persistent_auth_available:
-        status_reason = "persistent_auth_missing"
-        status_reason_detail = "all long-lived auth fields missing from token"
-        status_mapping_source = "persistent_auth_missing"
-    elif persistent_auth_available and not short_session_available:
-        if rebuild_failed:
-            status_reason = "short_session_rebuild_failed"
-            status_reason_detail = f"rebuild failed: {rebuild_error_code}"
-            status_mapping_source = "short_session_rebuild_failed"
-        else:
-            status_reason = "short_session_missing"
-            status_reason_detail = "short-lived session tokens missing"
-            status_mapping_source = "short_session_missing"
-    elif persistent_auth_available and short_session_available and not runtime_ready:
-        status_reason = "runtime_not_ready"
-        runtime_not_ready_reason = "runtime auth ready but not verified"
-        status_reason_detail = runtime_not_ready_reason
-        status_mapping_source = "runtime_not_ready"
+    public_status = {}
+    try:
+        am = getattr(xiaomusic, "auth_manager", None)
+        if am is not None and hasattr(am, "map_auth_public_status"):
+            public_status = am.map_auth_public_status(runtime_auth_ready=runtime_ready)
+    except Exception:
+        public_status = {}
 
+    return {
+        "token_file": token_path,
+        "auth_token_file": token_path,
+        "token_exists": token_exists,
+        "token_valid": token_valid,
+        "cloud_available": token_valid,
+        "runtime_auth_ready": runtime_ready,
+        "persistent_auth_available": persistent_auth_available,
+        "short_session_available": short_session_available,
+        "status": public_status.get("status", "unknown"),
+        "status_reason": public_status.get("status_reason", "unknown"),
+        "status_reason_detail": public_status.get("status_reason_detail", ""),
+        "status_mapping_source": public_status.get("status_mapping_source", "unknown"),
+        "manual_login_required_reason": public_status.get("manual_login_required_reason", ""),
+        "runtime_not_ready_reason": public_status.get("runtime_not_ready_reason", ""),
+        "recovery_failure_count": public_status.get(
+            "recovery_failure_count", auth_state.get("recovery_failure_count", 0)
+        ),
+        "rebuild_failed": public_status.get("rebuild_failed", rebuild_failed),
+        "rebuild_error_code": public_status.get("rebuild_error_code", rebuild_error_code),
+        "rebuild_failed_reason": public_status.get(
+            "rebuild_failed_reason",
+            rebuild_failed_reason[:200] if rebuild_failed_reason else "",
+        ),
+        "login_in_progress": login_in_progress,
+        "last_error": qrcode_login_error or public_status.get("last_error", auth_debug.get("last_auth_error", "")),
+        "auth_mode": public_status.get("auth_mode", auth_state.get("auth_mode") or auth_state.get("mode", "healthy")),
+        "auth_locked": public_status.get("auth_locked", bool(auth_state.get("locked", False))),
+        "auth_lock_until": public_status.get("auth_lock_until", auth_state.get("locked_until_ts")),
+        "auth_lock_reason": public_status.get("auth_lock_reason", auth_state.get("lock_reason", "")),
+        "auth_lock_transition_reason": public_status.get("auth_lock_transition_reason", auth_state.get("lock_transition_reason", "")),
+        "auth_lock_counter": public_status.get("auth_lock_counter", auth_state.get("lock_counter", 0)),
+        "auth_lock_counter_threshold": public_status.get("auth_lock_counter_threshold", auth_state.get("lock_counter_threshold", 0)),
+    }
+
+
+# Internal API - 仅供 WebUI/内部认证流程使用，不承诺兼容性。
+@router.get("/api/auth/status")
+async def auth_status():
     return api_response.ok(
-        {
-            "token_file": token_path,
-            "auth_token_file": token_path,
-            "token_exists": token_exists,
-            "token_valid": token_valid,
-            "cloud_available": token_valid,
-            "runtime_auth_ready": runtime_ready,
-            "persistent_auth_available": persistent_auth_available,
-            "short_session_available": short_session_available,
-            "status_reason": status_reason,
-            "status_reason_detail": status_reason_detail,
-            "status_mapping_source": status_mapping_source,
-            "manual_login_required_reason": manual_login_required_reason,
-            "runtime_not_ready_reason": runtime_not_ready_reason,
-            "rebuild_failed": rebuild_failed,
-            "rebuild_error_code": rebuild_error_code,
-            "rebuild_failed_reason": rebuild_failed_reason[:200] if rebuild_failed_reason else "",
-            "login_in_progress": login_in_progress,
-            "last_error": qrcode_login_error or auth_debug.get("last_auth_error", ""),
-            "auth_mode": auth_state.get("mode", "healthy"),
-            "auth_locked": bool(auth_state.get("locked", False)),
-            "auth_lock_until": auth_state.get("locked_until_ts"),
-            "auth_lock_reason": auth_state.get("lock_reason", ""),
-            "auth_lock_transition_reason": auth_state.get("lock_transition_reason", ""),
-            "auth_lock_counter": auth_state.get("lock_counter", 0),
-            "auth_lock_counter_threshold": auth_state.get("lock_counter_threshold", 0),
-        },
+        await _build_auth_status_payload(),
         contract="success_error",
     )
 

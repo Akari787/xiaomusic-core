@@ -115,3 +115,17 @@ def test_media_request_from_payload_keeps_volume_and_timeout_context() -> None:
     assert req.context[OPT_VOLUME] == 35
     assert req.context[OPT_TIMEOUT] == 9
     assert req.context[OPT_START_POSITION] == 12
+
+
+def test_media_request_from_payload_keeps_title_for_auto_url_route() -> None:
+    opts = PlayOptions.from_payload({"title": "慢慢懂-汪苏泷"})
+    req = MediaRequest.from_payload(
+        request_id="rid-3",
+        query="http://192.168.7.4:30013/Audio/id/stream.mp3?api_key=demo",
+        source_hint="auto",
+        device_id="did-3",
+        options=opts,
+        include_prefer_proxy=True,
+    )
+
+    assert req.context[OPT_TITLE] == "慢慢懂-汪苏泷"

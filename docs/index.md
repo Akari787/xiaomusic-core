@@ -32,11 +32,13 @@ features:
 
 建议按以下顺序阅读当前 auth 文档：
 
-1. [认证运行时恢复规范](/spec/auth_runtime_recovery)
-2. [认证运行时恢复路径规范](/spec/auth_runtime_reload_recovery_path)
-3. [fresh session 主路径验收收口](/implementation/auth_fresh_session_runtime_recovery_acceptance)
-4. [spec rebuild 验收矩阵](/implementation/spec_rebuild_acceptance_matrix_2026-04-09)
-5. [v1.0.10 发布说明](/release/v1.0.10)
+1. [Auth 运行时恢复链说明](/architecture/auth_runtime_recovery)
+   - auth runtime 运行时恢复链——v1 auth status、双路径 rebuild、阶段化 debug 结构
+2. [认证运行时恢复规范](/spec/auth_runtime_recovery)
+3. [认证运行时恢复路径规范](/spec/auth_runtime_reload_recovery_path)
+4. [fresh session 主路径验收收口](/implementation/auth_fresh_session_runtime_recovery_acceptance)
+5. [spec rebuild 验收矩阵](/implementation/spec_rebuild_acceptance_matrix_2026-04-09)
+6. [v1.0.10 发布说明](/release/v1.0.10)
 
 当前阅读路径的目的：
 

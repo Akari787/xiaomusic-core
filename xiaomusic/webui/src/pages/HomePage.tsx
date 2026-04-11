@@ -506,6 +506,7 @@ function useProgressInterpolation(serverState: PlayerStateData, transportState: 
   currentPositionMs: number;
   progress: number;
 } {
+  const MAX_INTERPOLATION_MS = 5000;
   const [currentPositionMs, setCurrentPositionMs] = useState<number>(() => serverState.position_ms);
   const timerRef = useRef<number | null>(null);
   const lastRevisionRef = useRef<number>(-1);
@@ -543,7 +544,7 @@ function useProgressInterpolation(serverState: PlayerStateData, transportState: 
 
     timerRef.current = window.setInterval(() => {
       const now = Date.now();
-      const elapsed = now - lastSnapshotRef.current;
+      const elapsed = Math.min(Math.max(0, now - lastSnapshotRef.current), MAX_INTERPOLATION_MS);
       let newPosition = basePosition + elapsed;
       if (durationMs > 0) {
         newPosition = Math.min(newPosition, durationMs);
@@ -813,6 +814,7 @@ export function HomePage() {
   const [uiState, setUiState] = useState<UiState>(EMPTY_UI_STATE);
   const serverStateRef = useRef<PlayerStateData>(EMPTY_SERVER_STATE);
   const prevPlaySessionRef = useRef<string>("");
+  const lastStableTrackTitleRef = useRef<string>(loadRememberedPlayingSong(activeDid));
   const activeDidRef = useRef<string>(activeDid);
   const publicBaseMigratedRef = useRef<boolean>(false);
   const themeFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -844,6 +846,7 @@ export function HomePage() {
         if (snapshot.transport_state === "playing") {
           if (snapshot.track?.title) {
             saveRememberedPlayingSong(snapshot.device_id, snapshot.track.title);
+            lastStableTrackTitleRef.current = snapshot.track.title;
           }
           setUiState((prev) => ({ ...prev, switchingHint: false }));
         }
@@ -977,24 +980,27 @@ export function HomePage() {
 
   const playbackText = useMemo(() => {
     const title = serverState.track?.title || "";
+    const rememberedTitle = uiState.initializing ? loadRememberedPlayingSong(activeDid) : "";
+    const visibleTitle = title || rememberedTitle;
+    const bufferedTitle = lastStableTrackTitleRef.current || rememberedTitle;
     switch (serverState.transport_state) {
       case "playing":
-        return title ? `正在播放：${title}` : "正在播放";
+        return visibleTitle ? `正在播放：${visibleTitle}` : "正在播放";
       case "paused":
-        return title ? `已暂停：${title}` : "已暂停";
+        return visibleTitle ? `已暂停：${visibleTitle}` : "已暂停";
       case "starting":
-        return "正在加载...";
+        return visibleTitle ? `正在加载：${visibleTitle}` : "正在加载...";
       case "switching":
-        return "正在切换...";
+        return bufferedTitle ? `正在切换：${bufferedTitle}` : "正在切换...";
       case "stopped":
         return "空闲";
       case "error":
-        return "播放出错";
+        return bufferedTitle ? `播放出错：${bufferedTitle}` : "播放出错";
       case "idle":
       default:
-        return "空闲";
+        return uiState.initializing && rememberedTitle ? `正在恢复：${rememberedTitle}` : "空闲";
     }
-  }, [serverState.transport_state, serverState.track?.title]);
+  }, [activeDid, serverState.transport_state, serverState.track?.title, uiState.initializing]);
 
   const safeOffsetSec = Math.max(0, currentPositionMs / 1000);
   const safeDurationSec = Math.max(0, serverState.duration_ms / 1000);
@@ -1192,10 +1198,12 @@ export function HomePage() {
       setUiState(EMPTY_UI_STATE);
       serverStateRef.current = EMPTY_SERVER_STATE;
       prevPlaySessionRef.current = "";
+      lastStableTrackTitleRef.current = "";
       return;
     }
 
     setVolume(loadRememberedVolume(activeDid));
+    lastStableTrackTitleRef.current = loadRememberedPlayingSong(activeDid);
     setUiState((prev) => ({ ...prev, initializing: true }));
   }, [activeDid]);
 
@@ -1322,27 +1330,41 @@ export function HomePage() {
     setMessage(`正在切换到 ${picked}...`);
     try {
       const info = await getLibraryMusicInfo(picked);
-      void info;
-      const playResp = await v1Play({
-        device_id: deviceId,
-        query: picked,
-        source_hint: "local_library",
-        options: {
-          title: picked,
-          context_hint: {
-            context_type: "playlist",
-            context_name: playlist,
-            context_id: playlist,
-          },
-          source_payload: {
-            source: "local_library",
-            playlist_name: playlist,
-            music_name: picked,
-            context_type: "playlist",
-            context_name: playlist,
-          },
-        },
-      });
+      const streamUrl = String(info?.data?.url || "").trim();
+      const playResp = streamUrl
+        ? await v1Play({
+            device_id: deviceId,
+            query: streamUrl,
+            source_hint: "auto",
+            options: {
+              title: picked,
+              context_hint: {
+                context_type: "playlist",
+                context_name: playlist,
+                context_id: playlist,
+              },
+            },
+          })
+        : await v1Play({
+            device_id: deviceId,
+            query: picked,
+            source_hint: "local_library",
+            options: {
+              title: picked,
+              context_hint: {
+                context_type: "playlist",
+                context_name: playlist,
+                context_id: playlist,
+              },
+              source_payload: {
+                source: "local_library",
+                playlist_name: playlist,
+                music_name: picked,
+                context_type: "playlist",
+                context_name: playlist,
+              },
+            },
+          });
 
       if (isApiOk(playResp)) {
         setMessage(`已发送播放《${picked}》`);

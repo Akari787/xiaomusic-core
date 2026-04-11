@@ -20,6 +20,7 @@ from xiaomusic.core.transport.transport import Transport
 from xiaomusic.core.transport.transport_policy import TransportPolicy
 from xiaomusic.core.transport.transport_router import TransportRouter
 from xiaomusic.relay.contracts import ResolveResult
+from xiaomusic.relay.url_classifier import UrlClassifier
 
 
 class _TransportStub(Transport):
@@ -39,6 +40,12 @@ class _TransportStub(Transport):
 
     async def set_volume(self, device_id: str, volume: int) -> dict:
         return {"ret": "OK", "device_id": device_id, "volume": volume}
+
+    async def previous(self, device_id: str) -> dict:
+        return {"ret": "OK", "device_id": device_id}
+
+    async def next(self, device_id: str) -> dict:
+        return {"ret": "OK", "device_id": device_id}
 
     async def probe(self, device_id: str) -> dict:
         return {"local_reachable": True, "cloud_reachable": False, "device_id": device_id}
@@ -76,8 +83,14 @@ class _LocalLibraryStub:
 
 def _build_coordinator() -> PlaybackCoordinator:
     source_registry = SourceRegistry()
-    source_registry.register(JellyfinSourcePlugin(lambda payload: str(payload.get("url") or "")))
-    source_registry.register(DirectUrlSourcePlugin())
+    classifier = UrlClassifier(jellyfin_base_url="http://192.168.7.4:30013")
+    source_registry.register(
+        JellyfinSourcePlugin(
+            lambda payload: str(payload.get("url") or ""),
+            classifier=classifier,
+        )
+    )
+    source_registry.register(DirectUrlSourcePlugin(classifier=classifier))
     source_registry.register(LocalLibrarySourcePlugin(_LocalLibraryStub()))
     source_registry.register(SiteMediaSourcePlugin(resolver=cast(Any, _ResolverStub())))
 
@@ -122,6 +135,16 @@ def _build_coordinator() -> PlaybackCoordinator:
                 device_id="d1",
             ),
             "direct_url",
+        ),
+        (
+            MediaRequest(
+                request_id="r-jf-url",
+                source_hint=None,
+                query="http://192.168.7.4:30013/Audio/id/stream.mp3?api_key=demo",
+                device_id="d1",
+                context={"title": "慢慢懂-汪苏泷"},
+            ),
+            "jellyfin",
         ),
         (
             MediaRequest(

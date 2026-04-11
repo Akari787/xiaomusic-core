@@ -15,6 +15,7 @@ from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
 from xiaomusic.core.models.media import MediaRequest
 from xiaomusic.core.source.source_registry import SourceRegistry
 from xiaomusic.relay.contracts import ResolveResult
+from xiaomusic.relay.url_classifier import UrlClassifier
 
 
 @pytest.mark.unit
@@ -49,7 +50,10 @@ async def test_direct_url_source_plugin_resolve_with_context_fields():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_jellyfin_source_plugin_resolve_from_payload():
-    plugin = JellyfinSourcePlugin(lambda payload: payload["url"])
+    plugin = JellyfinSourcePlugin(
+        lambda payload: payload["url"],
+        classifier=UrlClassifier(jellyfin_base_url="http://192.168.7.4:30013"),
+    )
     req = MediaRequest(
         request_id="r2",
         source_hint="jellyfin",
@@ -78,8 +82,12 @@ async def test_jellyfin_source_plugin_resolve_from_payload():
 @pytest.mark.unit
 def test_source_registry_prefers_source_hint_then_can_resolve():
     registry = SourceRegistry()
-    direct_plugin = DirectUrlSourcePlugin()
-    jf_plugin = JellyfinSourcePlugin(lambda payload: str(payload.get("url") or ""))
+    classifier = UrlClassifier(jellyfin_base_url="http://192.168.7.4:30013")
+    direct_plugin = DirectUrlSourcePlugin(classifier=classifier)
+    jf_plugin = JellyfinSourcePlugin(
+        lambda payload: str(payload.get("url") or ""),
+        classifier=classifier,
+    )
     site_plugin = SiteMediaSourcePlugin(resolver=cast(Any, _ResolverStub()))
     local_plugin = LocalLibrarySourcePlugin(_LocalMusicLibraryStub())
     registry.register(direct_plugin)
@@ -119,6 +127,14 @@ def test_source_registry_prefers_source_hint_then_can_resolve():
     )
     assert registry.get_plugin(req_na.source_hint, req_na).name == "site_media"
 
+    req_auto_jf_url = MediaRequest(
+        request_id="r5-jf-url",
+        source_hint=None,
+        query="http://192.168.7.4:30013/Audio/aa05e8ae29761e44e505f2a9b1816eb8/stream.mp3?api_key=demo",
+        context={"title": "慢慢懂-汪苏泷"},
+    )
+    assert registry.get_plugin(req_auto_jf_url.source_hint, req_auto_jf_url).name == "jellyfin"
+
     req_local = MediaRequest(
         request_id="r6",
         source_hint="local_library",
@@ -150,6 +166,29 @@ def test_source_registry_prefers_source_hint_then_can_resolve():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_jellyfin_source_plugin_resolve_from_owned_stream_url_without_payload():
+    plugin = JellyfinSourcePlugin(
+        lambda payload: str(payload.get("url") or ""),
+        classifier=UrlClassifier(jellyfin_base_url="http://192.168.7.4:30013"),
+    )
+    req = MediaRequest(
+        request_id="r2-jf-url",
+        source_hint=None,
+        query="http://192.168.7.4:30013/Audio/aa05e8ae29761e44e505f2a9b1816eb8/stream.mp3?api_key=demo",
+        device_id="d1",
+        context={"title": "慢慢懂-汪苏泷"},
+    )
+
+    out = await plugin.resolve(req)
+
+    assert out.media_id == "aa05e8ae29761e44e505f2a9b1816eb8"
+    assert out.source == "jellyfin"
+    assert out.title == "慢慢懂-汪苏泷"
+    assert out.stream_url.startswith("http://192.168.7.4:30013/Audio/")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_local_library_source_plugin_resolve_by_track_name_and_path():
     with TemporaryDirectory() as tmp_dir:
         p = Path(tmp_dir) / "hello.mp3"
@@ -163,10 +202,36 @@ async def test_local_library_source_plugin_resolve_by_track_name_and_path():
         by_path = await plugin.resolve(
             MediaRequest(request_id="r8", source_hint="local_library", query=str(p))
         )
+        by_playlist = await plugin.resolve(
+            MediaRequest(
+                request_id="r9",
+                source_hint="local_library",
+                query="hello",
+                context={
+                    "title": "hello",
+                    "context_hint": {
+                        "context_type": "playlist",
+                        "context_name": "所有歌曲",
+                        "context_id": "所有歌曲",
+                    },
+                    "source_payload": {
+                        "source": "local_library",
+                        "playlist_name": "所有歌曲",
+                        "context_name": "所有歌曲",
+                        "music_name": "hello",
+                        "track_name": "hello",
+                        "context_type": "playlist",
+                    },
+                },
+            )
+        )
 
         assert by_name.source == "local_library"
         assert by_name.stream_url.endswith("/music/hello.mp3")
         assert by_path.stream_url.endswith("/music/hello.mp3")
+        assert by_playlist.source == "local_library"
+        assert by_playlist.stream_url.endswith("/music/hello.mp3")
+        assert by_playlist.title == "hello"
 
 
 class _ResolverStub:

@@ -5,6 +5,7 @@ from xiaomusic.adapters.sources.jellyfin_source_plugin import JellyfinSourcePlug
 from xiaomusic.adapters.sources.local_library_source_plugin import LocalLibrarySourcePlugin
 from xiaomusic.adapters.sources.site_media_source_plugin import SiteMediaSourcePlugin
 from xiaomusic.core.source import SourceRegistry
+from xiaomusic.relay.url_classifier import UrlClassifier
 
 
 def register_default_source_plugins(
@@ -14,8 +15,16 @@ def register_default_source_plugins(
 ) -> None:
     """Register built-in source plugins in deterministic order."""
 
-    source_registry.register(JellyfinSourcePlugin(_resolve_jellyfin_source_url(xiaomusic)))
-    source_registry.register(DirectUrlSourcePlugin())
+    jellyfin_classifier = UrlClassifier(
+        jellyfin_base_url=str(getattr(xiaomusic.config, "jellyfin_base_url", "") or "")
+    )
+    source_registry.register(
+        JellyfinSourcePlugin(
+            _resolve_jellyfin_source_url(xiaomusic),
+            classifier=jellyfin_classifier,
+        )
+    )
+    source_registry.register(DirectUrlSourcePlugin(classifier=jellyfin_classifier))
     source_registry.register(LocalLibrarySourcePlugin(xiaomusic.music_library))
     source_registry.register(SiteMediaSourcePlugin(runtime_provider=runtime_provider))
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -12,6 +14,22 @@ def _v1_client() -> TestClient:
     return TestClient(app)
 
 
+def _snapshot(**overrides):
+    data = {
+        "device_id": "did-1",
+        "revision": 1,
+        "play_session_id": "sess-1",
+        "transport_state": "idle",
+        "track": None,
+        "context": None,
+        "position_ms": 0,
+        "duration_ms": 0,
+        "snapshot_at_ms": 1710000000000,
+    }
+    data.update(overrides)
+    return data
+
+
 def test_player_state_requires_device_id_query_param():
     client = _v1_client()
     resp = client.get("/api/v1/player/state")
@@ -20,21 +38,8 @@ def test_player_state_requires_device_id_query_param():
 
 def test_player_state_success_shape(monkeypatch):
     class _Facade:
-        async def player_state(self, device_id: str, request_id: str | None = None):
-            _ = request_id
-            return {
-                "device_id": device_id,
-                "is_playing": False,
-                "cur_music": "",
-                "offset": 0,
-                "duration": 0,
-                "current_track_id": "",
-                "current_index": None,
-                "context_type": None,
-                "context_id": None,
-                "context_name": None,
-                "request_id": "rid-state",
-            }
+        async def build_player_state_snapshot(self, device_id: str):
+            return _snapshot(device_id=device_id)
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
     client = _v1_client()
@@ -43,9 +48,16 @@ def test_player_state_success_shape(monkeypatch):
     body = resp.json()
     assert body["code"] == 0
     assert set(body.keys()) == {"code", "message", "data", "request_id"}
-    assert body["data"]["device_id"] == "did-1"
     assert body["data"] == {
         "device_id": "did-1",
+        "revision": 1,
+        "play_session_id": "sess-1",
+        "transport_state": "idle",
+        "track": None,
+        "context": None,
+        "position_ms": 0,
+        "duration_ms": 0,
+        "snapshot_at_ms": 1710000000000,
         "is_playing": False,
         "cur_music": "",
         "offset": 0,
@@ -59,24 +71,29 @@ def test_player_state_success_shape(monkeypatch):
 
 
 def test_player_state_returns_contract_extended_fields(monkeypatch):
-    """验证 player/state 返回正式契约扩展字段"""
-
     class _Facade:
-        async def player_state(self, device_id: str, request_id: str | None = None):
-            _ = request_id
-            return {
-                "device_id": device_id,
-                "is_playing": True,
-                "cur_music": "song-a",
-                "offset": 12,
-                "duration": 180,
-                "current_track_id": "abc123",
-                "current_index": 3,
-                "context_type": "playlist",
-                "context_id": "OTS",
-                "context_name": "OTS",
-                "request_id": "rid-state",
-            }
+        async def build_player_state_snapshot(self, device_id: str):
+            return _snapshot(
+                device_id=device_id,
+                revision=3,
+                play_session_id="sess-3",
+                transport_state="playing",
+                track={
+                    "id": "abc123",
+                    "title": "song-a",
+                    "artist": "artist-a",
+                    "album": "album-a",
+                    "source": "jellyfin",
+                },
+                context={
+                    "id": "OTS",
+                    "name": "OTS",
+                    "current_index": 3,
+                },
+                position_ms=12000,
+                duration_ms=180000,
+                snapshot_at_ms=1710000001234,
+            )
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
     client = _v1_client()
@@ -85,6 +102,24 @@ def test_player_state_returns_contract_extended_fields(monkeypatch):
     body = resp.json()
     assert body["data"] == {
         "device_id": "did-1",
+        "revision": 3,
+        "play_session_id": "sess-3",
+        "transport_state": "playing",
+        "track": {
+            "id": "abc123",
+            "title": "song-a",
+            "artist": "artist-a",
+            "album": "album-a",
+            "source": "jellyfin",
+        },
+        "context": {
+            "id": "OTS",
+            "name": "OTS",
+            "current_index": 3,
+        },
+        "position_ms": 12000,
+        "duration_ms": 180000,
+        "snapshot_at_ms": 1710000001234,
         "is_playing": True,
         "cur_music": "song-a",
         "offset": 12,
@@ -98,106 +133,77 @@ def test_player_state_returns_contract_extended_fields(monkeypatch):
 
 
 def test_player_state_track_id_stability(monkeypatch):
-    """验证同一首歌连续读取时 current_track_id 不变"""
-    call_count = [0]
-
     class _Facade:
-        async def player_state(self, device_id: str, request_id: str | None = None):
-            _ = request_id
-            call_count[0] += 1
-            return {
-                "device_id": device_id,
-                "is_playing": True,
-                "cur_music": "stable-song",
-                "offset": call_count[0] * 10,
-                "duration": 180,
-                "current_track_id": "stable-track-id",
-                "current_index": 0,
-                "context_type": "playlist",
-                "context_id": "test-list",
-                "context_name": "test-list",
-                "request_id": f"rid-{call_count[0]}",
-            }
+        def __init__(self):
+            self._calls = 0
 
-    monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
+        async def build_player_state_snapshot(self, device_id: str):
+            self._calls += 1
+            return _snapshot(
+                device_id=device_id,
+                revision=1,
+                play_session_id="sess-stable",
+                transport_state="playing",
+                track={"id": "stable-track-id", "title": "stable-song"},
+                context={"id": "test-list", "name": "test-list", "current_index": 0},
+                position_ms=self._calls * 10000,
+                duration_ms=180000,
+            )
+
+    facade = _Facade()
+    monkeypatch.setattr(v1, "_get_facade", lambda: facade)
     client = _v1_client()
-
-    # 连续两次读取
     resp1 = client.get("/api/v1/player/state", params={"device_id": "did-1"})
     resp2 = client.get("/api/v1/player/state", params={"device_id": "did-1"})
-
     assert resp1.status_code == 200
     assert resp2.status_code == 200
-
-    # current_track_id 应该稳定不变
     assert resp1.json()["data"]["current_track_id"] == "stable-track-id"
     assert resp2.json()["data"]["current_track_id"] == "stable-track-id"
 
 
 def test_player_state_track_id_changes_on_next(monkeypatch):
-    """验证切歌后 current_track_id 必须变化"""
-    track_ids = ["track-1", "track-2"]
-    call_count = [0]
-
     class _Facade:
-        async def player_state(self, device_id: str, request_id: str | None = None):
-            _ = request_id
-            idx = call_count[0]
-            call_count[0] += 1
-            return {
-                "device_id": device_id,
-                "is_playing": True,
-                "cur_music": f"song-{idx}",
-                "offset": 0,
-                "duration": 180,
-                "current_track_id": track_ids[idx % len(track_ids)],
-                "current_index": idx,
-                "context_type": "playlist",
-                "context_id": "test-list",
-                "context_name": "test-list",
-                "request_id": f"rid-{idx}",
-            }
+        def __init__(self):
+            self._calls = 0
 
-    monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
+        async def build_player_state_snapshot(self, device_id: str):
+            idx = self._calls
+            self._calls += 1
+            return _snapshot(
+                device_id=device_id,
+                revision=idx + 1,
+                play_session_id=f"sess-{idx + 1}",
+                transport_state="playing",
+                track={"id": f"track-{idx + 1}", "title": f"song-{idx}"},
+                context={"id": "test-list", "name": "test-list", "current_index": idx},
+                duration_ms=180000,
+            )
+
+    facade = _Facade()
+    monkeypatch.setattr(v1, "_get_facade", lambda: facade)
     client = _v1_client()
-
-    # 第一次读取
     resp1 = client.get("/api/v1/player/state", params={"device_id": "did-1"})
-    # 第二次读取（模拟切歌）
     resp2 = client.get("/api/v1/player/state", params={"device_id": "did-1"})
-
     assert resp1.json()["data"]["current_track_id"] == "track-1"
     assert resp2.json()["data"]["current_track_id"] == "track-2"
-    assert (
-        resp1.json()["data"]["current_track_id"]
-        != resp2.json()["data"]["current_track_id"]
-    )
+    assert resp1.json()["data"]["current_track_id"] != resp2.json()["data"]["current_track_id"]
 
 
 def test_player_state_context_fields(monkeypatch):
-    """验证存在上下文时返回 context_* 字段"""
-
     class _Facade:
-        async def player_state(self, device_id: str, request_id: str | None = None):
-            _ = request_id
-            return {
-                "device_id": device_id,
-                "is_playing": True,
-                "cur_music": "context-song",
-                "offset": 5,
-                "duration": 200,
-                "current_track_id": "ctx-track-1",
-                "current_index": 2,
-                "context_type": "playlist",
-                "context_id": "my-playlist",
-                "context_name": "我的歌单",
-                "request_id": "rid-ctx",
-            }
+        async def build_player_state_snapshot(self, device_id: str):
+            return _snapshot(
+                device_id=device_id,
+                transport_state="playing",
+                track={"id": "ctx-track-1", "title": "context-song"},
+                context={"id": "my-playlist", "name": "我的歌单", "current_index": 2},
+                position_ms=5000,
+                duration_ms=200000,
+            )
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
     client = _v1_client()
     resp = client.get("/api/v1/player/state", params={"device_id": "did-1"})
-
     data = resp.json()["data"]
     assert data["context_type"] == "playlist"
     assert data["context_id"] == "my-playlist"
@@ -206,42 +212,88 @@ def test_player_state_context_fields(monkeypatch):
 
 
 def test_player_state_no_context_returns_null(monkeypatch):
-    """验证无明确上下文时 context_* 返回 null"""
-
     class _Facade:
-        async def player_state(self, device_id: str, request_id: str | None = None):
-            _ = request_id
-            return {
-                "device_id": device_id,
-                "is_playing": True,
-                "cur_music": "no-context-song",
-                "offset": 3,
-                "duration": 150,
-                "current_track_id": "no-ctx-track",
-                "current_index": None,
-                "context_type": None,
-                "context_id": None,
-                "context_name": None,
-                "request_id": "rid-no-ctx",
-            }
+        async def build_player_state_snapshot(self, device_id: str):
+            return _snapshot(
+                device_id=device_id,
+                transport_state="playing",
+                track={"id": "no-ctx-track", "title": "no-context-song"},
+                context=None,
+                position_ms=3000,
+                duration_ms=150000,
+            )
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
     client = _v1_client()
     resp = client.get("/api/v1/player/state", params={"device_id": "did-1"})
-
     data = resp.json()["data"]
     assert data["current_index"] is None
     assert data["context_type"] is None
     assert data["context_id"] is None
     assert data["context_name"] is None
-    # 即使无上下文，也应提供稳定的 current_track_id
     assert data["current_track_id"] == "no-ctx-track"
+
+
+def test_player_state_route_normalizes_jellyfin_track_source(monkeypatch):
+    class _DevicePlayer:
+        _play_session_id = 42
+        _current_index = 3
+        _play_list = ["Song A", "Song B", "Song C", "Jellyfin Song"]
+        _last_cmd = "play"
+        _next_timer = None
+        _play_failed_cnt = 0
+        _degraded = False
+
+        def get_cur_music(self):
+            return "Jellyfin Song"
+
+    class _XM:
+        def __init__(self):
+            self.device_manager = SimpleNamespace(devices={"did-jf": _DevicePlayer()})
+            self.config = SimpleNamespace(
+                music_list_json='[{"name": "Jellyfin Favorites", "source": "jellyfin", "musics": []}]'
+            )
+            self.music_library = SimpleNamespace(all_music={}, is_web_music=lambda _name: True)
+
+        def did_exist(self, did: str) -> bool:
+            return did == "did-jf"
+
+        def isplaying(self, did: str) -> bool:
+            return True
+
+        def get_offset_duration(self, did: str):
+            return (12, 180)
+
+        async def get_player_status(self, did: str):
+            return {
+                "status": 1,
+                "play_song_detail": {
+                    "audio_name": "Jellyfin Song",
+                    "artist": "Artist A",
+                    "album": "Album A",
+                    "source": "xm_unknown_device_value",
+                    "position": 12000,
+                    "duration": 180000,
+                },
+            }
+
+        def get_cur_play_list(self, did: str) -> str:
+            return "Jellyfin Favorites"
+
+    v1._facade = None
+    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    client = _v1_client()
+    resp = client.get("/api/v1/player/state", params={"device_id": "did-jf"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["track"]["source"] == "jellyfin"
 
 
 def test_player_state_unknown_error_has_non_null_stage(monkeypatch):
     class _Facade:
-        async def player_state(self, device_id: str, request_id: str | None = None):
-            _ = (device_id, request_id)
+        async def build_player_state_snapshot(self, device_id: str):
+            _ = device_id
             raise RuntimeError("boom")
 
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())

@@ -49,6 +49,45 @@ async def test_local_library_source_plugin_resolve_success_by_name_and_path():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_local_library_source_plugin_resolve_playlist_payload():
+    with TemporaryDirectory() as tmp_dir:
+        p = Path(tmp_dir) / "song.mp3"
+        p.write_bytes(b"demo")
+        plugin = LocalLibrarySourcePlugin(_LocalLibraryStub("song", str(p)))
+
+        out = await plugin.resolve(
+            MediaRequest(
+                request_id="r-playlist",
+                source_hint="local_library",
+                query="Song From Playlist",
+                context={
+                    "title": "Song From Playlist",
+                    "context_hint": {
+                        "context_type": "playlist",
+                        "context_name": "All Songs",
+                        "context_id": "All Songs",
+                    },
+                    "source_payload": {
+                        "source": "local_library",
+                        "playlist_name": "All Songs",
+                        "context_name": "All Songs",
+                        "music_name": "song",
+                        "track_name": "song",
+                        "track_id": "track-song-1",
+                        "context_type": "playlist",
+                    },
+                },
+            )
+        )
+
+        assert out.media_id == "track-song-1"
+        assert out.source == "local_library"
+        assert out.title == "Song From Playlist"
+        assert out.stream_url.endswith("/music/song.mp3")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_local_library_source_plugin_resolve_not_found_raises():
     plugin = LocalLibrarySourcePlugin(_LocalLibraryStub("song", "/music/song.mp3"))
 

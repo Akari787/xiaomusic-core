@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from xiaomusic.core.models.media import PlayOptions
@@ -54,7 +56,37 @@ def test_playback_facade_records_playback_capability_when_auth_manager_supports_
 async def test_playback_facade_playlist_context_play_uses_runtime_playlist_flow() -> (
     None
 ):
-    calls: list[tuple[str, str, str]] = []
+    captured: dict[str, object] = {}
+
+    class _Dispatch:
+        transport = "mina"
+        data = {"accepted": True}
+
+    class _Prepared:
+        source = "local_library"
+        final_url = "http://example.com/song-a.mp3"
+
+    class _Resolved:
+        media_id = "media-song-a"
+        title = "Song A"
+        source = "local_library"
+        is_live = False
+
+    class _Outcome:
+        accepted = True
+        started = True
+
+    class _Core:
+        async def play(self, request, device_id=None):
+            captured["request"] = request
+            captured["device_id"] = device_id
+            return {
+                "prepared_stream": _Prepared(),
+                "resolved_media": _Resolved(),
+                "dispatch": _Dispatch(),
+                "outcome": _Outcome(),
+                "delivery_plan": None,
+            }
 
     class _XM:
         def __init__(self):
@@ -85,16 +117,12 @@ async def test_playback_facade_playlist_context_play_uses_runtime_playlist_flow(
         def did_exist(did: str) -> bool:
             return did == "did-1"
 
-        async def do_play_music_list(
-            self, did: str, playlist_name: str, music_name: str
-        ):
-            calls.append((did, playlist_name, music_name))
-
         async def get_player_status(self, did: str) -> dict:
             _ = did
             return {"status": 1}
 
     facade = PlaybackFacade(_XM())
+    facade._core_coordinator = _Core()
     out = await facade.play(
         device_id="did-1",
         query="Song A",
@@ -113,11 +141,17 @@ async def test_playback_facade_playlist_context_play_uses_runtime_playlist_flow(
         request_id="rid-playlist",
     )
 
-    assert calls == [("did-1", "所有歌曲", "Song A")]
+    request = captured["request"]
+    assert captured["device_id"] == "did-1"
+    assert request.source_hint == "local_library"
+    assert request.context["source_payload"]["playlist_name"] == "所有歌曲"
+    assert request.context["source_payload"]["music_name"] == "Song A"
+    assert request.context["context_hint"]["context_type"] == "playlist"
+    assert request.context["context_hint"]["context_id"] == "所有歌曲"
     assert out["status"] == "playing"
     assert out["device_id"] == "did-1"
     assert out["source_plugin"] == "local_library"
-    assert out["transport"] == "device_player"
+    assert out["transport"] == "mina"
     assert out["media"]["title"] == "Song A"
 
 
@@ -228,6 +262,129 @@ async def test_player_state_detail_title_overrides_playingmusic_when_playing() -
 
     assert state["cur_music"] == "YouTube Title"
     assert state["is_playing"] is True
+
+
+@pytest.mark.asyncio
+async def test_build_player_state_snapshot_keeps_jellyfin_source_for_auto_stream_url_play() -> None:
+    captured: dict[str, object] = {}
+
+    class _Dispatch:
+        transport = "mina"
+        data = {"accepted": True}
+
+    class _Prepared:
+        source = "jellyfin"
+        final_url = "http://192.168.7.4:30013/Audio/aa05e8ae29761e44e505f2a9b1816eb8/stream.mp3?api_key=demo"
+
+    class _Resolved:
+        media_id = "aa05e8ae29761e44e505f2a9b1816eb8"
+        title = "慢慢懂-汪苏泷"
+        source = "jellyfin"
+        is_live = False
+
+    class _Outcome:
+        accepted = True
+        started = True
+
+    class _Core:
+        async def play(self, request, device_id=None):
+            captured["request"] = request
+            captured["device_id"] = device_id
+            return {
+                "prepared_stream": _Prepared(),
+                "resolved_media": _Resolved(),
+                "dispatch": _Dispatch(),
+                "outcome": _Outcome(),
+                "delivery_plan": None,
+            }
+
+    class _DevicePlayer:
+        _play_session_id = 1
+        _current_index = -1
+        _play_list = []
+        _last_cmd = "external_play"
+        _next_timer = None
+        _play_failed_cnt = 0
+        _degraded = False
+
+        def get_cur_music(self):
+            return ""
+
+    class _XM:
+        def __init__(self):
+            self.log = type(
+                "L",
+                (),
+                {
+                    "info": lambda *a, **k: None,
+                    "warning": lambda *a, **k: None,
+                    "error": lambda *a, **k: None,
+                },
+            )()
+            self.music_library = SimpleNamespace(
+                get_proxy_url=lambda origin_url, name=None: origin_url,
+                is_jellyfin_url=lambda url: True,
+                all_music={},
+                is_web_music=lambda _name: True,
+            )
+            self.online_music_service = SimpleNamespace(
+                _get_plugin_proxy_url=lambda payload: ""
+            )
+            self.device_manager = SimpleNamespace(devices={"did-1": _DevicePlayer()})
+            self.config = SimpleNamespace(music_list_json="")
+
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return did == "did-1"
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[int, int]:
+            return (0, 0)
+
+        async def get_player_status(self, did: str) -> dict:
+            return {
+                "status": 1,
+                "play_song_detail": {
+                    "audio_name": "",
+                    "position": 0,
+                    "duration": 0,
+                    "source": "",
+                },
+            }
+
+        @staticmethod
+        def get_cur_play_list(did: str) -> str:
+            return "unknown-playlist"
+
+        @staticmethod
+        def playingmusic(did: str) -> str:
+            return ""
+
+    facade = PlaybackFacade(_XM())
+    facade._core_coordinator = _Core()
+
+    out = await facade.play(
+        device_id="did-1",
+        query="http://192.168.7.4:30013/Audio/aa05e8ae29761e44e505f2a9b1816eb8/stream.mp3?api_key=demo",
+        source_hint="auto",
+        options=PlayOptions(
+            title="慢慢懂-汪苏泷",
+            context_hint={"context_type": "playlist", "context_name": "中文", "context_id": "中文"},
+        ),
+        request_id="rid-jf-auto",
+    )
+
+    request = captured["request"]
+    assert request.context["title"] == "慢慢懂-汪苏泷"
+    assert out["source_plugin"] == "jellyfin"
+
+    snapshot = await facade.build_player_state_snapshot("did-1")
+
+    assert snapshot["track"]["source"] == "jellyfin"
 
 
 @pytest.mark.asyncio
