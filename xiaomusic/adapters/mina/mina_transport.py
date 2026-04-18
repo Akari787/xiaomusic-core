@@ -24,11 +24,22 @@ class MinaTransport(Transport):
         self._xiaomusic = xiaomusic
 
     async def play_url(
-        self, device_id: str, prepared: PreparedStream
+        self,
+        device_id: str,
+        prepared: PreparedStream,
+        request_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         start = time.perf_counter()
         try:
-            ret = await self._xiaomusic.play_url(did=device_id, arg1=prepared.final_url)
+            resolved = {}
+            if isinstance(request_context, dict):
+                resolved = request_context.get("_resolved_media") or {}
+            ret = await self._xiaomusic.play_url(
+                did=device_id,
+                arg1=prepared.final_url,
+                context=request_context or {},
+                resolved=resolved,
+            )
             out = {"ret": ret, "url": prepared.final_url}
             LOG.info(
                 "transport_action action=play_url success=true latency_ms=%d device_id=%s",

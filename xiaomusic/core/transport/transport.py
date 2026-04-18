@@ -10,7 +10,12 @@ class Transport(ABC):
     name = "base"
 
     @abstractmethod
-    async def play_url(self, device_id: str, prepared: PreparedStream) -> dict[str, Any]:
+    async def play_url(
+        self,
+        device_id: str,
+        prepared: PreparedStream,
+        request_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         raise NotImplementedError
 
     @abstractmethod

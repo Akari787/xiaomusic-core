@@ -75,6 +75,14 @@ class PlaybackCoordinator:
                 last_expired_error = exc
                 continue
 
+            request_context = dict(request.context or {})
+            request_context["_resolved_media"] = {
+                "media_id": getattr(resolved, "media_id", ""),
+                "title": getattr(resolved, "title", ""),
+                "source": getattr(resolved, "source", ""),
+                "stream_url": getattr(resolved, "stream_url", ""),
+                "duration_seconds": getattr(resolved, "duration_seconds", None),
+            }
             (
                 dispatch_result,
                 used_prepared,
@@ -84,7 +92,7 @@ class PlaybackCoordinator:
                 profile=profile,
                 capability=capability,
                 device_id=target_device_id,
-                request_context=request.context,
+                request_context=request_context,
             )
             return {
                 "ok": dispatch_result.ok,
@@ -266,6 +274,7 @@ class PlaybackCoordinator:
             prepared=prepared,
             profile=profile,
             capability_matrix=capability,
+            request_context=request_context,
         )
         started = await self._confirm_playback_started(device_id, request_context)
         attempt = PlaybackAttempt(

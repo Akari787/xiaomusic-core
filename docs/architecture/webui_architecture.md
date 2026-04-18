@@ -157,6 +157,7 @@ render（基于 transport_state / track.id / position_ms 等字段）
 | `docs/api/api_v1_spec.md` | v1 接口完整契约，WebUI 依赖的接口权威来源 |
 | `docs/spec/player_state_projection_spec.md` | 播放状态快照字段模型与消费约束 |
 | `docs/spec/player_stream_sse_spec.md` | SSE 推送协议详细规范 |
+| `docs/architecture/webui_playlist_state.md` | playlist selector 的 pending / playback / effective 三层状态模型与 pending-aware 导航语义 |
 | `docs/spec/webui_playback_state_machine_spec.md` | WebUI 消费型状态机规范 |
 | `docs/spec/webui_playback_state_machine_mapping.md` | WebUI 重构实现映射清单 |
 | `docs/architecture/system_overview.md` | WebUI 在系统九个一级边界中的位置 |

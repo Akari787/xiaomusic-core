@@ -40,6 +40,7 @@ export interface PlayData {
   stage?: string;
   sid?: string;
   error_code?: string;
+  state?: PlayerStateData;
   extra?: Record<string, unknown>;
 }
 
@@ -78,6 +79,7 @@ export interface PlayerStateData {
   context: PlayerStateContext | null;
   position_ms: number;
   duration_ms: number;
+  volume: number;
   snapshot_at_ms: number;
 
   // 兼容旧字段（deprecated，新代码不得读取）

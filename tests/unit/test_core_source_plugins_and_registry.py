@@ -65,6 +65,7 @@ async def test_jellyfin_source_plugin_resolve_from_payload():
                 "source": "jellyfin",
                 "title": "jf-title",
                 "url": "http://192.168.7.4:30013/Audio/xxx/stream.mp3",
+                "duration_seconds": 123.5,
             }
         },
     )
@@ -75,6 +76,7 @@ async def test_jellyfin_source_plugin_resolve_from_payload():
     assert out.media_id == "jf-1"
     assert out.source == "jellyfin"
     assert out.title == "jf-title"
+    assert out.duration_seconds == 123.5
     assert out.stream_url.startswith("http://192.168.7.4")
     assert prepared.final_url.startswith("http://192.168.7.4")
 

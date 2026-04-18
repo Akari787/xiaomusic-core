@@ -22,7 +22,12 @@ from xiaomusic.conversation import ConversationPoller
 from xiaomusic.crontab import Crontab
 from xiaomusic.device_manager import DeviceManager
 from xiaomusic.diagnostics import build_startup_diagnostics
-from xiaomusic.events import CONFIG_CHANGED, DEVICE_CONFIG_CHANGED, EventBus
+from xiaomusic.events import (
+    CONFIG_CHANGED,
+    DEVICE_CONFIG_CHANGED,
+    PLAYER_STATE_CHANGED,
+    EventBus,
+)
 from xiaomusic.file_watcher import FileWatcherManager
 from xiaomusic.music_library import MusicLibrary
 from xiaomusic.online_music import OnlineMusicService
@@ -377,8 +382,13 @@ class XiaoMusic:
         self.log.info(f"手动推送链接：{arg1}")
         url = arg1
         device = self.device_manager.devices[did]
-        await device.on_external_url_play()
-        return await device.group_player_play(url)
+        context = kwargs.get("context") or {}
+        resolved = kwargs.get("resolved") or {}
+        await device.on_external_url_play(context=context)
+        ret = await device.group_player_play(url)
+        if not (isinstance(ret, list) and all(ele is None for ele in ret)):
+            await device.on_external_url_play_started(context=context, resolved=resolved)
+        return ret
 
     # 口令:单曲循环
     async def set_play_type_one(self, did="", **kwargs):

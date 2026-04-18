@@ -6,7 +6,7 @@ import pytest
 
 from xiaomusic.core.models.media import PlayOptions
 from xiaomusic.core.models.media import DeliveryPlan, PreparedStream
-from xiaomusic.playback.facade import PlaybackFacade
+from xiaomusic.playback.facade import PlaybackFacade, build_track_id
 
 
 def test_playback_facade_serialize_dataclass() -> None:
@@ -385,6 +385,118 @@ async def test_build_player_state_snapshot_keeps_jellyfin_source_for_auto_stream
     snapshot = await facade.build_player_state_snapshot("did-1")
 
     assert snapshot["track"]["source"] == "jellyfin"
+
+
+@pytest.mark.asyncio
+async def test_build_player_state_snapshot_includes_volume_from_status_and_cache() -> None:
+    class _DevicePlayer:
+        _play_session_id = 5
+        _current_index = -1
+        _play_list = []
+        _last_cmd = "play"
+        _last_volume = 27
+
+        @staticmethod
+        def get_cur_music() -> str:
+            return ""
+
+    class _XM:
+        def __init__(self, status_payload):
+            self._status_payload = status_payload
+            self.device_manager = SimpleNamespace(devices={"did-1": _DevicePlayer()})
+            self.config = SimpleNamespace(music_list_json="[]")
+            self.music_library = SimpleNamespace(all_music={}, is_web_music=lambda _name: True)
+
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return did == "did-1"
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return False
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[int, int]:
+            return (0, 0)
+
+        @staticmethod
+        def get_cur_play_list(did: str) -> str:
+            return ""
+
+        async def get_player_status(self, did: str) -> dict:
+            return dict(self._status_payload)
+
+    facade = PlaybackFacade(_XM({"status": 0, "volume": 41}))
+    snapshot = await facade.build_player_state_snapshot("did-1")
+    assert snapshot["volume"] == 41
+
+    facade_cached = PlaybackFacade(_XM({"status": 0}))
+    snapshot_cached = await facade_cached.build_player_state_snapshot("did-1")
+    assert snapshot_cached["volume"] == 27
+
+
+@pytest.mark.asyncio
+async def test_build_player_state_snapshot_track_id_uses_stable_identity_not_random_index() -> None:
+    class _DevicePlayer:
+        _play_session_id = 5
+        _current_index = 7
+        _play_list = ["Song A", "Song B", "Song C"]
+        _last_cmd = "play"
+        _next_timer = None
+        _play_failed_cnt = 0
+        _degraded = False
+
+        def get_cur_music(self):
+            return "Song B"
+
+    class _XM:
+        def __init__(self):
+            self.device_manager = SimpleNamespace(devices={"did-1": _DevicePlayer()})
+            self.music_library = SimpleNamespace(
+                all_music={"Song B": "/music/song-b.flac"},
+                is_web_music=lambda _name: False,
+            )
+            self.config = SimpleNamespace(music_list_json="")
+
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return did == "did-1"
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def playingmusic(did: str) -> str:
+            return "Song B"
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[int, int]:
+            return (0, 180)
+
+        @staticmethod
+        def get_cur_play_list(did: str) -> str:
+            return "随机歌单"
+
+        async def get_player_status(self, did: str) -> dict:
+            return {
+                "status": 1,
+                "play_song_detail": {
+                    "audio_name": "Song B",
+                    "position": 0,
+                    "duration": 180000,
+                },
+            }
+
+    facade = PlaybackFacade(_XM())
+
+    first = await facade.build_player_state_snapshot("did-1")
+    expected_id = build_track_id("随机歌单", 7, "Song B", identity_hint="/music/song-b.flac")
+    assert first["track"]["id"] == expected_id
+
+    _DevicePlayer._current_index = 1
+    second = await facade.build_player_state_snapshot("did-1")
+    assert second["track"]["id"] == expected_id
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,21 @@
+## v1.1.0 (2026-04-17)
+
+### 相对 v1.0.10 的主要变化
+
+- 版本号提升到 `1.1.0`，`pyproject.toml`、`xiaomusic/__init__.py` 与对外版本展示入口继续统一到同一版本来源。
+- auth 从“主线文档收口”推进到“正式状态接口 + 短会话重建实现”：新增 `GET /api/v1/auth/status`，并在 `auth.py` 中接入统一公开状态映射、persistent-auth rebuild 主路径与 `MiJia` fallback。
+- `GET /diagnostics` 从 startup/self-check 碎片信息升级为统一五维诊断视图，WebUI 同步新增最小诊断页。
+- 来源插件新增最小管理骨架：`SourcePluginManager`、`/api/v1/sources` 观察/管理接口，以及 WebUI 最小 sources 管理页。
+- playback / player state 相对 v1.0.10 继续推进：Jellyfin playlist context、external URL post-start hook、`track.source` 规范化、`volume` 暴露与若干 `player_state` / SSE 重复推送收口已进入当前代码。
+- 新增 `docs/release/v1.1.0.md` 与 `docs/release/v1.1.0_checklist.md`，把本次相对 `v1.0.10` 的真实变化与发布边界固定下来。
+
+### 本版本仍保留的边界
+
+- `disabled_plugins` 当前仍为内存态，不持久化。
+- M2 P2 尚未完成。
+- 浏览器自动化不稳定与部分旧 HomePage vitest 漂移仍是独立问题。
+- 当前验收覆盖关键主路径，不等于所有来源、所有模式、所有网络条件下的长期稳定性总验收。
+
 ## v1.0.10 (2026-04-09)
 
 ### 发布收口

@@ -24,6 +24,7 @@ def _snapshot(**overrides):
         "context": None,
         "position_ms": 0,
         "duration_ms": 0,
+        "volume": 0,
         "snapshot_at_ms": 1710000000000,
     }
     data.update(overrides)
@@ -57,6 +58,7 @@ def test_player_state_success_shape(monkeypatch):
         "context": None,
         "position_ms": 0,
         "duration_ms": 0,
+        "volume": 0,
         "snapshot_at_ms": 1710000000000,
         "is_playing": False,
         "cur_music": "",
@@ -92,6 +94,7 @@ def test_player_state_returns_contract_extended_fields(monkeypatch):
                 },
                 position_ms=12000,
                 duration_ms=180000,
+                volume=37,
                 snapshot_at_ms=1710000001234,
             )
 
@@ -119,6 +122,7 @@ def test_player_state_returns_contract_extended_fields(monkeypatch):
         },
         "position_ms": 12000,
         "duration_ms": 180000,
+        "volume": 37,
         "snapshot_at_ms": 1710000001234,
         "is_playing": True,
         "cur_music": "song-a",

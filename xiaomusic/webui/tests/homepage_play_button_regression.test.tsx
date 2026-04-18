@@ -262,6 +262,54 @@ describe("HomePage play button regression", () => {
     expect((announcer?.textContent || "").trim()).not.toContain("/api/v1/play");
   });
 
+  it("passes duration_seconds through jellyfin fallback play request", async () => {
+    mockedV1.play
+      .mockResolvedValueOnce({
+        code: 20002,
+        message: "source resolve failed",
+        data: { error_code: "E_RESOLVE_NONZERO_EXIT", stage: "resolve" },
+        request_id: "rid-play-fail",
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        message: "ok",
+        data: { status: "playing", device_id: "981257654", source_plugin: "jellyfin", transport: "mina" },
+        request_id: "rid-play-fallback",
+      });
+
+    const playTooltip = Array.from(container.querySelectorAll(".control-button .tooltip")).find(
+      (el) => (el.textContent || "").trim() === "播放",
+    );
+    const playButton = playTooltip?.parentElement as HTMLElement | null;
+
+    await act(async () => {
+      playButton?.click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(mockedV1.play).toHaveBeenCalledTimes(2);
+    expect(mockedV1.play).toHaveBeenNthCalledWith(2, {
+      device_id: "981257654",
+      query: "http://127.0.0.1:58090/static/media/song-a.mp3",
+      source_hint: "jellyfin",
+      options: {
+        title: "Song A",
+        context_hint: { context_type: "playlist", context_name: "所有歌曲", context_id: "所有歌曲" },
+        source_payload: {
+          source: "jellyfin",
+          playlist_name: "所有歌曲",
+          music_name: "Song A",
+          track_name: "Song A",
+          context_type: "playlist",
+          context_name: "所有歌曲",
+          context_id: "所有歌曲",
+          url: "http://127.0.0.1:58090/static/media/song-a.mp3",
+          duration_seconds: 180,
+        },
+      },
+    });
+  });
+
   it("routes next/previous/play-mode/timer/favorite through v1 services instead of /cmd", async () => {
     const buttons = Array.from(container.querySelectorAll(".control-button .tooltip"));
     const prev = buttons.find((el) => (el.textContent || "").trim() === "上一首")?.parentElement as HTMLElement;

@@ -209,6 +209,7 @@ class ResolvedMedia:
     headers: dict[str, str] = field(default_factory=dict)
     expires_at: int | None = None
     is_live: bool = False
+    duration_seconds: float | None = None
 
 
 @dataclass(slots=True)

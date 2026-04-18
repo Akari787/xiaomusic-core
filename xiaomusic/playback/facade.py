@@ -33,26 +33,23 @@ if TYPE_CHECKING:
     pass
 
 
-def build_track_id(playlist_name: str, index: int | None, title: str) -> str:
+def build_track_id(
+    playlist_name: str,
+    index: int | None,
+    title: str,
+    identity_hint: str | None = None,
+) -> str:
     """Build stable track identity for playlist items.
 
-    This function generates a consistent track ID that matches the logic
-    used in build_player_state_snapshot(). Both must use the same
-    algorithm to ensure frontend can match track.id with playlist items.
-
-    Args:
-        playlist_name: The playlist name (context_id)
-        index: The position in playlist, or None if unknown
-        title: The song title
-
-    Returns:
-        16-character hex string MD5 hash
+    Prefer a stable media identity (media_id / file path / source URL) so track.id
+    stays consistent even when backend runtime playlist order changes (for example,
+    random playback mode). Fall back to title, then index only when no better
+    identity is available.
     """
-    track_key = (
-        f"{playlist_name or 'default'}:"
-        f"{index if index is not None else -1}:"
-        f"{title or ''}"
-    )
+    stable_identity = str(identity_hint or "").strip() or str(title or "").strip()
+    if not stable_identity:
+        stable_identity = str(index if index is not None else -1)
+    track_key = f"{playlist_name or 'default'}:{stable_identity}"
     return hashlib.md5(track_key.encode()).hexdigest()[:16]
 
 
@@ -175,33 +172,85 @@ class PlaybackFacade:
             "play_session_id": str(play_session_id or "").strip(),
         }
 
-    def _resolve_context_source(self, context_id: str) -> str | None:
-        playlist_name = str(context_id or "").strip()
-        if not playlist_name:
-            return None
-
+    def _get_config_music_lists(self) -> list[dict[str, Any]]:
         config = getattr(self.xiaomusic, "config", None)
         raw_music_list_json = getattr(config, "music_list_json", "") if config else ""
         if not raw_music_list_json:
-            return None
+            return []
 
         try:
             import json
 
             music_lists = json.loads(raw_music_list_json)
         except Exception:
-            return None
+            return []
 
         if not isinstance(music_lists, list):
+            return []
+        return [item for item in music_lists if isinstance(item, dict)]
+
+    def _resolve_context_source(self, context_id: str) -> str | None:
+        playlist_name = str(context_id or "").strip()
+        if not playlist_name:
             return None
 
-        for item in music_lists:
-            if not isinstance(item, dict):
-                continue
+        for item in self._get_config_music_lists():
             if str(item.get("name") or "").strip() != playlist_name:
                 continue
             return self._normalize_track_source_value(item.get("source"))
         return None
+
+    def _resolve_track_identity_hint(
+        self,
+        *,
+        context_id: str,
+        track_title: str,
+        detail: dict[str, Any] | None = None,
+    ) -> str:
+        playlist_name = str(context_id or "").strip()
+        title = str(track_title or "").strip()
+        detail = detail if isinstance(detail, dict) else {}
+
+        for key in ("media_id", "audio_id", "audioID", "id"):
+            value = str(detail.get(key) or "").strip()
+            if value:
+                return value
+
+        for key in ("origin_url", "stream_url", "url", "audio_url", "play_url", "path"):
+            value = str(detail.get(key) or "").strip()
+            if value:
+                return value
+
+        if playlist_name and title:
+            for playlist in self._get_config_music_lists():
+                if str(playlist.get("name") or "").strip() != playlist_name:
+                    continue
+                musics = playlist.get("musics")
+                if not isinstance(musics, list):
+                    continue
+                for item in musics:
+                    if not isinstance(item, dict):
+                        continue
+                    item_title = str(item.get("name") or item.get("title") or "").strip()
+                    if item_title != title:
+                        continue
+                    for key in ("id", "media_id", "audio_id", "url", "path"):
+                        value = str(item.get(key) or "").strip()
+                        if value:
+                            return value
+                    break
+                break
+
+        music_library = getattr(self.xiaomusic, "music_library", None)
+        all_music = getattr(music_library, "all_music", None)
+        if isinstance(all_music, dict) and title:
+            value = all_music.get(title)
+            if value is not None:
+                identity = str(value).strip()
+                if identity:
+                    return identity
+
+        return title
 
     def _infer_local_library_source(self, track_title: str) -> str | None:
         title = str(track_title or "").strip()
@@ -826,13 +875,30 @@ class PlaybackFacade:
             device_player, is_playing, raw_status
         )
 
+        volume_from_status = False
+        current_volume = 0
+        if "volume" in raw_status and raw_status.get("volume") is not None:
+            try:
+                current_volume = int(float(raw_status.get("volume") or 0))
+                volume_from_status = True
+            except Exception:
+                current_volume = 0
+        if not volume_from_status and device_player is not None:
+            try:
+                current_volume = int(getattr(device_player, "_last_volume", 0) or 0)
+            except Exception:
+                current_volume = 0
+        current_volume = max(0, min(100, int(current_volume or 0)))
+
         track_title = ""
         track_artist: str | None = None
         track_album: str | None = None
         raw_track_source: str | None = None
         track_source: str | None = None
+        track_identity_hint = ""
         position_ms = 0
         duration_ms = 0
+        detail: dict[str, Any] | None = None
 
         if is_playing or transport_state in {"paused", "stopped"}:
             if is_playing:
@@ -941,6 +1007,11 @@ class PlaybackFacade:
             raw_source=raw_track_source,
             play_session_id=play_session_id,
         )
+        track_identity_hint = self._resolve_track_identity_hint(
+            context_id=cur_playlist,
+            track_title=track_title,
+            detail=detail,
+        )
 
         current_index: int | None = None
         if device_player:
@@ -981,7 +1052,12 @@ class PlaybackFacade:
 
         track_id = ""
         if track_title or current_index is not None or cur_playlist:
-            track_id = build_track_id(cur_playlist, current_index, track_title)
+            track_id = build_track_id(
+                cur_playlist,
+                current_index,
+                track_title,
+                identity_hint=track_identity_hint,
+            )
 
         track_obj: dict[str, Any] | None = None
         if transport_state not in {"idle"} and (track_title or track_id):
@@ -1017,6 +1093,7 @@ class PlaybackFacade:
             "context": context_obj,
             "position_ms": position_ms,
             "duration_ms": duration_ms,
+            "volume": current_volume,
             "snapshot_at_ms": snapshot_at_ms,
         }
 

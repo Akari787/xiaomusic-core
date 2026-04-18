@@ -26,9 +26,12 @@ class MiioTransport(Transport):
         self._xiaomusic = xiaomusic
 
     async def play_url(
-        self, device_id: str, prepared: PreparedStream
+        self,
+        device_id: str,
+        prepared: PreparedStream,
+        request_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        _ = (device_id, prepared)
+        _ = (device_id, prepared, request_context)
         LOG.warning(
             "transport_action action=play_url success=false latency_ms=0 device_id=%s",
             device_id,

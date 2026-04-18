@@ -77,6 +77,7 @@ class XiaoMusicDevice:
         self._autonext_guard_task = None
         self._degraded = False
         self._degraded_notified = False
+        self._last_volume = 0
 
         # Used to guard delayed tasks (next-song timer, auto-add, retries)
         self._play_session_id = 0
@@ -191,6 +192,34 @@ class XiaoMusicDevice:
                 d = d / 1000.0
             return max(d, 0.0)
         return 0.0
+
+    @staticmethod
+    def _normalize_volume_value(value, default: int = 0) -> int:
+        try:
+            volume = int(float(value))
+        except (TypeError, ValueError):
+            volume = int(default)
+        return max(0, min(100, volume))
+
+    def _remember_volume(self, value, default: int | None = None) -> int:
+        fallback = self._last_volume if default is None else int(default)
+        volume = self._normalize_volume_value(value, fallback)
+        self._last_volume = volume
+        return volume
+
+    def _remember_volume_from_status(self, info: dict | None) -> int:
+        if not isinstance(info, dict):
+            return self._last_volume
+        return self._remember_volume(info.get("volume"), self._last_volume)
+
+    async def _refresh_runtime_volume(self, *, context: str = "") -> int:
+        try:
+            volume = await self.get_volume()
+        except Exception as exc:
+            self.log.warning("refresh_runtime_volume failed ctx=%s err=%s", context, exc)
+            return self._last_volume
+        self.log.info("refresh_runtime_volume ctx=%s volume=%d", context or "-", volume)
+        return self._remember_volume(volume)
 
     def _start_duration_probe(self, name: str, sid: int):
         if self._duration_probe_task and not self._duration_probe_task.done():
@@ -408,6 +437,26 @@ class XiaoMusicDevice:
         """播放下一首（外部接口）"""
         return await self._play_next(manual=True)
 
+    def _stage_playlist_navigation_transition(self, name: str, *, reason: str) -> None:
+        target = str(name or "").strip()
+        if not target:
+            return
+        self.is_playing = False
+        self._start_time = 0
+        self._paused_time = 0
+        self._duration = 0
+        self._last_cmd = reason
+        self.device.cur_music = target
+        cur_playlist = str(getattr(self.device, "cur_playlist", "") or "")
+        playlist2music = getattr(self.device, "playlist2music", None)
+        if cur_playlist and isinstance(playlist2music, dict):
+            playlist2music[cur_playlist] = target
+        if self._play_list:
+            try:
+                self._current_index = self._play_list.index(target)
+            except ValueError:
+                self._current_index = -1
+
     async def _play_next(self, manual: bool = False):
         """播放下一首（内部实现）"""
         self.log.info("开始播放下一首")
@@ -430,7 +479,7 @@ class XiaoMusicDevice:
         if name == "":
             self.log.info("本地没有歌曲")
             return False
-        self._last_cmd = "play_next"
+        self._stage_playlist_navigation_transition(name, reason="play_next")
         return await self._play(name, preserve_playlist=manual)
 
     async def play_prev(self):
@@ -616,6 +665,7 @@ class XiaoMusicDevice:
         # 记录歌曲开始播放的时间
         self._start_time = time.time()
         self._paused_time = 0
+        await self._refresh_runtime_volume(context="playmusic_started")
 
         if self.event_bus:
             self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.did)
@@ -1052,8 +1102,58 @@ class XiaoMusicDevice:
         self.log.info(f"group_player_play {url} {device_id_list} {results}")
         return results
 
-    async def on_external_url_play(self):
+    def _bootstrap_playlist_session_for_external_url(self, context: dict | None = None):
+        context = context if isinstance(context, dict) else {}
+        context_hint = context.get("context_hint")
+        if not isinstance(context_hint, dict):
+            context_hint = {}
+        source_payload = context.get("source_payload")
+        if not isinstance(source_payload, dict):
+            source_payload = {}
+
+        context_type = str(
+            context_hint.get("context_type") or source_payload.get("context_type") or ""
+        ).strip().lower()
+        playlist_name = str(
+            context_hint.get("context_name")
+            or context_hint.get("context_id")
+            or source_payload.get("playlist_name")
+            or source_payload.get("context_name")
+            or ""
+        ).strip()
+        music_name = str(
+            source_payload.get("music_name")
+            or source_payload.get("track_name")
+            or context.get("title")
+            or ""
+        ).strip()
+        if context_type != "playlist":
+            return
+        if not playlist_name:
+            return
+
+        music_list = getattr(self.xiaomusic.music_library, "music_list", {}) or {}
+        play_list = music_list.get(playlist_name)
+        if not isinstance(play_list, list):
+            return
+
+        self.device.cur_playlist = playlist_name
+        self._play_list = copy.copy(play_list)
+        if self.device.play_type == PLAY_TYPE_RND:
+            random.shuffle(self._play_list)
+            self.log.info(
+                f"external_url playlist shuffled {playlist_name} {list2str(self._play_list, self.config.verbose)}"
+            )
+        self.device.cur_music = music_name
+        self.device.playlist2music[playlist_name] = music_name
+        try:
+            self._current_index = self._play_list.index(music_name)
+        except ValueError:
+            self._current_index = -1
+
+    async def on_external_url_play(self, context: dict | None = None):
         """Reset local playlist progress state for external URL playback."""
+        previous_playlist = str(self.device.cur_playlist or "").strip()
         self._bump_play_session(reason="external_url_play")
         await self.cancel_group_next_timer()
         self.is_playing = False
@@ -1061,7 +1161,87 @@ class XiaoMusicDevice:
         self._paused_time = 0
         self._duration = 0
         self._last_cmd = "external_play"
+        self._current_index = -1
+        self._play_list = []
+        self.device.cur_playlist = ""
         self.device.cur_music = ""
+        if previous_playlist:
+            self.device.playlist2music[previous_playlist] = ""
+        self._bootstrap_playlist_session_for_external_url(context)
+        if not self.device.cur_music:
+            self.device.cur_music = ""
+
+    async def on_external_url_play_started(
+        self,
+        context: dict | None = None,
+        resolved: dict | None = None,
+    ):
+        """Finalize local runtime state after external URL dispatch succeeds."""
+        context = context if isinstance(context, dict) else {}
+        resolved = resolved if isinstance(resolved, dict) else {}
+
+        sid = self._play_session_id
+        title = str(
+            resolved.get("title")
+            or context.get("title")
+            or self.device.cur_music
+            or ""
+        ).strip()
+        if title:
+            self.device.cur_music = title
+            if self.device.cur_playlist:
+                self.device.playlist2music[self.device.cur_playlist] = title
+            if self._play_list and self._current_index < 0:
+                try:
+                    self._current_index = self._play_list.index(title)
+                except ValueError:
+                    self._current_index = -1
+
+        self.is_playing = True
+        self._start_time = time.time()
+        self._paused_time = 0
+        self._last_cmd = "external_play"
+        await self._refresh_runtime_volume(context="external_url_play_started")
+
+        duration_hint = 0.0
+        for key in ("duration_seconds", "duration", "duration_ms"):
+            value = resolved.get(key)
+            if value is None:
+                continue
+            try:
+                parsed = float(value)
+            except Exception:
+                continue
+            if parsed > 10000:
+                parsed = parsed / 1000.0
+            if parsed > 0.1:
+                duration_hint = parsed
+                break
+
+        sec = duration_hint
+        if sec <= 0.1 and title:
+            try:
+                sec = await self.xiaomusic.music_library.get_music_duration(title)
+            except Exception:
+                sec = 0.0
+
+        self._duration = max(float(sec or 0.0), 0.0)
+        if self.event_bus:
+            self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.did)
+
+        if self._duration <= 0.1:
+            self._start_duration_probe(title, sid)
+            self.log.info(f"【{title or 'external_url'}】不会设置下一首歌的定时器")
+            return
+
+        adjusted_sec = max(self._duration + self.config.delay_sec, 0.1)
+        self.log.info(
+            "external_url_post_start duration=%.3f adjusted_delay=%.3f title=%s",
+            self._duration,
+            adjusted_sec,
+            title,
+        )
+        await self.set_next_music_timeout(adjusted_sec)
 
     async def play_one_url(self, device_id, url, name):
         """在单个设备上播放URL"""
@@ -1247,6 +1427,7 @@ class XiaoMusicDevice:
 
     async def set_volume(self, volume: int):
         """设置音量"""
+        volume = self._remember_volume(volume)
         self.log.info(f"set_volume.  did: {self.did} volume: {volume}")
         try:
             await self.auth_manager.mina_call(
@@ -1275,7 +1456,7 @@ class XiaoMusicDevice:
             )
         except Exception as e:
             self.log.warning(f"Execption {e}")
-        volume = int(volume)
+        volume = self._remember_volume(volume)
         self.log.info("get_volume. volume:%d", volume)
         return volume
 
@@ -1290,6 +1471,7 @@ class XiaoMusicDevice:
             )
             self.log.info(f"get_player_status. playing_info:{playing_info}")
             info = json.loads(playing_info.get("data", {}).get("info", "{}"))
+            self._remember_volume_from_status(info)
             return info
         except Exception as e:
             self.log.warning(f"Execption {e}")

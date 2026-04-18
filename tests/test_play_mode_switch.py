@@ -105,6 +105,53 @@ async def test_manual_play_next_preserves_current_playlist():
 
 
 @pytest.mark.asyncio
+async def test_manual_play_next_stages_target_index_and_resets_progress_before_dispatch():
+    d = XiaoMusicDevice.__new__(XiaoMusicDevice)
+
+    d.device = types.SimpleNamespace(
+        did="did-1",
+        play_type=PLAY_TYPE_ONE,
+        cur_playlist="BGM",
+        cur_music="song-a",
+        playlist2music={"BGM": "song-a"},
+    )
+    d.event_bus = types.SimpleNamespace(
+        publish=lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("staging should not publish duplicate player_state events")
+        )
+    )
+    d.log = types.SimpleNamespace(info=lambda *args, **kwargs: None)
+    d._play_list = ["song-a", "song-b"]
+    d._current_index = 0
+    d.is_playing = True
+    d._start_time = 123.0
+    d._paused_time = 5.0
+    d._duration = 99.0
+    d.get_cur_music = lambda: d.device.cur_music
+    d.get_next_music = lambda: "song-b"
+
+    captured: list[tuple[str, bool]] = []
+
+    async def _play(name="", search_key="", preserve_playlist=False):  # noqa: ARG001
+        captured.append((name, preserve_playlist))
+        return True
+
+    d._play = _play
+
+    await d.play_next()
+
+    assert captured == [("song-b", True)]
+    assert d.device.cur_music == "song-b"
+    assert d.device.playlist2music["BGM"] == "song-b"
+    assert d._current_index == 1
+    assert d.is_playing is False
+    assert d._start_time == 0
+    assert d._paused_time == 0
+    assert d._duration == 0
+    assert d._last_cmd == "play_next"
+
+
+@pytest.mark.asyncio
 async def test_manual_play_prev_advances_even_in_single_mode():
     d = XiaoMusicDevice.__new__(XiaoMusicDevice)
     d.device = types.SimpleNamespace(play_type=PLAY_TYPE_SIN)

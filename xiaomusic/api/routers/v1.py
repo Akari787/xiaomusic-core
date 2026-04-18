@@ -338,13 +338,26 @@ async def api_v1_play(data: PlayRequest):
     request_id = _next_request_id(data.request_id)
     options = PlayOptions.from_payload(getattr(data, OPTIONS, None))
     try:
-        out = await _get_facade().play(
+        facade = _get_facade()
+        out = await facade.play(
             device_id=getattr(data, DEVICE_ID),
             query=getattr(data, QUERY),
             source_hint=getattr(data, SOURCE_HINT),
             options=options,
             request_id=request_id,
         )
+        snapshot: dict[str, Any] | None = None
+        try:
+            snapshot = await facade.build_player_state_snapshot(
+                device_id=out.get(DEVICE_ID, getattr(data, DEVICE_ID))
+            )
+        except Exception:
+            LOG.warning(
+                "api_warn endpoint=/api/v1/play request_id=%s device_id=%s snapshot=build_failed",
+                request_id,
+                out.get(DEVICE_ID, getattr(data, DEVICE_ID)),
+                exc_info=True,
+            )
         return _api_ok(
             {
                 "status": out.get("status", "playing"),
@@ -353,6 +366,7 @@ async def api_v1_play(data: PlayRequest):
                 "transport": out.get("transport", ""),
                 "sid": request_id,
                 "media": out.get("media", {}),
+                "state": snapshot,
                 "extra": out.get("extra", {}),
             },
             request_id=request_id,
@@ -917,7 +931,7 @@ async def api_v1_control_play_mode(data: PlayModeRequest):
             )
         xm = _require_device(data.device_id, request_id)
         handler = getattr(xm, _PLAY_MODE_HANDLERS[play_mode])
-        await handler(did=data.device_id, dotts=False, refresh_playlist=False)
+        await handler(did=data.device_id, dotts=False, refresh_playlist=True)
         return _api_ok(
             {"status": "ok", DEVICE_ID: data.device_id, "play_mode": play_mode},
             request_id=request_id,
@@ -1018,6 +1032,9 @@ async def api_v1_library_playlists(request_id: str | None = None):
         raw_playlists = _get_xiaomusic().music_library.get_music_list()
         from xiaomusic.utils.text_utils import custom_sort_key
 
+        music_library = getattr(_get_xiaomusic(), "music_library", None)
+        all_music = getattr(music_library, "all_music", {}) if music_library else {}
+
         playlists_with_ids = {}
         if isinstance(raw_playlists, dict):
             for name, songs in raw_playlists.items():
@@ -1025,9 +1042,12 @@ async def api_v1_library_playlists(request_id: str | None = None):
                     sorted_songs = sorted(songs, key=custom_sort_key)
                     items = []
                     for idx, title in enumerate(sorted_songs):
+                        identity_hint = ""
+                        if isinstance(all_music, dict):
+                            identity_hint = str(all_music.get(title) or "").strip()
                         items.append(
                             {
-                                "id": build_track_id(name, idx, title),
+                                "id": build_track_id(name, idx, title, identity_hint=identity_hint),
                                 "title": title,
                             }
                         )
@@ -1180,6 +1200,7 @@ async def api_v1_player_state(
             "context": snapshot.get("context"),
             "position_ms": int(snapshot.get("position_ms", 0)),
             "duration_ms": int(snapshot.get("duration_ms", 0)),
+            "volume": int(snapshot.get("volume", 0) or 0),
             "snapshot_at_ms": int(snapshot.get("snapshot_at_ms", 0)),
             "is_playing": bool(snapshot.get("transport_state") == "playing"),
             "cur_music": str((snapshot.get("track") or {}).get("title", "") or ""),

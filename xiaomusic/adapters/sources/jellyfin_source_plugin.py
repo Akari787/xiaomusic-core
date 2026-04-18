@@ -14,6 +14,23 @@ class JellyfinSourcePlugin(SourcePlugin):
 
     name = "jellyfin"
 
+    @staticmethod
+    def _resolve_duration_seconds(*values: Any) -> float | None:
+        for value in values:
+            if value is None:
+                continue
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed <= 0:
+                continue
+            if parsed > 10000:
+                parsed = parsed / 1000.0
+            if parsed > 0:
+                return parsed
+        return None
+
     def __init__(
         self,
         payload_url_resolver: Callable[[dict[str, Any]], str],
@@ -45,6 +62,12 @@ class JellyfinSourcePlugin(SourcePlugin):
                 raise SourceResolveError("jellyfin payload did not resolve to HTTP URL")
             title = request.context.get("title") or payload.get("title") or payload.get("name")
             media_id = str(payload.get("id") or request.request_id)
+            duration_seconds = self._resolve_duration_seconds(
+                payload.get("duration_seconds"),
+                payload.get("duration"),
+                request.context.get("duration_seconds"),
+                request.context.get("duration_ms"),
+            )
             return ResolvedMedia(
                 media_id=media_id,
                 source=self.name,
@@ -53,6 +76,7 @@ class JellyfinSourcePlugin(SourcePlugin):
                 headers={},
                 expires_at=None,
                 is_live=False,
+                duration_seconds=duration_seconds,
             )
 
         query = str(request.query or "").strip()
@@ -66,6 +90,10 @@ class JellyfinSourcePlugin(SourcePlugin):
         path_parts = [part for part in parsed.path.split("/") if part]
         if len(path_parts) >= 2 and path_parts[0].lower() == "audio":
             media_id = path_parts[1]
+        duration_seconds = self._resolve_duration_seconds(
+            context.get("duration_seconds"),
+            context.get("duration_ms"),
+        )
         return ResolvedMedia(
             media_id=str(media_id),
             source=self.name,
@@ -74,4 +102,5 @@ class JellyfinSourcePlugin(SourcePlugin):
             headers={},
             expires_at=None,
             is_live=False,
+            duration_seconds=duration_seconds,
         )

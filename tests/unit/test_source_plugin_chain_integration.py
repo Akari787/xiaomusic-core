@@ -26,8 +26,18 @@ from xiaomusic.relay.url_classifier import UrlClassifier
 class _TransportStub(Transport):
     name = "mina"
 
-    async def play_url(self, device_id: str, prepared: PreparedStream) -> dict:
-        return {"ret": "OK", "device_id": device_id, "url": prepared.final_url}
+    async def play_url(
+        self,
+        device_id: str,
+        prepared: PreparedStream,
+        request_context: dict | None = None,
+    ) -> dict:
+        return {
+            "ret": "OK",
+            "device_id": device_id,
+            "url": prepared.final_url,
+            "request_context": request_context or {},
+        }
 
     async def stop(self, device_id: str) -> dict:
         return {"ret": "OK", "device_id": device_id}
@@ -123,7 +133,7 @@ def _build_coordinator() -> PlaybackCoordinator:
                 source_hint="jellyfin",
                 query="legacy://jellyfin",
                 device_id="d1",
-                context={"source_payload": {"source": "jellyfin", "url": "http://192.168.7.4:30013/Audio/id/stream.mp3"}},
+                context={"source_payload": {"source": "jellyfin", "url": "http://192.168.7.4:30013/Audio/id/stream.mp3", "duration_seconds": 123.5}},
             ),
             "jellyfin",
         ),
@@ -174,3 +184,6 @@ async def test_unified_chain_for_all_source_plugins(media_request: MediaRequest,
     assert out["ok"] is True
     assert out["prepared_stream"].source == expected_source
     assert out["dispatch"].transport == "mina"
+    assert out["dispatch"].data["request_context"]["_resolved_media"]["source"] == expected_source
+    if expected_source == "jellyfin" and isinstance(media_request.context.get("source_payload"), dict):
+        assert out["dispatch"].data["request_context"]["_resolved_media"]["duration_seconds"] == media_request.context["source_payload"].get("duration_seconds")

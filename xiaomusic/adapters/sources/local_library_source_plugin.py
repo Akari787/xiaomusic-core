@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -132,7 +133,51 @@ class LocalLibrarySourcePlugin(SourcePlugin):
                         is_live=False,
                     )
 
+        # ── Playlist-context branch: read raw music_list_json to find the track ──
         if is_playlist_context and playlist_name:
+            try:
+                raw = self._music_library.config.music_list_json
+                music_lists = json.loads(raw) if raw else []
+            except Exception:
+                music_lists = []
+
+            if music_lists:
+                for playlist in music_lists:
+                    pl_name = str(playlist.get("name") or "").strip()
+                    if pl_name != playlist_name:
+                        continue
+                    musics = playlist.get("musics")
+                    if not isinstance(musics, list):
+                        continue
+
+                    for item in musics:
+                        item_name = str(item.get("name") or "").strip()
+                        item_track_name = str(item.get("track_name") or "").strip()
+                        item_track_id = str(item.get("track_id") or "").strip()
+
+                        if (
+                            item_name == candidate
+                            or item_track_name == candidate
+                            or item_track_id == candidate
+                        ):
+                            item_url = str(item.get("url") or "").strip()
+                            if not item_url:
+                                continue
+                            parsed_url = urlparse(item_url)
+                            is_jellyfin_item = (
+                                parsed_url.scheme in ("http", "https")
+                                and self._music_library.is_jellyfin_url(item_url)
+                            )
+                            return ResolvedMedia(
+                                media_id=media_id,
+                                source="jellyfin" if is_jellyfin_item else self.name,
+                                title=title,
+                                stream_url=item_url,
+                                headers={},
+                                expires_at=None,
+                                is_live=False,
+                            )
+
             raise SourceResolveError(
                 f"local library media not found in playlist {playlist_name}: {candidate}"
             )

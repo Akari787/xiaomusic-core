@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from xiaomusic.api.routers import v1
+from xiaomusic.playback.facade import build_track_id
 
 
 def _v1_client() -> TestClient:
@@ -14,6 +15,11 @@ def _v1_client() -> TestClient:
 
 def test_library_playlists_success(monkeypatch):
     class _Library:
+        all_music = {
+            "song-a": "/music/song-a.flac",
+            "song-b": "/music/song-b.flac",
+        }
+
         @staticmethod
         def get_music_list():
             return {"收藏": ["song-a", "song-b"]}
@@ -27,7 +33,14 @@ def test_library_playlists_success(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["code"] == 0
-    assert body["data"] == {"playlists": {"收藏": ["song-a", "song-b"]}}
+    assert body["data"] == {
+        "playlists": {
+            "收藏": [
+                {"id": build_track_id("收藏", 0, "song-a", identity_hint="/music/song-a.flac"), "title": "song-a"},
+                {"id": build_track_id("收藏", 1, "song-b", identity_hint="/music/song-b.flac"), "title": "song-b"},
+            ]
+        }
+    }
 
 
 def test_library_music_info_success(monkeypatch):

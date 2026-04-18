@@ -59,9 +59,16 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
         async def gen_music_list(self, **kwargs):
             calls.append(("gen_music_list", (), kwargs))
 
+    pushed: list[str] = []
+
     xm = _XM()
     monkeypatch.setattr(v1, "_get_xiaomusic", lambda: xm)
     monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
+
+    async def _push(device_id: str):
+        pushed.append(device_id)
+
+    monkeypatch.setattr(v1, "_push_player_state_event", _push)
 
     out_prev = await v1.api_v1_control_previous(ControlRequest(device_id="did-1"))
     out_next = await v1.api_v1_control_next(ControlRequest(device_id="did-1"))
@@ -83,9 +90,10 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
     assert calls[3][2]["arg1"] == 5
     assert calls[4][2]["arg1"] == "song-a"
     assert calls[2][2]["dotts"] is False
-    assert calls[2][2]["refresh_playlist"] is False
+    assert calls[2][2]["refresh_playlist"] is True
     assert out_prev["data"]["transport"] == "miio"
     assert out_next["data"]["transport"] == "miio"
+    assert pushed == []
     for out in (out_prev, out_next, out_mode, out_timer, out_add, out_remove, out_refresh):
         assert out["code"] == 0
         assert out["message"] == "ok"
@@ -177,6 +185,34 @@ async def test_api_v1_devices_and_system_status_internal_failure_are_structured(
     assert status_out["message"] == "system status query failed"
     assert status_out["data"]["error_code"] == "E_SYSTEM_STATUS_FAILED"
     assert status_out["data"]["stage"] == "system"
+
+
+@pytest.mark.asyncio
+async def test_api_v1_control_next_does_not_push_player_state_event(monkeypatch):
+    class _Facade:
+        async def next(self, device_id: str, request_id: str | None = None):
+            _ = (device_id, request_id)
+            return {
+                "status": "ok",
+                "device_id": device_id,
+                "transport": "miio",
+                "request_id": request_id,
+                "action": "next",
+            }
+
+    pushed: list[str] = []
+
+    async def _push(device_id: str):
+        pushed.append(device_id)
+
+    monkeypatch.setattr(v1, "_get_facade", lambda: _Facade())
+    monkeypatch.setattr(v1, "_push_player_state_event", _push)
+
+    out = await v1.api_v1_control_next(ControlRequest(device_id="did-1"))
+
+    assert out["code"] == 0
+    assert out["data"]["action"] == "next"
+    assert pushed == []
 
 
 @pytest.mark.asyncio

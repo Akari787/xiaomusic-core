@@ -65,6 +65,7 @@ docker run -d --name xiaomusic-core \
 | [播放状态快照规范](docs/spec/player_state_projection_spec.md) | 权威状态快照字段模型与消费约束 |
 | [SSE 推送协议](docs/spec/player_stream_sse_spec.md) | 播放状态主通道协议、重连、心跳 |
 | [架构说明](ARCHITECTURE.md) | 系统分层、模块职责、调用链 |
+| [v1.1.0 发布说明](docs/release/v1.1.0.md) | 相对 `v1.0.10` 的真实代码变化、当前确认范围与发布边界 |
 | [播放架构](docs/architecture/unified_playback_model.md) | 统一播放模型、来源、上下文、执行路径 |
 | [WebUI 状态机规范](docs/spec/webui_playback_state_machine_spec.md) | 前端消费型状态机定义 |
 | [Runtime 技术规范](docs/spec/runtime_specification.md) | core 层数据模型、错误体系、Source/Transport 接口 |
@@ -79,6 +80,7 @@ docker run -d --name xiaomusic-core \
 2. [认证运行时恢复路径规范](docs/spec/auth_runtime_reload_recovery_path.md)
 3. [fresh session 主路径验收收口](docs/implementation/auth_fresh_session_runtime_recovery_acceptance.md)
 4. [spec rebuild 验收矩阵](docs/implementation/spec_rebuild_acceptance_matrix_2026-04-09.md)
+5. [v1.1.0 发布说明](docs/release/v1.1.0.md)
 
 其中：
 

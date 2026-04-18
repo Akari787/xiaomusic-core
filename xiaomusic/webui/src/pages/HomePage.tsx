@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import {
   addFavorite as v1AddFavorite,
@@ -58,6 +58,15 @@ type AuthStatus = {
   runtime_auth_ready?: boolean;
   login_in_progress?: boolean;
   last_error?: string;
+};
+
+type PendingSelection = {
+  playlist: string | null;
+  trackId: string | null;
+  trackTitle: string | null;
+  anchorPlaySessionId: string;
+  anchorRevision: number;
+  submitting: boolean;
 };
 
 type QrcodeResp = {
@@ -255,6 +264,7 @@ const EMPTY_SERVER_STATE: PlayerStateData = {
   context: null,
   position_ms: 0,
   duration_ms: 0,
+  volume: 0,
   snapshot_at_ms: 0,
 };
 
@@ -502,16 +512,87 @@ function clearXmCache(): void {
   });
 }
 
-function useProgressInterpolation(serverState: PlayerStateData, transportState: TransportState): {
+type ProgressBaselineCache = {
+  play_session_id: string;
+  revision: number;
+  position_ms: number;
+  captured_at_ms: number;
+};
+
+function progressBaselineStorageKey(did: string): string {
+  return `xm_progress_baseline_${did}`;
+}
+
+function loadProgressBaseline(did: string): ProgressBaselineCache | null {
+  if (!did) {
+    return null;
+  }
+  try {
+    const raw = localStorage.getItem(progressBaselineStorageKey(did));
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as ProgressBaselineCache;
+    if (
+      !parsed ||
+      typeof parsed.play_session_id !== "string" ||
+      typeof parsed.revision !== "number" ||
+      typeof parsed.position_ms !== "number" ||
+      typeof parsed.captured_at_ms !== "number"
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveProgressBaseline(did: string, baseline: ProgressBaselineCache): void {
+  if (!did) {
+    return;
+  }
+  try {
+    localStorage.setItem(progressBaselineStorageKey(did), JSON.stringify(baseline));
+  } catch {
+    return;
+  }
+}
+
+function clearProgressBaseline(did: string): void {
+  if (!did) {
+    return;
+  }
+  removeLocal(progressBaselineStorageKey(did));
+}
+
+function useProgressInterpolation(
+  serverState: PlayerStateData,
+  transportState: TransportState,
+  suspendUpdates = false,
+): {
   currentPositionMs: number;
   progress: number;
 } {
-  const MAX_INTERPOLATION_MS = 5000;
   const [currentPositionMs, setCurrentPositionMs] = useState<number>(() => serverState.position_ms);
   const timerRef = useRef<number | null>(null);
   const lastRevisionRef = useRef<number>(-1);
   const lastSessionRef = useRef<string>('');
-  const lastSnapshotRef = useRef<number>(0);
+  const lastSnapshotAtRef = useRef<number>(0);
+  const lastPositionRef = useRef<number>(0);
+
+  const clampPosition = (positionMs: number, durationMs: number): number => {
+    if (durationMs > 0) {
+      return Math.min(positionMs, durationMs);
+    }
+    return positionMs;
+  };
+
+  const resolveInterpolatedPosition = (basePosition: number, snapshotAtMs: number, durationMs: number): number => {
+    const effectiveSnapshotAt = snapshotAtMs > 0 ? snapshotAtMs : Date.now();
+    const elapsed = Math.max(0, Date.now() - effectiveSnapshotAt);
+    return clampPosition(basePosition + elapsed, durationMs);
+  };
 
   useEffect(() => {
     if (timerRef.current !== null) {
@@ -519,37 +600,63 @@ function useProgressInterpolation(serverState: PlayerStateData, transportState: 
       timerRef.current = null;
     }
 
-    if (transportState !== "playing") {
+    const sessionChanged = serverState.play_session_id !== lastSessionRef.current;
+    const revisionChanged = serverState.revision !== lastRevisionRef.current;
+    const snapshotChanged = serverState.snapshot_at_ms !== lastSnapshotAtRef.current;
+    const positionChanged = serverState.position_ms !== lastPositionRef.current;
+
+    lastSessionRef.current = serverState.play_session_id;
+    lastRevisionRef.current = serverState.revision;
+    lastSnapshotAtRef.current = serverState.snapshot_at_ms;
+    lastPositionRef.current = serverState.position_ms;
+
+    if (transportState !== "playing" || suspendUpdates) {
+      if (transportState !== "playing") {
+        clearProgressBaseline(serverState.device_id);
+      }
       setCurrentPositionMs(serverState.position_ms);
       return;
     }
 
-    const sessionChanged = serverState.play_session_id !== lastSessionRef.current;
-    const revisionChanged = serverState.revision !== lastRevisionRef.current;
-    if (sessionChanged) {
-      lastSessionRef.current = serverState.play_session_id;
-    }
-    if (revisionChanged) {
-      lastRevisionRef.current = serverState.revision;
-    }
-
-    const basePosition = serverState.position_ms;
     const durationMs = serverState.duration_ms;
-    let snapshotAt = serverState.snapshot_at_ms;
+    const serverDisplayedPosition = resolveInterpolatedPosition(
+      serverState.position_ms,
+      serverState.snapshot_at_ms,
+      durationMs,
+    );
 
-    if (sessionChanged || revisionChanged) {
-      setCurrentPositionMs(basePosition);
-      lastSnapshotRef.current = snapshotAt;
+    let effectiveBasePosition = serverState.position_ms;
+    let effectiveSnapshotAtMs = serverState.snapshot_at_ms;
+
+    const cachedBaseline = loadProgressBaseline(serverState.device_id);
+    if (
+      cachedBaseline &&
+      cachedBaseline.play_session_id === serverState.play_session_id &&
+      cachedBaseline.revision === serverState.revision
+    ) {
+      const cachedDisplayedPosition = clampPosition(
+        cachedBaseline.position_ms + Math.max(0, Date.now() - cachedBaseline.captured_at_ms),
+        durationMs,
+      );
+      if (cachedDisplayedPosition > serverDisplayedPosition + 750) {
+        effectiveBasePosition = cachedDisplayedPosition;
+        effectiveSnapshotAtMs = Date.now();
+      }
+    }
+
+    if (sessionChanged || revisionChanged || snapshotChanged || positionChanged) {
+      setCurrentPositionMs(resolveInterpolatedPosition(effectiveBasePosition, effectiveSnapshotAtMs, durationMs));
     }
 
     timerRef.current = window.setInterval(() => {
-      const now = Date.now();
-      const elapsed = Math.min(Math.max(0, now - lastSnapshotRef.current), MAX_INTERPOLATION_MS);
-      let newPosition = basePosition + elapsed;
-      if (durationMs > 0) {
-        newPosition = Math.min(newPosition, durationMs);
-      }
-      setCurrentPositionMs(newPosition);
+      const nextPosition = resolveInterpolatedPosition(effectiveBasePosition, effectiveSnapshotAtMs, durationMs);
+      setCurrentPositionMs(nextPosition);
+      saveProgressBaseline(serverState.device_id, {
+        play_session_id: serverState.play_session_id,
+        revision: serverState.revision,
+        position_ms: nextPosition,
+        captured_at_ms: Date.now(),
+      });
     }, 250);
 
     return () => {
@@ -560,11 +667,13 @@ function useProgressInterpolation(serverState: PlayerStateData, transportState: 
     };
   }, [
     transportState,
+    serverState.device_id,
     serverState.position_ms,
     serverState.snapshot_at_ms,
     serverState.play_session_id,
     serverState.revision,
     serverState.duration_ms,
+    suspendUpdates,
   ]);
 
   const progress = useMemo(() => {
@@ -772,9 +881,7 @@ export function HomePage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [activeDid, setActiveDid] = useState<string>(() => loadLocal("xm_ui_active_did"));
   const [playlists, setPlaylists] = useState<Record<string, { id: string; title: string }[]>>({});
-  const [playlist, setPlaylist] = useState<string>(() => loadLocal("xm_ui_playlist"));
-  const [music, setMusic] = useState<string>(() => loadLocal("xm_ui_music"));
-  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
+  const [pendingSelection, setPendingSelection] = useState<PendingSelection | null>(null);
   const [volume, setVolume] = useState<number>(50);
   const [message, setMessage] = useState<string>("");
   const [version, setVersion] = useState<string>("");
@@ -782,6 +889,8 @@ export function HomePage() {
   const [switchingPlayMode, setSwitchingPlayMode] = useState<boolean>(false);
 
   const [showSearch, setShowSearch] = useState<boolean>(false);
+  const [selectorInteracting, setSelectorInteracting] = useState<boolean>(false);
+  const selectorInteractionTimerRef = useRef<number | null>(null);
   const [showTimer, setShowTimer] = useState<boolean>(false);
   const [showPlaylink, setShowPlaylink] = useState<boolean>(false);
   const [showVolume, setShowVolume] = useState<boolean>(false);
@@ -813,14 +922,52 @@ export function HomePage() {
   const [serverState, dispatchServerState] = useReducer(serverStateReducer, EMPTY_SERVER_STATE);
   const [uiState, setUiState] = useState<UiState>(EMPTY_UI_STATE);
   const serverStateRef = useRef<PlayerStateData>(EMPTY_SERVER_STATE);
+  const previousPendingCheckStateRef = useRef<PlayerStateData>(EMPTY_SERVER_STATE);
   const prevPlaySessionRef = useRef<string>("");
   const lastStableTrackTitleRef = useRef<string>(loadRememberedPlayingSong(activeDid));
   const activeDidRef = useRef<string>(activeDid);
   const publicBaseMigratedRef = useRef<boolean>(false);
   const themeFileInputRef = useRef<HTMLInputElement | null>(null);
   const lastAppliedRevisionRef = useRef<number>(-1);
+  const lastAppliedSnapshotAtRef = useRef<number>(-1);
+  const lastAppliedPositionRef = useRef<number>(-1);
 
-  const { currentPositionMs, progress } = useProgressInterpolation(serverState, serverState.transport_state);
+  const { currentPositionMs, progress } = useProgressInterpolation(
+    serverState,
+    serverState.transport_state,
+    selectorInteracting,
+  );
+
+  const beginSelectorInteraction = useCallback(() => {
+    if (selectorInteractionTimerRef.current !== null) {
+      window.clearTimeout(selectorInteractionTimerRef.current);
+      selectorInteractionTimerRef.current = null;
+    }
+    setSelectorInteracting(true);
+  }, []);
+
+  const endSelectorInteraction = useCallback((delayMs = 0) => {
+    if (selectorInteractionTimerRef.current !== null) {
+      window.clearTimeout(selectorInteractionTimerRef.current);
+      selectorInteractionTimerRef.current = null;
+    }
+    if (delayMs > 0) {
+      selectorInteractionTimerRef.current = window.setTimeout(() => {
+        selectorInteractionTimerRef.current = null;
+        setSelectorInteracting(false);
+      }, delayMs);
+      return;
+    }
+    setSelectorInteracting(false);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (selectorInteractionTimerRef.current !== null) {
+        window.clearTimeout(selectorInteractionTimerRef.current);
+      }
+    };
+  }, []);
 
   const applySnapshotFn = useMemo(
     () =>
@@ -828,14 +975,26 @@ export function HomePage() {
         if (snapshot.device_id !== currentDeviceId) {
           return false;
         }
-        if (snapshot.revision <= lastAppliedRevisionRef.current) {
+        const isOlderRevision = snapshot.revision < lastAppliedRevisionRef.current;
+        const sameRevision = snapshot.revision === lastAppliedRevisionRef.current;
+        const hasNewTimingBaseline =
+          snapshot.snapshot_at_ms > lastAppliedSnapshotAtRef.current ||
+          snapshot.position_ms !== lastAppliedPositionRef.current;
+
+        if (isOlderRevision) {
           if (lastAppliedRevisionRef.current > 0 && snapshot.revision < lastAppliedRevisionRef.current * 0.1) {
             lastAppliedRevisionRef.current = -1;
+            lastAppliedSnapshotAtRef.current = -1;
+            lastAppliedPositionRef.current = -1;
           } else {
             return false;
           }
+        } else if (sameRevision && !hasNewTimingBaseline) {
+          return false;
         }
         lastAppliedRevisionRef.current = snapshot.revision;
+        lastAppliedSnapshotAtRef.current = snapshot.snapshot_at_ms;
+        lastAppliedPositionRef.current = snapshot.position_ms;
 
         const prevState = serverStateRef.current;
         if (snapshot.play_session_id !== prevState.play_session_id) {
@@ -873,19 +1032,11 @@ export function HomePage() {
 
   useEffect(() => {
     activeDidRef.current = activeDid;
+    lastAppliedRevisionRef.current = -1;
+    lastAppliedSnapshotAtRef.current = -1;
+    lastAppliedPositionRef.current = -1;
+    previousPendingCheckStateRef.current = EMPTY_SERVER_STATE;
   }, [activeDid]);
-
-  useEffect(() => {
-    if (playlist) {
-      saveLocal("xm_ui_playlist", playlist);
-    }
-  }, [playlist]);
-
-  useEffect(() => {
-    if (music) {
-      saveLocal("xm_ui_music", music);
-    }
-  }, [music]);
 
   useEffect(() => {
     document.body.classList.add("index_page");
@@ -942,7 +1093,85 @@ export function HomePage() {
     }
   }, [authStatus.runtime_auth_ready, authStatus.login_in_progress]);
 
-  const songs = useMemo(() => playlists[playlist] || [], [playlists, playlist]);
+  const playlistNames = useMemo(() => Object.keys(playlists), [playlists]);
+  const fallbackPlaylist = playlistNames[0] || "";
+  const playbackPlaylist = useMemo(() => {
+    const contextName = String(serverState.context?.name || "").trim();
+    if (contextName && playlists[contextName]) {
+      return contextName;
+    }
+    return "";
+  }, [playlists, serverState.context?.name]);
+  const playbackSongs = useMemo(() => playlists[playbackPlaylist] || [], [playlists, playbackPlaylist]);
+  const playbackTrackId = serverState.track?.id || null;
+  const playbackTrackTitle = serverState.track?.title || "";
+  const playbackTrackItem = useMemo(
+    () => playbackSongs.find((item) => item.id === playbackTrackId) || null,
+    [playbackSongs, playbackTrackId],
+  );
+
+  const effectivePlaylist = pendingSelection?.playlist || playbackPlaylist || fallbackPlaylist;
+  const songs = useMemo(() => playlists[effectivePlaylist] || [], [playlists, effectivePlaylist]);
+  const effectiveTrackId = useMemo(() => {
+    if (pendingSelection?.trackId && songs.find((item) => item.id === pendingSelection.trackId)) {
+      return pendingSelection.trackId;
+    }
+    if (!pendingSelection && effectivePlaylist === playbackPlaylist && playbackTrackId && songs.find((item) => item.id === playbackTrackId)) {
+      return playbackTrackId;
+    }
+    return songs[0]?.id ?? null;
+  }, [pendingSelection, songs, effectivePlaylist, playbackPlaylist, playbackTrackId]);
+  const effectiveTrackItem = useMemo(
+    () => songs.find((item) => item.id === effectiveTrackId) || null,
+    [songs, effectiveTrackId],
+  );
+  const effectiveTrackTitle =
+    pendingSelection?.trackTitle ||
+    effectiveTrackItem?.title ||
+    (!pendingSelection && effectivePlaylist === playbackPlaylist ? playbackTrackItem?.title || playbackTrackTitle : "") ||
+    songs[0]?.title ||
+    "";
+
+  const clearPendingSelection = useCallback(() => {
+    setPendingSelection(null);
+  }, []);
+
+  const applyPendingPlaylist = useCallback(
+    (nextPlaylist: string) => {
+      const nextSongs = playlists[nextPlaylist] || [];
+      setPendingSelection({
+        playlist: nextPlaylist,
+        trackId: nextSongs[0]?.id ?? null,
+        trackTitle: nextSongs[0]?.title ?? null,
+        anchorPlaySessionId: String(serverState.play_session_id || ""),
+        anchorRevision: Number(serverState.revision || 0),
+        submitting: false,
+      });
+    },
+    [playlists, serverState.play_session_id, serverState.revision],
+  );
+
+  const applyPendingTrack = useCallback(
+    (trackId: string | null, trackTitle?: string | null, playlistName?: string) => {
+      const nextPlaylist = playlistName ?? effectivePlaylist;
+      const nextSongs = playlists[nextPlaylist] || [];
+      const item = nextSongs.find((entry) => entry.id === trackId) || null;
+      setPendingSelection({
+        playlist: nextPlaylist || null,
+        trackId: item?.id ?? trackId ?? null,
+        trackTitle: item?.title ?? trackTitle ?? null,
+        anchorPlaySessionId: String(serverState.play_session_id || ""),
+        anchorRevision: Number(serverState.revision || 0),
+        submitting: false,
+      });
+    },
+    [playlists, effectivePlaylist, serverState.play_session_id, serverState.revision],
+  );
+
+  const markPendingSubmitting = useCallback(() => {
+    setPendingSelection((prev) => (prev ? { ...prev, submitting: true } : prev));
+  }, []);
+
   const songTitles = useMemo(() => songs.map((s) => s.title), [songs]);
   const filteredSongs = useMemo(() => {
     const key = soundscapeFilter.trim().toLowerCase();
@@ -1174,15 +1403,12 @@ export function HomePage() {
     const out = await getLibraryPlaylists();
     if (!isApiOk(out)) {
       setPlaylists({});
+      clearPendingSelection();
       setMessage("获取歌单失败");
       return;
     }
     const playlistsData = out.data.playlists || {};
     setPlaylists(playlistsData);
-    const names = Object.keys(playlistsData);
-    if (names.length) {
-      setPlaylist((prev) => (prev && playlistsData[prev] ? prev : names[0]));
-    }
   }
 
   useEffect(() => {
@@ -1199,81 +1425,60 @@ export function HomePage() {
       serverStateRef.current = EMPTY_SERVER_STATE;
       prevPlaySessionRef.current = "";
       lastStableTrackTitleRef.current = "";
+      clearPendingSelection();
       return;
     }
 
+    clearPendingSelection();
     setVolume(loadRememberedVolume(activeDid));
     lastStableTrackTitleRef.current = loadRememberedPlayingSong(activeDid);
     setUiState((prev) => ({ ...prev, initializing: true }));
   }, [activeDid]);
 
   useEffect(() => {
-    if (!songs.length) {
-      setMusic("");
-      setSelectedTrackId(null);
+    if (!activeDid) {
       return;
     }
-    setMusic((prev) => {
-      const found = songs.find((s) => s.title === prev);
-      return found ? prev : songs[0].title;
-    });
-    setSelectedTrackId((prev) => {
-      if (prev && songs.find(s => s.id === prev)) {
-        return prev;
-      }
-      return songs[0]?.id ?? null;
-    });
-  }, [songs]);
+    const serverVolume = Number(serverState.volume ?? -1);
+    if (!Number.isFinite(serverVolume) || serverVolume < 0 || serverVolume > 100) {
+      return;
+    }
+    setVolume(serverVolume);
+    saveRememberedVolume(activeDid, serverVolume);
+  }, [activeDid, serverState.volume]);
 
   useEffect(() => {
-    if (serverState.transport_state !== "playing" && serverState.transport_state !== "paused") {
+    if (pendingSelection?.playlist && !playlists[pendingSelection.playlist]) {
+      clearPendingSelection();
+    }
+  }, [pendingSelection, playlists, clearPendingSelection]);
+
+  useEffect(() => {
+    const prevState = previousPendingCheckStateRef.current;
+    previousPendingCheckStateRef.current = serverState;
+    if (!pendingSelection) {
       return;
     }
-    if (!Object.keys(playlists).length) {
-      return;
-    }
+    const sessionChanged = serverState.play_session_id !== pendingSelection.anchorPlaySessionId;
+    const revisionAdvanced = Number(serverState.revision || 0) > Number(pendingSelection.anchorRevision || 0);
+    const stoppedAfterChange =
+      revisionAdvanced && (serverState.transport_state === "stopped" || serverState.transport_state === "idle");
+    const trackChanged =
+      revisionAdvanced &&
+      String(serverState.track?.id || "") !== String(prevState.track?.id || "") &&
+      Boolean(serverState.track?.id || prevState.track?.id);
+    const contextChanged =
+      revisionAdvanced &&
+      String(serverState.context?.name || "") !== String(prevState.context?.name || "") &&
+      Boolean(serverState.context?.name || prevState.context?.name);
 
-    const currentTrack = serverState.track;
-    if (!currentTrack || !currentTrack.id) {
-      return;
-    }
-
-    const currentContext = serverState.context;
-    if (!currentContext || !currentContext.name) {
-      return;
-    }
-
-    const contextSongs = playlists[currentContext.name];
-    if (!contextSongs || !Array.isArray(contextSongs)) {
-      return;
-    }
-
-    const trackId = currentTrack.id;
-    const matchingItem = contextSongs.find((item) => item.id === trackId);
-
-    if (!matchingItem) {
-      return;
-    }
-
-    if (playlist !== currentContext.name) {
-      setPlaylist(currentContext.name);
-    }
-
-    if (matchingItem.title !== music) {
-      setMusic(matchingItem.title);
-    }
-
-    if (selectedTrackId !== trackId) {
-      setSelectedTrackId(trackId);
+    if (sessionChanged || stoppedAfterChange || trackChanged || contextChanged) {
+      clearPendingSelection();
     }
   }, [
-    serverState.track,
-    serverState.context,
-    serverState.transport_state,
-    playlists,
-    playlist,
-    music,
-    selectedTrackId,
+    pendingSelection,
+    serverState,
+    clearPendingSelection,
   ]);
 
   useEffect(() => {
@@ -1292,6 +1497,91 @@ export function HomePage() {
     return false;
   }
 
+  function applyPlayStateFromResponse(deviceId: string, state: PlayerStateData | undefined): void {
+    if (!state) {
+      return;
+    }
+    void applySnapshotFn(state, deviceId);
+  }
+
+  async function playPlaylistTrack(
+    deviceId: string,
+    playlistName: string,
+    picked: string,
+    trackId?: string | null,
+  ): Promise<boolean> {
+    const contextHint = {
+      context_type: "playlist",
+      context_name: playlistName,
+      context_id: playlistName,
+    };
+    const localLibraryOptions = {
+      title: picked,
+      context_hint: contextHint,
+      source_payload: {
+        source: "local_library",
+        playlist_name: playlistName,
+        music_name: picked,
+        track_name: picked,
+        track_id: trackId ?? undefined,
+        context_type: "playlist",
+        context_name: playlistName,
+        context_id: playlistName,
+      },
+    };
+
+    const playResp = await v1Play({
+      device_id: deviceId,
+      query: picked,
+      source_hint: "local_library",
+      options: localLibraryOptions,
+    });
+
+    if (isApiOk(playResp)) {
+      markPendingSubmitting();
+      applyPlayStateFromResponse(deviceId, playResp.data?.state);
+      setMessage(`已发送播放《${picked}》`);
+      return true;
+    }
+
+    const info = await getLibraryMusicInfo(picked);
+    const streamUrl = String(info?.data?.url || "").trim();
+    const durationSeconds = Number(info?.data?.duration_seconds || 0);
+    if (streamUrl) {
+      const fallbackResp = await v1Play({
+        device_id: deviceId,
+        query: streamUrl,
+        source_hint: "jellyfin",
+        options: {
+          title: picked,
+          context_hint: contextHint,
+          source_payload: {
+            source: "jellyfin",
+            playlist_name: playlistName,
+            music_name: picked,
+            track_name: picked,
+            track_id: trackId ?? undefined,
+            context_type: "playlist",
+            context_name: playlistName,
+            context_id: playlistName,
+            url: streamUrl,
+            duration_seconds: Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : undefined,
+          },
+        },
+      });
+      if (isApiOk(fallbackResp)) {
+        markPendingSubmitting();
+        applyPlayStateFromResponse(deviceId, fallbackResp.data?.state);
+        setMessage(`已发送播放《${picked}》`);
+        return true;
+      }
+    }
+
+    const err = apiErrorInfo(playResp);
+    setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`);
+    return false;
+  }
+
   async function switchTrack(action: "previous" | "next", okText: string) {
     if (!requireDid()) {
       return;
@@ -1299,6 +1589,20 @@ export function HomePage() {
     const did = activeDid;
     setMessage(`${okText}，正在同步播放信息...`);
     try {
+      if (pendingSelection && songs.length > 0) {
+        const currentIndex = Math.max(0, songs.findIndex((item) => item.id === effectiveTrackId));
+        const delta = action === "previous" ? -1 : 1;
+        const nextIndex = (currentIndex + delta + songs.length) % songs.length;
+        const nextItem = songs[nextIndex];
+        if (!nextItem) {
+          setMessage("当前歌单为空，请先刷新歌单或切换列表");
+          return;
+        }
+        applyPendingTrack(nextItem.id, nextItem.title, effectivePlaylist);
+        await playPlaylistTrack(did, effectivePlaylist, nextItem.title, nextItem.id);
+        return;
+      }
+
       const out = action === "previous" ? await v1Previous(did) : await v1Next(did);
       if (isApiOk(out)) {
         setMessage(okText);
@@ -1317,61 +1621,18 @@ export function HomePage() {
       return;
     }
     const deviceId = activeDid;
-    let picked = songName;
-    if (!picked && songs.length > 0) {
-      const currentItem = songs.find(s => s.id === selectedTrackId);
-      picked = currentItem?.title ?? songs[0].title;
-    }
-    if (!picked) {
+    const currentItem = songs.find((s) => s.id === effectiveTrackId) || null;
+    const targetPlaylist = effectivePlaylist;
+    const picked = String(songName || currentItem?.title || effectiveTrackTitle || "").trim();
+    const targetTrackId = currentItem?.title === picked ? currentItem.id : effectiveTrackId;
+    if (!picked || !targetPlaylist) {
       setMessage("当前歌单为空，请先刷新歌单或切换列表");
       return;
     }
-    setMusic(picked);
     setMessage(`正在切换到 ${picked}...`);
-    try {
-      const info = await getLibraryMusicInfo(picked);
-      const streamUrl = String(info?.data?.url || "").trim();
-      const playResp = streamUrl
-        ? await v1Play({
-            device_id: deviceId,
-            query: streamUrl,
-            source_hint: "auto",
-            options: {
-              title: picked,
-              context_hint: {
-                context_type: "playlist",
-                context_name: playlist,
-                context_id: playlist,
-              },
-            },
-          })
-        : await v1Play({
-            device_id: deviceId,
-            query: picked,
-            source_hint: "local_library",
-            options: {
-              title: picked,
-              context_hint: {
-                context_type: "playlist",
-                context_name: playlist,
-                context_id: playlist,
-              },
-              source_payload: {
-                source: "local_library",
-                playlist_name: playlist,
-                music_name: picked,
-                context_type: "playlist",
-                context_name: playlist,
-              },
-            },
-          });
 
-      if (isApiOk(playResp)) {
-        setMessage(`已发送播放《${picked}》`);
-      } else {
-        const err = apiErrorInfo(playResp);
-        setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`);
-      }
+    try {
+      await playPlaylistTrack(deviceId, targetPlaylist, picked, targetTrackId);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err || "未知错误");
       setMessage(`播放失败：${reason}`);
@@ -1379,8 +1640,8 @@ export function HomePage() {
   }
 
   async function playCurrent() {
-    const currentItem = songs.find(s => s.id === selectedTrackId);
-    const songToPlay = currentItem?.title ?? music;
+    const currentItem = songs.find((s) => s.id === effectiveTrackId) || null;
+    const songToPlay = currentItem?.title ?? effectiveTrackTitle;
     await playSongByName(songToPlay);
   }
 
@@ -1436,6 +1697,8 @@ export function HomePage() {
       const finalPath = String(outcome.final_path || netAudio.mode || "");
       const fallbackTriggered = Boolean(outcome.fallback_triggered);
       if (isApiOk(out)) {
+        clearPendingSelection();
+        applyPlayStateFromResponse(activeDid, out.data?.state);
         setMessage(
           `播放已发送（来源: ${String(data.source_plugin || "unknown")}, 传输: ${String(data.transport || "unknown")}, 路径: ${
             finalPath || "unknown"
@@ -1481,7 +1744,7 @@ export function HomePage() {
     if (!requireDid()) {
       return;
     }
-    const musicName = String(serverState.track?.title || music || "").trim();
+    const musicName = String(serverState.track?.title || effectiveTrackTitle || "").trim();
     if (!musicName) {
       setMessage("当前没有可收藏的歌曲");
       return;
@@ -1686,15 +1949,7 @@ export function HomePage() {
   }
 
   function applySoundscapePlaylist(nextPlaylist: string) {
-    setPlaylist(nextPlaylist);
-    const nextSongs = playlists[nextPlaylist] || [];
-    if (!nextSongs.length) {
-      setMusic("");
-      setSelectedTrackId(null);
-      return;
-    }
-    setMusic(nextSongs[0].title);
-    setSelectedTrackId(nextSongs[0].id);
+    applyPendingPlaylist(nextPlaylist);
   }
 
   function fieldValue(key: string): string {
@@ -1828,7 +2083,7 @@ export function HomePage() {
               {Object.keys(playlists).map((name) => (
                 <button
                   key={`soundscape-${name}`}
-                  className={`soundscape-playlist-item ${playlist === name ? "active" : ""}`}
+                  className={`soundscape-playlist-item ${effectivePlaylist === name ? "active" : ""}`}
                   onClick={() => applySoundscapePlaylist(name)}
                 >
                   <span className="soundscape-playlist-name">{name}</span>
@@ -1857,7 +2112,7 @@ export function HomePage() {
             </header>
 
             <div className="soundscape-meta-row">
-              <span className="soundscape-meta-chip">当前列表：{playlist || "-"}</span>
+              <span className="soundscape-meta-chip">当前列表：{effectivePlaylist || "-"}</span>
               <div className="soundscape-device-group">
                 <select id="did" className="device-selector" value={activeDid} onChange={(e) => setActiveDid(e.target.value)}>
                   {devices.map((d) => {
@@ -1895,14 +2150,12 @@ export function HomePage() {
                   {filteredSongs.map((item, idx) => (
                     <tr
                       key={`song-${item.id}-${idx}`}
-                      className={selectedTrackId === item.id ? "active" : ""}
+                      className={effectiveTrackId === item.id ? "active" : ""}
                       onClick={() => {
-                        setSelectedTrackId(item.id);
-                        setMusic(item.title);
+                        applyPendingTrack(item.id, item.title, effectivePlaylist);
                       }}
                       onDoubleClick={() => {
-                        setSelectedTrackId(item.id);
-                        setMusic(item.title);
+                        applyPendingTrack(item.id, item.title, effectivePlaylist);
                         void playSongByName(item.title);
                       }}
                     >
@@ -1910,8 +2163,7 @@ export function HomePage() {
                       <td>{item.title}</td>
                       <td>
                         <button onClick={() => {
-                          setSelectedTrackId(item.id);
-                          setMusic(item.title);
+                          applyPendingTrack(item.id, item.title, effectivePlaylist);
                           void playSongByName(item.title);
                         }}>播放</button>
                       </td>
@@ -2026,7 +2278,20 @@ export function HomePage() {
               <span className="tooltip">刷新列表</span>
             </div>
           </label>
-          <select id="music_list" className="playlist-selector" value={playlist} onChange={(e) => setPlaylist(e.target.value)}>
+          <select
+            id="music_list"
+            className="playlist-selector"
+            value={effectivePlaylist}
+            onMouseDown={beginSelectorInteraction}
+            onTouchStart={beginSelectorInteraction}
+            onFocus={beginSelectorInteraction}
+            onBlur={() => endSelectorInteraction()}
+            onChange={(e) => {
+              beginSelectorInteraction();
+              applyPendingPlaylist(e.target.value);
+              endSelectorInteraction(800);
+            }}
+          >
             {Object.keys(playlists).map((name) => (
               <option key={name} value={name}>
                 {`${name} (${(playlists[name] || []).length})`}
@@ -2037,14 +2302,24 @@ export function HomePage() {
           <label htmlFor="music_name" className="label-with-action">
             选择歌曲:
           </label>
-          <select id="music_name" className="song-selector" value={selectedTrackId ?? ""} onChange={(e) => {
-            const selectedId = e.target.value;
-            const item = songs.find(s => s.id === selectedId);
-            if (item) {
-              setSelectedTrackId(selectedId);
-              setMusic(item.title);
-            }
-          }}>
+          <select
+            id="music_name"
+            className="song-selector"
+            value={effectiveTrackId ?? ""}
+            onMouseDown={beginSelectorInteraction}
+            onTouchStart={beginSelectorInteraction}
+            onFocus={beginSelectorInteraction}
+            onBlur={() => endSelectorInteraction()}
+            onChange={(e) => {
+              beginSelectorInteraction();
+              const selectedId = e.target.value;
+              const item = songs.find(s => s.id === selectedId);
+              if (item) {
+                applyPendingTrack(selectedId, item.title, effectivePlaylist);
+              }
+              endSelectorInteraction(800);
+            }}
+          >
             {songs.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.title}

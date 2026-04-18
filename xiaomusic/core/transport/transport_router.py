@@ -29,6 +29,7 @@ class TransportRouter:
         prepared: PreparedStream,
         profile: DeviceProfile,
         capability_matrix: TransportCapabilityMatrix,
+        request_context: dict[str, Any] | None = None,
     ) -> TransportDispatchResult:
         return await self.dispatch(
             action="play",
@@ -36,6 +37,7 @@ class TransportRouter:
             profile=profile,
             capability_matrix=capability_matrix,
             prepared=prepared,
+            request_context=request_context,
         )
 
     async def dispatch(
@@ -47,6 +49,7 @@ class TransportRouter:
         prepared: PreparedStream | None = None,
         text: str | None = None,
         volume: int | None = None,
+        request_context: dict[str, Any] | None = None,
     ) -> TransportDispatchResult:
         _ = profile
         candidate_transports = self._candidate_transports(action, capability_matrix)
@@ -73,6 +76,7 @@ class TransportRouter:
                     prepared=prepared,
                     text=text,
                     volume=volume,
+                    request_context=request_context,
                 )
                 LOG.info(
                     "transport_route action=%s candidate_transports=%s selected_transport=%s fallback_triggered=%s",
@@ -118,11 +122,12 @@ class TransportRouter:
         prepared: PreparedStream | None,
         text: str | None,
         volume: int | None,
+        request_context: dict[str, Any] | None,
     ) -> dict[str, Any]:
         if action == "play":
             if prepared is None:
                 raise TransportError("prepared stream is required for play")
-            return await transport.play_url(device_id, prepared)
+            return await transport.play_url(device_id, prepared, request_context)
         if action == "stop":
             return await transport.stop(device_id)
         if action == "previous":

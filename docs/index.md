@@ -38,7 +38,8 @@ features:
 3. [认证运行时恢复路径规范](/spec/auth_runtime_reload_recovery_path)
 4. [fresh session 主路径验收收口](/implementation/auth_fresh_session_runtime_recovery_acceptance)
 5. [spec rebuild 验收矩阵](/implementation/spec_rebuild_acceptance_matrix_2026-04-09)
-6. [v1.0.10 发布说明](/release/v1.0.10)
+6. [v1.1.0 发布说明](/release/v1.1.0)
+7. [v1.0.10 发布说明](/release/v1.0.10)
 
 当前阅读路径的目的：
 
@@ -46,3 +47,21 @@ features:
 - 再理解 `_try_login()` / runtime reload 的阶段边界
 - 再看本轮已确认通过的是哪一层
 - 最后看 spec rebuild 当前哪些仍未覆盖
+
+## 当前 WebUI playlist 状态阅读路径
+
+建议按以下顺序阅读当前 WebUI playlist 状态文档：
+
+1. [WebUI 歌单选择状态架构](/architecture/webui_playlist_state)
+   - pendingSelection / effectiveSelection / pending 失效判据 / pending-aware next/previous / `/api/v1/play` snapshot 回包
+2. [WebUI 架构](/architecture/webui_architecture)
+3. [播放器状态投影规范](/spec/player_state_projection_spec)
+4. [播放器 SSE 规范](/spec/player_stream_sse_spec)
+5. [v1 API 文档](/api/api_v1_spec)
+6. [v1.1.0 发布说明](/release/v1.1.0)
+
+当前阅读路径的目的：
+
+- 先理解 playlist selector 的三层状态模型
+- 再回到 WebUI 的通用接口依赖边界
+- 最后确认播放状态字段、SSE 契约与 v1 API 对齐关系
