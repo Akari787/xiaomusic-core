@@ -8,8 +8,38 @@ vi.mock("../src/services/apiClient", () => ({
   apiPost: vi.fn(),
 }));
 
+const mockedEventSource = vi.hoisted(() => {
+  class MockEventSource {
+    static instances: MockEventSource[] = [];
+    url: string;
+    onopen: ((event: Event) => void) | null = null;
+    onerror: ((event: Event) => void) | null = null;
+    listeners = new Map<string, Set<(event: MessageEvent) => void>>();
+
+    constructor(url: string) {
+      this.url = url;
+      MockEventSource.instances.push(this);
+    }
+
+    addEventListener(type: string, listener: (event: MessageEvent) => void) {
+      if (!this.listeners.has(type)) {
+        this.listeners.set(type, new Set());
+      }
+      this.listeners.get(type)?.add(listener);
+    }
+
+    removeEventListener(type: string, listener: (event: MessageEvent) => void) {
+      this.listeners.get(type)?.delete(listener);
+    }
+
+    close() {}
+  }
+
+  return { MockEventSource };
+});
+
 vi.mock("../src/services/v1Api", () => ({
-  isApiOk: (out: { code?: number }) => Number(out.code || -1) === 0,
+  isApiOk: (out: { code?: number }) => Number(out.code ?? -1) === 0,
   apiErrorText: (out: { message?: string }) => String(out.message || "request failed"),
   apiErrorInfo: (out: { message?: string }) => ({
     message: String(out.message || "request failed"),
@@ -19,6 +49,7 @@ vi.mock("../src/services/v1Api", () => ({
   addFavorite: vi.fn(),
   getLibraryMusicInfo: vi.fn(),
   getLibraryPlaylists: vi.fn(),
+  getPlayerStreamUrl: vi.fn((deviceId: string) => `http://127.0.0.1:58090/api/v1/player/stream?device_id=${deviceId}`),
   next: vi.fn(),
   play: vi.fn(),
   previous: vi.fn(),
@@ -62,17 +93,70 @@ import {
 } from "../src/services/v1Api";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as typeof globalThis & { EventSource?: typeof mockedEventSource.MockEventSource }).EventSource = mockedEventSource.MockEventSource;
+
+async function flushUi(cycles = 1) {
+  for (let i = 0; i < cycles; i += 1) {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+}
+
+async function advanceAndFlush(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+  await flushUi(3);
+}
+
+async function waitForText(container: HTMLDivElement, expected: string, rounds = 6) {
+  for (let i = 0; i < rounds; i += 1) {
+    if ((container.textContent || "").includes(expected)) {
+      return;
+    }
+    await advanceAndFlush(3000);
+  }
+  expect(container.textContent || "").toContain(expected);
+}
 
 function ok(data: Record<string, unknown> = {}) {
   return { code: 0, message: "ok", data, request_id: "req-ok" };
+}
+
+function state(title: string, overrides: Record<string, unknown> = {}) {
+  return ok({
+    device_id: "did-001",
+    revision: 1,
+    play_session_id: `ps-${title || "idle"}`,
+    transport_state: title ? "playing" : "idle",
+    track: title ? { id: title, title } : null,
+    context: { type: "playlist", id: "Playlist1", name: "Playlist1", current_index: 0 },
+    position_ms: 5000,
+    duration_ms: 180000,
+    volume: 50,
+    snapshot_at_ms: Date.now(),
+    ...overrides,
+  });
 }
 
 describe("HomePage playback song switch boundary", () => {
   let container: HTMLDivElement;
   let root: Root;
 
+  async function renderHome() {
+    await act(async () => {
+      root.render(<HomePage />);
+    });
+    await flushUi(4);
+  }
+
   beforeEach(async () => {
     vi.useFakeTimers();
+    localStorage.clear();
+    localStorage.setItem("xm_ui_active_did", "did-001");
+    mockedEventSource.MockEventSource.instances.length = 0;
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -97,16 +181,18 @@ describe("HomePage playback song switch boundary", () => {
       }),
     );
     (getLibraryPlaylists as ReturnType<typeof vi.fn>).mockResolvedValue(
-      ok({ playlists: { Playlist1: ["Song A", "Song B", "Song C"] } }),
+      ok({
+        playlists: {
+          Playlist1: [
+            { id: "song-a", title: "Song A" },
+            { id: "song-b", title: "Song B" },
+            { id: "song-c", title: "Song C" },
+          ],
+        },
+      }),
     );
     (setVolume as ReturnType<typeof vi.fn>).mockResolvedValue(ok({}));
-    (getPlayerState as ReturnType<typeof vi.fn>).mockResolvedValue(
-      ok({ device_id: "did-001", is_playing: true, cur_music: "InitialSong", offset: 5, duration: 180 }),
-    );
-
-    await act(async () => {
-      root.render(<HomePage />);
-    });
+    (getPlayerState as ReturnType<typeof vi.fn>).mockResolvedValue(state("InitialSong"));
   });
 
   afterEach(async () => {
@@ -117,12 +203,9 @@ describe("HomePage playback song switch boundary", () => {
     container.remove();
   });
 
-  it("render shows song from status when status.cur_music is populated", async () => {
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2000);
-    });
-    const text = container.textContent || "";
-    expect(text).toContain("InitialSong");
+  it("render shows song from status when status.track.title is populated", async () => {
+    await renderHome();
+    await waitForText(container, "InitialSong");
   });
 
   it("b: render switches from old song to new song as getPlayerState returns new data", async () => {
@@ -130,77 +213,64 @@ describe("HomePage playback song switch boundary", () => {
     (getPlayerState as ReturnType<typeof vi.fn>).mockImplementation(async () => {
       callCount += 1;
       if (callCount === 1) {
-        return ok({ device_id: "did-001", is_playing: true, cur_music: "Song A", offset: 10, duration: 180 });
+        return state("Song A", { revision: 1, play_session_id: "ps-song-a", position_ms: 10000, duration_ms: 180000 });
       }
-      return ok({ device_id: "did-001", is_playing: true, cur_music: "Song B", offset: 0, duration: 200 });
+      return state("Song B", { revision: 2, play_session_id: "ps-song-b", position_ms: 0, duration_ms: 200000 });
     });
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
-    });
+    await renderHome();
+    await waitForText(container, "正在播放：Song A");
 
     const text1 = container.textContent || "";
-    expect(text1).toContain("Song A");
-    expect(text1).not.toContain("Song B");
+    expect(text1).toContain("正在播放：Song A");
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
-    });
+    await waitForText(container, "正在播放：Song B");
 
     const text2 = container.textContent || "";
-    expect(text2).toContain("Song B");
-    expect(text2).not.toContain("Song A");
+    expect(text2).toContain("正在播放：Song B");
   });
 
-  it("d: UI switches to new song when backend returns new cur_music", async () => {
+  it("d: UI switches to new song when backend returns new track.title", async () => {
     let callCount = 0;
     (getPlayerState as ReturnType<typeof vi.fn>).mockImplementation(async () => {
       callCount += 1;
       if (callCount === 1) {
-        return ok({ device_id: "did-001", is_playing: true, cur_music: "Song X", offset: 30, duration: 150 });
+        return state("Song X", { revision: 1, play_session_id: "ps-song-x", position_ms: 30000, duration_ms: 150000 });
       }
-      return ok({ device_id: "did-001", is_playing: true, cur_music: "Song Y", offset: 0, duration: 160 });
+      return state("Song Y", { revision: 2, play_session_id: "ps-song-y", position_ms: 0, duration_ms: 160000 });
     });
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
-    });
+    await renderHome();
+    await waitForText(container, "正在播放：Song X");
 
     const text1 = container.textContent || "";
-    expect(text1).toContain("Song X");
-    expect(text1).not.toContain("Song Y");
+    expect(text1).toContain("正在播放：Song X");
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
-    });
+    await waitForText(container, "正在播放：Song Y");
 
     const text2 = container.textContent || "";
-    expect(text2).toContain("Song Y");
-    expect(text2).not.toContain("Song X");
+    expect(text2).toContain("正在播放：Song Y");
   });
 
-  it("c: auto-sync uses status.cur_music as primary sync source", async () => {
+  it("c: auto-sync uses status.track.title as primary sync source", async () => {
     let callCount = 0;
     (getPlayerState as ReturnType<typeof vi.fn>).mockImplementation(async () => {
       callCount += 1;
       if (callCount === 1) {
-        return ok({ device_id: "did-001", is_playing: true, cur_music: "Song API1", offset: 5, duration: 180 });
+        return state("Song API1", { revision: 1, play_session_id: "ps-song-api1", position_ms: 5000, duration_ms: 180000 });
       }
-      return ok({ device_id: "did-001", is_playing: true, cur_music: "Song API2", offset: 0, duration: 200 });
+      return state("Song API2", { revision: 2, play_session_id: "ps-song-api2", position_ms: 0, duration_ms: 200000 });
     });
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
-    });
+    await renderHome();
+    await waitForText(container, "正在播放：Song API1");
 
     const text = container.textContent || "";
-    expect(text).toContain("Song API1");
+    expect(text).toContain("正在播放：Song API1");
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
-    });
+    await waitForText(container, "正在播放：Song API2");
 
     const text2 = container.textContent || "";
-    expect(text2).toContain("Song API2");
+    expect(text2).toContain("正在播放：Song API2");
   });
 });

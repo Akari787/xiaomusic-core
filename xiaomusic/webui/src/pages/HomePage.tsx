@@ -60,7 +60,7 @@ type AuthStatus = {
   last_error?: string;
 };
 
-type PendingSelection = {
+export type PendingSelection = {
   playlist: string | null;
   trackId: string | null;
   trackTitle: string | null;
@@ -293,6 +293,109 @@ function serverStateReducer(_state: PlayerStateData, action: ServerStateAction):
     default:
       return _state;
   }
+}
+
+/**
+ * 判断 pending 是否处于提交态
+ */
+export function isSubmittingPending(pending: PendingSelection | null): pending is PendingSelection {
+  return Boolean(pending?.submitting);
+}
+
+/**
+ * 从 serverState 中提取播放上下文名称
+ */
+export function getPlaybackContextName(state: PlayerStateData): string {
+  return String(state.context?.name || "").trim();
+}
+
+/**
+ * 判断服务端状态是否已确认了 pending 的目标
+ */
+export function doesServerStateConfirmPending(pending: PendingSelection, state: PlayerStateData): boolean {
+  const contextName = getPlaybackContextName(state);
+  const stateTrackId = String(state.track?.id || "").trim();
+  const stateTrackTitle = String(state.track?.title || "").trim();
+  const playlistMatched = !pending.playlist || contextName === pending.playlist;
+  const trackMatched = pending.trackId
+    ? stateTrackId === pending.trackId
+    : !pending.trackTitle || stateTrackTitle === pending.trackTitle;
+  return playlistMatched && trackMatched;
+}
+
+/**
+ * 判断是否应该清理 pendingSelection
+ * 核心规则：
+ * - 浏览态(submitting=false)默认不清理
+ * - 提交态(submitting=true)在确认成功或确认性停止时清理
+ */
+export function shouldClearPendingSelection(
+  pending: PendingSelection,
+  prevState: PlayerStateData,
+  nextState: PlayerStateData,
+): boolean {
+  void prevState;
+
+  // 浏览态不因状态推进而清理
+  if (!isSubmittingPending(pending)) {
+    return false;
+  }
+
+  const sessionChanged =
+    String(nextState.play_session_id || "") !== String(pending.anchorPlaySessionId || "");
+  const revisionAdvanced = Number(nextState.revision || 0) > Number(pending.anchorRevision || 0);
+  const transportStopped = nextState.transport_state === "stopped" || nextState.transport_state === "idle";
+
+  // session变化且目标命中
+  if (sessionChanged && doesServerStateConfirmPending(pending, nextState)) {
+    return true;
+  }
+  // revision前进且目标命中
+  if (revisionAdvanced && doesServerStateConfirmPending(pending, nextState)) {
+    return true;
+  }
+  // revision前进且进入停止态（用于stop或失败后回稳路径）
+  if (revisionAdvanced && transportStopped) {
+    return true;
+  }
+
+  return false;
+}
+
+export function buildPendingSelectionForPlayback(
+  prev: PendingSelection | null,
+  playlistName: string,
+  picked: string,
+  trackId: string | null | undefined,
+  state: PlayerStateData,
+): PendingSelection {
+  return {
+    playlist: playlistName || prev?.playlist || null,
+    trackId: trackId ?? prev?.trackId ?? null,
+    trackTitle: picked || prev?.trackTitle || null,
+    anchorPlaySessionId: String(state.play_session_id || ""),
+    anchorRevision: Number(state.revision || 0),
+    submitting: false,
+  };
+}
+
+export function markPendingSubmittingState(
+  prev: PendingSelection | null,
+  state: PlayerStateData,
+): PendingSelection | null {
+  if (!prev) {
+    return prev;
+  }
+  return {
+    ...prev,
+    submitting: true,
+    anchorPlaySessionId: String(state.play_session_id || ""),
+    anchorRevision: Number(state.revision || 0),
+  };
+}
+
+export function shouldGuardPendingNativeSwitch(pending: PendingSelection | null, songsLength: number): boolean {
+  return Boolean(pending) && songsLength === 0;
 }
 
 function resolveDisplayName(d: Device): string {
@@ -1095,13 +1198,11 @@ export function HomePage() {
 
   const playlistNames = useMemo(() => Object.keys(playlists), [playlists]);
   const fallbackPlaylist = playlistNames[0] || "";
-  const playbackPlaylist = useMemo(() => {
-    const contextName = String(serverState.context?.name || "").trim();
-    if (contextName && playlists[contextName]) {
-      return contextName;
-    }
-    return "";
-  }, [playlists, serverState.context?.name]);
+  const playbackContextName = useMemo(
+    () => String(serverState.context?.name || "").trim(),
+    [serverState.context?.name],
+  );
+  const playbackPlaylist = playbackContextName;
   const playbackSongs = useMemo(() => playlists[playbackPlaylist] || [], [playlists, playbackPlaylist]);
   const playbackTrackId = serverState.track?.id || null;
   const playbackTrackTitle = serverState.track?.title || "";
@@ -1111,6 +1212,13 @@ export function HomePage() {
   );
 
   const effectivePlaylist = pendingSelection?.playlist || playbackPlaylist || fallbackPlaylist;
+  const playlistOptions = useMemo(() => {
+    const names = Object.keys(playlists);
+    if (!effectivePlaylist || names.includes(effectivePlaylist)) {
+      return names;
+    }
+    return [effectivePlaylist, ...names];
+  }, [effectivePlaylist, playlists]);
   const songs = useMemo(() => playlists[effectivePlaylist] || [], [playlists, effectivePlaylist]);
   const effectiveTrackId = useMemo(() => {
     if (pendingSelection?.trackId && songs.find((item) => item.id === pendingSelection.trackId)) {
@@ -1169,7 +1277,7 @@ export function HomePage() {
   );
 
   const markPendingSubmitting = useCallback(() => {
-    setPendingSelection((prev) => (prev ? { ...prev, submitting: true } : prev));
+    setPendingSelection((prev) => markPendingSubmittingState(prev, serverStateRef.current));
   }, []);
 
   const songTitles = useMemo(() => songs.map((s) => s.title), [songs]);
@@ -1459,27 +1567,10 @@ export function HomePage() {
     if (!pendingSelection) {
       return;
     }
-    const sessionChanged = serverState.play_session_id !== pendingSelection.anchorPlaySessionId;
-    const revisionAdvanced = Number(serverState.revision || 0) > Number(pendingSelection.anchorRevision || 0);
-    const stoppedAfterChange =
-      revisionAdvanced && (serverState.transport_state === "stopped" || serverState.transport_state === "idle");
-    const trackChanged =
-      revisionAdvanced &&
-      String(serverState.track?.id || "") !== String(prevState.track?.id || "") &&
-      Boolean(serverState.track?.id || prevState.track?.id);
-    const contextChanged =
-      revisionAdvanced &&
-      String(serverState.context?.name || "") !== String(prevState.context?.name || "") &&
-      Boolean(serverState.context?.name || prevState.context?.name);
-
-    if (sessionChanged || stoppedAfterChange || trackChanged || contextChanged) {
+    if (shouldClearPendingSelection(pendingSelection, prevState, serverState)) {
       clearPendingSelection();
     }
-  }, [
-    pendingSelection,
-    serverState,
-    clearPendingSelection,
-  ]);
+  }, [pendingSelection, serverState, clearPendingSelection]);
 
   useEffect(() => {
     const devices = (settingData.devices || {}) as Record<string, { play_type?: number }>;
@@ -1510,6 +1601,11 @@ export function HomePage() {
     picked: string,
     trackId?: string | null,
   ): Promise<boolean> {
+    // 确保 pending 存在，即使之前没有浏览过
+    setPendingSelection((prev) =>
+      buildPendingSelectionForPlayback(prev, playlistName, picked, trackId, serverStateRef.current),
+    );
+
     const contextHint = {
       context_type: "playlist",
       context_name: playlistName,
@@ -1600,6 +1696,11 @@ export function HomePage() {
         }
         applyPendingTrack(nextItem.id, nextItem.title, effectivePlaylist);
         await playPlaylistTrack(did, effectivePlaylist, nextItem.title, nextItem.id);
+        return;
+      }
+
+      if (shouldGuardPendingNativeSwitch(pendingSelection, songs.length)) {
+        setMessage("当前列表尚未加载完成，请稍候");
         return;
       }
 
@@ -2292,9 +2393,9 @@ export function HomePage() {
               endSelectorInteraction(800);
             }}
           >
-            {Object.keys(playlists).map((name) => (
+            {playlistOptions.map((name) => (
               <option key={name} value={name}>
-                {`${name} (${(playlists[name] || []).length})`}
+                {`${name} (${name === effectivePlaylist ? songs.length : (playlists[name] || []).length})`}
               </option>
             ))}
           </select>

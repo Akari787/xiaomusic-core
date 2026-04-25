@@ -1,8 +1,8 @@
 # WebUI 歌单选择状态架构（WebUI Playlist Selection State Architecture）
 
-版本：v1.1
-状态：正式架构文档（已实施）
-最后更新：2026-04-18
+版本：v1.3
+状态：正式架构文档（实现已落地，阶段4测试与文档已同步，待阶段5实机验收收口）
+最后更新：2026-04-25
 
 本文档定义 WebUI 中歌单选择、曲目选择与后端播放状态之间的职责边界，解决当前 playlist selector 在播放中或停止后仍可能被后端状态覆盖、无法自由浏览歌单的问题。本文档只覆盖 WebUI 侧状态模型与 v1 API 消费语义，不修改 `docs/spec/player_state_projection_spec.md` 中的播放器快照字段定义。
 
@@ -13,11 +13,12 @@
 - `docs/spec/player_stream_sse_spec.md`
 - `docs/api/api_v1_spec.md`
 
-当前实现状态（2026-04-18）：
+当前实现状态（2026-04-25）：
 
-- P0 已实施并完成测试服务器验收
-- P1 已实施并经人工验收通过
-- P2 已实施，`/api/v1/play` 已返回最新 snapshot
+- P0 已实施，pending 清理逻辑已收口到纯函数 helper：`isSubmittingPending(...)`、`doesServerStateConfirmPending(...)`、`shouldClearPendingSelection(...)`
+- P1 已实施，pending-aware `next` / `previous` 已补 `shouldGuardPendingNativeSwitch(...)` 空列表保护
+- P2 已实施，`/api/v1/play` 回包 snapshot 与本地 pending 状态机已接通
+- 阶段4已补充本地单元测试（覆盖 8.1-8.5）并完成文档同步；阶段5实机验收仍需单独执行
 
 ---
 
@@ -108,6 +109,11 @@ WebUI 必须使用三层状态模型，不得再让单一 `playlist / music / se
 ### 定义
 用户在前端做出的、尚未提交或尚未被后端确认的临时选择。
 
+其中：
+
+- `submitting = false` 表示浏览态（browsing）
+- `submitting = true` 表示已提交待确认态（submitting）
+
 建议最小结构：
 
 ```ts
@@ -126,11 +132,14 @@ interface PendingSelection {
 - 表达用户当前正在浏览或准备播放的歌单/曲目
 - 作为 `play` / pending-aware `next` / pending-aware `previous` 的请求输入
 - 在后端真实状态确认前维持 selector 的用户选择
+- 用 `anchorPlaySessionId + anchorRevision` 记录本次提交相对的服务端锚点
 
 ### 约束
 
 - `pendingSelection` 不代表真实播放状态
 - `pendingSelection` 只由用户交互或前端提交逻辑修改
+- 浏览态不得因普通 `serverState` 推进而自动清空
+- 提交态只在“确认成功”或“确认性停止”后清空
 - `pendingSelection` 失效后必须清空，不得继续参与渲染和请求决策
 
 ## 3.3 `effectiveSelection`
@@ -183,17 +192,22 @@ pending 清除必须基于“后端真实播放状态已变化”这一事实，
 
 ## 5.1 主判据
 
-### `play_session_id` 变化
+### `play_session_id` 变化优先
 
-当：
+当前实现中，`pending` 清理统一收口到 `shouldClearPendingSelection(...)`，其前置分层由 `isSubmittingPending(...)` 明确区分 browsing / submitting。
+
+首选判据为：
 
 ```ts
-next.play_session_id !== pending.anchorPlaySessionId
+next.play_session_id !== pending.anchorPlaySessionId && doesServerStateConfirmPending(pending, next)
 ```
 
-则判定 pending 失效并清空。
+也就是：
 
-这是首选判据，适用于：
+- `play_session_id` 相对 pending anchor 已变化
+- 且服务端 `context.name` / `track.id`（必要时回退到 `track.title`）已经确认到 pending 目标
+
+适用于：
 
 - 用户点击播放后切到新曲目
 - 用户点击上一首 / 下一首后切到新曲目
@@ -204,11 +218,15 @@ next.play_session_id !== pending.anchorPlaySessionId
 
 当以下条件成立时，也可清空 pending：
 
-1. `revision` 已推进，且
-2. `context.name` / `track.id` 已切到新的真实对象，且
-3. 该变化不再匹配 pending 建立时的 anchor 状态
+1. `revision` 已相对 `anchorRevision` 推进，且
+2. `context.name` / `track.id`（必要时回退到 `track.title`）已命中 pending 目标
 
 辅判据用于补偿个别路径里 `play_session_id` 更新不及时的情况。
+
+需要明确：
+
+- 仅 `position_ms` / `snapshot_at_ms` 推进，不足以清空 pending
+- 目标未命中时，即使 `revision` 推进，也不能清空 pending
 
 ## 5.3 停止态判据
 
@@ -217,12 +235,15 @@ next.play_session_id !== pending.anchorPlaySessionId
 - `transport_state = stopped`
 - 或 `transport_state = idle`
 
-且该状态对应的 `revision` / `play_session_id` 已发生确认性变化，则应清空 pending。
+且 `revision` 已相对 `anchorRevision` 推进，则应清空提交态 pending。
+
+该规则用于 stop 或失败后回稳路径；它不要求 playlist / track 再次命中目标。
 
 ## 5.4 不应触发 pending 清除的变化
 
 以下变化不得单独导致 pending 失效：
 
+- 浏览态下任意普通 `serverState` 推进
 - `snapshot_at_ms` 推进
 - `position_ms` 推进
 - `duration_ms` 补全
@@ -256,7 +277,7 @@ pending 是否失效，应在 snapshot 应用后的独立逻辑中判断：
 serverState <- applySnapshotFn(snapshot)
 
 useEffect([serverState]) {
-  if (pendingSelection && shouldInvalidatePending(prevServerState, serverState, pendingSelection)) {
+  if (pendingSelection && shouldClearPendingSelection(pendingSelection, prevServerState, serverState)) {
     clearPendingSelection()
   }
 }
@@ -293,10 +314,12 @@ useEffect([serverState]) {
 
 规范决定：
 
-1. API 成功后，前端可先将 pending 标记为 `submitting = true`
-2. 若 `data.state` 存在，则立即应用该 snapshot，缩短 UI 等待窗口
-3. 后续仍继续接受 SSE / `/player/state` 的权威更新
-4. 当命中 pending 清除判据后，再清空 pending
+1. `playPlaylistTrack()` 开头先通过 `buildPendingSelectionForPlayback(...)` 补齐目标 browsing pending，保证没有预先浏览态时也有完整目标
+2. 请求真正发出前，`markPendingSubmittingState(...)` 要把 pending 切到 `submitting = true`，并把 anchor 刷新到最新 `serverState`
+3. API 成功后，前端保留该 submitting pending，等待权威状态确认，而不是在响应点直接清空
+4. 若 `data.state` 存在，则立即应用该 snapshot，缩短 UI 等待窗口
+5. 后续仍继续接受 SSE / `/player/state` 的权威更新
+6. 当命中 `shouldClearPendingSelection(...)` 判据后，再清空 pending
 
 ## 7.2 `next` / `previous` 的正式语义
 
@@ -311,6 +334,7 @@ useEffect([serverState]) {
 - **前端不得直接调用 `v1Next` / `v1Previous` 作为 pending 导航语义实现**
 - 前端必须在 pending 对应的 playlist 中本地计算目标曲目
 - 然后通过 `POST /api/v1/play` 发起播放
+- 若 pending 存在但当前 songs 为空，必须通过 `shouldGuardPendingNativeSwitch(...)` 阻止回落到设备原生 `next` / `previous`，并提示“当前列表尚未加载完成”
 
 ### 原因
 当前 `v1Next` / `v1Previous` 的语义是“对设备当前真实播放队列导航”，并不接受 pending playlist / pending track 作为输入。
@@ -372,8 +396,9 @@ useEffect([serverState]) {
 - 用户可自由切换歌单浏览
 - 播放态不会直接覆盖未提交的浏览选择
 - 刷新页后回到后端真实播放态
+- 浏览态与提交态已通过 `submitting` 显式分层
 
-当前状态：已实施。
+当前状态：已实施，阶段4已补本地测试与文档同步。
 
 ## P1：pending-aware 导航语义
 
@@ -388,8 +413,9 @@ useEffect([serverState]) {
 完成定义：
 
 - 用户在 pending 浏览态下点击上一首/下一首，行为以当前选择为准，而不是以后端旧播放队列为准
+- 当 pending 存在但列表尚未加载完成时，不会错误回落到设备真实队列导航
 
-当前状态：已实施，并经人工验收通过。
+当前状态：已实施，实机验收待阶段5统一收口。
 
 ## P2：体验优化
 
@@ -401,7 +427,7 @@ useEffect([serverState]) {
 - 评估 `/api/v1/control/*` 是否返回最新 player state snapshot
 - 用 API 响应加速 pending 清空与 UI 收敛
 
-当前状态：已实施。
+当前状态：已实施，`/api/v1/play` 即时回包与 pending 收敛规则已对齐。
 
 ---
 
@@ -414,7 +440,7 @@ useEffect([serverState]) {
    - 后续建议拆出独立 hooks，降低回归风险
 
 2. **pending invalidation 仍依赖前端本地判据组合**
-   - 当前以 `play_session_id` 为主判据，辅以 `revision + track/context` 变化
+   - 当前以 `play_session_id` 变化优先，辅以 `revision + playlist/track 命中` 与 `revision + stopped/idle`
    - 若后端某些路径存在投影延迟，仍可能出现边界误差
 
 3. **P2 当前只覆盖 `/api/v1/play`**
@@ -460,8 +486,12 @@ useEffect([serverState]) {
 1. WebUI playlist selector 已引入 pending 状态模型
 2. `serverState` 与 `pendingSelection` 已完成分离
 3. selector/UI 已绑定 `effectiveSelection`
-4. pending 清除以 `play_session_id` 变化为主判据已落地
-5. pending 存在时的 next/previous 前端语义已切换为“本地算目标曲目 + `v1Play`”
-6. `/api/v1/play` 已返回最新 snapshot，用于缩短前端等待窗口
+4. pending 清理已收口为 `shouldClearPendingSelection(...)`，规则顺序为：`play_session_id` 变化优先，其次 `revision + 目标命中`，最后 `revision + stopped/idle`
+5. `playPlaylistTrack()` 会先补齐 pending，并在 `markPendingSubmitting()` 中刷新 anchor 到最新服务端状态
+6. pending 存在时的 next/previous 前端语义已切换为“本地算目标曲目 + `v1Play`”，且空列表时不会误走设备原生导航
+7. browsing / submitting 双态语义已固定：浏览态不因普通 snapshot 推进清理，提交态只在确认成功或确认性停止后清理
+8. `playbackContextName` 已与本地 playlist 映射解耦，服务端 context 暂未加载时 selector 不再错误回退
+9. `/api/v1/play` 已返回最新 snapshot，用于缩短前端等待窗口
+10. `markPendingSubmittingState(...)` 会刷新 anchor，`shouldGuardPendingNativeSwitch(...)` 会拦截 pending + 空列表的原生切歌回退
 
 后续实现与回归验证必须继续以本规范为准，不再回退到补丁式状态覆盖方案。

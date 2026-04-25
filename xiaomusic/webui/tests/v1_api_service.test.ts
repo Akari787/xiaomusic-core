@@ -69,7 +69,7 @@ describe("v1Api service", () => {
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/next", { device_id: "did-1" });
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/play-mode", { device_id: "did-1", play_mode: "sequence" });
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/shutdown-timer", { device_id: "did-1", minutes: 1 });
-    expect(mockedPost).toHaveBeenCalledWith("/api/v1/library/favorites/add", { device_id: "did-1", music_name: "Song A" });
+    expect(mockedPost).toHaveBeenCalledWith("/api/v1/library/favorites/add", { device_id: "did-1", track_name: "Song A" });
   });
 
   it("calls official device and system status endpoints", async () => {

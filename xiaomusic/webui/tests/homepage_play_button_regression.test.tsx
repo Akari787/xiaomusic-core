@@ -12,6 +12,7 @@ const mockedV1 = vi.hoisted(() => ({
   addFavorite: vi.fn(),
   getLibraryMusicInfo: vi.fn(),
   getLibraryPlaylists: vi.fn(),
+  getPlayerStreamUrl: vi.fn((deviceId: string) => `http://127.0.0.1:58090/api/v1/player/stream?device_id=${deviceId}`),
   next: vi.fn(),
   play: vi.fn(),
   previous: vi.fn(),
@@ -30,13 +31,43 @@ const mockedV1 = vi.hoisted(() => ({
   stop: vi.fn(),
 }));
 
+const mockedEventSource = vi.hoisted(() => {
+  class MockEventSource {
+    static instances: MockEventSource[] = [];
+    url: string;
+    onopen: ((event: Event) => void) | null = null;
+    onerror: ((event: Event) => void) | null = null;
+    listeners = new Map<string, Set<(event: MessageEvent) => void>>();
+
+    constructor(url: string) {
+      this.url = url;
+      MockEventSource.instances.push(this);
+    }
+
+    addEventListener(type: string, listener: (event: MessageEvent) => void) {
+      if (!this.listeners.has(type)) {
+        this.listeners.set(type, new Set());
+      }
+      this.listeners.get(type)?.add(listener);
+    }
+
+    removeEventListener(type: string, listener: (event: MessageEvent) => void) {
+      this.listeners.get(type)?.delete(listener);
+    }
+
+    close() {}
+  }
+
+  return { MockEventSource };
+});
+
 vi.mock("../src/services/apiClient", () => ({
   apiGet: mockedApi.apiGet,
   apiPost: mockedApi.apiPost,
 }));
 
 vi.mock("../src/services/v1Api", () => ({
-  isApiOk: (out: { code?: number }) => Number(out.code || -1) === 0,
+  isApiOk: (out: { code?: number }) => Number(out.code ?? -1) === 0,
   apiErrorText: (out: { message?: string }) => String(out.message || "request failed"),
   apiErrorInfo: (out: { message?: string }) => ({
     message: String(out.message || "request failed"),
@@ -46,6 +77,7 @@ vi.mock("../src/services/v1Api", () => ({
   addFavorite: mockedV1.addFavorite,
   getLibraryMusicInfo: mockedV1.getLibraryMusicInfo,
   getLibraryPlaylists: mockedV1.getLibraryPlaylists,
+  getPlayerStreamUrl: mockedV1.getPlayerStreamUrl,
   next: mockedV1.next,
   play: mockedV1.play,
   previous: mockedV1.previous,
@@ -80,6 +112,34 @@ vi.mock("../src/theme/ThemeProvider", () => ({
 import { HomePage } from "../src/pages/HomePage";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as typeof globalThis & { EventSource?: typeof mockedEventSource.MockEventSource }).EventSource = mockedEventSource.MockEventSource;
+
+async function flushUi(cycles = 1) {
+  for (let i = 0; i < cycles; i += 1) {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+}
+
+async function advanceAndFlush(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+  await flushUi(3);
+}
+
+async function waitForHomeReady(container: HTMLDivElement, rounds = 6) {
+  for (let i = 0; i < rounds; i += 1) {
+    const text = container.textContent || "";
+    if (text.includes("Song A") && text.includes("XiaoAI")) {
+      return;
+    }
+    await advanceAndFlush(3000);
+  }
+  expect(container.textContent || "").toContain("Song A");
+}
 
 describe("HomePage play button regression", () => {
   let container: HTMLDivElement;
@@ -87,6 +147,9 @@ describe("HomePage play button regression", () => {
 
   beforeEach(async () => {
     vi.useFakeTimers();
+    localStorage.clear();
+    localStorage.setItem("xm_ui_active_did", "981257654");
+    mockedEventSource.MockEventSource.instances.length = 0;
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -138,14 +201,36 @@ describe("HomePage play button regression", () => {
         return {
           code: 0,
           message: "ok",
-          data: { device_id: "981257654", is_playing: false, cur_music: "", offset: 0, duration: 0 },
+          data: {
+            device_id: "981257654",
+            revision: 1,
+            play_session_id: "ps-idle",
+            transport_state: "idle",
+            track: null,
+            context: { type: "playlist", id: "所有歌曲", name: "所有歌曲", current_index: 0 },
+            position_ms: 0,
+            duration_ms: 0,
+            volume: 50,
+            snapshot_at_ms: 1000,
+          },
           request_id: "rid-state-idle",
         };
       }
       return {
         code: 0,
         message: "ok",
-        data: { device_id: "981257654", is_playing: true, cur_music: currentSong, offset: 1, duration: currentDuration || 180 },
+        data: {
+          device_id: "981257654",
+          revision: 2,
+          play_session_id: `ps-${currentSong}`,
+          transport_state: "playing",
+          track: { id: currentSong, title: currentSong },
+          context: { type: "playlist", id: "所有歌曲", name: "所有歌曲", current_index: 0 },
+          position_ms: 1000,
+          duration_ms: (currentDuration || 180) * 1000,
+          volume: 50,
+          snapshot_at_ms: 2000,
+        },
         request_id: `rid-state-${currentSong}`,
       };
     });
@@ -184,7 +269,7 @@ describe("HomePage play button regression", () => {
     mockedV1.getLibraryPlaylists.mockResolvedValue({
       code: 0,
       message: "ok",
-      data: { playlists: { 所有歌曲: ["Song A"] } },
+      data: { playlists: { 所有歌曲: [{ id: "song-a", title: "Song A" }] } },
       request_id: "rid-playlists",
     });
     mockedV1.getLibraryMusicInfo.mockResolvedValue({
@@ -211,11 +296,13 @@ describe("HomePage play button regression", () => {
     });
     mockedV1.setPlayMode.mockResolvedValue({ code: 0, message: "ok", data: { play_mode: "sequence" }, request_id: "rid-mode" });
     mockedV1.setShutdownTimer.mockResolvedValue({ code: 0, message: "ok", data: { minutes: 1 }, request_id: "rid-timer" });
-    mockedV1.addFavorite.mockResolvedValue({ code: 0, message: "ok", data: { music_name: "Song A" }, request_id: "rid-fav" });
+    mockedV1.addFavorite.mockResolvedValue({ code: 0, message: "ok", data: { track_name: "Song A" }, request_id: "rid-fav" });
 
     await act(async () => {
       root.render(<HomePage />);
     });
+    await flushUi(4);
+    await waitForHomeReady(container);
   });
 
   afterEach(async () => {
@@ -238,7 +325,7 @@ describe("HomePage play button regression", () => {
       await vi.advanceTimersByTimeAsync(3000);
     });
 
-    expect(mockedV1.getLibraryMusicInfo).toHaveBeenCalledWith("Song A");
+    expect(mockedV1.getLibraryMusicInfo).not.toHaveBeenCalled();
 
     expect(mockedV1.play).toHaveBeenCalledTimes(1);
     expect(mockedV1.play).toHaveBeenCalledWith({
@@ -252,8 +339,11 @@ describe("HomePage play button regression", () => {
           source: "local_library",
           playlist_name: "所有歌曲",
           music_name: "Song A",
+          track_name: "Song A",
+          track_id: "song-a",
           context_type: "playlist",
           context_name: "所有歌曲",
+          context_id: "所有歌曲",
         },
       },
     });
@@ -300,6 +390,7 @@ describe("HomePage play button regression", () => {
           playlist_name: "所有歌曲",
           music_name: "Song A",
           track_name: "Song A",
+          track_id: "song-a",
           context_type: "playlist",
           context_name: "所有歌曲",
           context_id: "所有歌曲",
