@@ -500,6 +500,152 @@ async def test_build_player_state_snapshot_track_id_uses_stable_identity_not_ran
 
 
 @pytest.mark.asyncio
+async def test_build_player_state_snapshot_prefers_membership_item_id_and_entity_id() -> None:
+    class _DevicePlayer:
+        _play_session_id = 6
+        _current_index = 0
+        _play_list = ["Song B"]
+        _last_cmd = "play"
+        _next_timer = None
+        _play_failed_cnt = 0
+        _degraded = False
+
+        def get_cur_music(self):
+            return "Song B"
+
+    class _XM:
+        def __init__(self):
+            self.device_manager = SimpleNamespace(devices={"did-1": _DevicePlayer()})
+            self.music_library = SimpleNamespace(
+                all_music={"Song B": "/music/song-b.flac"},
+                is_web_music=lambda _name: False,
+                resolve_playlist_item_record=lambda playlist_name, item_name="", item_id="": {
+                    "item_id": "playlist-item-42",
+                    "entity_id": "local:/music/song-b.flac",
+                },
+                resolve_playlist_item_identity=lambda playlist_name, item_name="", item_id="": "local:/music/song-b.flac",
+                resolve_entity_id_by_name=lambda name: "local:/music/song-b.flac" if name == "Song B" else "",
+            )
+            self.config = SimpleNamespace(music_list_json="")
+
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return did == "did-1"
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def playingmusic(did: str) -> str:
+            return "Song B"
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[int, int]:
+            return (0, 180)
+
+        @staticmethod
+        def get_cur_play_list(did: str) -> str:
+            return "我的歌单"
+
+        async def get_player_status(self, did: str) -> dict:
+            return {
+                "status": 1,
+                "play_song_detail": {
+                    "audio_name": "Song B",
+                    "position": 0,
+                    "duration": 180000,
+                },
+            }
+
+    facade = PlaybackFacade(_XM())
+    snapshot = await facade.build_player_state_snapshot("did-1")
+    assert snapshot["track"]["id"] == "playlist-item-42"
+    assert snapshot["track"]["entity_id"] == "local:/music/song-b.flac"
+
+
+@pytest.mark.asyncio
+async def test_build_player_state_snapshot_prefers_runtime_playlist_item_reference_when_titles_collide() -> None:
+    class _DevicePlayer:
+        _play_session_id = 7
+        _current_index = 1
+        _play_list = ["same-song", "same-song"]
+        _last_cmd = "play"
+        _next_timer = None
+        _play_failed_cnt = 0
+        _degraded = False
+
+        def get_cur_music(self):
+            return "same-song"
+
+        def get_current_track_reference(self):
+            return {
+                "display_name": "same-song",
+                "entity_id": "entity-2",
+                "playlist_item_id": "item-2",
+                "current_index": 1,
+                "playlist_name": "中文",
+            }
+
+    class _XM:
+        def __init__(self):
+            self.device_manager = SimpleNamespace(devices={"did-1": _DevicePlayer()})
+            self.music_library = SimpleNamespace(
+                all_music={"same-song": "/music/same-song.flac"},
+                is_web_music=lambda _name: False,
+                resolve_playlist_item_record=lambda playlist_name, item_name="", item_id="": {
+                    "item_id": "item-2",
+                    "entity_id": "entity-2",
+                }
+                if item_id == "item-2"
+                else {
+                    "item_id": "item-1",
+                    "entity_id": "entity-1",
+                },
+                resolve_playlist_item_identity=lambda playlist_name, item_name="", item_id="": "entity-2"
+                if item_id == "item-2"
+                else "entity-1",
+                resolve_entity_id_by_name=lambda name: "entity-1",
+            )
+            self.config = SimpleNamespace(music_list_json="")
+
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return did == "did-1"
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def playingmusic(did: str) -> str:
+            return "same-song"
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[int, int]:
+            return (0, 180)
+
+        @staticmethod
+        def get_cur_play_list(did: str) -> str:
+            return "中文"
+
+        async def get_player_status(self, did: str) -> dict:
+            return {
+                "status": 1,
+                "play_song_detail": {
+                    "audio_name": "same-song",
+                    "position": 0,
+                    "duration": 180000,
+                },
+            }
+
+    snapshot = await PlaybackFacade(_XM()).build_player_state_snapshot("did-1")
+    assert snapshot["track"]["id"] == "item-2"
+    assert snapshot["track"]["entity_id"] == "entity-2"
+    assert snapshot["context"]["current_index"] == 1
+
+
+@pytest.mark.asyncio
 async def test_player_state_detail_title_not_used_when_not_playing() -> None:
     class _XM:
         @staticmethod

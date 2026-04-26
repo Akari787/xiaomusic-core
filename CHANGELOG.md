@@ -1,3 +1,21 @@
+## v1.1.1 (2026-04-26)
+
+### 相对 v1.1.0 的主要变化
+
+- **WebUI 歌单选择状态彻底整改**：引入完整 identity 体系，彻底解决同实体异名、不同实体同名、聚合歌单重复 entry 问题。
+- **音乐库主模型 identity 化**：建立 `music_entities` / `playlist_memberships` / `playlist_definitions` 主模型，替代 `all_music={name:url}` / `music_list={playlist:[name]}` 的 name-based 旧结构。
+- **设备运行态 identity 化**：`Device` 增加 `current_entity_id` / `current_playlist_item_id` / `current_display_name`；`device_player.py` 维护结构化 `_play_list_items`，external URL bootstrap 优先按 `playlist_item_id -> entity_id -> display_name` 对位。
+- **Legacy API identity 收口**：`/playingmusic` 与 `/ws/playingmusic` 新增 `entity_id` / `playlist_item_id` / `current_index` / `context_id`；`/api/v1/library/music-info` 与 `/musicinfo` 支持 `entity_id` 查询。
+- **Favorites entity 全链路**：`FavoritesRequest` entity_id 优先透传，`/api/v1/library/favorites/add|remove` 优先处理 entity_id，`play_list_add_music('收藏', ...)` 修复新建后引用丢失问题。
+- **WebUI 前端修复**：歌曲 selector key 从 `item.id` 改为 `${effectivePlaylist}:${item.id}:${idx}`，解决重复 id 导致 React 残留问题。
+- 版本号提升到 `1.1.1`，`pyproject.toml` / `xiaomusic/__init__.py` 与对外版本展示入口继续统一。
+
+### 本版本仍保留的边界
+
+- `disabled_plugins` 当前仍为内存态，不持久化。
+- 前端 HomePage 状态逻辑仍偏集中，后续建议拆出独立 hooks。
+- pending invalidation 仍依赖前端本地判据组合，若后端某些路径存在投影延迟，仍可能出现边界误差。
+
 ## v1.1.0 (2026-04-17)
 
 ### 相对 v1.0.10 的主要变化

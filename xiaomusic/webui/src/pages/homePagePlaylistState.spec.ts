@@ -42,6 +42,7 @@ function makePending(overrides: Partial<PendingSelection> = {}): PendingSelectio
   return {
     playlist: "列表A",
     trackId: "track-1",
+    entityId: "entity-1",
     trackTitle: "Song A",
     anchorPlaySessionId: "session-9",
     anchorRevision: 9,
@@ -227,9 +228,10 @@ describe("HomePage playlist pending state helpers", () => {
         track: { id: "track-server", title: "Server Song" },
       });
 
-      expect(buildPendingSelectionForPlayback(null, "列表B", "Song B", "track-2", state)).toEqual({
+      expect(buildPendingSelectionForPlayback(null, "列表B", "Song B", "track-2", state, "entity-2")).toEqual({
         playlist: "列表B",
         trackId: "track-2",
+        entityId: "entity-2",
         trackTitle: "Song B",
         anchorPlaySessionId: "session-12",
         anchorRevision: 12,

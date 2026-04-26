@@ -221,6 +221,24 @@ class PlaybackFacade:
             if value:
                 return value
 
+        music_library = getattr(self.xiaomusic, "music_library", None)
+        if playlist_name and title and music_library is not None:
+            resolver = getattr(music_library, "resolve_playlist_item_identity", None)
+            if callable(resolver):
+                try:
+                    resolved_entity_id = str(
+                        resolver(
+                            playlist_name,
+                            item_name=title,
+                            item_id=str(detail.get("track_id") or detail.get("id") or "").strip(),
+                        )
+                        or ""
+                    ).strip()
+                    if resolved_entity_id:
+                        return resolved_entity_id
+                except Exception:
+                    pass
+
         if playlist_name and title:
             for playlist in self._get_config_music_lists():
                 if str(playlist.get("name") or "").strip() != playlist_name:
@@ -234,14 +252,23 @@ class PlaybackFacade:
                     item_title = str(item.get("name") or item.get("title") or "").strip()
                     if item_title != title:
                         continue
-                    for key in ("id", "media_id", "audio_id", "url", "path"):
+                    for key in ("entity_id", "id", "media_id", "audio_id", "url", "path"):
                         value = str(item.get(key) or "").strip()
                         if value:
                             return value
                     break
                 break
 
-        music_library = getattr(self.xiaomusic, "music_library", None)
+        if music_library is not None and title:
+            resolver = getattr(music_library, "resolve_entity_id_by_name", None)
+            if callable(resolver):
+                try:
+                    entity_id = str(resolver(title) or "").strip()
+                    if entity_id:
+                        return entity_id
+                except Exception:
+                    pass
+
         all_music = getattr(music_library, "all_music", None)
         if isinstance(all_music, dict) and title:
             value = all_music.get(title)
@@ -890,6 +917,21 @@ class PlaybackFacade:
                 current_volume = 0
         current_volume = max(0, min(100, int(current_volume or 0)))
 
+        runtime_track_ref: dict[str, Any] = {}
+        if device_player is not None:
+            getter = getattr(device_player, "get_current_track_reference", None)
+            if callable(getter):
+                try:
+                    runtime_track_ref = getter() or {}
+                except Exception:
+                    runtime_track_ref = {}
+
+        runtime_display_name = str(runtime_track_ref.get("display_name") or "").strip()
+        runtime_entity_id = str(runtime_track_ref.get("entity_id") or "").strip()
+        runtime_playlist_item_id = str(
+            runtime_track_ref.get("playlist_item_id") or ""
+        ).strip()
+
         track_title = ""
         track_artist: str | None = None
         track_album: str | None = None
@@ -916,15 +958,14 @@ class PlaybackFacade:
                     )
                     if not track_title:
                         track_title = (
-                            str(
+                            str(runtime_display_name)
+                            or str(
                                 getattr(
                                     self.xiaomusic, "playingmusic", lambda _did: ""
                                 )(did)
                                 or ""
                             )
-                            .strip('"')
-                            .strip()
-                        )
+                        ).strip('"').strip()
 
                     artist = detail.get("artist") or detail.get("singer")
                     if artist:
@@ -955,15 +996,17 @@ class PlaybackFacade:
                         )
                 else:
                     track_title = (
-                        str(
+                        str(runtime_display_name)
+                        or str(
                             getattr(self.xiaomusic, "playingmusic", lambda _did: "")(
                                 did
                             )
                             or ""
                         )
-                        .strip('"')
-                        .strip()
-                    )
+                    ).strip('"').strip()
+
+            if not track_title and runtime_display_name:
+                track_title = runtime_display_name
 
             if not track_title and device_player and transport_state != "idle":
                 try:
@@ -1007,7 +1050,25 @@ class PlaybackFacade:
             raw_source=raw_track_source,
             play_session_id=play_session_id,
         )
-        track_identity_hint = self._resolve_track_identity_hint(
+        music_library = getattr(self.xiaomusic, "music_library", None)
+        resolved_playlist_member = None
+        if music_library is not None:
+            resolver = getattr(music_library, "resolve_playlist_item_record", None)
+            if callable(resolver):
+                try:
+                    resolved_playlist_member = resolver(
+                        cur_playlist,
+                        item_name=track_title,
+                        item_id=str(
+                            runtime_playlist_item_id
+                            or (detail or {}).get("track_id")
+                            or (detail or {}).get("id")
+                            or ""
+                        ).strip(),
+                    )
+                except Exception:
+                    resolved_playlist_member = None
+        track_identity_hint = str(runtime_entity_id or "").strip() or self._resolve_track_identity_hint(
             context_id=cur_playlist,
             track_title=track_title,
             detail=detail,
@@ -1036,6 +1097,20 @@ class PlaybackFacade:
             except (ValueError, AttributeError):
                 pass
 
+            if current_index is None:
+                try:
+                    finder = getattr(device_player, "_find_playlist_index", None)
+                    if callable(finder):
+                        idx = finder(
+                            item_id=runtime_playlist_item_id,
+                            entity_id=track_identity_hint,
+                            display_name=track_title,
+                        )
+                        if idx >= 0:
+                            current_index = idx
+                except Exception:
+                    pass
+
             if current_index is None and track_title and play_list:
                 try:
                     if track_title in play_list:
@@ -1051,7 +1126,11 @@ class PlaybackFacade:
             }
 
         track_id = ""
-        if track_title or current_index is not None or cur_playlist:
+        if runtime_playlist_item_id:
+            track_id = runtime_playlist_item_id
+        elif resolved_playlist_member and str(resolved_playlist_member.get("item_id") or "").strip():
+            track_id = str(resolved_playlist_member.get("item_id") or "").strip()
+        elif track_title or current_index is not None or cur_playlist:
             track_id = build_track_id(
                 cur_playlist,
                 current_index,
@@ -1063,6 +1142,7 @@ class PlaybackFacade:
         if transport_state not in {"idle"} and (track_title or track_id):
             track_obj = {
                 "id": track_id,
+                "entity_id": track_identity_hint,
                 "title": track_title,
             }
             if track_artist is not None:

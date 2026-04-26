@@ -150,94 +150,106 @@ async def get_media_lyric(request: Request):
 
 @router.get("/playingmusic")
 async def playingmusic(did: str = ""):
-    """当前播放音乐"""
+    """当前播放音乐（legacy 兼容视图，附带 identity 字段）"""
     if not xiaomusic.did_exist(did):
         return api_response.ok(contract="ret", ret="Did not exist")
 
-    is_playing = xiaomusic.isplaying(did)
-    cur_music = xiaomusic.playingmusic(did)
-    cur_playlist = xiaomusic.get_cur_play_list(did)
-    # 播放进度
-    offset, duration = xiaomusic.get_offset_duration(did)
+    from xiaomusic.playback.facade import PlaybackFacade
 
-    player_status = {}
-    try:
-        player_status = await xiaomusic.get_player_status(did=did)
-    except Exception as e:
-        log.debug(f"playingmusic fallback get_player_status failed: {e}")
-
-    if isinstance(player_status, dict):
-        status_val = int(player_status.get("status", 0) or 0)
-        if not is_playing and status_val == 1:
-            is_playing = True
-
-        detail = player_status.get("play_song_detail")
-        if isinstance(detail, dict):
-            if not cur_music:
-                cur_music = (
-                    detail.get("audio_name")
-                    or detail.get("title")
-                    or detail.get("name")
-                    or cur_music
-                )
-            raw_pos = detail.get("position")
-            raw_dur = detail.get("duration")
-            try:
-                pos = float(raw_pos or 0)
-            except Exception:
-                pos = 0.0
-            try:
-                dur = float(raw_dur or 0)
-            except Exception:
-                dur = 0.0
-            if pos > 0 and offset <= 0:
-                offset = pos / 1000.0 if pos > 10000 else pos
-            if dur > 0 and duration <= 0:
-                duration = dur / 1000.0 if dur > 10000 else dur
+    snapshot = await PlaybackFacade(xiaomusic).build_player_state_snapshot(did)
+    track = snapshot.get("track") or {}
+    context = snapshot.get("context") or {}
 
     return api_response.ok(
         {
-            "is_playing": is_playing,
-            "cur_music": cur_music,
-            "cur_playlist": cur_playlist,
-            "offset": offset,
-            "duration": duration,
+            "is_playing": snapshot.get("transport_state") == "playing",
+            "cur_music": str(track.get("title") or ""),
+            "cur_playlist": str(context.get("name") or context.get("id") or ""),
+            "offset": int(snapshot.get("position_ms") or 0) / 1000,
+            "duration": int(snapshot.get("duration_ms") or 0) / 1000,
+            "entity_id": str(track.get("entity_id") or ""),
+            "playlist_item_id": str(track.get("id") or ""),
+            "current_index": context.get("current_index"),
+            "context_id": str(context.get("id") or ""),
         },
         contract="ret",
     )
 
 
 @router.get("/musiclist")
-async def musiclist():
-    """音乐列表"""
+async def musiclist(structured: bool = False):
+    """音乐列表。默认返回 legacy `{playlist: [name]}` 视图；structured=true 时返回结构化 playlist items。"""
+    if structured:
+        return api_response.ok(
+            {
+                "legacy": False,
+                "playlists": xiaomusic.music_library.get_playlist_items(),
+            },
+            contract="raw",
+        )
     return api_response.ok(xiaomusic.music_library.get_music_list(), contract="raw")
 
 
 @router.get("/musicinfo")
-async def musicinfo(name: str, musictag: bool = False):
+async def musicinfo(name: str = "", entity_id: str = "", musictag: bool = False):
     """音乐信息"""
-    url, _ = await xiaomusic.music_library.get_music_url(name)
-    info = {"name": name, "url": url}
+    music_name = str(name or "").strip()
+    requested_entity_id = str(entity_id or "").strip()
+    library = xiaomusic.music_library
+    if requested_entity_id:
+        music_name = str(
+            getattr(library, "get_legacy_name_for_entity", lambda *_args, **_kwargs: "")(
+                requested_entity_id
+            )
+            or ""
+        ).strip()
+        url, _ = await library.get_music_url_by_entity(requested_entity_id)
+    else:
+        url, _ = await library.get_music_url(music_name)
+    info = {"name": music_name, "entity_id": requested_entity_id, "url": url}
     if musictag:
-        info["tags"] = await xiaomusic.music_library.get_music_tags(name)
+        info["tags"] = (
+            await library.get_music_tags_by_entity(requested_entity_id)
+            if requested_entity_id
+            else await library.get_music_tags(music_name)
+        )
     return api_response.ok(info, contract="ret")
 
 
 @router.get("/musicinfos")
 async def musicinfos(
     name: list[str] = Query(None),
+    entity_id: list[str] = Query(None),
     musictag: bool = False,
 ):
     """批量音乐信息"""
     ret = []
-    for music_name in name:
-        url, _ = await xiaomusic.music_library.get_music_url(music_name)
+    names = name or []
+    entity_ids = entity_id or []
+    library = xiaomusic.music_library
+    if entity_ids:
+        resolver = getattr(library, "get_legacy_name_for_entity", None)
+        if callable(resolver):
+            names = [str(resolver(item) or "").strip() for item in entity_ids]
+        else:
+            names = ["" for _ in entity_ids]
+    for idx, music_name in enumerate(names):
+        current_entity_id = entity_ids[idx] if idx < len(entity_ids) else ""
+        if current_entity_id:
+            url, _ = await library.get_music_url_by_entity(current_entity_id)
+        else:
+            url, _ = await library.get_music_url(music_name)
         info = {
             "name": music_name,
+            "entity_id": current_entity_id,
             "url": url,
         }
         if musictag:
-            info["tags"] = await xiaomusic.music_library.get_music_tags(music_name)
+            info["tags"] = (
+                await library.get_music_tags_by_entity(current_entity_id)
+                if current_entity_id
+                else await library.get_music_tags(music_name)
+            )
         ret.append(info)
     return api_response.ok(ret, contract="raw")
 
@@ -245,7 +257,11 @@ async def musicinfos(
 @router.post("/setmusictag")
 async def setmusictag(info: MusicInfoObj):
     """设置音乐标签"""
-    ret = xiaomusic.music_library.set_music_tag(info.musicname, info)
+    entity_id = str(getattr(info, "entity_id", "") or "").strip()
+    if entity_id and hasattr(xiaomusic.music_library, "set_music_tag_by_entity"):
+        ret = xiaomusic.music_library.set_music_tag_by_entity(entity_id, info)
+    else:
+        ret = xiaomusic.music_library.set_music_tag(info.musicname, info)
     return api_response.ok(contract="ret", ret=ret)
 
 

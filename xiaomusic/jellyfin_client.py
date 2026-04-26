@@ -153,27 +153,43 @@ class JellyfinClient:
             "sources": {"Jellyfin": len(data)},
         }
 
-    def _build_music_name(self, item, used_names):
+    def _build_music_name(self, item, item_id_to_name, name_to_item_id):
         title = item.get("Name") or "Unknown"
         artists = item.get("Artists") or item.get("AlbumArtists") or []
         artist = artists[0] if artists else "Unknown"
         base_name = f"{title}-{artist}"
-        name = base_name
-        item_id = str(item.get("Id", ""))
-        if name in used_names and item_id:
-            name = f"{base_name}-[{item_id[:6]}]"
-        if name in used_names and item_id:
-            name = f"{base_name}-[{item_id}]"
+        item_id = str(item.get("Id", "")).strip()
+
+        # 同一个 Jellyfin 媒体项出现在多个歌单时，应复用第一次分配的名称，
+        # 而不是在后续歌单里追加后缀制造“同媒体不同名字”的别名。
+        if item_id and item_id in item_id_to_name:
+            return item_id_to_name[item_id]
+
+        owner = name_to_item_id.get(base_name)
+        if owner in (None, item_id):
+            name = base_name
+        elif item_id:
+            short_name = f"{base_name}-[{item_id[:6]}]"
+            short_owner = name_to_item_id.get(short_name)
+            if short_owner in (None, item_id):
+                name = short_name
+            else:
+                name = f"{base_name}-[{item_id}]"
+        else:
+            name = base_name
+
+        if item_id:
+            item_id_to_name[item_id] = name
+            name_to_item_id[name] = item_id
         return name
 
-    def _convert_audio_items_to_musics(self, items, used_names, user_id):
+    def _convert_audio_items_to_musics(self, items, item_id_to_name, name_to_item_id, user_id):
         musics = []
         for item in items:
             item_id = item.get("Id")
             if not item_id:
                 continue
-            name = self._build_music_name(item, used_names)
-            used_names.add(name)
+            name = self._build_music_name(item, item_id_to_name, name_to_item_id)
             duration = 0
             runtime_ticks = item.get("RunTimeTicks")
             if runtime_ticks:
@@ -181,15 +197,22 @@ class JellyfinClient:
                     duration = float(runtime_ticks) / 10000000.0
                 except Exception:
                     duration = 0
+            stream_url = self._stream_url(
+                item_id,
+                user_id=user_id,
+                force_transcode=self._need_transcode_mp3(item),
+            )
             musics.append(
                 {
+                    "entity_id": f"jellyfin:{item_id}",
                     "name": name,
-                    "url": self._stream_url(
-                        item_id,
-                        user_id=user_id,
-                        force_transcode=self._need_transcode_mp3(item),
-                    ),
+                    "canonical_name": name,
+                    "url": stream_url,
                     "type": "music",
+                    "source": "jellyfin",
+                    "source_item_id": str(item_id),
+                    "media_id": str(item_id),
+                    "id": str(item_id),
                     "duration": duration,
                 }
             )
@@ -201,7 +224,8 @@ class JellyfinClient:
         headers = self._headers()
         base = self._base()
 
-        used_names = set()
+        item_id_to_name = {}
+        name_to_item_id = {}
         exported_lists = []
 
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -250,10 +274,16 @@ class JellyfinClient:
                     else []
                 )
                 musics = self._convert_audio_items_to_musics(
-                    playlist_items, used_names, user_id
+                    playlist_items, item_id_to_name, name_to_item_id, user_id
                 )
                 exported_lists.append(
-                    {"name": playlist_name, "musics": musics, "source": "jellyfin"}
+                    {
+                        "name": playlist_name,
+                        "playlist_id": f"jellyfin:{playlist_id}",
+                        "source_playlist_id": str(playlist_id),
+                        "musics": musics,
+                        "source": "jellyfin",
+                    }
                 )
 
         return exported_lists

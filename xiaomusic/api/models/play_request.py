@@ -54,6 +54,7 @@ class FavoritesRequest(BaseModel):
 
     device_id: str = Field(alias=DEVICE_ID, min_length=1)
     track_name: str = ""
+    entity_id: str = ""
     request_id: str | None = Field(default=None, alias=REQUEST_ID)
 
 

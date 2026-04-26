@@ -33,7 +33,10 @@ class DidCmd(BaseModel):
 
 
 class MusicInfoObj(BaseModel):
-    musicname: str
+    musicname: str = ""
+    entity_id: str = ""
+    playlist_item_id: str = ""
+    playlist_name: str = ""
     title: str = ""
     artist: str = ""
     album: str = ""
@@ -83,7 +86,7 @@ class PlayListUpdateObj(BaseModel):
 
 class PlayListMusicObj(BaseModel):
     name: str = ""  # 歌单名
-    music_list: list[str]  # 歌曲名列表
+    music_list: list[str | dict[str, str]]  # 支持 str 或 {entity_id, display_name, playlist_item_id}
 
 
 class ApiResponseBase(BaseModel):

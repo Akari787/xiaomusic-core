@@ -99,6 +99,9 @@ class Device:
     cur_music: str = ""
     cur_playlist: str = ""
     playlist2music: dict[str, str] = field(default_factory=dict)
+    current_entity_id: str = ""
+    current_playlist_item_id: str = ""
+    current_display_name: str = ""
 
 
 @dataclass

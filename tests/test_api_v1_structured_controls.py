@@ -89,6 +89,7 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
     ]
     assert calls[3][2]["arg1"] == 5
     assert calls[4][2]["arg1"] == "song-a"
+    assert calls[5][2]["arg1"] == "song-a"
     assert calls[2][2]["dotts"] is False
     assert calls[2][2]["refresh_playlist"] is True
     assert out_prev["data"]["transport"] == "miio"
@@ -130,6 +131,38 @@ async def test_api_v1_structured_controls_reject_missing_device(monkeypatch):
     assert out["message"] == "device not found"
     assert out["data"]["error_code"] == "E_DEVICE_NOT_FOUND"
     assert out["data"]["stage"] == "request"
+
+
+@pytest.mark.asyncio
+async def test_api_v1_favorites_routes_prefer_entity_id_when_provided(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return did == "did-1"
+
+        async def add_to_favorites(self, **kwargs):
+            calls.append(("add", kwargs))
+
+        async def del_from_favorites(self, **kwargs):
+            calls.append(("remove", kwargs))
+
+    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+
+    add_out = await v1.api_v1_library_favorites_add(
+        FavoritesRequest(device_id="did-1", track_name="song-a", entity_id="jellyfin:item-a")
+    )
+    remove_out = await v1.api_v1_library_favorites_remove(
+        FavoritesRequest(device_id="did-1", track_name="song-a", entity_id="jellyfin:item-a")
+    )
+
+    assert calls == [
+        ("add", {"did": "did-1", "arg1": "jellyfin:item-a"}),
+        ("remove", {"did": "did-1", "arg1": "jellyfin:item-a"}),
+    ]
+    assert add_out["data"]["entity_id"] == "jellyfin:item-a"
+    assert remove_out["data"]["entity_id"] == "jellyfin:item-a"
 
 
 @pytest.mark.asyncio

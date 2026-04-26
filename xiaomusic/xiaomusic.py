@@ -671,25 +671,63 @@ class XiaoMusic:
             minute = chinese_to_number(str(arg1))
         return await self.device_manager.devices[did].stop_after_minute(minute)
 
+    def _resolve_current_track_reference(self, did: str, fallback: str = "") -> str:
+        device_player = getattr(getattr(self, "device_manager", None), "devices", {}).get(did)
+        if device_player is not None:
+            direct_entity_id = str(
+                getattr(getattr(device_player, "device", None), "current_entity_id", "")
+                or ""
+            ).strip()
+            if direct_entity_id:
+                return direct_entity_id
+        token = str(fallback or self.playingmusic(did) or "").strip()
+        if not token:
+            return ""
+        music_library = getattr(self, "music_library", None)
+        if music_library is None:
+            return token
+
+        playlist_name = str(self.get_cur_play_list(did) or "").strip()
+        resolver = getattr(music_library, "resolve_playlist_item_identity", None)
+        if callable(resolver):
+            try:
+                entity_id = str(
+                    resolver(playlist_name, item_name=token) or ""
+                ).strip()
+            except Exception:
+                entity_id = ""
+            if entity_id:
+                return entity_id
+
+        resolver = getattr(music_library, "resolve_entity_id_by_name", None)
+        if callable(resolver):
+            try:
+                entity_id = str(resolver(token) or "").strip()
+            except Exception:
+                entity_id = ""
+            if entity_id:
+                return entity_id
+        return token
+
     # 口令:加入收藏,收藏歌曲
     async def add_to_favorites(self, did="", arg1="", **kwargs):
-        name = arg1 if arg1 else self.playingmusic(did)
-        self.log.info(f"add_to_favorites {name}")
-        if not name:
+        target = self._resolve_current_track_reference(did, fallback=arg1)
+        self.log.info(f"add_to_favorites {target}")
+        if not target:
             self.log.warning("当前没有在播放歌曲，添加歌曲到收藏列表失败")
             return
 
-        self.music_library.play_list_add_music("收藏", [name])
+        self.music_library.play_list_add_music("收藏", [target])
 
     # 口令:取消收藏
     async def del_from_favorites(self, did="", arg1="", **kwargs):
-        name = arg1 if arg1 else self.playingmusic(did)
-        self.log.info(f"del_from_favorites {name}")
-        if not name:
+        target = self._resolve_current_track_reference(did, fallback=arg1)
+        self.log.info(f"del_from_favorites {target}")
+        if not target:
             self.log.warning("当前没有在播放歌曲，从收藏列表中移除失败")
             return
 
-        self.music_library.play_list_del_music("收藏", [name])
+        self.music_library.play_list_del_music("收藏", [target])
 
     # 更新每个设备的歌单
     def update_all_playlist(self):

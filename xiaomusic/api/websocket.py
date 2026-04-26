@@ -74,23 +74,39 @@ async def ws_playingmusic(websocket: WebSocket):
 
         # 开始推送状态
         while True:
-            is_playing = xiaomusic.isplaying(did)
-            cur_music = xiaomusic.playingmusic(did)
-            cur_playlist = xiaomusic.get_cur_play_list(did)
-            offset, duration = xiaomusic.get_offset_duration(did)
+            if did:
+                from xiaomusic.playback.facade import PlaybackFacade
 
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "ret": "OK",
-                        "is_playing": is_playing,
-                        "cur_music": cur_music,
-                        "cur_playlist": cur_playlist,
-                        "offset": offset,
-                        "duration": duration,
-                    }
-                )
-            )
+                snapshot = await PlaybackFacade(xiaomusic).build_player_state_snapshot(did)
+                track = snapshot.get("track") or {}
+                context = snapshot.get("context") or {}
+                payload = {
+                    "ret": "OK",
+                    "is_playing": snapshot.get("transport_state") == "playing",
+                    "cur_music": str(track.get("title") or ""),
+                    "cur_playlist": str(context.get("name") or context.get("id") or ""),
+                    "offset": int(snapshot.get("position_ms") or 0) / 1000,
+                    "duration": int(snapshot.get("duration_ms") or 0) / 1000,
+                    "entity_id": str(track.get("entity_id") or ""),
+                    "playlist_item_id": str(track.get("id") or ""),
+                    "current_index": context.get("current_index"),
+                    "context_id": str(context.get("id") or ""),
+                }
+            else:
+                payload = {
+                    "ret": "OK",
+                    "is_playing": False,
+                    "cur_music": "",
+                    "cur_playlist": "",
+                    "offset": 0,
+                    "duration": 0,
+                    "entity_id": "",
+                    "playlist_item_id": "",
+                    "current_index": None,
+                    "context_id": "",
+                }
+
+            await websocket.send_text(json.dumps(payload))
             await asyncio.sleep(1)
 
     except jwt.ExpiredSignatureError:

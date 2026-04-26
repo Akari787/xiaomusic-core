@@ -55,6 +55,7 @@ export interface ControlData {
 
 export interface PlayerStateTrack {
   id: string;
+  entity_id?: string;
   title: string;
   artist?: string;
   album?: string;
@@ -118,6 +119,7 @@ export interface DevicesData {
 
 export interface PlaylistItem {
   id: string;
+  entity_id?: string;
   title: string;
 }
 

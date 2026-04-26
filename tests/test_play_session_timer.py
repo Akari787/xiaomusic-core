@@ -283,6 +283,49 @@ async def test_external_url_playlist_bootstrap_shuffles_when_random_mode():
 
 
 @pytest.mark.asyncio
+async def test_external_url_playlist_bootstrap_prefers_playlist_item_id_over_title():
+    d = _build_device_for_timer_tests()
+    d.xiaomusic = types.SimpleNamespace(
+        music_library=types.SimpleNamespace(
+            music_list={"中文": ["same-song", "same-song"]},
+            get_playlist_items=lambda playlist_name: [
+                {
+                    "item_id": "item-1",
+                    "entity_id": "entity-1",
+                    "display_name": "same-song",
+                    "legacy_name": "same-song",
+                },
+                {
+                    "item_id": "item-2",
+                    "entity_id": "entity-2",
+                    "display_name": "same-song",
+                    "legacy_name": "same-song",
+                },
+            ],
+        )
+    )
+
+    await d.on_external_url_play(
+        context={
+            "title": "same-song",
+            "context_hint": {"context_type": "playlist", "context_name": "中文", "context_id": "中文"},
+            "source_payload": {
+                "music_name": "same-song",
+                "playlist_name": "中文",
+                "context_type": "playlist",
+                "playlist_item_id": "item-2",
+                "entity_id": "entity-2",
+            },
+        }
+    )
+
+    assert d._current_index == 1
+    assert d.device.cur_music == "same-song"
+    assert d.device.current_playlist_item_id == "item-2"
+    assert d.device.current_entity_id == "entity-2"
+
+
+@pytest.mark.asyncio
 async def test_xiaomusic_play_url_does_not_publish_extra_player_state_event():
     sys.modules["miservice"] = types.SimpleNamespace(
         miio_command=lambda *args, **kwargs: None,

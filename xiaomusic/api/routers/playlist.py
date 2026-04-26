@@ -91,7 +91,12 @@ async def playlistupdatemusic(data: PlayListMusicObj):
 
 
 @router.get("/playlistmusics")
-async def getplaylist(name: str):
+async def getplaylist(name: str, structured: bool = False):
     """获取歌单中所有歌曲"""
     ret, musics = xiaomusic.music_library.play_list_musics(name)
-    return api_response.ok({"musics": musics}, contract="ret")
+    payload = {"musics": musics}
+    if structured:
+        _, items = xiaomusic.music_library.play_list_items(name)
+        payload["items"] = items
+        payload["legacy"] = False
+    return api_response.ok(payload, contract="ret")

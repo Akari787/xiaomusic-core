@@ -34,8 +34,14 @@ class LegacyPayloadSourcePlugin:
         source_hint = source_raw if source_raw in self.KNOWN_HINTS else fallback_hint
 
         local_query = str(
-            payload.get("music_name")
+            payload.get("playlist_item_id")
+            or payload.get("item_id")
             or payload.get("track_id")
+            or payload.get("entity_id")
+            or payload.get("media_id")
+            or payload.get("source_item_id")
+            or payload.get("music_name")
+            or payload.get("track_name")
             or payload.get("name")
             or payload.get("title")
             or payload.get("path")

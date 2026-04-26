@@ -26,6 +26,7 @@ import {
   type ApiEnvelope,
   type PlayMode,
   type PlayerStateData,
+  type PlaylistItem,
   type TransportState,
 } from "../services/v1Api";
 import { fetchAuthStatus, logoutAuth as logoutAuthRequest, reloadAuthRuntime } from "../services/auth";
@@ -63,6 +64,7 @@ type AuthStatus = {
 export type PendingSelection = {
   playlist: string | null;
   trackId: string | null;
+  entityId: string | null;
   trackTitle: string | null;
   anchorPlaySessionId: string;
   anchorRevision: number;
@@ -368,10 +370,12 @@ export function buildPendingSelectionForPlayback(
   picked: string,
   trackId: string | null | undefined,
   state: PlayerStateData,
+  entityId?: string | null,
 ): PendingSelection {
   return {
     playlist: playlistName || prev?.playlist || null,
     trackId: trackId ?? prev?.trackId ?? null,
+    entityId: entityId ?? prev?.entityId ?? null,
     trackTitle: picked || prev?.trackTitle || null,
     anchorPlaySessionId: String(state.play_session_id || ""),
     anchorRevision: Number(state.revision || 0),
@@ -983,7 +987,7 @@ function usePlayerStream(
 export function HomePage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [activeDid, setActiveDid] = useState<string>(() => loadLocal("xm_ui_active_did"));
-  const [playlists, setPlaylists] = useState<Record<string, { id: string; title: string }[]>>({});
+  const [playlists, setPlaylists] = useState<Record<string, PlaylistItem[]>>({});
   const [pendingSelection, setPendingSelection] = useState<PendingSelection | null>(null);
   const [volume, setVolume] = useState<number>(50);
   const [message, setMessage] = useState<string>("");
@@ -1250,6 +1254,7 @@ export function HomePage() {
       setPendingSelection({
         playlist: nextPlaylist,
         trackId: nextSongs[0]?.id ?? null,
+        entityId: nextSongs[0]?.entity_id ?? null,
         trackTitle: nextSongs[0]?.title ?? null,
         anchorPlaySessionId: String(serverState.play_session_id || ""),
         anchorRevision: Number(serverState.revision || 0),
@@ -1267,6 +1272,7 @@ export function HomePage() {
       setPendingSelection({
         playlist: nextPlaylist || null,
         trackId: item?.id ?? trackId ?? null,
+        entityId: item?.entity_id ?? null,
         trackTitle: item?.title ?? trackTitle ?? null,
         anchorPlaySessionId: String(serverState.play_session_id || ""),
         anchorRevision: Number(serverState.revision || 0),
@@ -1600,10 +1606,11 @@ export function HomePage() {
     playlistName: string,
     picked: string,
     trackId?: string | null,
+    entityId?: string | null,
   ): Promise<boolean> {
     // 确保 pending 存在，即使之前没有浏览过
     setPendingSelection((prev) =>
-      buildPendingSelectionForPlayback(prev, playlistName, picked, trackId, serverStateRef.current),
+      buildPendingSelectionForPlayback(prev, playlistName, picked, trackId, serverStateRef.current, entityId),
     );
 
     const contextHint = {
@@ -1611,6 +1618,8 @@ export function HomePage() {
       context_name: playlistName,
       context_id: playlistName,
     };
+    const playlistItem = songs.find((item) => item.id === trackId) || null;
+    const resolvedEntityId = String(entityId || playlistItem?.entity_id || pendingSelection?.entityId || "").trim() || undefined;
     const localLibraryOptions = {
       title: picked,
       context_hint: contextHint,
@@ -1620,6 +1629,7 @@ export function HomePage() {
         music_name: picked,
         track_name: picked,
         track_id: trackId ?? undefined,
+        entity_id: resolvedEntityId,
         context_type: "playlist",
         context_name: playlistName,
         context_id: playlistName,
@@ -1657,6 +1667,7 @@ export function HomePage() {
             music_name: picked,
             track_name: picked,
             track_id: trackId ?? undefined,
+            entity_id: resolvedEntityId,
             context_type: "playlist",
             context_name: playlistName,
             context_id: playlistName,
@@ -1695,7 +1706,7 @@ export function HomePage() {
           return;
         }
         applyPendingTrack(nextItem.id, nextItem.title, effectivePlaylist);
-        await playPlaylistTrack(did, effectivePlaylist, nextItem.title, nextItem.id);
+        await playPlaylistTrack(did, effectivePlaylist, nextItem.title, nextItem.id, nextItem.entity_id);
         return;
       }
 
@@ -1726,6 +1737,7 @@ export function HomePage() {
     const targetPlaylist = effectivePlaylist;
     const picked = String(songName || currentItem?.title || effectiveTrackTitle || "").trim();
     const targetTrackId = currentItem?.title === picked ? currentItem.id : effectiveTrackId;
+    const targetEntityId = currentItem?.title === picked ? currentItem.entity_id : pendingSelection?.entityId;
     if (!picked || !targetPlaylist) {
       setMessage("当前歌单为空，请先刷新歌单或切换列表");
       return;
@@ -1733,7 +1745,7 @@ export function HomePage() {
     setMessage(`正在切换到 ${picked}...`);
 
     try {
-      await playPlaylistTrack(deviceId, targetPlaylist, picked, targetTrackId);
+      await playPlaylistTrack(deviceId, targetPlaylist, picked, targetTrackId, targetEntityId);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err || "未知错误");
       setMessage(`播放失败：${reason}`);
@@ -2421,8 +2433,8 @@ export function HomePage() {
               endSelectorInteraction(800);
             }}
           >
-            {songs.map((item) => (
-              <option key={item.id} value={item.id}>
+            {songs.map((item, idx) => (
+              <option key={`${effectivePlaylist}:${item.id}:${idx}`} value={item.id}>
                 {item.title}
               </option>
             ))}

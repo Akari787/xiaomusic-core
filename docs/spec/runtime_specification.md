@@ -1,6 +1,6 @@
 # Runtime 核心层技术规范
 
-> 版本：v1.1.0 Phase 1
+> 版本：v1.1.1 Phase 1
 > 最后更新：2026-03-19
 > 适用范围：`xiaomusic/core/` 下所有模块
 

@@ -1,8 +1,8 @@
 # WebUI 歌单选择状态架构（WebUI Playlist Selection State Architecture）
 
-版本：v1.3
-状态：正式架构文档（实现已落地，阶段4测试与文档已同步，待阶段5实机验收收口）
-最后更新：2026-04-25
+版本：v1.4
+状态：正式架构文档（已全部收口，P0/P1/P2 实机验收通过，影子澪审核通过）
+最后更新：2026-04-26
 
 本文档定义 WebUI 中歌单选择、曲目选择与后端播放状态之间的职责边界，解决当前 playlist selector 在播放中或停止后仍可能被后端状态覆盖、无法自由浏览歌单的问题。本文档只覆盖 WebUI 侧状态模型与 v1 API 消费语义，不修改 `docs/spec/player_state_projection_spec.md` 中的播放器快照字段定义。
 
@@ -13,12 +13,15 @@
 - `docs/spec/player_stream_sse_spec.md`
 - `docs/api/api_v1_spec.md`
 
-当前实现状态（2026-04-25）：
+当前实现状态（2026-04-26）：
 
-- P0 已实施，pending 清理逻辑已收口到纯函数 helper：`isSubmittingPending(...)`、`doesServerStateConfirmPending(...)`、`shouldClearPendingSelection(...)`
+- P0 已实施并实机验收通过，pending 清理逻辑已收口到纯函数 helper：`isSubmittingPending(...)`、`doesServerStateConfirmPending(...)`、`shouldClearPendingSelection(...)`
 - P1 已实施，pending-aware `next` / `previous` 已补 `shouldGuardPendingNativeSwitch(...)` 空列表保护
 - P2 已实施，`/api/v1/play` 回包 snapshot 与本地 pending 状态机已接通
-- 阶段4已补充本地单元测试（覆盖 8.1-8.5）并完成文档同步；阶段5实机验收仍需单独执行
+- WebUI 歌曲 selector key 修复（`${effectivePlaylist}:${item.id}:${idx}`）已完成
+- 音乐库 identity 主模型已建立，聚合歌单按 entity 去重
+- 设备运行态 identity 化已完成，Legacy API 已收口
+- 影子澪审核通过（2026-04-26）
 
 ---
 

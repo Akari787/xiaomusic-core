@@ -971,9 +971,15 @@ async def api_v1_library_favorites_add(data: FavoritesRequest):
     request_id = _next_request_id(data.request_id)
     try:
         xm = _require_device(data.device_id, request_id)
-        await xm.add_to_favorites(did=data.device_id, arg1=data.track_name)
+        target = str(data.entity_id or data.track_name or "").strip()
+        await xm.add_to_favorites(did=data.device_id, arg1=target)
         return _api_ok(
-            {"status": "ok", DEVICE_ID: data.device_id, "track_name": data.track_name},
+            {
+                "status": "ok",
+                DEVICE_ID: data.device_id,
+                "track_name": data.track_name,
+                "entity_id": data.entity_id,
+            },
             request_id=request_id,
         )
     except Exception as exc:
@@ -991,9 +997,15 @@ async def api_v1_library_favorites_remove(data: FavoritesRequest):
     request_id = _next_request_id(data.request_id)
     try:
         xm = _require_device(data.device_id, request_id)
-        await xm.del_from_favorites(did=data.device_id, arg1=data.track_name)
+        target = str(data.entity_id or data.track_name or "").strip()
+        await xm.del_from_favorites(did=data.device_id, arg1=target)
         return _api_ok(
-            {"status": "ok", DEVICE_ID: data.device_id, "track_name": data.track_name},
+            {
+                "status": "ok",
+                DEVICE_ID: data.device_id,
+                "track_name": data.track_name,
+                "entity_id": data.entity_id,
+            },
             request_id=request_id,
         )
     except Exception as exc:
@@ -1029,28 +1041,57 @@ async def api_v1_library_playlists(request_id: str | None = None):
     try:
         from xiaomusic.playback.facade import build_track_id
 
-        raw_playlists = _get_xiaomusic().music_library.get_music_list()
-        from xiaomusic.utils.text_utils import custom_sort_key
-
         music_library = getattr(_get_xiaomusic(), "music_library", None)
+        raw_playlists = _get_xiaomusic().music_library.get_music_list()
         all_music = getattr(music_library, "all_music", {}) if music_library else {}
+        playlist_items = (
+            music_library.get_playlist_items() if music_library and hasattr(music_library, "get_playlist_items") else {}
+        )
 
         playlists_with_ids = {}
         if isinstance(raw_playlists, dict):
             for name, songs in raw_playlists.items():
                 if isinstance(songs, list):
-                    sorted_songs = sorted(songs, key=custom_sort_key)
+                    structured_items = playlist_items.get(name) if isinstance(playlist_items, dict) else None
                     items = []
-                    for idx, title in enumerate(sorted_songs):
-                        identity_hint = ""
-                        if isinstance(all_music, dict):
-                            identity_hint = str(all_music.get(title) or "").strip()
-                        items.append(
-                            {
-                                "id": build_track_id(name, idx, title, identity_hint=identity_hint),
-                                "title": title,
-                            }
-                        )
+                    if isinstance(structured_items, list) and structured_items:
+                        members_by_legacy = {
+                            str(item.get("legacy_name") or item.get("display_name") or "").strip(): item
+                            for item in structured_items
+                            if isinstance(item, dict)
+                        }
+                        for idx, title in enumerate(songs):
+                            member = members_by_legacy.get(str(title or "").strip(), {})
+                            identity_hint = str(
+                                member.get("entity_id")
+                                or member.get("source_item_id")
+                                or member.get("item_id")
+                                or ""
+                            ).strip()
+                            item_id = str(member.get("item_id") or "").strip() or build_track_id(
+                                name,
+                                idx,
+                                str(title or ""),
+                                identity_hint=identity_hint,
+                            )
+                            items.append(
+                                {
+                                    "id": item_id,
+                                    "entity_id": str(member.get("entity_id") or "").strip(),
+                                    "title": str(member.get("display_name") or title or ""),
+                                }
+                            )
+                    else:
+                        for idx, title in enumerate(songs):
+                            identity_hint = ""
+                            if isinstance(all_music, dict):
+                                identity_hint = str(all_music.get(title) or "").strip()
+                            items.append(
+                                {
+                                    "id": build_track_id(name, idx, title, identity_hint=identity_hint),
+                                    "title": title,
+                                }
+                            )
                     playlists_with_ids[name] = items
                 else:
                     playlists_with_ids[name] = songs
@@ -1070,24 +1111,45 @@ async def api_v1_library_playlists(request_id: str | None = None):
 
 @router.get("/api/v1/library/music-info")
 async def api_v1_library_music_info(
-    name: str = Query(""), request_id: str | None = None
+    name: str = Query(""),
+    entity_id: str = Query(""),
+    request_id: str | None = None,
 ):
     rid = _next_request_id(request_id)
     try:
         music_name = str(name or "").strip()
+        requested_entity_id = str(entity_id or "").strip()
+        if not music_name and not requested_entity_id:
+            raise _bad_request(rid, "name or entity_id is required", field="name")
+        xm = _get_xiaomusic()
+        music_library = xm.music_library
+        if requested_entity_id:
+            resolver = getattr(music_library, "get_legacy_name_for_entity", None)
+            if callable(resolver):
+                music_name = str(resolver(requested_entity_id) or "").strip()
         if not music_name:
-            raise _bad_request(rid, "name is required", field="name")
-        url, _ = await _get_xiaomusic().music_library.get_music_url(music_name)
-        tags = await _get_xiaomusic().music_library.get_music_tags(music_name)
+            raise _bad_request(rid, "name or entity_id is required", field="name")
+        if requested_entity_id and hasattr(music_library, "get_music_url_by_entity"):
+            url, _ = await music_library.get_music_url_by_entity(requested_entity_id)
+            tags = await music_library.get_music_tags_by_entity(requested_entity_id)
+        else:
+            url, _ = await music_library.get_music_url(music_name)
+            tags = await music_library.get_music_tags(music_name)
         duration_seconds = 0.0
         if isinstance(tags, dict):
             try:
                 duration_seconds = float(tags.get("duration") or 0)
             except Exception:
                 duration_seconds = 0.0
+        resolved_entity_id = requested_entity_id
+        if not resolved_entity_id:
+            resolver = getattr(music_library, "resolve_entity_id_by_name", None)
+            if callable(resolver):
+                resolved_entity_id = str(resolver(music_name) or "").strip()
         return _api_ok(
             {
                 "name": music_name,
+                "entity_id": resolved_entity_id,
                 "url": url,
                 "duration_seconds": duration_seconds,
             },

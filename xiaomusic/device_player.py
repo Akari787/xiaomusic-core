@@ -83,6 +83,7 @@ class XiaoMusicDevice:
         self._play_session_id = 0
 
         self._play_list = []
+        self._play_list_items = []
         self._current_index = -1  # 当前歌曲在播放列表中的索引
 
         # 关机定时器
@@ -107,7 +108,146 @@ class XiaoMusicDevice:
 
     def get_cur_music(self):
         """获取当前播放的音乐名称"""
-        return self.device.cur_music
+        return str(
+            getattr(self.device, "current_display_name", "") or self.device.cur_music
+        )
+
+    @staticmethod
+    def _normalize_playlist_runtime_item(item) -> dict[str, str]:
+        if not isinstance(item, dict):
+            title = str(item or "").strip()
+            return {
+                "item_id": "",
+                "entity_id": "",
+                "display_name": title,
+                "legacy_name": title,
+            }
+        title = str(
+            item.get("display_name")
+            or item.get("legacy_name")
+            or item.get("title")
+            or item.get("name")
+            or ""
+        ).strip()
+        legacy_name = str(item.get("legacy_name") or title).strip()
+        return {
+            "item_id": str(item.get("item_id") or item.get("id") or "").strip(),
+            "entity_id": str(item.get("entity_id") or "").strip(),
+            "display_name": title,
+            "legacy_name": legacy_name,
+        }
+
+    def _build_playlist_runtime_items(self, playlist_name: str) -> list[dict[str, str]]:
+        music_library = getattr(self.xiaomusic, "music_library", None)
+        getter = getattr(music_library, "get_playlist_items", None)
+        if callable(getter):
+            try:
+                items = getter(playlist_name)
+            except Exception:
+                items = None
+            if isinstance(items, list) and items:
+                return [self._normalize_playlist_runtime_item(item) for item in items]
+
+        music_list = getattr(music_library, "music_list", {}) or {}
+        legacy_items = music_list.get(playlist_name, [])
+        if not isinstance(legacy_items, list):
+            return []
+        return [self._normalize_playlist_runtime_item(name) for name in legacy_items]
+
+    def _find_playlist_index(
+        self,
+        *,
+        item_id: str = "",
+        entity_id: str = "",
+        display_name: str = "",
+    ) -> int:
+        items = list(getattr(self, "_play_list_items", []) or [])
+        target_item_id = str(item_id or "").strip()
+        target_entity_id = str(entity_id or "").strip()
+        target_display = str(display_name or "").strip()
+        if target_item_id:
+            for idx, item in enumerate(items):
+                if str(item.get("item_id") or "") == target_item_id:
+                    return idx
+        if target_entity_id:
+            for idx, item in enumerate(items):
+                if str(item.get("entity_id") or "") == target_entity_id:
+                    return idx
+        if target_display:
+            for idx, item in enumerate(items):
+                if target_display in {
+                    str(item.get("display_name") or "").strip(),
+                    str(item.get("legacy_name") or "").strip(),
+                }:
+                    return idx
+            try:
+                return self._play_list.index(target_display)
+            except ValueError:
+                return -1
+        return -1
+
+    def _set_runtime_track_reference(
+        self,
+        *,
+        playlist_name: str | None = None,
+        display_name: str = "",
+        entity_id: str = "",
+        playlist_item_id: str = "",
+        current_index: int | None = None,
+    ) -> None:
+        playlist_name = str(
+            playlist_name if playlist_name is not None else self.device.cur_playlist or ""
+        ).strip()
+        resolved_index = current_index if current_index is not None else -1
+        if resolved_index < 0:
+            resolved_index = self._find_playlist_index(
+                item_id=playlist_item_id,
+                entity_id=entity_id,
+                display_name=display_name,
+            )
+        item = None
+        if 0 <= resolved_index < len(getattr(self, "_play_list_items", []) or []):
+            item = self._play_list_items[resolved_index]
+        final_display = str(
+            display_name
+            or (item.get("display_name") if item else "")
+            or getattr(self.device, "current_display_name", "")
+            or getattr(self.device, "cur_music", "")
+            or ""
+        ).strip()
+        final_entity_id = str(
+            entity_id
+            or (item.get("entity_id") if item else "")
+            or getattr(self.device, "current_entity_id", "")
+            or ""
+        ).strip()
+        final_playlist_item_id = str(
+            playlist_item_id
+            or (item.get("item_id") if item else "")
+            or getattr(self.device, "current_playlist_item_id", "")
+            or ""
+        ).strip()
+
+        self.device.cur_music = final_display
+        self.device.current_display_name = final_display
+        self.device.current_entity_id = final_entity_id
+        self.device.current_playlist_item_id = final_playlist_item_id
+        self._current_index = resolved_index if resolved_index >= 0 else -1
+
+        playlist2music = getattr(self.device, "playlist2music", None)
+        if playlist_name and isinstance(playlist2music, dict):
+            playlist2music[playlist_name] = final_display
+
+    def get_current_track_reference(self) -> dict[str, str | int]:
+        return {
+            "display_name": self.get_cur_music(),
+            "entity_id": str(getattr(self.device, "current_entity_id", "") or ""),
+            "playlist_item_id": str(
+                getattr(self.device, "current_playlist_item_id", "") or ""
+            ),
+            "current_index": int(getattr(self, "_current_index", -1) or -1),
+            "playlist_name": str(getattr(self.device, "cur_playlist", "") or ""),
+        }
 
     def get_offset_duration(self):
         """获取播放偏移量和总时长"""
@@ -317,18 +457,35 @@ class XiaoMusicDevice:
             self.device.cur_playlist = "全部"
 
         list_name = self.device.cur_playlist
-        self._play_list = copy.copy(self.xiaomusic.music_library.music_list[list_name])
+        playlist_items = self._build_playlist_runtime_items(list_name)
 
         if self.device.play_type == PLAY_TYPE_RND:
-            random.shuffle(self._play_list)
+            random.shuffle(playlist_items)
             self.log.info(
-                f"随机打乱 {list_name} {list2str(self._play_list, self.config.verbose)}"
+                f"随机打乱 {list_name} {list2str([item.get('display_name', '') for item in playlist_items], self.config.verbose)}"
             )
         else:
-            self._play_list.sort(key=custom_sort_key)
-            self.log.info(
-                f"没打乱 {list_name} {list2str(self._play_list, self.config.verbose)}"
+            playlist_items.sort(
+                key=lambda item: custom_sort_key(str(item.get("display_name") or ""))
             )
+            self.log.info(
+                f"没打乱 {list_name} {list2str([item.get('display_name', '') for item in playlist_items], self.config.verbose)}"
+            )
+
+        self._play_list_items = playlist_items
+        self._play_list = [str(item.get("display_name") or "") for item in playlist_items]
+        self._set_runtime_track_reference(
+            playlist_name=list_name,
+            display_name=str(
+                getattr(self.device, "current_display_name", "")
+                or getattr(self.device, "cur_music", "")
+                or ""
+            ),
+            entity_id=str(getattr(self.device, "current_entity_id", "") or ""),
+            playlist_item_id=str(
+                getattr(self.device, "current_playlist_item_id", "") or ""
+            ),
+        )
 
     async def play(self, name="", search_key=""):
         """播放歌曲（外部接口）"""
@@ -446,16 +603,10 @@ class XiaoMusicDevice:
         self._paused_time = 0
         self._duration = 0
         self._last_cmd = reason
-        self.device.cur_music = target
-        cur_playlist = str(getattr(self.device, "cur_playlist", "") or "")
-        playlist2music = getattr(self.device, "playlist2music", None)
-        if cur_playlist and isinstance(playlist2music, dict):
-            playlist2music[cur_playlist] = target
-        if self._play_list:
-            try:
-                self._current_index = self._play_list.index(target)
-            except ValueError:
-                self._current_index = -1
+        self._set_runtime_track_reference(
+            playlist_name=str(getattr(self.device, "cur_playlist", "") or ""),
+            display_name=target,
+        )
 
     async def _play_next(self, manual: bool = False):
         """播放下一首（内部实现）"""
@@ -542,14 +693,30 @@ class XiaoMusicDevice:
         await self.cancel_group_next_timer()
 
         self.is_playing = True
-        self.device.cur_music = name
-        self.device.playlist2music[self.device.cur_playlist] = name
         cur_playlist = self.device.cur_playlist
-        # 更新当前索引
-        try:
-            self._current_index = self._play_list.index(name)
-        except ValueError:
-            self._current_index = -1
+        music_library = getattr(self.xiaomusic, "music_library", None)
+        entity_id = ""
+        if music_library is not None:
+            resolver = getattr(music_library, "resolve_playlist_item_identity", None)
+            if callable(resolver):
+                try:
+                    entity_id = str(
+                        resolver(cur_playlist, item_name=name) or ""
+                    ).strip()
+                except Exception:
+                    entity_id = ""
+            if not entity_id:
+                resolver = getattr(music_library, "resolve_entity_id_by_name", None)
+                if callable(resolver):
+                    try:
+                        entity_id = str(resolver(name) or "").strip()
+                    except Exception:
+                        entity_id = ""
+        self._set_runtime_track_reference(
+            playlist_name=cur_playlist,
+            display_name=name,
+            entity_id=entity_id,
+        )
         self.log.info(f"cur_music {self.get_cur_music()}")
         url, origin_url = await self.xiaomusic.music_library.get_music_url(name)
         await self.group_force_stop_xiaoai()
@@ -934,11 +1101,15 @@ class XiaoMusicDevice:
         if play_list_len == 0:
             self.log.warning("当前播放列表没有歌曲")
             return ""
-        index = 0
-        try:
-            index = self._play_list.index(self.get_cur_music())
-        except ValueError:
-            pass
+        index = self._current_index if 0 <= self._current_index < play_list_len else -1
+        if index < 0:
+            index = self._find_playlist_index(
+                item_id=str(getattr(self.device, "current_playlist_item_id", "") or ""),
+                entity_id=str(getattr(self.device, "current_entity_id", "") or ""),
+                display_name=self.get_cur_music(),
+            )
+        if index < 0:
+            index = 0
 
         if play_list_len == 1:
             new_index = index  # 当只有一首歌曲时保持当前索引不变
@@ -1132,24 +1303,33 @@ class XiaoMusicDevice:
         if not playlist_name:
             return
 
-        music_list = getattr(self.xiaomusic.music_library, "music_list", {}) or {}
-        play_list = music_list.get(playlist_name)
-        if not isinstance(play_list, list):
+        playlist_items = self._build_playlist_runtime_items(playlist_name)
+        if not playlist_items:
             return
 
         self.device.cur_playlist = playlist_name
-        self._play_list = copy.copy(play_list)
         if self.device.play_type == PLAY_TYPE_RND:
-            random.shuffle(self._play_list)
+            random.shuffle(playlist_items)
             self.log.info(
-                f"external_url playlist shuffled {playlist_name} {list2str(self._play_list, self.config.verbose)}"
+                f"external_url playlist shuffled {playlist_name} {list2str([item.get('display_name', '') for item in playlist_items], self.config.verbose)}"
             )
-        self.device.cur_music = music_name
-        self.device.playlist2music[playlist_name] = music_name
-        try:
-            self._current_index = self._play_list.index(music_name)
-        except ValueError:
-            self._current_index = -1
+        self._play_list_items = playlist_items
+        self._play_list = [str(item.get("display_name") or "") for item in playlist_items]
+        self._set_runtime_track_reference(
+            playlist_name=playlist_name,
+            display_name=music_name,
+            entity_id=str(
+                source_payload.get("entity_id") or context_hint.get("entity_id") or ""
+            ).strip(),
+            playlist_item_id=str(
+                source_payload.get("playlist_item_id")
+                or source_payload.get("item_id")
+                or source_payload.get("id")
+                or context_hint.get("playlist_item_id")
+                or context_hint.get("item_id")
+                or ""
+            ).strip(),
+        )
 
     async def on_external_url_play(self, context: dict | None = None):
         """Reset local playlist progress state for external URL playback."""
@@ -1163,8 +1343,12 @@ class XiaoMusicDevice:
         self._last_cmd = "external_play"
         self._current_index = -1
         self._play_list = []
+        self._play_list_items = []
         self.device.cur_playlist = ""
         self.device.cur_music = ""
+        self.device.current_display_name = ""
+        self.device.current_entity_id = ""
+        self.device.current_playlist_item_id = ""
         if previous_playlist:
             self.device.playlist2music[previous_playlist] = ""
         self._bootstrap_playlist_session_for_external_url(context)
@@ -1188,14 +1372,24 @@ class XiaoMusicDevice:
             or ""
         ).strip()
         if title:
-            self.device.cur_music = title
-            if self.device.cur_playlist:
-                self.device.playlist2music[self.device.cur_playlist] = title
-            if self._play_list and self._current_index < 0:
-                try:
-                    self._current_index = self._play_list.index(title)
-                except ValueError:
-                    self._current_index = -1
+            self._set_runtime_track_reference(
+                playlist_name=str(self.device.cur_playlist or "").strip(),
+                display_name=title,
+                entity_id=str(
+                    resolved.get("entity_id")
+                    or resolved.get("id")
+                    or (context.get("source_payload") or {}).get("entity_id")
+                    or getattr(self.device, "current_entity_id", "")
+                    or ""
+                ).strip(),
+                playlist_item_id=str(
+                    resolved.get("playlist_item_id")
+                    or resolved.get("item_id")
+                    or (context.get("source_payload") or {}).get("playlist_item_id")
+                    or getattr(self.device, "current_playlist_item_id", "")
+                    or ""
+                ).strip(),
+            )
 
         self.is_playing = True
         self._start_time = time.time()

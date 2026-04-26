@@ -61,15 +61,24 @@ class LocalLibrarySourcePlugin(SourcePlugin):
         is_playlist_context, payload, context_hint = self._playlist_payload(request)
 
         raw_query = str(request.query or "").strip()
-        candidate = str(
-            payload.get("music_name")
-            or payload.get("track_name")
-            or payload.get("track_id")
-            or payload.get("path")
-            or payload.get("name")
-            or raw_query
-            or ""
-        ).strip()
+        candidate_values: list[str] = []
+        for value in (
+            payload.get("playlist_item_id"),
+            payload.get("item_id"),
+            payload.get("track_id"),
+            payload.get("entity_id"),
+            payload.get("media_id"),
+            payload.get("source_item_id"),
+            payload.get("music_name"),
+            payload.get("track_name"),
+            payload.get("path"),
+            payload.get("name"),
+            raw_query,
+        ):
+            token = str(value or "").strip()
+            if token and token not in candidate_values:
+                candidate_values.append(token)
+        candidate = candidate_values[0] if candidate_values else ""
         if not candidate:
             raise SourceResolveError("local library query is required")
 
@@ -88,50 +97,60 @@ class LocalLibrarySourcePlugin(SourcePlugin):
             or payload.get("title")
             or candidate
         ).strip()
-        media_id = str(payload.get("track_id") or request.request_id)
+        media_id = str(
+            payload.get("playlist_item_id")
+            or payload.get("item_id")
+            or payload.get("track_id")
+            or payload.get("entity_id")
+            or payload.get("media_id")
+            or request.request_id
+        )
 
-        path_candidate = self._candidate_path(candidate)
-        if path_candidate:
-            final_path = self._validate_path(path_candidate)
-            return ResolvedMedia(
-                media_id=media_id,
-                source=self.name,
-                title=title,
-                stream_url=self._music_library._get_file_url(str(final_path)),
-                headers={},
-                expires_at=None,
-                is_live=False,
-            )
+        for token in candidate_values:
+            path_candidate = self._candidate_path(token)
+            if path_candidate:
+                final_path = self._validate_path(path_candidate)
+                return ResolvedMedia(
+                    media_id=media_id,
+                    source=self.name,
+                    title=title,
+                    stream_url=self._music_library._get_file_url(str(final_path)),
+                    headers={},
+                    expires_at=None,
+                    is_live=False,
+                )
 
-        if candidate in self._music_library.all_music and not self._music_library.is_web_music(candidate):
-            filename = self._music_library.get_filename(candidate)
-            if not filename:
-                raise SourceResolveError(f"local library file missing: {candidate}")
-            return ResolvedMedia(
-                media_id=media_id,
-                source=self.name,
-                title=title,
-                stream_url=self._music_library._get_file_url(filename),
-                headers={},
-                expires_at=None,
-                is_live=False,
-            )
+        for token in candidate_values:
+            if token in self._music_library.all_music and not self._music_library.is_web_music(token):
+                filename = self._music_library.get_filename(token)
+                if not filename:
+                    raise SourceResolveError(f"local library file missing: {token}")
+                return ResolvedMedia(
+                    media_id=media_id,
+                    source=self.name,
+                    title=title,
+                    stream_url=self._music_library._get_file_url(filename),
+                    headers={},
+                    expires_at=None,
+                    is_live=False,
+                )
 
-        matches = self._music_library.searchmusic(candidate)
-        for name in matches:
-            if name in self._music_library.all_music and not self._music_library.is_web_music(name):
-                filename = self._music_library.get_filename(name)
-                if filename:
-                    resolved_title = title if is_playlist_context and title else str(name)
-                    return ResolvedMedia(
-                        media_id=media_id,
-                        source=self.name,
-                        title=resolved_title,
-                        stream_url=self._music_library._get_file_url(filename),
-                        headers={},
-                        expires_at=None,
-                        is_live=False,
-                    )
+        for token in candidate_values:
+            matches = self._music_library.searchmusic(token)
+            for name in matches:
+                if name in self._music_library.all_music and not self._music_library.is_web_music(name):
+                    filename = self._music_library.get_filename(name)
+                    if filename:
+                        resolved_title = title if is_playlist_context and title else str(name)
+                        return ResolvedMedia(
+                            media_id=media_id,
+                            source=self.name,
+                            title=resolved_title,
+                            stream_url=self._music_library._get_file_url(filename),
+                            headers={},
+                            expires_at=None,
+                            is_live=False,
+                        )
 
         # ── Playlist-context branch: read raw music_list_json to find the track ──
         if is_playlist_context and playlist_name:
@@ -150,16 +169,15 @@ class LocalLibrarySourcePlugin(SourcePlugin):
                     if not isinstance(musics, list):
                         continue
 
-                    for item in musics:
-                        item_name = str(item.get("name") or "").strip()
-                        item_track_name = str(item.get("track_name") or "").strip()
-                        item_track_id = str(item.get("track_id") or "").strip()
+                    for token in candidate_values:
+                        for item in musics:
+                            item_name = str(item.get("name") or "").strip()
+                            item_track_name = str(item.get("track_name") or "").strip()
+                            item_track_id = str(item.get("track_id") or item.get("id") or item.get("playlist_item_id") or "").strip()
+                            item_entity_id = str(item.get("entity_id") or "").strip()
 
-                        if (
-                            item_name == candidate
-                            or item_track_name == candidate
-                            or item_track_id == candidate
-                        ):
+                            if token not in {item_name, item_track_name, item_track_id, item_entity_id}:
+                                continue
                             item_url = str(item.get("url") or "").strip()
                             if not item_url:
                                 continue
