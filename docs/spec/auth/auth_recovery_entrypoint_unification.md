@@ -7,12 +7,30 @@
 
 ---
 
+## 文档状态
+
+**本文档定位**：auth 专项约束文档，是 auth 全局规范的补充层，**不是 auth 全局权威规范**。
+
+**权威层级**：
+- auth 全局权威入口：`docs/spec/auth/README.md`
+- 认证状态模型权威：`docs/architecture/authentication_architecture.md`
+- auth 恢复主线行为权威：`docs/spec/auth/auth_runtime_recovery.md`
+
+**与主线规范的关系**：如本文与主线规范冲突，**以主线规范为准**。
+
+**本文仍可复用的结论**：
+1. 恢复入口应统一收口，避免多路径绕过 singleflight
+2. follower 不 clear、不 rebuild，leader 独占恢复主链
+3. 任何新增会触发 clear+rebuild / relogin / redirect 的路径，都必须遵守统一入口约束
+
+---
+
 ## 1. 文档目的
 
 本文档用于解决"恢复入口分裂导致 singleflight 覆盖不完整"的问题。
 
 - 服务于 1.0.9 的最小侵入修复
-- 是对 `docs/spec/auth_recovery_state_machine.md` 和 `docs/spec/auth_recovery_singleflight.md` 的补充
+- 是对 `docs/spec/auth/auth_recovery_state_machine.md` 和 `docs/spec/auth/auth_recovery_singleflight.md` 的补充
 - 只新增"恢复入口统一与执行权收口"的行为约束层
 
 ---
@@ -159,8 +177,8 @@
 
 ## 10. 与现有文档的关系
 
-- 本文档补充 `docs/spec/auth_recovery_state_machine.md`
-- 本文档补充 `docs/spec/auth_recovery_singleflight.md`
+- 本文档补充 `docs/spec/auth/auth_recovery_state_machine.md`
+- 本文档补充 `docs/spec/auth/auth_recovery_singleflight.md`
 - 状态机语义仍以前两者为准
 - 本文档只新增"恢复入口统一与执行权收口"的行为约束层
 

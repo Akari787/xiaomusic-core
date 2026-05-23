@@ -238,6 +238,28 @@ class SimpleAuthManager:
         self._recovery_task: asyncio.Task | None = None
         self._recovery_inflight: bool = False
 
+        # singleflight 并发控制
+        self._recovery_lock = asyncio.Lock()
+        self._recovery_complete_event = asyncio.Event()
+        self._recovery_backoff_until_ts: float = 0.0
+        self._recovery_backoff_sec: int = 10
+        self._recovery_leader_ctx: str = ""
+
+        # TTL / scheduled refresh 状态
+        self._login_at: float = 0.0
+        self._expires_at: float = 0.0
+        self._ttl_remaining_seconds: int = 0
+        self._last_refresh_trigger: str = ""
+        self._last_auth_mode_transition: str = ""
+        self._last_auth_error: str = ""
+        self._token_save_ts = self._read_save_time
+        self._token_expires_in: int = 3600
+
+        # keepalive 退化跟踪
+        self._keepalive_degraded: bool = False
+        self._keepalive_fail_streak: int = 0
+        self._keepalive_recovery_cooldown_ts: float = 0.0
+
         # 兼容性调试状态
         self._last_recovery_result: str = "skipped"
         self._last_recovery_stage: str = ""
@@ -256,6 +278,14 @@ class SimpleAuthManager:
 
         chars = string.ascii_uppercase + string.digits
         return "".join(random.choices(chars, k=16))
+
+    def _read_save_time(self) -> float:
+        """从 token_store 读取 saveTime（秒），用于 TTL 计算。"""
+        data = self._get_auth_data()
+        st = data.get("saveTime")
+        if st is not None:
+            return float(st) / 1000.0
+        return 0.0
 
     def _has_persistent_auth_fields(self, auth_data: dict[str, Any]) -> bool:
         """判断是否具备可用于重登的长生命周期认证字段。"""
@@ -968,11 +998,15 @@ class SimpleAuthManager:
         )
 
     def _persist_auth_data(self, auth_data: dict, mi_account, reason: str = "") -> None:
-        """持久化认证数据"""
+        """持久化认证数据。
+
+        仅在 token 内容发生变化时才更新 saveTime，防止每次调用都刷新 TTL。
+        """
         if self.token_store is None:
             return
 
         merged = dict(auth_data or {})
+        old_token = self.token_store.get() if self.token_store else {}
         try:
             acct = getattr(mi_account, "token", {}) or {}
             for key in ("passToken", "userId", "deviceId", "cUserId"):
@@ -992,7 +1026,17 @@ class SimpleAuthManager:
             if acct.get("yetAnotherServiceToken"):
                 merged["yetAnotherServiceToken"] = acct.get("yetAnotherServiceToken")
 
-            merged["saveTime"] = int(time.time() * 1000)
+            # 仅在新 token 与旧 token 不同时才更新 saveTime
+            new_service_token = merged.get("serviceToken") or merged.get("yetAnotherServiceToken")
+            old_service_token = old_token.get("serviceToken") or old_token.get("yetAnotherServiceToken")
+            if new_service_token and new_service_token != old_service_token:
+                merged["saveTime"] = int(time.time() * 1000)
+                self.log.info(
+                    f"persist_auth_data: token changed, updating saveTime reason={reason}"
+                )
+            elif "saveTime" not in merged and old_token.get("saveTime"):
+                # 保留旧的 saveTime，避免丢失
+                merged["saveTime"] = old_token["saveTime"]
         except Exception as e:
             self.log.warning(f"persist token merge failed: {e}")
 
@@ -1007,6 +1051,92 @@ class SimpleAuthManager:
     def _record_auth_recovery_flow_state(self, payload: dict[str, Any]) -> None:
         state = dict(payload or {})
         self._last_auth_recovery_flow_state = state
+
+    def _sync_auth_ttl(
+        self, auth_data: dict[str, Any] | None = None, login_at_ts: float | None = None
+    ) -> None:
+        """根据 saveTime 同步 TTL 计算字段。
+
+        Args:
+            auth_data: 认证数据（默认从 token_store 读取）
+            login_at_ts: 登录时间戳秒（默认从 saveTime 反推）
+        """
+        data = auth_data or self._get_auth_data()
+        if not data:
+            self._login_at = 0.0
+            self._expires_at = 0.0
+            self._ttl_remaining_seconds = 0
+            return
+
+        # 计算登录时间
+        if login_at_ts is not None:
+            self._login_at = login_at_ts
+        else:
+            st = data.get("saveTime")
+            if st is not None:
+                self._login_at = float(st) / 1000.0
+            else:
+                self._login_at = 0.0
+
+        # 计算过期时间
+        expires_in = data.get("expires_in") or self._token_expires_in
+        if self._login_at > 0:
+            self._expires_at = self._login_at + expires_in
+        else:
+            self._expires_at = 0.0
+
+        # 计算剩余 TTL
+        if self._expires_at > 0:
+            self._ttl_remaining_seconds = max(0, int(self._expires_at - time.time()))
+        else:
+            self._ttl_remaining_seconds = 0
+
+    async def _maybe_scheduled_refresh(self) -> bool:
+        """计划内定时静默刷新，返回是否执行了刷新。
+
+        触发条件：
+        1. auth_state 为 HEALTHY
+        2. 剩余 TTL < 阈值（默认 30%）
+        3. 距离上次刷新超过最小间隔
+        """
+        if self._state != self.STATE_HEALTHY:
+            return False
+
+        self._sync_auth_ttl()
+        if self._expires_at <= 0 or self._login_at <= 0:
+            return False
+
+        total_ttl = self._expires_at - self._login_at
+        if total_ttl <= 0:
+            return False
+
+        remaining_ratio = self._ttl_remaining_seconds / total_ttl
+        threshold = 0.3  # 剩余 30% 时触发
+
+        if remaining_ratio > threshold:
+            return False
+
+        # 检查最小刷新间隔
+        now = time.time()
+        save_ts = self._read_save_time()
+        min_interval = getattr(self.config, "auth_refresh_min_interval_minutes", 30) * 60
+        if save_ts > 0 and (now - save_ts) < min_interval:
+            self.log.info(
+                f"_maybe_scheduled_refresh: skip, min interval not met "
+                f"({now - save_ts:.0f}s < {min_interval}s)"
+            )
+            return False
+
+        self._last_refresh_trigger = "scheduled"
+        self.log.info(
+            f"_maybe_scheduled_refresh: triggering scheduled refresh "
+            f"ttl_remaining={self._ttl_remaining_seconds}s ratio={remaining_ratio:.2f}"
+        )
+
+        success = await self.ensure_auth(
+            force=True, reason="_maybe_scheduled_refresh"
+        )
+        return success
 
     async def _try_miaccount_persistent_auth_relogin(
         self, before: dict[str, Any] | None = None, reason: str = "", sid: str = "micoapi"
@@ -1697,14 +1827,40 @@ class SimpleAuthManager:
 
         raise last_err
 
-    def _schedule_background_recovery(self):
-        """安排后台恢复任务"""
+    def _schedule_background_recovery(self, ctx: str = ""):
+        """安排后台恢复任务（singleflight 保护）。
+
+        - 如果已有 leader 在执行恢复，新的调用作为 follower 等待
+        - 如果处于 backoff 期，跳过
+        """
+        role, reason = self._try_acquire_recovery_leader(ctx=ctx or "background_recovery")
+        if role == "blocked":
+            return
+        if role == "follower":
+            # follower: 确保已有 recovery task 在跑，不重复创建
+            if self._recovery_task is not None and not self._recovery_task.done():
+                return
+            # 如果没有 task 但 inflight 为 True（异常情况），重置
+            self._recovery_inflight = False
+            return
+
+        # leader: 如果已经有 task 在执行就不再创建
         if self._recovery_task is not None and not self._recovery_task.done():
-            # 已经有恢复任务在运行
             return
 
         async def _do_recovery():
+            # 在协程内部使用锁确保互斥
+            leader_role, leader_reason = await self._acquire_recovery_leader_lock(
+                ctx=ctx or "background_recovery"
+            )
+            if leader_role != "leader":
+                # 被另一个协程抢先了
+                if leader_role == "follower":
+                    await self._wait_for_recovery_complete()
+                return
+
             self._background_recovery_attempted = True
+            result = "failed"
             try:
                 success = await self._try_login()
                 if success:
@@ -1712,6 +1868,7 @@ class SimpleAuthManager:
                     self._background_recovery_error = ""
                     self._state = self.STATE_HEALTHY
                     self.log.info("后台恢复成功")
+                    result = "ok"
                 else:
                     self._background_recovery_result = "failed"
                     self._background_recovery_error = self._last_error
@@ -1744,9 +1901,91 @@ class SimpleAuthManager:
                     self._state = self.STATE_DEGRADED
                     self._start_cooldown()
             finally:
+                await self._release_recovery_leader(result=result)
                 self._recovery_task = None
 
+        # owner: auth_manager (recovery)
         self._recovery_task = asyncio.create_task(_do_recovery())
+
+    # ==================== singleflight 并发控制 ====================
+
+    def _try_acquire_recovery_leader(self, ctx: str = "") -> tuple[str, str]:
+        """尝试获取恢复 leader 角色。
+
+        返回 (role, reason)，其中 role 为 "leader" | "follower" | "blocked"。
+        注意：此方法不持有锁，调用者需在获取 leader 后通过
+        _release_recovery_leader 释放。
+        """
+        # 检查 backoff
+        if self._recovery_backoff_until_ts > 0 and time.time() < self._recovery_backoff_until_ts:
+            remaining = self._recovery_backoff_until_ts - time.time()
+            self.log.info(
+                "auth_recovery_singleflight: role=blocked action=backoff_skip "
+                f"reason=backoff_active remaining={remaining:.1f}s ctx={ctx}"
+            )
+            return ("blocked", "backoff_active")
+
+        # 检查是否已有 inflight recovery
+        if self._recovery_inflight:
+            self.log.info(
+                "auth_recovery_singleflight: role=follower "
+                f"action=join_existing_recovery leader_ctx={self._recovery_leader_ctx}"
+            )
+            return ("follower", "leader_running")
+
+        return ("leader", "acquired")
+
+    async def _acquire_recovery_leader_lock(self, ctx: str = "") -> tuple[str, str]:
+        """带锁的 leader 获取，用于在临界区内判断并设置 inflight。
+
+        返回 (role, reason)，其中 role 为 "leader" | "follower" | "blocked"。
+        """
+        async with self._recovery_lock:
+            # backoff 检查
+            if self._recovery_backoff_until_ts > 0 and time.time() < self._recovery_backoff_until_ts:
+                remaining = self._recovery_backoff_until_ts - time.time()
+                self.log.info(
+                    "auth_recovery_singleflight: role=blocked action=backoff_skip "
+                    f"reason=backoff_active remaining={remaining:.1f}s ctx={ctx}"
+                )
+                return ("blocked", "backoff_active")
+
+            if self._recovery_inflight:
+                self.log.info(
+                    "auth_recovery_singleflight: role=follower "
+                    f"action=join_existing_recovery leader_ctx={self._recovery_leader_ctx}"
+                )
+                return ("follower", "leader_running")
+
+            self._recovery_inflight = True
+            self._recovery_leader_ctx = ctx
+            self._recovery_complete_event.clear()
+            self.log.info(
+                f"auth_recovery_singleflight: role=leader action=start ctx={ctx}"
+            )
+            return ("leader", "acquired")
+
+    async def _release_recovery_leader(self, result: str = "ok") -> None:
+        """释放恢复 leader 并通知所有等待的 follower。"""
+        async with self._recovery_lock:
+            self._recovery_inflight = False
+            self._recovery_leader_ctx = ""
+            if result != "ok":
+                self._recovery_backoff_until_ts = time.time() + self._recovery_backoff_sec
+            self.log.info(
+                f"auth_recovery_singleflight: role=leader action=finish result={result}"
+            )
+        self._recovery_complete_event.set()
+
+    async def _wait_for_recovery_complete(self) -> None:
+        """Follower 等待 leader 完成恢复。"""
+        try:
+            await asyncio.wait_for(
+                self._recovery_complete_event.wait(),
+                timeout=self._recovery_backoff_sec + 30,
+            )
+        except asyncio.TimeoutError:
+            self.log.warning("auth_recovery_singleflight: follower wait timed out")
 
     async def mina_call(
         self, method_name: str, *args, retry: int = 1, ctx: str = "", **kwargs
@@ -1772,7 +2011,7 @@ class SimpleAuthManager:
         Keepalive 循环
 
         每隔 interval_sec 秒检查一次认证状态
-        如果发现问题，触发恢复
+        如果发现问题，触发恢复；如果健康，尝试 Scheduled Refresh。
         """
         while True:
             try:
@@ -1782,6 +2021,9 @@ class SimpleAuthManager:
                 if not await self.ensure_auth():
                     self._last_keepalive_probe_result = "ensure_auth_failed"
                     self._last_keepalive_probe_error = str(self._last_error or "")[:200]
+                    self._keepalive_fail_streak += 1
+                    if self._keepalive_fail_streak >= 3:
+                        self._keepalive_degraded = True
                     self.log.warning("Keepalive: 认证不健康，触发恢复")
                     # 不等待恢复完成，下一轮再检查
                 else:
@@ -1792,10 +2034,22 @@ class SimpleAuthManager:
                         self._last_keepalive_probe_error = ""
                         await self.mina_service.device_list()
                         self._last_ok_ts = time.time()
+                        # 恢复 keepalive 退化状态
+                        if self._keepalive_degraded:
+                            self._keepalive_degraded = False
+                            self._keepalive_fail_streak = 0
+                            self._keepalive_recovery_cooldown_ts = 0.0
+                            self.log.info("Keepalive: 从退化状态恢复")
+                        # Scheduled Refresh: 在健康状态时尝试计划内刷新
+                        if self._state == self.STATE_HEALTHY:
+                            await self._maybe_scheduled_refresh()
                     except Exception as e:
                         self._last_keepalive_probe_result = "probe_failed"
                         self._last_keepalive_probe_error = str(e)[:200]
                         self._probe_failure_count += 1
+                        self._keepalive_fail_streak += 1
+                        if self._keepalive_fail_streak >= 3:
+                            self._keepalive_degraded = True
                         self._last_degraded_entry_reason = "keepalive_probe_failed"
                         self.log.warning(f"Keepalive probe failed: {e}")
                         self._state = self.STATE_DEGRADED
@@ -2265,52 +2519,84 @@ class SimpleAuthManager:
         }
 
     def auth_debug_state(self) -> dict[str, Any]:
-        """获取调试状态"""
+        """获取调试状态（紧凑版，供测试与 API 使用）。
+
+        包含 TTL 相关字段、模式转换记录等核心调试信息。
+        扩展字段请使用 auth_status_snapshot()。
+        """
         auth_data = self._get_auth_data()
         return {
-            "last_auth_error": self._last_error,
-            "state": self._state,
             "auth_mode": self._state,
-            "retry_count": self._retry_count,
-            "retry_count_effective": self._retry_count_effective,
-            "lock_counter": self._lock_counter,
-            "lock_counter_threshold": self._lock_counter_threshold,
-            "probe_failure_count": self._probe_failure_count,
-            "recovery_failure_count": self._recovery_failure_count,
-            "last_ok_ts": int(self._last_ok_ts * 1000) if self._last_ok_ts > 0 else 0,
-            "last_login_ts": int(self._last_login_ts * 1000)
-            if self._last_login_ts > 0
-            else 0,
-            "locked_until_ts": int(self._locked_until * 1000)
-            if self._locked_until > 0
-            else 0,
-            "cooldown_until_ts": int(self._cooldown_until * 1000)
-            if self._cooldown_until > 0
-            else 0,
+            "last_auth_mode_transition": self._last_auth_mode_transition or {},
+            "login_at": self._login_at,
+            "expires_at": self._expires_at,
+            "ttl_remaining_seconds": self._ttl_remaining_seconds,
+            "last_refresh_trigger": self._last_refresh_trigger,
+            "last_auth_error": self._last_error,
             "persistent_auth_available": self._has_persistent_auth_fields(auth_data),
             "short_session_available": bool(
                 auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
             ),
-            "error_type": self._last_recovery_error_code,
-            "need_qr_scan": bool(self._last_login_trace.get("need_qr_scan")),
-            "user_action_required": bool(
-                self._last_login_trace.get("user_action_required")
-            ),
-            "long_term_expired": bool(self._last_login_trace.get("long_term_expired")),
-            "degraded_entry_reason": self._last_degraded_entry_reason,
-            "status_mapping_source": self._last_status_mapping_source,
-            "manual_login_required_reason": self._last_manual_login_required_reason,
-            "runtime_not_ready_reason": self._last_runtime_not_ready_reason,
         }
 
     def clear_auth_lock(self, reason: str = "", mode: str = "degraded"):
         """清除认证锁定"""
         if mode == "healthy":
             self._state = self.STATE_HEALTHY
+            self._auth_mode = self.STATE_HEALTHY
         else:
             self._state = self.STATE_DEGRADED
+            self._auth_mode = self.STATE_DEGRADED
         self._locked_until = 0
         self.log.info(f"认证锁定已清除: {reason}, 模式: {mode}")
+
+    # ==================== 状态机兼容层 ====================
+
+    @property
+    def _auth_mode(self) -> str:
+        """兼容旧接口：_auth_mode 映射到 _state。"""
+        return self._state
+
+    @_auth_mode.setter
+    def _auth_mode(self, value: str) -> None:
+        self._state = value
+
+    def _transition_auth_mode(self, target: str, reason: str = "") -> None:
+        """兼容旧状态机接口：记录模式转换。"""
+        prev = self._state
+        self._state = target
+        self._last_auth_mode_transition = {
+            "from": prev,
+            "to": target,
+            "reason": reason,
+            "ts": int(time.time() * 1000),
+        }
+
+    def _emit_auth_state(
+        self,
+        auth_step: str = "",
+        auth_result: str = "",
+        refresh_trigger: str = "",
+        auth_mode_before: str = "",
+        auth_mode_after: str = "",
+    ) -> None:
+        """发出认证状态日志事件。"""
+        import json as _json
+
+        payload = {
+            "event": "auth_state",
+            "auth_session_id": str(int(time.time() * 1000)),
+            "login_at": self._login_at,
+            "expires_at": self._expires_at,
+            "ttl_remaining_seconds": self._ttl_remaining_seconds,
+            "estimated_ttl": self._ttl_remaining_seconds,
+            "refresh_trigger": refresh_trigger or self._last_refresh_trigger,
+            "auth_step": auth_step,
+            "auth_result": auth_result,
+            "auth_mode_before": auth_mode_before,
+            "auth_mode_after": auth_mode_after,
+        }
+        self.log.info(_json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
 
 AuthManager = SimpleAuthManager

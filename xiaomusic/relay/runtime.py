@@ -352,6 +352,8 @@ class RelayRuntime:
             ),
         )
         self.audio_streamer.stop_stream(oldest.sid)
+        # 偏差2修复：通过 session_manager API 更新状态，而非绕过它直接修改。
+        self.session_manager.stop_session(oldest.sid)
         return True
 
 

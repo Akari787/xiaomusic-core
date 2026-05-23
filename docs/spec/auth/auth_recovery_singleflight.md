@@ -7,6 +7,24 @@
 
 ---
 
+## 文档状态
+
+**本文档定位**：auth 专项规范文档，描述 singleflight 保护层的并发行为约束，**不是 auth 全局权威规范**。
+
+**权威层级**：
+- auth 全局权威入口：`docs/spec/auth/README.md`
+- 认证状态模型权威：`docs/architecture/authentication_architecture.md`
+- auth 恢复主线行为权威：`docs/spec/auth/auth_runtime_recovery.md`
+
+**与主线规范的关系**：如本文与主线规范冲突，**以主线规范为准**。
+
+**本文仍可复用的结论**：
+1. singleflight 应保护"恢复执行权"，而不仅是 `auth_call` 某个调用点
+2. follower 不 clear、不 rebuild，leader 独占恢复主链，失败后有 backoff
+3. 同一时间只允许一个 leader 进入 clear+rebuild 或 strong-evidence 升级后的恢复主链
+
+---
+
 ## 1. 文档目的
 
 本文档约束认证恢复期间的并发行为，用于：

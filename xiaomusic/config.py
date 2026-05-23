@@ -192,6 +192,29 @@ class Config:
     continue_play: bool = (
         os.getenv("XIAOMUSIC_CONTINUE_PLAY", "false").lower() == "true"
     )
+    # Playback URL dispatch mode for A/B experiments.
+    # auto -> existing behavior
+    # play_by_music_url -> force Mina play_by_music_url
+    # play_by_url -> force Mina play_by_url
+    play_url_mode: str = os.getenv("XIAOMUSIC_PLAY_URL_MODE", "auto")
+    # Auto-next stop wait strategy for stop/play overlap experiments.
+    # sync -> wait for player_stop to finish before play
+    # overlap -> fire fast stop in background, optionally wait grace_ms, then play
+    auto_next_stop_wait_mode: str = os.getenv(
+        "XIAOMUSIC_AUTO_NEXT_STOP_WAIT_MODE", "overlap"
+    )
+    auto_next_stop_grace_ms: int = int(
+        os.getenv("XIAOMUSIC_AUTO_NEXT_STOP_GRACE_MS", "200")
+    )
+    auto_next_confirm_delay_ms: int = int(
+        os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_DELAY_MS", "800")
+    )
+    auto_next_confirm_retries: int = int(
+        os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_RETRIES", "0")
+    )
+    auto_next_confirm_interval_ms: int = int(
+        os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_INTERVAL_MS", "300")
+    )
     # 目录监控配置
     enable_file_watch: bool = (
         os.getenv("XIAOMUSIC_ENABLE_FILE_WATCH", "false").lower() == "true"

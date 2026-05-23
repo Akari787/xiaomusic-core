@@ -1,224 +1,139 @@
-# xiaomusic-core 架构说明
+# xiaomusic-core 架构文档
 
-本文档说明当前系统分层、模块职责与调用关系。API 契约以 `docs/api/api_v1_spec.md` 为准。
+> 入口文档 · 请先阅读本文档
 
----
+## 项目简介
 
-## 1. 文档定位
-
-`ARCHITECTURE.md` 不是 API 契约文档。
-
-本文档负责：
-
-- 当前实现分层
-- 模块职责与边界
-- 模块调用关系
-
-本文档不定义：
-
-- 正式响应字段
-- 错误码集合
-- 接口分级（Class A / B / C）
-- 内部归属约束
-
-以上内容统一以 `docs/api/api_v1_spec.md` 为准。两者冲突时，以 `api_v1_spec.md` 为准。
+xiaomusic-core 是小米音箱的 Python 后端服务，提供音乐播放、设备控制、认证管理等功能。核心职责：
+- **播放控制**：通过小米 API 控制音箱播放音乐
+- **Source 抽象**：支持多种音乐来源（Jellyfin、本地音乐库、URL、站点媒体）
+- **流媒体转发**：relay 模式支持网络音频流推送
+- **认证管理**：处理小米账号认证和 token 刷新
 
 ---
 
-## 2. 接口分层
+## AI 开工协议
 
-### 2.1 Public API
+任何 AI 开始工作前，按以下顺序阅读：
 
-`/api/v1/*` 白名单接口。面向 WebUI、Home Assistant、插件与第三方调用方，承诺兼容性与长期稳定性。
-
-### 2.2 Internal API
-
-非 v1 白名单的内部接口。仅供 WebUI 与项目内部使用，不承诺兼容性。
-
-当前属于 Internal API 的接口：
-
-- 认证 / 会话：`/api/auth/status`、`/api/auth/refresh`、`/api/auth/logout`、`/api/get_qrcode`
-- 文件 / 工具：`/api/file/fetch_playlist_json`、`/api/file/cleantempdir`
-
-### 2.3 Forbidden / Removed
-
-已删除接口与禁止恢复入口：
-
-- `/api/v1/playlist/play`、`/api/v1/playlist/play-index`
-- 旧 device wrapper：`/getplayerstatus`、`/setvolume`、`/playtts`、`/device/stop`
-- `*_legacy` facade 方法
-- 中文命令入口、cmd 风格入口
-
-### 2.4 调用方约束
-
-- WebUI 可调用 Public API 与 Internal API
-- 插件与第三方只能依赖 Public API
-- Forbidden / Removed 不得被重新接入
+1. **先判定改动边界**：读 `docs/architecture/system_overview.md` 的九大边界定义
+2. **再按领域读对应文档**：
+   - 架构层：读 `docs/architecture/README.md`
+   - 行为规范：读 `docs/spec/README.md`
+3. **涉及 API 必读**：`docs/api/api_v1_spec.md`
+4. **涉及状态/生命周期/跨层依赖**：读 `docs/architecture/state-authority.md` 与 `docs/architecture/constraints.md`
+5. **提交前必读**：`docs/ai-review-checklist.md`
 
 ---
 
-## 3. 当前架构分层
+## 主要模块（九大边界）
 
-```mermaid
-flowchart TD
-    U[WebUI / HA / 第三方调用方]
-    P[Public API 层 /api/v1/*]
-    I[Internal API 层 auth file tool]
-
-    F[Playback Facade]
-    C[Playback Coordinator]
-    T[Transport Router]
-
-    X[Runtime / XiaoMusic 核心能力]
-    D[Device 执行层 / Xiaomi 设备调用]
-    L[Library / Playlist / Favorites]
-    Q[Query / Status 聚合]
-
-    U --> P
-    U --> I
-
-    P -->|设备动作型接口| F
-    F --> C
-    C --> T
-    T --> X
-    X --> D
-
-    P -->|本地控制接口| X
-    X --> L
-
-    P -->|查询接口| Q
-    Q --> X
-    Q --> D
-    Q --> L
-
-    I -->|认证/文件辅助流程| X
-```
+| 边界 | 职责 | 入口文件 |
+|---|---|---|
+| **api** | 对外 HTTP 接口层（v1 Public API、Internal API） | `xiaomusic/api/` |
+| **runtime** | 系统主协调对象，管理生命周期与依赖注入 | `xiaomusic/xiaomusic.py` |
+| **playback** | 播放编排层，策略决策、队列管理、状态快照 | `xiaomusic/playback/`、`xiaomusic/core/` |
+| **source** | 媒体来源解析，SourcePlugin.resolve() | `xiaomusic/adapters/sources/` |
+| **device** | 设备抽象与命令执行（transport mina/miio） | `xiaomusic/device_player.py` |
+| **auth** | 小米账号认证状态与会话维护 | `xiaomusic/auth.py` |
+| **config** | 运行时配置对象管理与持久化 | `xiaomusic/config.py` |
+| **relay** | 站内流媒体中转，relay session 与 `/relay/stream/{sid}` | `xiaomusic/relay/` |
+| **webui** | 前端展示层，消费 Public API 与 Internal API | `xiaomusic/webui/` |
 
 ---
 
-## 4. 模块边界与职责
+## 绝对不能碰的区域
 
-### 4.1 API Router
+以下区域在未充分理解前不要修改：
 
-负责：
-
-- 暴露 `/api/v1/*` HTTP 入口
-- 解析请求参数
-- 将请求路由到正确内部路径
-- 统一返回 envelope
-
-不负责：定义字段契约、承担播放编排、承担设备执行。
-
-### 4.2 v1 路由适配层
-
-负责：
-
-- 接口语义到内部模块调用的映射
-- 将 API 分级落到正确路径
-- 保证播放请求统一经 `/api/v1/play` 进入执行路径
-
-### 4.3 Playback Facade / Coordinator
-
-负责：
-
-- 统一调度链路入口
-- 来源解析、资源准备与分发动作编排
-- 承接 `/api/v1/play` 播放入口语义
-
-不负责：对外提供 HTTP 协议。
-
-### 4.4 Transport Router
-
-负责：
-
-- 根据动作类型、设备能力与 transport 可用性进行分发
-- 形成 transport 可观测结果
-
-### 4.5 Runtime / XiaoMusic
-
-负责：
-
-- 运行时核心能力
-- 设备控制、本地媒体控制、状态读取
-- 为统一调度链路与本地控制路径提供共享能力
-
-### 4.6 Device 执行层
-
-负责：
-
-- 执行 Xiaomi 设备侧动作
-- 与设备平台通信
-
-### 4.7 Library / Playlist / Favorites
-
-负责：
-
-- 本地库、歌单、收藏与索引刷新
-- 歌单选择、本地歌曲定位、收藏增删
-
-### 4.8 Query / Status 聚合层
-
-负责：
-
-- 聚合设备状态、系统状态、播放状态
-- 将多来源状态折叠成查询结果
-
-### 4.9 WebUI
-
-负责：
-
-- 调用 v1 正式接口
-- 根据契约展示结果
-- 新播放功能通过 `/api/v1/play` 接入
+| 区域 | 原因 |
+|---|---|
+| `auth.py`（AuthManager） | 认证逻辑复杂，token 管理脆弱，BUG-007/008 未完全覆盖 |
+| `device_player.py` | 播放状态机，Bug-011（stop 后切歌显示 switching）未修复 |
+| `relay/runtime.py` | 承担 6 个职责领域，God Object 症状，Bug-009 反复调研 |
+| `xiaomusic/xiaomusic.py` | 主应用对象，承担 9+ 职责，超级上帝对象 |
 
 ---
 
-## 5. 调用链
+## 禁止越界规则
 
-### 5.1 Class A 典型链路
+以下跨边界调用**严格禁止**：
 
-适用接口：`POST /api/v1/play`、`POST /api/v1/control/*`
+- `source` 不得直接调用 `device`
+- `webui` 不得依赖 `playback` / `runtime` 内部对象
+- `api` 层不得直接读取设备底层状态绕过 `playback` 快照构建器
+- `relay` 不得主动触发播放命令（只提供流服务）
 
-调用链：
-
-1. 请求进入 v1 Router
-2. 路由适配层交给统一调度入口
-3. Facade / Coordinator 组织解析与编排
-4. Transport Router 进行 transport 选择与分发
-5. Runtime / Device 执行动作
-6. 结果回到 v1 envelope
-
-### 5.2 Class B 典型链路
-
-适用接口：`POST /api/v1/control/play-mode`、`POST /api/v1/library/*`
-
-调用链：
-
-1. 请求进入 v1 Router
-2. 路由适配层交给 router / runtime 本地路径
-3. Runtime 调用 Library / Playlist / Favorites 能力
-4. 结果回到统一 envelope
-
-### 5.3 Class C 典型链路
-
-适用接口：`GET /api/v1/system/status`、`GET /api/v1/devices`、`GET /api/v1/player/state`
-
-调用链：
-
-1. 请求进入 v1 Router
-2. 路由适配层交给查询 / 聚合路径
-3. Query / Status 聚合层读取结果
-4. 聚合结果回到统一 envelope
+**文档优先级**（冲突时按此裁决）：
+1. `docs/api/api_v1_spec.md`
+2. `docs/spec/*`
+3. `docs/architecture/*`
+4. `ARCHITECTURE.md`
+5. `docs/archive/*`（历史归档，不作为当前实现依据）
 
 ---
 
-## 6. 关键文档导航
+## 开始工作前必须读
+
+| 文档 | 内容 | 何时必读 |
+|---|---|---|
+| [系统宪法](./docs/architecture/constraints.md) | 禁止和必须清单 | 改任何边界前 |
+| [状态权威](./docs/architecture/state-authority.md) | 每个状态的唯一权威归属 | 改状态字段前 |
+| [提交前检查](./docs/ai-review-checklist.md) | AI Review Checklist | 改代码前 |
+| [贡献指南](./docs/architecture/contributor_guide.md) | 改动前置规则与文档更新约束 | 改任何模块前 |
+
+---
+
+## 当前已知技术债
+
+### 高优先级
+
+| ID | 问题 | 影响 |
+|---|---|---|
+| BUG-007 | auto runtime reload 未完全覆盖 | 认证降级场景可能失败 |
+| BUG-008 | singleflight/fallback 未完全覆盖 | 并发认证恢复时可能冲突 |
+| — | `SiteMediaSourcePlugin` 持有 `runtime_provider` | Source 插件化了但未完全解耦 |
+| — | `RelayRuntime` 承担 6 个职责领域 | 维护性差，难以独立测试 |
+
+### 中优先级
+
+| ID | 问题 | 影响 |
+|---|---|---|
+| BUG-011 | stop 后 next/prev 长期显示 switching | 用户体验问题 |
+| BUG-009 | playback restart 反复调研 | 播放中断恢复逻辑不稳定 |
+| — | 播放列表双写（`_play_list` + `music_list`） | 数据可能不同步 |
+| — | 异步任务 owner 不明确 | zombie task 风险 |
+| — | 事件系统仅有 3 种事件 | 状态变化通知不完整 |
+
+### 低优先级
+
+| ID | 问题 | 影响 |
+|---|---|---|
+| BUG-003 | `disabled_plugins` 不持久化 | 重启后恢复 |
+| BUG-004 | 浏览器自动化不稳定 | 测试不稳定 |
+| — | v1.py 行数过多（1425行） | 维护性下降 |
+
+---
+
+## 文档入口
 
 | 文档 | 说明 |
 |---|---|
-| [docs/api/api_v1_spec.md](docs/api/api_v1_spec.md) | v1 API 唯一权威契约 |
-| [docs/spec/runtime_specification.md](docs/spec/runtime_specification.md) | Runtime 技术规范 |
-| [docs/spec/playback_coordinator_interface.md](docs/spec/playback_coordinator_interface.md) | 播放编排接口 |
-| [docs/spec/auth_runtime_recovery.md](docs/spec/auth_runtime_recovery.md) | 认证运行时恢复规范 |
-| [docs/authentication_architecture.md](docs/authentication_architecture.md) | 认证系统架构 |
-| [docs/architecture/](docs/architecture/) | 架构细分文档 |
+| [Architecture 文档地图](docs/architecture/README.md) | 架构文档索引：权威架构、深度审计、设计治理三类文档分类 |
+| [Spec 文档地图](docs/spec/README.md) | 规范文档索引：core、playback、auth、relay 规范（规范 > 架构） |
+| [API v1 规范](docs/api/api_v1_spec.md) | v1 接口契约、白名单、错误模型、Class A/B/C 分级 |
+| [ADR 目录](docs/adr/README.md) | 架构决策记录 |
+| [AI Review Checklist](docs/ai-review-checklist.md) | 提交前检查清单 |
+
+## ADR 流程
+
+架构决策记录（ADR）是变更架构约束的唯一方式。任何系统宪法中的约束变更，必须经过 ADR 流程：
+
+1. 在 `docs/adr/` 下创建新 ADR 文件
+2. 包含：**状态**（Proposed/Accepted/Rejected）、**上下文**、**决策**、**后果**
+3. 如果是拒绝的决策，说明拒绝原因和替代方案
+4. ADR 经讨论接受后，更新 `constraints.md` 和相关文档
+
+---
+
+*最后更新：2026-05-16 · 文档体系整理 v1.0*

@@ -66,12 +66,14 @@ class EventBus:
                 print(f"Error in event callback for {event_type}: {e}")
 
     def _schedule_async_callback(self, coro) -> None:
-        """安全调度异步回调"""
+        """安全调度异步回调
+
+        BUG-012: 使用 asyncio.ensure_future 调度执行，
+        移除已弃用的 loop 参数以确保 Python 3.10-3.12+ 兼容。
+        """
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(coro)
+            asyncio.ensure_future(coro)
         except RuntimeError:
-            try:
-                asyncio.run(coro)
-            except Exception:
-                pass
+            # 无运行中的事件回路，说明不在 async 上下文中，
+            # 此时无法安全调度，静默丢弃。
+            pass

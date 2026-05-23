@@ -45,7 +45,8 @@ api 层
         └── facade 构建 PlaybackCoordinator 执行播放链
 
 relay
-    └── 独立运行，runtime 提供配置，relay 不反向依赖 runtime
+    ├── **目标边界**：独立运行，runtime 提供配置，relay 不反向依赖 runtime
+    └── **当前实现**：RelayRuntime（`xiaomusic/relay/runtime.py`）仍直接持有 `xiaomusic` 引用（见 `docs/architecture/runtime-boundary.md` §2.4 危险信号）
 ```
 
 **关键约束：**
@@ -108,7 +109,7 @@ relay
 
 - `AuthManager` 管理小米账号的两层认证状态（长期态 + 短期态）
 - `auth.json` 是事实来源，重启后从磁盘恢复
-- 认证恢复流程见 `docs/spec/auth_runtime_recovery.md`
+- 认证恢复流程见 `docs/spec/auth/auth_runtime_recovery.md`
 
 ### 4.3 Device（设备）
 
@@ -148,7 +149,7 @@ relay
 | 文档 | 职责 |
 |---|---|
 | `docs/spec/runtime_specification.md` | core 层数据模型、接口契约、错误体系的技术规范 |
-| `docs/authentication_architecture.md` | 认证两层状态模型详细说明 |
-| `docs/spec/auth_runtime_recovery.md` | 认证恢复流程规范 |
+| `docs/architecture/authentication_architecture.md` | 认证两层状态模型详细说明 |
+| `docs/spec/auth/auth_runtime_recovery.md` | 认证恢复流程规范 |
 | `docs/architecture/system_overview.md` | runtime 在系统九个一级边界中的位置 |
-| `docs/spec/playback_coordinator_interface.md` | PlaybackCoordinator 接口约束 |
+| `docs/spec/playback/playback_coordinator_interface.md` | PlaybackCoordinator 接口约束 |

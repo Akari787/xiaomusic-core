@@ -16,10 +16,10 @@
 | 改播放状态字段或语义 | `docs/spec/player_state_projection_spec.md`、`docs/api/api_v1_spec.md` | `docs/spec/player_state_projection_spec.md` |
 | 改 SSE 推送行为 | `docs/spec/player_stream_sse_spec.md`、`docs/spec/player_state_projection_spec.md` | `docs/spec/player_stream_sse_spec.md` |
 | 改 runtime / XiaoMusic 类 | `docs/architecture/runtime_architecture.md`、`docs/spec/runtime_specification.md` | 视改动范围更新对应规范 |
-| 改 playback / facade / coordinator | `docs/spec/playback_coordinator_interface.md`、`docs/spec/player_state_projection_spec.md` | 视改动范围更新对应规范 |
-| 改 auth 相关 | `docs/authentication_architecture.md`、`docs/spec/auth_runtime_recovery.md` | 视改动范围更新对应规范 |
+| 改 playback / facade / coordinator | `docs/spec/playback/playback_coordinator_interface.md`、`docs/spec/player_state_projection_spec.md` | 视改动范围更新对应规范 |
+| 改 auth 相关 | `docs/architecture/authentication_architecture.md`、`docs/spec/auth/auth_runtime_recovery.md` | 视改动范围更新对应规范 |
 | 改 source / 新增 source 插件 | `docs/architecture/source_architecture.md`、`docs/spec/runtime_specification.md` | `docs/architecture/source_architecture.md`（若新增来源类型） |
-| 改 WebUI 状态消费逻辑 | `docs/spec/webui_playback_state_machine_spec.md`、`docs/spec/player_state_projection_spec.md` | `docs/spec/webui_playback_state_machine_mapping.md`（若改了实现结构） |
+| 改 WebUI 状态消费逻辑 | `docs/spec/webui_playback_state_machine_spec.md`、`docs/spec/player_state_projection_spec.md` | `docs/spec/playback/webui_playback_state_machine_mapping.md`（若改了实现结构） |
 | 改 WebUI 接口依赖 | `docs/architecture/webui_architecture.md`、`docs/api/api_v1_spec.md` | `docs/architecture/webui_architecture.md` |
 | 新增任意模块 | `docs/architecture/system_overview.md`（确认归属边界） | 视归属边界更新对应架构文档 |
 
@@ -116,7 +116,7 @@ runtime 过渡期内，`XiaoMusic` 类仍承担部分协调职责，改动前需
 | 修改 SSE 事件格式或推送规则 | `docs/spec/player_stream_sse_spec.md` |
 | 修改 source 类型集合 | `docs/architecture/source_architecture.md` |
 | 修改 WebUI 接口依赖 | `docs/architecture/webui_architecture.md` |
-| 修改认证恢复流程 | `docs/spec/auth_runtime_recovery.md` |
+| 修改认证恢复流程 | `docs/spec/auth/auth_runtime_recovery.md` |
 | 修改系统一级边界 | `docs/architecture/system_overview.md` |
 
 以下改动**不需要**更新规范文档（属于内部实现细节）：
@@ -135,9 +135,10 @@ runtime 过渡期内，`XiaoMusic` 类仍承担部分协调职责，改动前需
 1. `docs/api/api_v1_spec.md`
 2. `docs/spec/*`
 3. `docs/architecture/*`
-4. `docs/development/*`
-5. `ARCHITECTURE.md`
-6. `docs/dev/*`（历史归档，不作为当前依据）
+4. `docs/architecture/contributor_guide.md`
+5. `docs/architecture/*`
+6. `ARCHITECTURE.md`
+7. `docs/archive/*`（历史归档，不作为当前依据）
 
 发现文档冲突时，以高优先级文档为准，并将低优先级文档中的冲突内容标记为待修正，在下一轮文档更新中处理。
 
@@ -149,7 +150,7 @@ runtime 过渡期内，`XiaoMusic` 类仍承担部分协调职责，改动前需
 
 - 不得以"实现上更简单"为由跳过归属边界确认
 - 不得假设某字段存在于 API 响应中（必须查 `api_v1_spec.md` 确认）
-- 不得修改 `docs/dev/*` 中的历史归档文档（只读）
+- 不得修改 `docs/archive/*` 中的历史归档文档（只读）
 - 改动文档时，必须更新文档头部的"最后更新"日期
 - 改动涉及多个边界时，必须分步执行，每步明确指出影响边界
 

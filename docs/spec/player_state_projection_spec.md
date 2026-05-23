@@ -7,6 +7,34 @@
 
 ---
 
+## 速读导航
+
+本文档定义 XiaoMusic 播放器"权威播放状态快照"（Player State Projection）的结构、字段语义与消费约束，是所有对外状态输出的共同上位规范。
+
+**改什么时必须读本文：**
+- 涉及 `GET /api/v1/player/state` 响应数据结构的任何修改
+- 涉及 SSE 事件中 `data` 状态字段结构的任何修改
+- 涉及 `transport_state`、`track.id`、`play_session_id`、`revision` 等核心字段的定义或语义变更
+- 涉及 PlaybackCoordinator / PlaybackFacade 对外暴露状态的逻辑修改
+- 涉及前端消费播放状态的任何行为变更
+
+**AI 最容易改偏的禁止事项：**
+1. 不得在前端自行拼装或合并状态——服务端快照是唯一权威，前端是消费者不是裁决者
+2. 不得用 `track.title` 充当曲目身份——必须使用 `track.id` 作为曲目稳定标识
+3. 不得用 `track` 置空来隐式表达"切歌中"——切歌中必须由 `transport_state == "switching"` 表达
+4. 不得在前端维护独立的状态拼装逻辑——HTTP 状态查询与 SSE 状态推送必须共享同一套状态投影逻辑
+5. 不得在 SSE 连接正常时并行轮询 `/player/state`——两路来源并行会导致状态竞争
+
+**关键章节索引：**
+- [第 5 章 权威播放状态快照模型](#5-权威播放状态快照模型)：顶层字段、track、context、进度结构
+- [第 6 章 revision 规范](#6-revision-规范)：单调递增版本号与去重机制
+- [第 7 章 play_session_id 规范](#7-play_session_id-规范)：切歌边界信号
+- [第 8 章 transport_state 规范](#8-transport_state-规范)：传输状态枚举值与语义
+- [第 11 章 统一状态投影约束](#11-统一状态投影约束)：投影逻辑共享要求
+- [第 12 章 前端消费边界](#12-前端消费边界)：前端消费合法性边界
+
+---
+
 ## 1. 文档定位
 
 本文档定义 XiaoMusic 播放器"权威播放状态快照"（Player State Projection）的结构、字段语义与消费约束。
@@ -500,11 +528,11 @@
 
 ### 14.4 与 WebUI 相关规范的关系
 
-`docs/spec/webui_playback_state_machine_spec.md` 与 `docs/spec/webui_playback_state_machine_mapping.md` 定义 WebUI 的前端展示状态机与实现映射。这些文档定义前端如何消费本文档所描述的状态快照，但不得在前端侧重新定义播放真相的来源。前端规范中凡涉及"以哪个字段为权威依据"的判断，必须与本文档第 12.3 节保持一致。
+`docs/spec/webui_playback_state_machine_spec.md` 与 `docs/spec/playback/webui_playback_state_machine_mapping.md` 定义 WebUI 的前端展示状态机与实现映射。这些文档定义前端如何消费本文档所描述的状态快照，但不得在前端侧重新定义播放真相的来源。前端规范中凡涉及"以哪个字段为权威依据"的判断，必须与本文档第 12.3 节保持一致。
 
-### 14.5 与 `docs/spec/playback_coordinator_interface.md` 的关系
+### 14.5 与 `docs/spec/playback/playback_coordinator_interface.md` 的关系
 
-`docs/spec/playback_coordinator_interface.md` 定义 PlaybackCoordinator 的内部接口契约、Adapter 职责与 Framework 职责。PlaybackCoordinator 是状态快照构建器的内部状态来源；其对外暴露的播放事实（`current_index`、`context`、`track` 等）必须通过本文档定义的统一快照构建器转化为对外输出，不得直接绕过快照构建器暴露原始内部状态。
+`docs/spec/playback/playback_coordinator_interface.md` 定义 PlaybackCoordinator 的内部接口契约、Adapter 职责与 Framework 职责。PlaybackCoordinator 是状态快照构建器的内部状态来源；其对外暴露的播放事实（`current_index`、`context`、`track` 等）必须通过本文档定义的统一快照构建器转化为对外输出，不得直接绕过快照构建器暴露原始内部状态。
 
 ### 14.6 与 `docs/spec/runtime_specification.md` 的关系
 

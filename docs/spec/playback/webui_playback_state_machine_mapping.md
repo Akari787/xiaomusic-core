@@ -7,6 +7,27 @@
 
 ---
 
+## 文档状态
+
+**本文档定位**：WebUI 重构迁移映射文档，描述旧实现到新规范的对应关系，**不是播放状态/SSE/WebUI 状态机权威规范**。
+
+**权威层级**：
+- 播放状态投影规范：`docs/spec/player_state_projection_spec.md`
+- SSE 流规范：`docs/spec/player_stream_sse_spec.md`
+- WebUI 状态机规范：`docs/spec/webui_playback_state_machine_spec.md`
+
+**使用限制**：
+- 本文档仅用于理解旧模型如何迁移到新规范
+- **不得从本文反推当前规范**
+- 如本文与上述三份规范冲突，**以上述三份规范为准**
+
+**本文仍可复用的结论**：
+1. 旧字段到新字段的映射关系（`offset` → `position_ms`、`is_playing` → `transport_state` 等）
+2. 必须删除的旧变量/函数清单，可作为迁移 checklist
+3. 重构顺序建议（接口升级 → SSE hook → revision gate → session switch → 渲染层 → 清理）
+
+---
+
 ## 1. 文档定位
 
 本文档是实现映射文档，不是规范文档。

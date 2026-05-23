@@ -7,6 +7,24 @@
 
 ---
 
+## 文档状态
+
+**本文档定位**：auth 专项验收文档，定义 auto runtime reload 相关验收边界，**不是 auth 全局权威规范**。
+
+**权威层级**：
+- auth 全局权威入口：`docs/spec/auth/README.md`
+- 认证状态模型权威：`docs/architecture/authentication_architecture.md`
+- auth 恢复主线行为权威：`docs/spec/auth/auth_runtime_recovery.md`
+
+**与主线规范的关系**：如本文与主线规范冲突，**以主线规范为准**。
+
+**本文仍可复用的结论**：
+1. auto runtime reload 的触发条件为：`auth_mode=degraded` + `persistent_auth_available=true` + `short_session_available=true`
+2. verify auth failure 应正确 handoff 到既有 short-session 恢复链
+3. 结论书写必须分层，明确"本次通过的是"与"本次未覆盖的不是"
+
+---
+
 ## 1. 文档定位
 
 本文档只定义 **auto runtime reload 相关验收边界**，并同步当前已知通过范围与未覆盖范围。

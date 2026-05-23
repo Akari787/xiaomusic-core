@@ -1,0 +1,10 @@
+{
+  "task": "s4-2",
+  "execute_time": "2026-05-16 10:38",
+  "status": "completed",
+  "output_files": [
+    "docs/architecture/constraints.md"
+  ],
+  "next_task": "s4-3",
+  "notes": "系统宪法完成，包含7条禁止清单、5条必须清单、TEMP-HACK治理规范。"
+}

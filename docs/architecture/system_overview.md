@@ -92,14 +92,14 @@ runtime
 3. docs/architecture/*（含本文档）
    ↳ 系统结构、层级边界、模块归属决策
 
-4. docs/development/*
+4. `docs/architecture/contributor_guide.md`
    ↳ 开发流程、改动前置规则、文档更新约束
 
-5. ARCHITECTURE.md
+5. `ARCHITECTURE.md`
    ↳ 接口分层与调用关系的高层概述（与本文档互补，无冲突时均有效）
 
-6. docs/dev/*（归档）
-   ↳ 历史实施计划与验收报告，不作为当前实现依据
+6. `docs/archive/*`（归档）
+   ↳ 历史调研与实施记录，不作为当前实现依据
 ```
 
 ---
@@ -130,9 +130,9 @@ runtime
 | `docs/spec/player_state_projection_spec.md` | 播放状态快照语义规范 |
 | `docs/spec/player_stream_sse_spec.md` | SSE 推送协议规范 |
 | `docs/spec/runtime_specification.md` | core 层数据模型与错误体系 |
-| `docs/spec/playback_coordinator_interface.md` | PlaybackCoordinator 接口约束 |
-| `docs/authentication_architecture.md` | 认证系统两层状态模型 |
+| `playback/playback_coordinator_interface.md` | PlaybackCoordinator 接口约束 |
+| `docs/architecture/authentication_architecture.md` | 认证系统两层状态模型 |
 | `docs/architecture/runtime_architecture.md` | runtime 内部运转与生命周期 |
 | `docs/architecture/source_architecture.md` | source 边界与插件体系 |
 | `docs/architecture/webui_architecture.md` | WebUI 接口依赖边界 |
-| `docs/development/contributor_guide.md` | 改动前置规则与文档更新约束 |
+| `docs/architecture/contributor_guide.md` | 改动前置规则与文档更新约束 |

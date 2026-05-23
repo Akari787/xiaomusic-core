@@ -66,7 +66,7 @@ def _get_xiaomusic():
 def _get_facade() -> PlaybackFacade:
     global _facade
     if _facade is None:
-        _facade = PlaybackFacade(_get_xiaomusic(), runtime_provider=get_runtime)
+        _facade = PlaybackFacade(_get_xiaomusic(), link_preparer=get_runtime)
     return _facade
 
 

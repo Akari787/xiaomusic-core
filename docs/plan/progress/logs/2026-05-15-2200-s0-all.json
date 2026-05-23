@@ -1,0 +1,16 @@
+{
+  "task": "s0-all",
+  "execute_time": "2026-05-15 22:00",
+  "status": "completed",
+  "output_files": [
+    "docs/plan/*.md",
+    "docs/snapshot/*.md",
+    "docs/adr/*.md",
+    "docs/spec/auth/*.md",
+    "docs/spec/playback/*.md",
+    "docs/archive/investigation/*.md",
+    "docs/index.md (updated)"
+  ],
+  "next_task": "s1-all",
+  "notes": "阶段0完成。目录骨架创建，文件迁移，ADR占位文件创建，index.md更新。下一任务：s1-all Day 0 现状快照"
+}

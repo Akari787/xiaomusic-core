@@ -54,41 +54,32 @@ docker run -d --name xiaomusic-core \
 
 ## 4. 文档导航
 
+### 入口索引（AI 开工必读）
+
 | 文档 | 说明 |
-|------|------|
-| [API v1 规范](docs/api/api_v1_spec.md) | 接口契约、白名单、错误模型、Class A/B/C 分级 |
-| [认证系统架构](docs/authentication_architecture.md) | 长期态/短期态、auth.json、恢复链路、调试接口 |
-| [认证运行时恢复规范](docs/spec/auth_runtime_recovery.md) | 当前 auth 主线：fresh session `_try_login()`、阶段边界、验收范围 |
-| [认证运行时恢复路径规范](docs/spec/auth_runtime_reload_recovery_path.md) | `_try_login()` / runtime reload 的 login、verify、runtime swap 阶段定义 |
-| [fresh session 主路径验收收口](docs/implementation/auth_fresh_session_runtime_recovery_acceptance.md) | 当前已确认通过的是哪一层，不是哪一层 |
-| [spec rebuild 验收矩阵](docs/implementation/spec_rebuild_acceptance_matrix_2026-04-09.md) | 当前已覆盖 / 未覆盖范围与下一阶段优先级 |
-| [播放状态快照规范](docs/spec/player_state_projection_spec.md) | 权威状态快照字段模型与消费约束 |
-| [SSE 推送协议](docs/spec/player_stream_sse_spec.md) | 播放状态主通道协议、重连、心跳 |
-| [架构说明](ARCHITECTURE.md) | 系统分层、模块职责、调用链 |
-| [v1.1.1 发布说明](docs/release/v1.1.1.md) | 相对 `v1.1.0` 的真实代码变化、当前确认范围与发布边界 |
-| [v1.1.0 发布说明](docs/release/v1.1.0.md) | 相对 `v1.0.10` 的真实代码变化、当前确认范围与发布边界 |
-| [播放架构](docs/architecture/unified_playback_model.md) | 统一播放模型、来源、上下文、执行路径 |
-| [WebUI 状态机规范](docs/spec/webui_playback_state_machine_spec.md) | 前端消费型状态机定义 |
-| [Runtime 技术规范](docs/spec/runtime_specification.md) | core 层数据模型、错误体系、Source/Transport 接口 |
-| [模块边界](docs/architecture/module_inventory.md) | 模块目录、正式入口、兼容层说明 |
-| [Relay 术语](docs/spec/relay_terminology.md) | relay/proxy/delivery mode 术语定义 |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | AI 开工协议入口，含九大边界与约束清单 |
+| [Architecture 文档地图](docs/architecture/README.md) | 架构文档索引 |
+| [Spec 文档地图](docs/spec/README.md) | 规范文档索引（规范 > 架构） |
+| [API v1 规范](docs/api/api_v1_spec.md) | v1 接口契约、白名单、错误模型 |
+| [AI Review Checklist](docs/ai-review-checklist.md) | 提交前检查清单 |
 
-### 当前 auth 主线阅读路径
+### 关键专题文档（按领域）
 
-建议按以下顺序阅读：
+| 文档 | 说明 |
+|---|---|
+| [系统总览](docs/architecture/system_overview.md) | 九大边界、调用规则、文档优先级 |
+| [状态权威与约束](docs/architecture/state-authority.md) | 状态权威归属、禁止跨边界规则 |
+| [播放状态快照规范](docs/spec/player_state_projection_spec.md) | 权威状态快照字段模型 |
+| [SSE 推送协议](docs/spec/player_stream_sse_spec.md) | 播放状态主通道、重连、心跳 |
+| [WebUI 状态机规范](docs/spec/webui_playback_state_machine_spec.md) | 前端状态机定义 |
+| [Runtime 技术规范](docs/spec/runtime_specification.md) | core 层数据模型、错误体系 |
+| [Relay 术语](docs/spec/relay_terminology.md) | relay/proxy/delivery 术语定义 |
+| [ADR 目录](docs/adr/README.md) | 架构决策记录 |
 
-1. [认证运行时恢复规范](docs/spec/auth_runtime_recovery.md)
-2. [认证运行时恢复路径规范](docs/spec/auth_runtime_reload_recovery_path.md)
-3. [fresh session 主路径验收收口](docs/implementation/auth_fresh_session_runtime_recovery_acceptance.md)
-4. [spec rebuild 验收矩阵](docs/implementation/spec_rebuild_acceptance_matrix_2026-04-09.md)
-5. [v1.1.1 发布说明](docs/release/v1.1.1.md)
-6. [v1.1.0 发布说明](docs/release/v1.1.0.md)
+### auth 主线阅读路径
 
-其中：
-
-- 第 1、2 篇说明当前主线与阶段边界
-- 第 3 篇说明本轮已确认通过的是哪一层
-- 第 4 篇说明当前未覆盖的不是哪一层
+详见 [auth spec 子目录入口](docs/spec/auth/README.md)，包含恢复链路、状态机、singleflight 等文档。
 
 ## 5. Roadmap
 

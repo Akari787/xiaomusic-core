@@ -7,7 +7,7 @@ import logging
 import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from xiaomusic.adapters.mina import MinaTransport
@@ -15,6 +15,7 @@ from xiaomusic.adapters.miio import MiioTransport
 from xiaomusic.adapters.sources import register_default_source_plugins
 from xiaomusic.constants.api_fields import DEVICE_ID, REQUEST_ID
 from xiaomusic.core.coordinator import PlaybackCoordinator
+from xiaomusic.core.source.source_protocols import LinkPreparer
 from xiaomusic.managers.source_plugin_manager import SourcePluginManager
 from xiaomusic.core.delivery import DeliveryAdapter
 from xiaomusic.core.device import DeviceRegistry
@@ -59,17 +60,26 @@ class PlaybackFacade:
     def __init__(
         self,
         xiaomusic,
-        runtime_provider: Callable[[], Any] | None = None,
+        link_preparer: LinkPreparer | None = None,
         source_plugin_manager: SourcePluginManager | None = None,
     ) -> None:
         self.xiaomusic = xiaomusic
-        self._runtime_provider = runtime_provider
+        # link_preparer can be a direct LinkPreparer instance or a
+        # zero-argument callable that returns one (lazy factory).
+        self._link_preparer = link_preparer
         self._core_coordinator: PlaybackCoordinator | None = None
         self._core_registry_version: int | None = None
         self._device_track_source_hints: dict[str, dict[str, str]] = {}
         self._source_plugin_manager = source_plugin_manager or getattr(
             self.xiaomusic, "source_plugin_manager", None
         )
+
+    def _resolve_link_preparer(self) -> LinkPreparer | None:
+        """Resolve link_preparer lazily (supports factory callables)."""
+        lp = self._link_preparer
+        if callable(lp) and not isinstance(lp, type):
+            return lp()
+        return lp
 
     def _get_source_plugin_manager(self) -> SourcePluginManager:
         if self._source_plugin_manager is not None:
@@ -80,7 +90,7 @@ class PlaybackFacade:
             register_defaults=lambda registry: register_default_source_plugins(
                 registry,
                 self.xiaomusic,
-                runtime_provider=self._runtime_provider,
+                link_preparer=self._resolve_link_preparer(),
             ),
             plugins_dir=str(Path(conf_path) / "source_plugins"),
         )
@@ -823,17 +833,17 @@ class PlaybackFacade:
             # 如果没有真实索引，使用兜底方案
             if current_index is None and cur_music:
                 try:
-                    play_list = getattr(device_player, "_play_list", [])
+                    play_list = getattr(device_player, "_get_playlist_names", lambda: [])()
                     if play_list and cur_music in play_list:
                         current_index = play_list.index(cur_music)
                 except (ValueError, AttributeError):
                     pass
 
         # 为 cur_music 增加最终兜底
-        # 当 is_playing 为 true 但 cur_music 为空时，从 _play_list[current_index] 获取
+        # 当 is_playing 为 true 但 cur_music 为空时，从 playlist_names[current_index] 获取
         if is_playing and not cur_music and device_player and current_index is not None:
             try:
-                play_list = getattr(device_player, "_play_list", [])
+                play_list = getattr(device_player, "_get_playlist_names", lambda: [])()
                 if play_list and current_index >= 0 and current_index < len(play_list):
                     cur_music = str(play_list[current_index] or "")
             except (ValueError, AttributeError, IndexError):
@@ -1011,7 +1021,7 @@ class PlaybackFacade:
             if not track_title and device_player and transport_state != "idle":
                 try:
                     cur_idx = getattr(device_player, "_current_index", -1)
-                    play_list = getattr(device_player, "_play_list", [])
+                    play_list = getattr(device_player, "_get_playlist_names", lambda: [])()
                     if (
                         cur_idx >= 0
                         and isinstance(play_list, list)
@@ -1077,7 +1087,7 @@ class PlaybackFacade:
         current_index: int | None = None
         if device_player:
             try:
-                play_list = getattr(device_player, "_play_list", [])
+                play_list = getattr(device_player, "_get_playlist_names", lambda: [])()
             except (ValueError, AttributeError):
                 play_list = []
 
@@ -1205,6 +1215,15 @@ class PlaybackFacade:
             except (ValueError, AttributeError):
                 last_cmd = ""
             if last_cmd in {"stop"}:
+                # BUG-011: 如果 device_player 自己认为已停止（is_playing=False），
+                # 说明本地 state machine 已处理 stop，此时播放器状态
+                # 可能只是延迟还没更新。返回 "stopped" 而非 "switching"，
+                # 避免 UI 长期卡在 switching。
+                player_is_playing = bool(
+                    getattr(device_player, "is_playing", False)
+                )
+                if not player_is_playing:
+                    return "stopped"
                 return "switching"
             return "playing"
 
@@ -1219,23 +1238,46 @@ class PlaybackFacade:
         if last_cmd == "pause":
             return "paused"
 
+        # BUG-011: 非 playing 分支下的 switching 判定。
+        # _next_timer 存在时通常表示正在等待自动切歌，属于正常的切换过渡状态。
+        # 但如果本地 is_playing 为 False（设备已停止但定时器未被取消），
+        # 说明是残留定时器，应跳过 switching 以免 UI 长期卡住。
         try:
             next_timer = getattr(device_player, "_next_timer", None)
             current_index = getattr(device_player, "_current_index", -1)
-            play_list = getattr(device_player, "_play_list", [])
-            cur_music = getattr(device_player, "get_cur_music", lambda: "")()
+            play_list = getattr(device_player, "_get_playlist_names", lambda: [])()
+            cur_music = getattr(device_player, "get_cur_music", lambda: "")()()
             if callable(cur_music):
                 cur_music = cur_music() or ""
+            player_is_playing = bool(
+                getattr(device_player, "is_playing", False)
+            )
             if next_timer is not None:
-                return "switching"
+                if not player_is_playing:
+                    # BUG-011: 本地已停止但定时器仍在，残留定时器。
+                    # 主动清理并回退到命令态状态推导，避免 switching 长期卡住。
+                    try:
+                        next_timer.cancel()
+                    except Exception:
+                        pass
+                    try:
+                        setattr(device_player, "_next_timer", None)
+                    except Exception:
+                        pass
+                else:
+                    return "switching"
             if (
                 current_index >= 0
                 and isinstance(play_list, list)
                 and current_index < len(play_list)
             ):
                 next_name = play_list[current_index] or ""
+                # BUG-011 / BUG-013: current_index 与 cur_music 不一致时
+                # 返回 switching，但仅当本地状态为 playing 时（活跃切换中）。
+                # 若本地未处于 playing，则跳过 switching 并回退到命令态推导。
                 if next_name and next_name != cur_music:
-                    return "switching"
+                    if player_is_playing:
+                        return "switching"
         except Exception:
             pass
 

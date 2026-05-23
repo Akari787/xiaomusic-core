@@ -7,6 +7,25 @@
 
 ---
 
+## 文档状态
+
+**本文档定位**：auth 专项约束文档，描述 fallback path 的行为边界与结果分类，**不是 auth 全局权威规范**。
+
+**权威层级**：
+- auth 全局权威入口：`docs/spec/auth/README.md`
+- 认证状态模型权威：`docs/architecture/authentication_architecture.md`
+- auth 恢复主线行为权威：`docs/spec/auth/auth_runtime_recovery.md`
+
+**与主线规范的关系**：如本文与主线规范冲突，**以主线规范为准**。
+
+
+**本文仍可复用的结论**：
+1. fallback path 只在 primary 明确失败后才进入，不是默认主路径
+2. fallback path 必须在统一恢复执行入口内，不得绕过 singleflight
+3. fallback 失败后应明确结束为 degraded 或进入更高层决策，不得假装成功
+
+---
+
 ## 1. 文档目的
 
 当前自动恢复失败的主要矛盾已从 primary path 转移到 fallback path。

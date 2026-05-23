@@ -11,10 +11,10 @@ hero:
       link: /api/api_v1_spec
     - theme: alt
       text: Architecture
-      link: /architecture/module_inventory
+      link: /architecture/
     - theme: alt
       text: Spec
-      link: /spec/runtime_specification
+      link: /spec/
     - theme: alt
       text: GitHub
       link: https://github.com/Akari787/xiaomusic-core
@@ -28,41 +28,40 @@ features:
     details: 支持 Jellyfin 搜索与歌单同步
 ---
 
-## 当前 auth 主线阅读路径
+## 深度体检
 
-建议按以下顺序阅读当前 auth 文档：
+[执行方案](/plan/xiaomusic-core_深度体检与长期演化执行方案_v2)
 
-1. [Auth 运行时恢复链说明](/architecture/auth_runtime_recovery)
-   - auth runtime 运行时恢复链——v1 auth status、双路径 rebuild、阶段化 debug 结构
-2. [认证运行时恢复规范](/spec/auth_runtime_recovery)
-3. [认证运行时恢复路径规范](/spec/auth_runtime_reload_recovery_path)
-4. [fresh session 主路径验收收口](/implementation/auth_fresh_session_runtime_recovery_acceptance)
-5. [spec rebuild 验收矩阵](/implementation/spec_rebuild_acceptance_matrix_2026-04-09)
-6. [v1.1.1 发布说明](/release/v1.1.1)
-7. [v1.1.0 发布说明](/release/v1.1.0)
-8. [v1.0.10 发布说明](/release/v1.0.10)
+当前进度：阶段 5（已完成）
 
-当前阅读路径的目的：
+产出文档索引：
+- [Day 0 现状快照](/snapshot/known-bugs) — 已知 bug、迷之能用、雷区
+- [架构审计报告](/architecture/runtime-dependency) — 运行时依赖、状态流、生命周期
+- [边界审计报告](/architecture/source-system) — Source 系统、Runtime 边界、API 契约
+- [状态权威偏差表](/architecture/state-authority) — 状态权威、质量门禁
+- [可观测性设计](/architecture/event-model) — 统一事件模型、Correlation ID、Snapshot 端点
+- [ADR 目录](/adr/) — 5 个架构决策记录
+- [系统宪法](/architecture/constraints) — 禁止清单、必须清单
+- [AI Review Checklist](/ai-review-checklist) — 提交前检查
 
-- 先理解当前 auth 主线
-- 再理解 `_try_login()` / runtime reload 的阶段边界
-- 再看本轮已确认通过的是哪一层
-- 最后看 spec rebuild 当前哪些仍未覆盖
+---
 
-## 当前 WebUI playlist 状态阅读路径
+## AI 开工入口
 
-建议按以下顺序阅读当前 WebUI playlist 状态文档：
+| 文档 | 说明 |
+|---|---|
+| [ARCHITECTURE.md](https://github.com/Akari787/xiaomusic-core/blob/main/ARCHITECTURE.md) | AI 开工协议：5步开工流程、九大边界、约束清单 |
+| [Architecture 文档地图](architecture/README) | 架构文档索引 |
+| [Spec 文档地图](spec/README) | 规范文档索引（规范 > 架构） |
+| [API v1 规范](api/api_v1_spec) | v1 接口契约、白名单、错误模型 |
+| [AI Review Checklist](ai-review-checklist) | 提交前检查清单 |
 
-1. [WebUI 歌单选择状态架构](/architecture/webui_playlist_state)
-   - pendingSelection / effectiveSelection / pending 失效判据 / pending-aware next/previous / `/api/v1/play` snapshot 回包
-2. [WebUI 架构](/architecture/webui_architecture)
-3. [播放器状态投影规范](/spec/player_state_projection_spec)
-4. [播放器 SSE 规范](/spec/player_stream_sse_spec)
-5. [v1 API 文档](/api/api_v1_spec)
-6. [v1.1.0 发布说明](/release/v1.1.0)
+## 专题入口
 
-当前阅读路径的目的：
-
-- 先理解 playlist selector 的三层状态模型
-- 再回到 WebUI 的通用接口依赖边界
-- 最后确认播放状态字段、SSE 契约与 v1 API 对齐关系
+| 专题 | 入口文档 |
+|---|---|
+| auth 认证恢复 | [spec/auth/ 入口](spec/auth/README) |
+| playback 播放编排 | [spec/playback/ 入口](spec/playback/README) |
+| WebUI playlist 状态 | [架构：webui_playlist_state](architecture/webui_playlist_state) |
+| 播放状态快照 | [spec：player_state_projection_spec](spec/player_state_projection_spec) |
+| SSE 推送协议 | [spec：player_stream_sse_spec](spec/player_stream_sse_spec) |

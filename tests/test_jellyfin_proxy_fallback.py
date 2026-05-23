@@ -79,8 +79,10 @@ def test_jellyfin_auto_falls_back_to_proxy_when_not_playing(monkeypatch):
         calls.append(url)
         return [{"ok": True}]
 
-    # First status check false -> trigger fallback; second true -> accept proxy.
-    status_iter = iter([False, True])
+    # First three probes confirm direct dispatch was accepted, then a later
+    # status check observes not-playing and triggers proxy fallback, which is
+    # finally accepted by a successful status probe.
+    status_iter = iter([True, True, True, False, True])
 
     async def fake_get_if_xiaoai_is_playing():
         return next(status_iter)

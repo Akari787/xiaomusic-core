@@ -3,6 +3,26 @@
 > 适用范围：V1.1.1（auth 恢复链从零实现）当前代码实现。
 > 目标：说明正式状态接口、统一状态映射、short-session 重建主链、调试观测面与失败分类。
 
+---
+
+## 文档状态
+
+**本文档定位**：V1.1.1 auth runtime recovery **实现说明/观测说明**文档，描述当前代码实现细节，**不是 auth 全局规范**。
+
+**权威层级**：
+- 认证状态模型权威：`docs/architecture/authentication_architecture.md`
+- 行为规范权威：`docs/spec/auth/auth_runtime_recovery.md`
+- API 契约权威：`docs/api/api_v1_spec.md`
+
+**本文档用途**：
+- 用于理解现有实现细节
+- 用于 debug 端点观测
+- 用于 failure classification 分类
+
+**本文档约束**：本文档**不得覆盖** spec 与 api 契约的权威定义。
+
+---
+
 ## 1. 背景与边界
 
 当前认证状态分为两层：

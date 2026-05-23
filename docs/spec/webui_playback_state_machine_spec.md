@@ -7,6 +7,34 @@
 
 ---
 
+## 速读导航
+
+本文档定义 WebUI 播放状态机的消费型规范，前端不拥有播放真相，只负责忠实消费服务端状态快照并映射为可见 UI。
+
+**改什么时必须读本文：**
+- 涉及 WebUI 中任何消费播放状态的代码修改
+- 涉及 `serverState` / `uiState` 状态边界划分的变更
+- 涉及 SSE 连接状态管理与降级策略的变更
+- 涉及 `play_session_id`、`transport_state`、`track.id` 的消费逻辑变更
+- 涉及进度条、选中项同步、切歌动画等 UI 渲染逻辑的变更
+
+**AI 最容易改偏的禁止事项：**
+1. 不得在前端自行推断"当前播放哪首歌曲"——服务端快照是唯一权威
+2. 不得用 `track.title` 文本匹配驱动选中项——必须用 `track.id` 驱动
+3. 不得用 `offset` 回退或 `duration` 突变推断切歌——必须用 `play_session_id` 变化判断切歌边界
+4. 不得在 SSE 连接正常时同时轮询 `/player/state`——两路状态来源并行产生竞争
+5. 不得在前端维护推测型状态机逻辑（如 `lastPositivePlaybackAtRef`、`pendingTitle`）——已废弃
+
+**关键章节索引：**
+- [第 2 章 模型根本转变](#2-模型根本转变)：从推测型到消费型的范式转换
+- [第 3 章 状态来源模型](#3-状态来源模型)：serverState 与 uiState 的边界划分
+- [第 4 章 SSE 驱动模型](#4-sse-驱动模型)：状态更新的唯一驱动源
+- [第 5 章 UI 渲染规则](#5-ui-渲染规则)：渲染决策的字段优先级顺序
+- [第 6 章 revision 处理规则](#6-revision-处理规则)：去重机制
+- [第 7 章 play_session_id 行为规则](#7-play_session_id-行为规则)：切歌边界信号
+
+---
+
 ## 1. 文档定位
 
 本文档定义 WebUI 播放状态机的正式规范。
@@ -497,4 +525,4 @@ SSE 重连成功并收到初始 `player_state` 事件后，前端必须：
 - **`docs/spec/player_state_projection_spec.md`（投影规范）**：本文档的上位规范，定义 `serverState` 的字段模型与语义。本文档所有涉及字段语义的判断，以投影规范为准。
 - **`docs/spec/player_stream_sse_spec.md`（SSE 规范）**：定义 SSE 传输协议细节，包括连接行为、事件格式、重连机制与心跳。本文档的 SSE 消费逻辑必须与 SSE 规范保持一致。
 - **`docs/api/api_v1_spec.md`（API v1 契约）**：定义 `GET /api/v1/player/state` 与 `GET /api/v1/player/stream` 的接口契约。本文档的降级轮询与初始化逻辑以 API v1 契约为准。
-- **`docs/spec/webui_playback_state_machine_mapping.md`（实现映射清单）**：基于旧模型的实现映射文档。该文档描述的旧实现结构（`mergePlayingViewState`、`stabilityWindow`、`localPlayback*` 等）属于本文档第 13 章定义的"应删除或降级"的旧逻辑，不再作为新实现的参考依据。
+- **`docs/spec/playback/webui_playback_state_machine_mapping.md`（实现映射清单）**：基于旧模型的实现映射文档。该文档描述的旧实现结构（`mergePlayingViewState`、`stabilityWindow`、`localPlayback*` 等）属于本文档第 13 章定义的"应删除或降级"的旧逻辑，不再作为新实现的参考依据。

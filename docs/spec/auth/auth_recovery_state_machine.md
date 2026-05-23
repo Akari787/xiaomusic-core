@@ -41,7 +41,7 @@
 ### 2.2 非目标
 
 - 不讨论未来大重构方案
-- 不替代 `docs/spec/auth_runtime_recovery.md` 的主线路径说明
+- 不替代 `docs/spec/auth/auth_runtime_recovery.md` 的主线路径说明
 - 不把局部通过扩写成 spec rebuild 全量通过
 
 ---
@@ -282,7 +282,7 @@ runtime reload / `_try_login()` 当前需要按阶段理解：
 
 ## 11. 与现有文档关系
 
-- 当前 auth runtime 主线路径，以 `docs/spec/auth_runtime_recovery.md` 为主
-- 当前 runtime reload / `_try_login()` 阶段边界，以 `docs/spec/auth_runtime_reload_recovery_path.md` 为主
-- 当前 auto runtime reload 验收边界，以 `docs/spec/auth_auto_runtime_reload_acceptance.md` 为主
+- 当前 auth runtime 主线路径，以 `docs/spec/auth/auth_runtime_recovery.md` 为主
+- 当前 runtime reload / `_try_login()` 阶段边界，以 `docs/spec/auth/auth_runtime_reload_recovery_path.md` 为主
+- 当前 auto runtime reload 验收边界，以 `docs/spec/auth/auth_auto_runtime_reload_acceptance.md` 为主
 - 本文档负责状态机语义收口，不提供 spec rebuild 总通过结论

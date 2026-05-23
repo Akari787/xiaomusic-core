@@ -1,21 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Protocol
+from typing import Any
 
 from xiaomusic.core.errors.source_errors import SourceResolveError
 from xiaomusic.core.models.media import MediaRequest, ResolvedMedia
 from xiaomusic.core.source.source_plugin import SourcePlugin
+from xiaomusic.core.source.source_protocols import LinkPreparer
 from xiaomusic.relay.resolver import Resolver
 from xiaomusic.relay.url_classifier import UrlClassifier
-
-
-class _PrepareLinkRuntime(Protocol):
-    def prepare_link(self, url: str, prefer_proxy: bool = False, *, no_cache: bool = False) -> dict: ...
-
-
-def _supports_prepare_link(runtime: Any) -> bool:
-    return callable(getattr(runtime, "prepare_link", None))
 
 
 class SiteMediaSourcePlugin(SourcePlugin):
@@ -27,11 +20,11 @@ class SiteMediaSourcePlugin(SourcePlugin):
         self,
         classifier: UrlClassifier | None = None,
         resolver: Resolver | None = None,
-        runtime_provider: Any | None = None,
+        link_preparer: LinkPreparer | None = None,
     ) -> None:
         self._classifier = classifier or UrlClassifier()
         self._resolver = resolver or Resolver()
-        self._runtime_provider = runtime_provider
+        self._link_preparer = link_preparer
 
     def can_resolve(self, request: MediaRequest) -> bool:
         if request.source_hint == self.name:
@@ -44,9 +37,15 @@ class SiteMediaSourcePlugin(SourcePlugin):
         if info.site not in {"youtube", "bilibili"}:
             raise SourceResolveError("site_media plugin only supports recognized site-page URLs")
 
-        runtime = self._runtime_provider() if callable(self._runtime_provider) else None
-        if request.device_id and _supports_prepare_link(runtime):
-            prepared = _prepare_site_media_stream(runtime, request, info.normalized_url)
+        if self._link_preparer is not None and request.device_id:
+            prepared = self._link_preparer.prepare_link(
+                info.normalized_url,
+                prefer_proxy=bool(request.context.get("prefer_proxy", False)),
+                no_cache=bool(request.context.get("no_cache", False)),
+            )
+            if not prepared.get("ok"):
+                detail = prepared.get("error_message") or prepared.get("error_code") or "site media prepare failed"
+                raise SourceResolveError(str(detail))
             session = prepared.get("session") if isinstance(prepared.get("session"), dict) else {}
             stream_url = str(prepared.get("stream_url") or (session or {}).get("stream_url") or "").strip()
             if not stream_url:
@@ -90,15 +89,3 @@ class SiteMediaSourcePlugin(SourcePlugin):
             expires_at=None,
             is_live=bool(resolved.is_live),
         )
-
-
-def _prepare_site_media_stream(runtime: _PrepareLinkRuntime, request: MediaRequest, normalized_url: str) -> dict[str, Any]:
-    prepared = runtime.prepare_link(
-        normalized_url,
-        prefer_proxy=bool(request.context.get("prefer_proxy", False)),
-        no_cache=bool(request.context.get("no_cache", False)),
-    )
-    if not prepared.get("ok"):
-        detail = prepared.get("error_message") or prepared.get("error_code") or "site media prepare failed"
-        raise SourceResolveError(str(detail))
-    return prepared
