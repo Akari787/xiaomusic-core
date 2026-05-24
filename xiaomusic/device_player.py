@@ -767,7 +767,7 @@ class XiaoMusicDevice:
 
     async def _execute_group_stop(self, *, fast_stop: bool, sid: int):
         wait_mode = self._resolve_fast_stop_wait_mode(fast_stop=fast_stop)
-        grace_ms = max(0, int(getattr(self.config, "auto_next_stop_grace_ms", 0) or 0))
+        grace_ms = max(500, int(getattr(self.config, "auto_next_stop_grace_ms", 500) or 0))
         self.log.info(
             "group_stop_dispatch session_id=%s fast_stop=%s wait_mode=%s grace_ms=%d",
             sid,
@@ -1148,12 +1148,12 @@ class XiaoMusicDevice:
 
     def _get_auto_next_confirm_profile(self) -> dict[str, float | int]:
         delay_ms = max(
-            0,
-            int(getattr(self.config, "auto_next_confirm_delay_ms", 800) or 0),
+            1000,  # 最低 1000ms，覆盖音箱 stop→play 过渡
+            int(getattr(self.config, "auto_next_confirm_delay_ms", 1000) or 0),
         )
         retries = max(
-            0,
-            int(getattr(self.config, "auto_next_confirm_retries", 0) or 0),
+            2,  # 最低 2 次重试
+            int(getattr(self.config, "auto_next_confirm_retries", 2) or 0),
         )
         interval_ms = max(
             100,
@@ -2131,6 +2131,22 @@ class XiaoMusicDevice:
                     return
             except Exception:
                 pass
+            # 首次重试：用 sync stop 重试同一首歌，避免 overlap 模式连锁失败
+            # 音箱可能还没从上次失败的 stop+play 中恢复
+            if self._play_failed_cnt <= 2:
+                self.log.info(
+                    "retry_same_song_with_sync_stop(session_id=%s, name=%s, cnt=%d)",
+                    sid,
+                    name,
+                    self._play_failed_cnt,
+                )
+                await self._play(
+                    name,
+                    preserve_playlist=True,
+                    confirm_start_in_background=False,
+                    fast_stop=False,
+                )
+                return
             await self._play_next()
 
         # owner: device_player (retry_next)
