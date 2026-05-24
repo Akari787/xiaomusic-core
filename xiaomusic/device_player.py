@@ -654,9 +654,13 @@ class XiaoMusicDevice:
         )
 
     async def _play_next(self, manual: bool = False):
-        """播放下一首（内部实现）"""
+        """播放下一首（内部实现）
+
+        manual=True（用户主动点击）：单曲循环模式下前进到下一首
+        manual=False（自动切歌）：单曲循环模式下重复当前歌曲
+        """
         self.log.info("开始播放下一首")
-        name = self.get_next_music()
+        name = self.get_next_music(skip_one_repeat=manual)
         self.log.info(f"get_next_music {name}")
         self.log.info(f"_play_next. name:{name}, cur_music:{self.get_cur_music()}")
         if name == "":
@@ -678,16 +682,9 @@ class XiaoMusicDevice:
         """播放上一首（内部实现）"""
         self.log.info("开始播放上一首")
         name = self.get_cur_music()
-        if (
-            manual
-            or self.device.play_type == PLAY_TYPE_ONE
-            or self.device.play_type == PLAY_TYPE_SIN
-            or self.device.play_type == PLAY_TYPE_ALL
-            or self.device.play_type == PLAY_TYPE_RND
-            or self.device.play_type == PLAY_TYPE_SEQ
-            or name == ""
-            or (self._find_playlist_index(display_name=name) < 0)
-        ):
+        # manual=True（用户主动点击）: 切到上一首
+        # manual=False（自动触发）: 仅当当前歌曲无效时才切到上一首，否则重启当前歌曲
+        if manual or name == "" or (self._find_playlist_index(display_name=name) < 0):
             name = self.get_prev_music()
         self.log.info(f"_play_prev. name:{name}, cur_music:{self.get_cur_music()}")
         if name == "":
@@ -1516,8 +1513,10 @@ class XiaoMusicDevice:
             self.update_playlist()
             self.log.debug(self._get_playlist_names())
 
-    def get_music(self, direction="next"):
+    def get_music(self, direction="next", *, skip_one_repeat: bool = False):
         """获取下一首或上一首音乐
+
+        skip_one_repeat=True：单曲循环模式下强制前进到下一首（手动切歌场景）
 
         索引解析优先级（从快到慢，从可靠到不可靠）：
         1. _current_index — 运行时维护，指向打乱后列表中的当前位置（最快，最可靠）
@@ -1589,15 +1588,19 @@ class XiaoMusicDevice:
             new_index = index  # 当只有一首歌曲时保持当前索引不变
         else:
             if direction == "next":
-                new_index = index + 1
-                if (
-                    self.device.play_type == PLAY_TYPE_SEQ
-                    and new_index >= play_list_len
-                ):
-                    self.log.info("顺序播放结束")
-                    return ""
-                if new_index >= play_list_len:
-                    new_index = 0
+                if self.device.play_type == PLAY_TYPE_ONE and not skip_one_repeat:
+                    # 单曲循环：自动切歌时重复当前歌曲；手动切歌时前进到下一首
+                    new_index = index
+                else:
+                    new_index = index + 1
+                    if (
+                        self.device.play_type == PLAY_TYPE_SEQ
+                        and new_index >= play_list_len
+                    ):
+                        self.log.info("顺序播放结束")
+                        return ""
+                    if new_index >= play_list_len:
+                        new_index = 0
             elif direction == "prev":
                 new_index = index - 1
                 if new_index < 0:
@@ -1613,9 +1616,12 @@ class XiaoMusicDevice:
             return self.get_music(direction)
         return name
 
-    def get_next_music(self):
-        """获取下一首音乐"""
-        return self.get_music(direction="next")
+    def get_next_music(self, *, skip_one_repeat: bool = False):
+        """获取下一首音乐
+
+        skip_one_repeat=True：单曲循环模式下强制前进到下一首
+        """
+        return self.get_music(direction="next", skip_one_repeat=skip_one_repeat)
 
     def get_prev_music(self):
         """获取上一首音乐"""
@@ -2108,6 +2114,10 @@ class XiaoMusicDevice:
             if not self.is_playing or self._last_cmd == "stop":
                 return
             if self._degraded:
+                return
+            # 单曲播放模式：播放失败后停止，不前进到下一首
+            if self.device.play_type == PLAY_TYPE_SIN:
+                await self.stop(arg1="notts")
                 return
             await self._play_next()
 

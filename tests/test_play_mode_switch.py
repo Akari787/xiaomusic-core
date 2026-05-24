@@ -61,16 +61,18 @@ async def test_manual_play_next_advances_even_in_one_mode():
     d = XiaoMusicDevice.__new__(XiaoMusicDevice)
     d.device = types.SimpleNamespace(play_type=PLAY_TYPE_ONE)
     d.log = types.SimpleNamespace(info=lambda *args, **kwargs: None)
-    d._play_list = ["song-a", "song-b"]
+    d._play_list_items = [{"display_name": "song-a"}, {"display_name": "song-b"}]
     d.get_cur_music = lambda: "song-a"
-    d.get_next_music = lambda: "song-b"
+    d.get_next_music = lambda **kwargs: "song-b"
 
     played: list[str] = []
 
-    async def _play(name="", search_key="", preserve_playlist=False):  # noqa: ARG001
+    async def _play(name="", search_key="", preserve_playlist=False,
+                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
         played.append(name)
 
     d._play = _play
+    d._stage_playlist_navigation_transition = lambda name, *, reason: None
 
     await d.play_next()
     assert played == ["song-b"]
@@ -81,11 +83,11 @@ async def test_manual_play_next_preserves_current_playlist():
     d = XiaoMusicDevice.__new__(XiaoMusicDevice)
     d.device = types.SimpleNamespace(play_type=PLAY_TYPE_ONE, cur_playlist="BGM")
     d.log = types.SimpleNamespace(info=lambda *args, **kwargs: None, debug=lambda *args, **kwargs: None)
-    d._play_list = ["song-a", "song-b"]
+    d._play_list_items = [{"display_name": "song-a"}, {"display_name": "song-b"}]
     d.get_cur_music = lambda: "song-a"
-    d.get_next_music = lambda: "song-b"
+    d.get_next_music = lambda **kwargs: "song-b"
 
-    async def _playmusic(name):
+    async def _playmusic(name, *, confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
         d.device.cur_music = name
 
     async def _check_and_download_music(name, search_key, allow_download):  # noqa: ARG001
@@ -95,6 +97,7 @@ async def test_manual_play_next_preserves_current_playlist():
     d._check_and_download_music = _check_and_download_music
     d.update_playlist = lambda: (_ for _ in ()).throw(AssertionError("playlist should not be rebuilt"))
     d.find_cur_playlist = lambda name: (_ for _ in ()).throw(AssertionError("playlist should not be changed"))
+    d._stage_playlist_navigation_transition = lambda name, *, reason: None
     d.xiaomusic = types.SimpleNamespace(
         music_library=types.SimpleNamespace(find_real_music_name=lambda name, n=1: [name])
     )
@@ -121,18 +124,19 @@ async def test_manual_play_next_stages_target_index_and_resets_progress_before_d
         )
     )
     d.log = types.SimpleNamespace(info=lambda *args, **kwargs: None)
-    d._play_list = ["song-a", "song-b"]
+    d._play_list_items = [{"display_name": "song-a"}, {"display_name": "song-b"}]
     d._current_index = 0
     d.is_playing = True
     d._start_time = 123.0
     d._paused_time = 5.0
     d._duration = 99.0
     d.get_cur_music = lambda: d.device.cur_music
-    d.get_next_music = lambda: "song-b"
+    d.get_next_music = lambda **kwargs: "song-b"
 
     captured: list[tuple[str, bool]] = []
 
-    async def _play(name="", search_key="", preserve_playlist=False):  # noqa: ARG001
+    async def _play(name="", search_key="", preserve_playlist=False,
+                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
         captured.append((name, preserve_playlist))
         return True
 
@@ -156,16 +160,19 @@ async def test_manual_play_prev_advances_even_in_single_mode():
     d = XiaoMusicDevice.__new__(XiaoMusicDevice)
     d.device = types.SimpleNamespace(play_type=PLAY_TYPE_SIN)
     d.log = types.SimpleNamespace(info=lambda *args, **kwargs: None)
-    d._play_list = ["song-a", "song-b"]
+    d._play_list_items = [{"display_name": "song-a"}, {"display_name": "song-b"}]
+    d._find_playlist_index = lambda display_name="": (1 if display_name == "song-b" else -1)
     d.get_cur_music = lambda: "song-b"
     d.get_prev_music = lambda: "song-a"
 
     played: list[str] = []
 
-    async def _play(name="", search_key="", preserve_playlist=False):  # noqa: ARG001
+    async def _play(name="", search_key="", preserve_playlist=False,
+                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
         played.append(name)
 
     d._play = _play
+    d._stage_playlist_navigation_transition = lambda name, *, reason: None
 
     await d.play_prev()
     assert played == ["song-a"]
