@@ -184,16 +184,20 @@ class XiaoMusicDevice:
                 if str(item.get("entity_id") or "") == target_entity_id:
                     return idx
         if target_display:
+            # 如果同时提供了 entity_id，优先匹配 display_name + entity_id 都相符的项
+            # 应对随机打乱或列表中有多首同名歌曲的情况
+            best_idx = -1
             for idx, item in enumerate(items):
                 if target_display in {
                     str(item.get("display_name") or "").strip(),
                     str(item.get("legacy_name") or "").strip(),
                 }:
-                    return idx
-            try:
-                return self._find_playlist_index(target_display)
-            except ValueError:
-                return -1
+                    if target_entity_id and str(item.get("entity_id") or "") == target_entity_id:
+                        return idx  # 精确命中：display_name + entity_id 双重匹配
+                    if best_idx < 0:
+                        best_idx = idx  # 兜底：第一个仅 display_name 匹配的
+            if best_idx >= 0:
+                return best_idx
         return -1
 
     def _set_runtime_track_reference(
@@ -430,7 +434,7 @@ class XiaoMusicDevice:
         cur_music = self.get_cur_music()
         play_list_len = len(cur_playlist)
         if play_list_len != 0:
-            index = self._find_playlist_index(cur_music)
+            index = self._find_playlist_index(display_name=cur_music)
             is_last_song = index == play_list_len - 1
         # 四个条件都满足，才自动添加下一首
         if auto_add_song and is_online and play_all and is_last_song:
@@ -598,7 +602,7 @@ class XiaoMusicDevice:
             )
 
         name = names[0]
-        if (not preserve_playlist) and (self._find_playlist_index(name) < 0):
+        if (not preserve_playlist) and (self._find_playlist_index(display_name=name) < 0):
             # 根据当前歌曲匹配歌曲列表
             self.device.cur_playlist = self.find_cur_playlist(name)
             self.update_playlist()
@@ -682,7 +686,7 @@ class XiaoMusicDevice:
             or self.device.play_type == PLAY_TYPE_RND
             or self.device.play_type == PLAY_TYPE_SEQ
             or name == ""
-            or (self._find_playlist_index(name) < 0)
+            or (self._find_playlist_index(display_name=name) < 0)
         ):
             name = self.get_prev_music()
         self.log.info(f"_play_prev. name:{name}, cur_music:{self.get_cur_music()}")
@@ -1506,27 +1510,80 @@ class XiaoMusicDevice:
         self.xiaomusic.music_library.all_music[name] = filepath
         # 应该很快，阻塞运行
         await self.xiaomusic.music_library._gen_all_music_tag({name: filepath})
-        if self._find_playlist_index(name) < 0:
+        if self._find_playlist_index(display_name=name) < 0:
             # 通过 music_library API 添加歌曲后再调用 update_playlist() 同步快照
             await self.xiaomusic.music_library.add_music(name, filepath)
             self.update_playlist()
             self.log.debug(self._get_playlist_names())
 
     def get_music(self, direction="next"):
-        """获取下一首或上一首音乐"""
+        """获取下一首或上一首音乐
+
+        索引解析优先级（从快到慢，从可靠到不可靠）：
+        1. _current_index — 运行时维护，指向打乱后列表中的当前位置（最快，最可靠）
+        2. 按 display_name 搜索 _play_list_items — 兜底（device.model 可能携带原始顺序 ID）
+        3. index=0 硬兜底
+        """
         play_list_len = len(self._play_list_items)
         if play_list_len == 0:
             self.log.warning("当前播放列表没有歌曲")
             return ""
-        index = self._current_index if 0 <= self._current_index < play_list_len else -1
+
+        # 确定当前索引
+        index = -1
+        cur_music = self.get_cur_music()
+
+        # Step 1: 优先使用 _current_index，但必须验证其有效性
+        if 0 <= self._current_index < play_list_len:
+            item_at_idx = self._play_list_items[self._current_index]
+            idx_display = str(
+                item_at_idx.get("display_name") or item_at_idx.get("legacy_name") or ""
+            ).strip()
+            if idx_display and idx_display == cur_music:
+                index = self._current_index
+            else:
+                self.log.info(
+                    "_current_index=%d 与当前歌曲 %s 不匹配（位置上是 %s），回退搜索",
+                    self._current_index,
+                    cur_music,
+                    idx_display,
+                )
+
+        # Step 2: 兜底搜索 —— 优先按 display_name + entity_id（最可靠），其次用 device.model 的 ID 辅助
         if index < 0:
+            # 先按 display_name 搜索（打乱后的 _play_list_items），同时传入 entity_id 辅助去重
+            index = self._find_playlist_index(
+                display_name=cur_music,
+                entity_id=str(getattr(self.device, "current_entity_id", "") or ""),
+            )
+        if index < 0:
+            # 再尝试 device.model 的 ID（可能携带原始顺序索引，但在打乱列表中搜索仍然能找到正确位置）
             index = self._find_playlist_index(
                 item_id=str(getattr(self.device, "current_playlist_item_id", "") or ""),
                 entity_id=str(getattr(self.device, "current_entity_id", "") or ""),
-                display_name=self.get_cur_music(),
             )
         if index < 0:
             index = 0
+        # 如果 Step 1 的 _current_index 与搜索结果不一致，立即同步 runtime 索引
+        # 随机模式下常见：列表打乱后 _current_index 指向旧位置，必须强制更正
+        if index >= 0 and index != self._current_index:
+            self.log.info(
+                "get_music 索引修正: _current_index %d -> %d (cur_music=%s)",
+                self._current_index,
+                index,
+                cur_music,
+            )
+            self._current_index = index
+
+        self.log.debug(
+            "get_music direction=%s play_type=%d play_list_len=%d _current_index=%d resolved_index=%d cur_music=%s",
+            direction,
+            self.device.play_type,
+            play_list_len,
+            self._current_index,
+            index,
+            cur_music,
+        )
 
         if play_list_len == 1:
             new_index = index  # 当只有一首歌曲时保持当前索引不变
@@ -1567,7 +1624,7 @@ class XiaoMusicDevice:
     def check_play_next(self):
         """判断是否需要播放下一首歌曲"""
         # 当前歌曲不在当前播放列表
-        if self._find_playlist_index(self.get_cur_music()) < 0:
+        if self._find_playlist_index(display_name=self.get_cur_music()) < 0:
             self.log.info(f"当前歌曲 {self.get_cur_music()} 不在当前播放列表")
             return True
 
