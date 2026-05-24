@@ -204,13 +204,13 @@ class Config:
         "XIAOMUSIC_AUTO_NEXT_STOP_WAIT_MODE", "overlap"
     )
     auto_next_stop_grace_ms: int = int(
-        os.getenv("XIAOMUSIC_AUTO_NEXT_STOP_GRACE_MS", "200")
+        os.getenv("XIAOMUSIC_AUTO_NEXT_STOP_GRACE_MS", "500")
     )
     auto_next_confirm_delay_ms: int = int(
-        os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_DELAY_MS", "800")
+        os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_DELAY_MS", "1000")
     )
     auto_next_confirm_retries: int = int(
-        os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_RETRIES", "0")
+        os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_RETRIES", "2")
     )
     auto_next_confirm_interval_ms: int = int(
         os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_INTERVAL_MS", "300")

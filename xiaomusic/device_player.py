@@ -2119,6 +2119,18 @@ class XiaoMusicDevice:
             if self.device.play_type == PLAY_TYPE_SIN:
                 await self.stop(arg1="notts")
                 return
+            # 检查音箱是否已经在播放（可能因云 API 延迟上报）
+            # 避免切断已开始播放的歌曲
+            try:
+                if await self.get_if_xiaoai_is_playing():
+                    self.log.info(
+                        "retry_skip_speaker_already_playing(session_id=%s, name=%s)",
+                        sid,
+                        name,
+                    )
+                    return
+            except Exception:
+                pass
             await self._play_next()
 
         # owner: device_player (retry_next)

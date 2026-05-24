@@ -356,3 +356,39 @@ async def test_handle_play_failure_one_mode_retries_same_song():
 
     # ONE 模式应重复 song-a
     assert played == ["song-a"]
+
+
+@pytest.mark.asyncio
+async def test_handle_play_failure_skips_retry_when_speaker_already_playing():
+    """P0: _retry_next 在音箱已播放时不切断当前歌曲。"""
+    d = _make_device(PLAY_TYPE_ALL, ["song-a", "song-b", "song-c"], cur_music="song-b")
+    d.get_next_music = lambda *, skip_one_repeat=False: d.get_music("next", skip_one_repeat=skip_one_repeat)
+    d.is_playing = True
+    d._last_cmd = "play"
+    d._degraded = False
+    d._play_session_id = 3
+    d._play_fail_first_ts = 0.0
+    d._play_failed_cnt = 0
+
+    # 模拟音箱已经实际在播放（云 API 延迟上报场景）
+    async def _fake_playing(device_id=None):  # noqa: ARG001
+        return True
+    d.get_if_xiaoai_is_playing = _fake_playing
+
+    played: list[str] = []
+
+    async def _play(name="", search_key="", preserve_playlist=False,  # noqa: ARG001
+                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
+        played.append(name)
+
+    d._play = _play
+    d._stage_playlist_navigation_transition = lambda name, *, reason: None
+    d.stop = lambda arg1="": None
+
+    await d._handle_play_failure(name="song-b", sid=3, reason="play_start_not_confirmed")
+
+    # 等待 retry 执行
+    await asyncio.sleep(1.5)
+
+    # 音箱已在播放 → 不应调用 _play_next → played 为空
+    assert played == []
