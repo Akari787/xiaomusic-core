@@ -13,6 +13,7 @@ import time
 
 from aiohttp import ClientSession, ClientTimeout
 
+from xiaomusic.channel import ChannelCycleController, ChannelSettings
 from xiaomusic.const import GET_ASK_BY_MINA, LATEST_ASK_API
 
 
@@ -51,6 +52,8 @@ class ConversationPoller:
         # 内部事件管理
         self.polling_event = asyncio.Event()
         self.new_record_event = asyncio.Event()
+        self.channel_settings = ChannelSettings.from_config(config, log)
+        self.cycle_controller = ChannelCycleController(self.channel_settings.cycle_interval)
 
     async def run_conversation_loop(self, do_check_cmd_callback, reset_timer_callback):
         """运行对话循环
@@ -133,18 +136,13 @@ class ConversationPoller:
                         )
                 await asyncio.gather(*tasks)
 
-                start = time.perf_counter()
                 await self.polling_event.wait()
-                if self.config.pull_ask_sec <= 1:
-                    if (d := time.perf_counter() - start) < 1:
-                        await asyncio.sleep(1 - d)
-                else:
-                    sleep_sec = 0
-                    while True:
-                        await asyncio.sleep(1)
-                        sleep_sec = sleep_sec + 1
-                        if sleep_sec >= self.config.pull_ask_sec:
-                            break
+                # v1.1.2 channel cycle: configurable interval with interrupt wakeup.
+                self.channel_settings = ChannelSettings.from_config(self.config, self.log)
+                self.cycle_controller.interval = self.channel_settings.cycle_interval
+                interrupted = await self.cycle_controller.wait_next_cycle()
+                if interrupted:
+                    self.log.debug("channel cycle interrupted; next poll starts immediately")
         except asyncio.CancelledError:
             self.log.info("Polling task cancelled")
             raise

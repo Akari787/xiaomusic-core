@@ -1504,7 +1504,7 @@ class XiaoMusicDevice:
     async def add_download_music(self, name):
         """把下载的音乐加入播放列表"""
         filepath = os.path.join(self.config.download_path, f"{name}.mp3")
-        self.xiaomusic.music_library.all_music[name] = filepath
+        await self.xiaomusic.music_library.add_music(name, filepath)
         # 应该很快，阻塞运行
         await self.xiaomusic.music_library._gen_all_music_tag({name: filepath})
         if self._find_playlist_index(display_name=name) < 0:

@@ -223,6 +223,13 @@ class Config:
         os.getenv("XIAOMUSIC_FILE_WATCH_DEBOUNCE", 10)
     )  # 监控刷新延迟时间(秒)
     pull_ask_sec: int = int(os.getenv("XIAOMUSIC_PULL_ASK_SEC", "1"))
+    # Multi-platform channel cycle/context controls.
+    channel_cycle_interval: int = int(os.getenv("XIAOMUSIC_CHANNEL_CYCLE_INTERVAL", "60"))
+    channel_archive_log_max_entries: int = int(os.getenv("XIAOMUSIC_CHANNEL_ARCHIVE_LOG_MAX_ENTRIES", "500"))
+    channel_archive_log_enabled: bool = (
+        os.getenv("XIAOMUSIC_CHANNEL_ARCHIVE_LOG_ENABLED", "false").lower() == "true"
+    )
+    channel_context_window_size: int = int(os.getenv("XIAOMUSIC_CHANNEL_CONTEXT_WINDOW_SIZE", "20"))
     enable_pull_ask: bool = (
         os.getenv("XIAOMUSIC_ENABLE_PULL_ASK", "false").lower() == "true"
     )

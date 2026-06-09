@@ -18,6 +18,30 @@ from dataclasses import asdict
 from urllib.parse import urlparse
 from uuid import uuid4
 
+
+LEGACY_WRITE_BLOCKED_MESSAGE = "Legacy write actions are blocked, use Identity APIs instead"
+
+
+class LegacyReadOnlyDict(dict):
+    """dict-compatible read-only shadow projection for legacy views."""
+
+    def __readonly(self, *args, **kwargs):
+        raise PermissionError(LEGACY_WRITE_BLOCKED_MESSAGE)
+
+    __setitem__ = __readonly
+    __delitem__ = __readonly
+    clear = __readonly
+    pop = __readonly
+    popitem = __readonly
+    setdefault = __readonly
+    update = __readonly
+
+    @classmethod
+    def from_mapping(cls, mapping=None):
+        obj = cls()
+        dict.update(obj, mapping or {})
+        return obj
+
 from xiaomusic.const import SUPPORT_MUSIC_TYPE
 from xiaomusic.events import CONFIG_CHANGED
 from xiaomusic.utils.file_utils import not_in_dirs, traverse_music_directory
@@ -62,8 +86,9 @@ class MusicLibrary:
         self.event_bus = event_bus
 
         # 音乐库数据
-        self.all_music = {}  # 兼容只读视图：{legacy_name: filepath/url}
-        self.music_list = {}  # 兼容只读视图：{list_name: [legacy_music_names]}
+        self._legacy_view_lock = threading.RLock()
+        self.all_music = LegacyReadOnlyDict.from_mapping()  # 兼容只读视图：{legacy_name: filepath/url}
+        self.music_list = LegacyReadOnlyDict.from_mapping()  # 兼容只读视图：{list_name: [legacy_music_names]}
         self.music_entities = OrderedDict()  # 主模型：{entity_id: entity_record}
         self.playlist_definitions = OrderedDict()  # 歌单定义：{playlist_name: playlist_record}
         self.playlist_memberships = OrderedDict()  # 关系模型：{playlist_name: [membership_record]}
@@ -247,6 +272,72 @@ class MusicLibrary:
                 bucket.append(entity_id)
         return record
 
+    def register_identity_music(
+        self,
+        *,
+        entity_id,
+        display_name,
+        source="direct",
+        source_item_id="",
+        origin_url="",
+        path="",
+        media_type="music",
+        duration=0,
+        extra=None,
+        playlist_name="",
+        readonly=False,
+    ):
+        """Register or update a music entity, then rebuild legacy shadow views."""
+        record = self._register_entity(
+            entity_id=entity_id,
+            canonical_name=display_name,
+            source=source,
+            source_item_id=source_item_id,
+            origin_url=origin_url,
+            path=path,
+            media_type=media_type,
+            duration=duration,
+            extra=extra or {"display_name": display_name},
+        )
+        if playlist_name:
+            members = self.playlist_memberships.get(playlist_name, [])
+            already_member = any(
+                str(item.get("entity_id") or "").strip() == str(entity_id).strip()
+                for item in members
+            )
+            if not already_member:
+                order = len(members)
+                self._register_membership(
+                    playlist_name,
+                    entity_id=entity_id,
+                    display_name=display_name,
+                    order=order,
+                    source=source,
+                    source_playlist_id=playlist_name,
+                    readonly=readonly,
+                    kind="source" if readonly else "custom",
+                    media_type=media_type,
+                )
+        self._rebuild_legacy_views_from_identity_model()
+        return record
+
+    async def add_music(self, name, filepath, playlist_name="下载"):
+        """Identity-model path for adding a downloaded local music file."""
+        name = str(name or "").strip()
+        filepath = str(filepath or "").strip()
+        if not name or not filepath:
+            return False
+        entity_id = f"local:{self._normalize_local_path(filepath)}"
+        self.register_identity_music(
+            entity_id=entity_id,
+            display_name=name,
+            source="local",
+            path=filepath,
+            playlist_name=playlist_name,
+            readonly=False,
+        )
+        return True
+
     def _register_membership(
         self,
         playlist_name,
@@ -293,12 +384,12 @@ class MusicLibrary:
         return membership
 
     def _rebuild_legacy_views_from_identity_model(self):
-        self.all_music = {}
-        self.music_list = OrderedDict()
-        self._all_radio = {}
-        self._web_music_api = {}
-        self._extra_index_search = {}
-        self.legacy_name_to_entity = {}
+        next_all_music = {}
+        next_music_list = OrderedDict()
+        next_all_radio = {}
+        next_web_music_api = {}
+        next_extra_index_search = {}
+        next_legacy_name_to_entity = {}
 
         for playlist_name, members in self.playlist_memberships.items():
             sorted_members = sorted(
@@ -312,19 +403,19 @@ class MusicLibrary:
                 entity = self.music_entities.get(entity_id) or {}
                 base_name = str(member.get("display_name") or entity.get("canonical_name") or entity_id).strip()
                 legacy_name = base_name or entity_id
-                if legacy_name in used_names and self.legacy_name_to_entity.get(legacy_name) != entity_id:
+                if legacy_name in used_names and next_legacy_name_to_entity.get(legacy_name) != entity_id:
                     legacy_name = f"{legacy_name}-[{self._short_entity_suffix(entity_id)}]"
-                while legacy_name in used_names and self.legacy_name_to_entity.get(legacy_name) != entity_id:
+                while legacy_name in used_names and next_legacy_name_to_entity.get(legacy_name) != entity_id:
                     legacy_name = f"{base_name}-[{self._short_entity_suffix(entity_id)}]"
                 used_names.add(legacy_name)
                 member["legacy_name"] = legacy_name
                 names.append(legacy_name)
-                self.legacy_name_to_entity[legacy_name] = entity_id
+                next_legacy_name_to_entity[legacy_name] = entity_id
                 locator = str(entity.get("path") or entity.get("origin_url") or "").strip()
                 if locator:
-                    self.all_music[legacy_name] = locator
+                    next_all_music[legacy_name] = locator
                 if str(entity.get("media_type") or "") == "radio" and locator:
-                    self._all_radio[legacy_name] = locator
+                    next_all_radio[legacy_name] = locator
                 duration = entity.get("duration") or 0
                 try:
                     duration = float(duration)
@@ -334,10 +425,20 @@ class MusicLibrary:
                     self._set_cached_duration(legacy_name, duration, entity_id=entity_id)
                 api_payload = (entity.get("extra") or {}).get("api") if isinstance(entity.get("extra"), dict) else None
                 if api_payload:
-                    self._set_cached_web_music_api(legacy_name, api_payload, entity_id=entity_id)
+                    if entity_id:
+                        self._entity_web_music_api[entity_id] = api_payload
+                    next_web_music_api[legacy_name] = api_payload
                 if locator and not str(entity.get("media_type") or "") == "radio":
-                    self._extra_index_search[locator] = legacy_name
-            self.music_list[playlist_name] = names
+                    next_extra_index_search[locator] = legacy_name
+            next_music_list[playlist_name] = names
+
+        with self._legacy_view_lock:
+            self.all_music = LegacyReadOnlyDict.from_mapping(next_all_music)
+            self.music_list = LegacyReadOnlyDict.from_mapping(next_music_list)
+            self._all_radio = LegacyReadOnlyDict.from_mapping(next_all_radio)
+            self._web_music_api = LegacyReadOnlyDict.from_mapping(next_web_music_api)
+            self._extra_index_search = LegacyReadOnlyDict.from_mapping(next_extra_index_search)
+            self.legacy_name_to_entity = LegacyReadOnlyDict.from_mapping(next_legacy_name_to_entity)
 
     def get_playlist_items(self, playlist_name=None):
         if playlist_name is not None:
@@ -400,15 +501,10 @@ class MusicLibrary:
 
         扫描音乐目录，生成本地音乐列表和播放列表。
         """
-        self.all_music = {}
-        self.music_list = OrderedDict()
         self.music_entities = OrderedDict()
         self.playlist_definitions = OrderedDict()
         self.playlist_memberships = OrderedDict()
         self.name_index = {}
-        self.legacy_name_to_entity = {}
-        self._all_radio = {}
-        self._web_music_api = {}
         self._entity_web_music_api = {}
         self._web_music_duration_cache = {}
         self._entity_web_music_duration_cache = {}
@@ -810,7 +906,10 @@ class MusicLibrary:
         if resolved_entity_id:
             self._entity_web_music_api[resolved_entity_id] = api_payload
         if name:
-            self._web_music_api[name] = api_payload
+            with self._legacy_view_lock:
+                next_web_music_api = dict(self._web_music_api)
+                next_web_music_api[name] = api_payload
+                self._web_music_api = LegacyReadOnlyDict.from_mapping(next_web_music_api)
 
     def resolve_entity_id_by_name(self, name):
         token = str(name or "").strip()
@@ -951,8 +1050,8 @@ class MusicLibrary:
                 )
         return self.custom_play_list
 
-    def save_custom_play_list(self):
-        """保存自定义播放列表"""
+    def _save_custom_play_list_from_identity_model(self):
+        """Persist custom playlists after identity-model mutations."""
         custom_play_list, _ = self._normalize_custom_playlist_payload(
             self.get_custom_play_list()
         )
@@ -964,6 +1063,10 @@ class MusicLibrary:
         # 发布配置变更事件
         if self.event_bus:
             self.event_bus.publish(CONFIG_CHANGED)
+
+    def save_custom_play_list(self):
+        """Blocked legacy write API; use identity playlist APIs instead."""
+        raise PermissionError(LEGACY_WRITE_BLOCKED_MESSAGE)
 
     # ==================== 播放列表管理 ====================
 
@@ -983,7 +1086,7 @@ class MusicLibrary:
         if name in custom_play_list:
             return False
         custom_play_list[name] = []
-        self.save_custom_play_list()
+        self._save_custom_play_list_from_identity_model()
         return True
 
     def play_list_del(self, name):
@@ -999,7 +1102,7 @@ class MusicLibrary:
         if name not in custom_play_list:
             return False
         custom_play_list.pop(name)
-        self.save_custom_play_list()
+        self._save_custom_play_list_from_identity_model()
         return True
 
     def play_list_update_name(self, oldname, newname):
@@ -1026,7 +1129,7 @@ class MusicLibrary:
         play_list = custom_play_list[oldname]
         custom_play_list.pop(oldname)
         custom_play_list[newname] = play_list
-        self.save_custom_play_list()
+        self._save_custom_play_list_from_identity_model()
         return True
 
     def get_play_list_names(self):
@@ -1109,7 +1212,7 @@ class MusicLibrary:
 
         # 直接覆盖
         custom_play_list[name] = play_list
-        self.save_custom_play_list()
+        self._save_custom_play_list_from_identity_model()
         return True
 
     def update_music_list_json(self, list_name, update_list, append=False):
@@ -1223,7 +1326,7 @@ class MusicLibrary:
             existing_entity_ids.add(entity_id)
             play_list.append(normalized_entry)
 
-        self.save_custom_play_list()
+        self._save_custom_play_list_from_identity_model()
         return True
 
     def play_list_del_music(self, name, music_list):
@@ -1260,7 +1363,7 @@ class MusicLibrary:
             )
         ]
 
-        self.save_custom_play_list()
+        self._save_custom_play_list_from_identity_model()
         return True
 
     # ==================== 音乐搜索 ====================
@@ -1807,7 +1910,8 @@ class MusicLibrary:
         Returns:
             dict: 播放列表字典
         """
-        return self.music_list
+        with self._legacy_view_lock:
+            return dict(self.music_list)
 
     def get_all_music(self):
         """获取所有音乐
@@ -1815,7 +1919,8 @@ class MusicLibrary:
         Returns:
             dict: 所有音乐字典
         """
-        return self.all_music
+        with self._legacy_view_lock:
+            return dict(self.all_music)
 
     def get_web_music_api(self):
         """获取网络音乐API配置
@@ -1823,7 +1928,8 @@ class MusicLibrary:
         Returns:
             dict: 网络音乐API配置字典
         """
-        return self._web_music_api
+        with self._legacy_view_lock:
+            return dict(self._web_music_api)
 
     def get_web_music_api_by_entity(self, entity_id):
         return self._get_cached_web_music_api(entity_id=entity_id)
@@ -1834,7 +1940,8 @@ class MusicLibrary:
         Returns:
             dict: 所有电台字典
         """
-        return self._all_radio
+        with self._legacy_view_lock:
+            return dict(self._all_radio)
 
     def clear_web_music_duration_cache(self):
         """清空网络音乐时长缓存

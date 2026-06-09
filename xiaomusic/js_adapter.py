@@ -45,8 +45,19 @@ class JSAdapter:
                 "quality": item.get("quality", ""),
             }
 
-            # 添加到 all_music 字典中
-            self.xiaomusic.music_library.all_music[music_id] = music_item
+            # 通过 Identity 主模型注册，legacy all_music 仅作为只读影子投影。
+            url = str(music_item.get("url") or "").strip() or music_id
+            self.xiaomusic.music_library.register_identity_music(
+                entity_id=f"plugin:{plugin_name}:{music_id}",
+                display_name=music_id,
+                source="plugin",
+                source_item_id=music_id,
+                origin_url=url,
+                duration=music_item.get("duration", 0) or 0,
+                extra={"display_name": music_id, "api": music_item},
+                playlist_name=f"plugin:{plugin_name}",
+                readonly=False,
+            )
             formatted_ids.append(music_id)
 
         return formatted_ids

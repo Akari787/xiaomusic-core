@@ -3,7 +3,10 @@
 from fastapi import (
     APIRouter,
     Depends,
+    HTTPException,
 )
+
+from xiaomusic.music_library import LEGACY_WRITE_BLOCKED_MESSAGE
 
 from xiaomusic.api import response as api_response
 from xiaomusic.api.dependencies import (
@@ -20,6 +23,28 @@ from xiaomusic.api.models import (
 router = APIRouter(dependencies=[Depends(verification)])
 
 
+LEGACY_HTTP_WRITE_DISABLED_MESSAGE = "Legacy write is disabled, please migrate to Identity APIs. Use Identity API instead"
+
+
+def _reject_legacy_write():
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "legacy_write_disabled",
+            "message": LEGACY_HTTP_WRITE_DISABLED_MESSAGE,
+            "local_error": LEGACY_WRITE_BLOCKED_MESSAGE,
+        },
+        headers={"X-XiaoMusic-Migration": "Use Identity API instead"},
+    )
+
+
+def _has_identity_payload(music_list):
+    return any(
+        isinstance(item, dict) and str(item.get("entity_id") or "").strip()
+        for item in music_list or []
+    )
+
+
 @router.get("/curplaylist")
 async def curplaylist(did: str = ""):
     """当前播放列表"""
@@ -31,28 +56,19 @@ async def curplaylist(did: str = ""):
 @router.post("/playlistadd")
 async def playlistadd(data: PlayListObj):
     """新增歌单"""
-    ret = xiaomusic.music_library.play_list_add(data.name)
-    if ret:
-        return api_response.ok(contract="ret")
-    return api_response.ok(contract="ret", ret="Add failed, may be already exist.")
+    _reject_legacy_write()
 
 
 @router.post("/playlistdel")
 async def playlistdel(data: PlayListObj):
     """移除歌单"""
-    ret = xiaomusic.music_library.play_list_del(data.name)
-    if ret:
-        return api_response.ok(contract="ret")
-    return api_response.ok(contract="ret", ret="Del failed, may be not exist.")
+    _reject_legacy_write()
 
 
 @router.post("/playlistupdatename")
 async def playlistupdatename(data: PlayListUpdateObj):
     """修改歌单名字"""
-    ret = xiaomusic.music_library.play_list_update_name(data.oldname, data.newname)
-    if ret:
-        return api_response.ok(contract="ret")
-    return api_response.ok(contract="ret", ret="Update failed, may be not exist.")
+    _reject_legacy_write()
 
 
 @router.get("/playlistnames")
@@ -66,6 +82,8 @@ async def getplaylistnames():
 @router.post("/playlistaddmusic")
 async def playlistaddmusic(data: PlayListMusicObj):
     """歌单新增歌曲"""
+    if not _has_identity_payload(data.music_list):
+        _reject_legacy_write()
     ret = xiaomusic.music_library.play_list_add_music(data.name, data.music_list)
     if ret:
         return api_response.ok(contract="ret")
@@ -75,6 +93,8 @@ async def playlistaddmusic(data: PlayListMusicObj):
 @router.post("/playlistdelmusic")
 async def playlistdelmusic(data: PlayListMusicObj):
     """歌单移除歌曲"""
+    if not _has_identity_payload(data.music_list):
+        _reject_legacy_write()
     ret = xiaomusic.music_library.play_list_del_music(data.name, data.music_list)
     if ret:
         return api_response.ok(contract="ret")
@@ -84,6 +104,8 @@ async def playlistdelmusic(data: PlayListMusicObj):
 @router.post("/playlistupdatemusic")
 async def playlistupdatemusic(data: PlayListMusicObj):
     """歌单更新歌曲"""
+    if not _has_identity_payload(data.music_list):
+        _reject_legacy_write()
     ret = xiaomusic.music_library.play_list_update_music(data.name, data.music_list)
     if ret:
         return api_response.ok(contract="ret")

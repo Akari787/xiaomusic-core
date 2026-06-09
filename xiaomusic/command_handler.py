@@ -63,6 +63,25 @@ class CommandHandler:
                 await device.check_replay()
                 return
 
+            # 高优先级播放控制指令触发 channel 中断唤醒。
+            if opvalue in {
+                "play",
+                "playlocal",
+                "online_play",
+                "play_next",
+                "play_prev",
+                "stop",
+                "set_play_type_one",
+                "set_play_type_all",
+                "set_play_type_rnd",
+                "set_play_type_sin",
+                "set_play_type_seq",
+            }:
+                poller = getattr(self.xiaomusic, "conversation_poller", None)
+                controller = getattr(poller, "cycle_controller", None)
+                if controller is not None:
+                    controller.interrupt()
+
             # 执行命令
             func = getattr(self.xiaomusic, opvalue)
             await func(did=did, arg1=oparg)
