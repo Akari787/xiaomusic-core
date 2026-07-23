@@ -5,28 +5,28 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from xiaomusic.adapters.mina import MinaTransport
 from xiaomusic.adapters.miio import MiioTransport
+from xiaomusic.adapters.mina import MinaTransport
 from xiaomusic.adapters.sources import register_default_source_plugins
 from xiaomusic.constants.api_fields import DEVICE_ID, REQUEST_ID
 from xiaomusic.core.coordinator import PlaybackCoordinator
-from xiaomusic.core.source.source_protocols import LinkPreparer
-from xiaomusic.managers.source_plugin_manager import SourcePluginManager
 from xiaomusic.core.delivery import DeliveryAdapter
 from xiaomusic.core.device import DeviceRegistry
 from xiaomusic.core.errors import (
     DeviceNotFoundError,
     InvalidRequestError,
-    TransportError,
 )
 from xiaomusic.core.models import MediaRequest, PlayOptions
+from xiaomusic.core.source.source_protocols import LinkPreparer
 from xiaomusic.core.transport import TransportPolicy, TransportRouter
-
+from xiaomusic.managers.source_plugin_manager import SourcePluginManager
+from xiaomusic.security.redaction import redact_text
 
 LOG = logging.getLogger("xiaomusic.playback.facade")
 
@@ -94,7 +94,7 @@ class PlaybackFacade:
             ),
             plugins_dir=str(Path(conf_path) / "source_plugins"),
         )
-        setattr(self.xiaomusic, "source_plugin_manager", manager)
+        self.xiaomusic.source_plugin_manager = manager
         self._source_plugin_manager = manager
         return manager
 
@@ -117,9 +117,10 @@ class PlaybackFacade:
             getattr(self.xiaomusic, "music_library", None), "get_proxy_url", None
         )
         if callable(raw_proxy_builder):
-            proxy_builder = lambda origin_url, title: str(
-                raw_proxy_builder(origin_url, name=title)
-            )
+            def proxy_builder(origin_url, title):
+                return str(
+                            raw_proxy_builder(origin_url, name=title)
+                        )
         delivery_adapter = DeliveryAdapter(proxy_url_builder=proxy_builder)
         router = TransportRouter(policy=TransportPolicy())
         router.register_transport(MinaTransport(self.xiaomusic))
@@ -142,6 +143,28 @@ class PlaybackFacade:
             return [PlaybackFacade._serialize(item) for item in obj]
         if isinstance(obj, dict):
             return {str(k): PlaybackFacade._serialize(v) for k, v in obj.items()}
+        return obj
+
+    @staticmethod
+    def _sanitize_public_value(obj: Any) -> Any:
+        """Recursively redact sensitive values in public API responses.
+
+        Processes dict, list, and dataclass/plain-object structures.
+        Strings are passed through redact_text for api_key/token/password removal.
+        Internal dispatch values are NOT affected — this is only for public output.
+        """
+        if isinstance(obj, str):
+            return redact_text(obj)
+        if isinstance(obj, dict):
+            return {k: PlaybackFacade._sanitize_public_value(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [PlaybackFacade._sanitize_public_value(v) for v in obj]
+        if is_dataclass(obj) and not isinstance(obj, type):
+            raw = asdict(obj)
+            return PlaybackFacade._sanitize_public_value(raw)
+        if hasattr(obj, "__dict__") and not isinstance(obj, type):
+            raw = {k: getattr(obj, k) for k in obj.__dict__ if not k.startswith("_")}
+            return PlaybackFacade._sanitize_public_value(raw)
         return obj
 
     @staticmethod
@@ -356,8 +379,16 @@ class PlaybackFacade:
             raise InvalidRequestError("query is required")
         return q
 
-    @staticmethod
-    def _playlist_context(options: PlayOptions, query: str) -> tuple[str, str] | None:
+    def _playlist_context(self, options: PlayOptions, query: str) -> tuple[str, dict, dict, bool] | None:
+        """Extract playlist context and resolve a random member for shuffle.
+
+        Returns (playlist_name, member_info, entity_record, should_shuffle) or None.
+        member_info: membership data (item_id, entity_id, display_name, etc.)
+        entity_record: full entity from music_library.music_entities (url, duration, etc.)
+
+        When options.shuffle=True and query is a playlist name, a member is randomly
+        selected and its full entity record is looked up for source-aware routing.
+        """
         context_hint = (
             options.context_hint if isinstance(options.context_hint, dict) else {}
         )
@@ -380,12 +411,62 @@ class PlaybackFacade:
             payload.get("music_name")
             or payload.get("track_name")
             or options.title
-            or query
             or ""
         ).strip()
-        if context_type != "playlist" or not playlist_name or not music_name:
+
+        should_shuffle = bool(options.shuffle)
+        if should_shuffle and not music_name and not playlist_name and query:
+            playlist_name = query
+            context_type = "playlist"
+
+        if context_type != "playlist" or not playlist_name:
             return None
-        return playlist_name, music_name
+
+        # Resolve a random member from the playlist for source-aware routing.
+        music_library = getattr(self.xiaomusic, "music_library", None)
+        member_info: dict = {}
+        entity_record: dict = {}
+        if should_shuffle:
+            if music_library is None:
+                raise InvalidRequestError(
+                    f"playlist '{playlist_name}': music library not available"
+                )
+            getter = getattr(music_library, "get_playlist_items", None)
+            if callable(getter):
+                try:
+                    members = list(getter(playlist_name) or [])
+                except Exception:
+                    members = []
+                if not members:
+                    raise InvalidRequestError(
+                        f"playlist '{playlist_name}' is empty or not found"
+                    )
+                import random as _random
+                member_info = dict(_random.choice(members))
+                entity_id = str(member_info.get("entity_id") or "").strip()
+                if entity_id:
+                    music_entities = getattr(music_library, "music_entities", None)
+                    if isinstance(music_entities, dict):
+                        entity_record = dict(music_entities.get(entity_id) or {})
+                music_name = str(
+                    member_info.get("display_name")
+                    or member_info.get("legacy_name")
+                    or member_info.get("title")
+                    or member_info.get("name")
+                    or entity_record.get("canonical_name")
+                    or entity_record.get("display_name")
+                    or music_name
+                    or ""
+                ).strip()
+            else:
+                raise InvalidRequestError(
+                    f"playlist '{playlist_name}' not found in music library"
+                )
+
+        if not music_name:
+            music_name = query or ""
+
+        return playlist_name, member_info, entity_record, should_shuffle
 
     async def play(
         self,
@@ -404,19 +485,69 @@ class PlaybackFacade:
             raise DeviceNotFoundError("device not found")
 
         request_id_value = str(request_id or uuid4().hex[:16])
+        # Only call _playlist_context when hint is auto or local_library.
         playlist_context = (
             self._playlist_context(opts, q)
-            if normalized_hint == "local_library"
+            if normalized_hint in (None, "local_library")
             else None
         )
         if playlist_context is not None:
-            playlist_name, music_name = playlist_context
+            playlist_name, member_info, entity_record, should_shuffle = playlist_context
+
+            # Infer source from entity_record.
+            entity_id = str(entity_record.get("entity_id") or member_info.get("entity_id") or "").strip()
+            entity_source = str(entity_record.get("source") or "").strip().lower()
+
+            music_name = str(
+                entity_record.get("canonical_name")
+                or entity_record.get("display_name")
+                or member_info.get("display_name")
+                or member_info.get("legacy_name")
+                or member_info.get("title")
+                or member_info.get("name")
+                or opts.title
+                or ""
+            ).strip()
+
+            # Route to correct source plugin based on entity_id prefix.
+            if entity_id.startswith("jellyfin:") or entity_source == "jellyfin":
+                normalized_hint = "jellyfin"
+                q = music_name
+            elif entity_id.startswith("local:") or entity_source == "local":
+                normalized_hint = "local_library"
+                q = music_name
+            elif not entity_id and not entity_source:
+                # No source info: keep original hint, use music_name.
+                q = music_name
+            else:
+                q = music_name
+
+            # Build source_payload from entity_record (includes url, duration, etc.)
             merged_source_payload = (
                 dict(opts.source_payload) if isinstance(opts.source_payload, dict) else {}
             )
+            if entity_record:
+                merged_source_payload["entity_id"] = entity_id
+                merged_source_payload["source"] = entity_source or "unknown"
+                if entity_record.get("source_item_id"):
+                    merged_source_payload["id"] = str(entity_record["source_item_id"])
+                    merged_source_payload["media_id"] = str(entity_record["source_item_id"])
+                if entity_record.get("canonical_name") or entity_record.get("display_name"):
+                    merged_source_payload["title"] = music_name
+                if entity_record.get("origin_url"):
+                    merged_source_payload["url"] = str(entity_record["origin_url"])
+                if entity_record.get("path"):
+                    merged_source_payload["path"] = str(entity_record["path"])
+                if entity_record.get("duration"):
+                    try:
+                        merged_source_payload["duration"] = float(entity_record["duration"])
+                        merged_source_payload["duration_seconds"] = float(entity_record["duration"])
+                    except (TypeError, ValueError):
+                        pass
+            else:
+                merged_source_payload["entity_id"] = str(member_info.get("entity_id") or "")
             merged_source_payload.update(
                 {
-                    "source": "local_library",
                     "context_type": "playlist",
                     "playlist_name": playlist_name,
                     "context_name": playlist_name,
@@ -424,6 +555,8 @@ class PlaybackFacade:
                     "track_name": music_name,
                 }
             )
+            if member_info.get("item_id"):
+                merged_source_payload.setdefault("item_id", str(member_info.get("item_id") or ""))
             merged_context_hint = (
                 dict(opts.context_hint) if isinstance(opts.context_hint, dict) else {}
             )
@@ -511,7 +644,7 @@ class PlaybackFacade:
             context_id=playlist_context[0] if playlist_context is not None else "",
             play_session_id=current_play_session_id,
         )
-        return {
+        return self._sanitize_public_value({
             "status": "playing",
             DEVICE_ID: did,
             "source_plugin": prepared.source,
@@ -528,7 +661,7 @@ class PlaybackFacade:
                 "delivery_plan": self._serialize(result.get("delivery_plan")),
                 "playback_outcome": self._serialize(result.get("outcome")),
             },
-        }
+        })
 
     def _record_playback_capability_verify(
         self,
@@ -609,28 +742,28 @@ class PlaybackFacade:
     ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         result = await self._core().previous(did)
-        return {
+        return self._sanitize_public_value({
             "status": "ok",
             DEVICE_ID: did,
             "transport": result["transport"],
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
             "action": "previous",
             "extra": {"dispatch": result["dispatch"].data},
-        }
+        })
 
     async def next(
         self, device_id: str, request_id: str | None = None
     ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         result = await self._core().next(did)
-        return {
+        return self._sanitize_public_value({
             "status": "ok",
             DEVICE_ID: did,
             "transport": result["transport"],
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
             "action": "next",
             "extra": {"dispatch": result["dispatch"].data},
-        }
+        })
 
     async def pause(
         self, device_id: str, request_id: str | None = None
@@ -1261,7 +1394,7 @@ class PlaybackFacade:
                     except Exception:
                         pass
                     try:
-                        setattr(device_player, "_next_timer", None)
+                        device_player._next_timer = None
                     except Exception:
                         pass
                 else:
