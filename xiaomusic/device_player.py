@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import copy
 import json
 import os
 import random
@@ -26,10 +27,10 @@ from xiaomusic.const import (
     PLAY_TYPE_SIN,
     TTS_COMMAND,
 )
-from xiaomusic.download_result import DownloadResult
 from xiaomusic.events import DEVICE_CONFIG_CHANGED, PLAYER_STATE_CHANGED
 from xiaomusic.utils.file_utils import chmodfile
 from xiaomusic.utils.text_utils import custom_sort_key, list2str
+from xiaomusic.download_result import DownloadResult
 
 
 class XiaoMusicDevice:
@@ -43,8 +44,6 @@ class XiaoMusicDevice:
     - 定时器管理
     - 设备状态管理
     """
-
-    MAX_COMPLETION_GRACE_EXTENSIONS = 3  # timer expiry: max extensions before forcing advance
 
     def __init__(self, xiaomusic: "XiaoMusic", device: Device, group_name: str):
         """初始化设备播放控制器
@@ -85,14 +84,6 @@ class XiaoMusicDevice:
 
         # Used to guard delayed tasks (next-song timer, auto-add, retries)
         self._play_session_id = 0
-
-        # Non-destructive completion tracking: count consecutive False confirmations
-        # before advancing (two-False rule for both timer expiry and bg confirm).
-        self._timer_expiry_false_count = 0
-        self._bg_confirm_false_count = 0
-        self._timer_expiry_playing_grace_count = 0
-        self._timer_expiry_unknown_grace_count = 0
-        self._playlist_session_shuffled = False  # set by explicit context.shuffle, consumed by navigation
 
         # 播放列表（单一权威：music_library，device_player 只持有运行时快照）
         # _play_list_items 是 music_library 播放列表的运行时快照，通过 update_playlist() 从
@@ -273,19 +264,61 @@ class XiaoMusicDevice:
         }
 
     def get_offset_duration(self):
-        """获取播放偏移量和总时长——纯查询，无副作用。
-
-        不启动任何 task，不查询设备状态，不触发切歌。
-        自动结束判定仅由 set_next_music_timeout 的 expiry gate 负责。
-        """
+        """获取播放偏移量和总时长"""
         duration = self._duration
         if not self.is_playing:
             return 0, duration
-        # Defense: if _start_time was never set (self-cancellation race),
-        # return 0 offset instead of epoch-based value.
-        if self._start_time <= 0.1:
-            return 0, duration
         offset = time.time() - self._start_time - self._paused_time
+
+        # Safety net: if timer was lost/cancelled and track is far beyond expected
+        # duration, try one guarded auto-next recovery.
+        should_check_autonext = False
+        if (
+            duration > 0.1
+            and self.device.play_type != PLAY_TYPE_SIN
+            and self._last_cmd not in {"stop", "pause"}
+        ):
+            overdue_without_timer = (
+                self._next_timer is None and offset >= duration + 15.0
+            )
+            near_end_with_timer = self._next_timer is not None and offset >= max(
+                duration - 1.0, duration * 0.9
+            )
+            should_check_autonext = overdue_without_timer or near_end_with_timer
+
+        if should_check_autonext:
+            if self._autonext_guard_task is None or self._autonext_guard_task.done():
+                sid = self._play_session_id
+
+                async def _guard_autonext():
+                    try:
+                        # Avoid false-positive early switches when Xiaomi is still playing.
+                        still_playing = await self.get_if_xiaoai_is_playing()
+                        if still_playing:
+                            return
+                    except Exception:
+                        # If status check fails, avoid force-switching.
+                        return
+                    if sid != self._play_session_id:
+                        return
+                    if self._next_timer is not None:
+                        self._next_timer.cancel()
+                        try:
+                            await self._next_timer
+                        except asyncio.CancelledError:
+                            pass
+                        self._next_timer = None
+                    self.log.info(
+                        "autonext_guard_trigger(session_id=%s, offset=%.3f, duration=%.3f)",
+                        sid,
+                        offset,
+                        duration,
+                    )
+                    await self._play_next()
+
+                # owner: device_player (autonext_guard)
+                self._autonext_guard_task = asyncio.create_task(_guard_autonext())
+
         return offset, duration
 
     @staticmethod
@@ -625,9 +658,6 @@ class XiaoMusicDevice:
 
         manual=True（用户主动点击）：单曲循环模式下前进到下一首
         manual=False（自动切歌）：单曲循环模式下重复当前歌曲
-
-        始终 preserve_playlist=True：当前 _play_list_items 是会话权威快照，
-        自动/手动切歌都不应触发 find_cur_playlist/update_playlist 重新打乱。
         """
         self.log.info("开始播放下一首")
         name = self.get_next_music(skip_one_repeat=manual)
@@ -639,7 +669,7 @@ class XiaoMusicDevice:
         self._stage_playlist_navigation_transition(name, reason="play_next")
         return await self._play(
             name,
-            preserve_playlist=True,
+            preserve_playlist=manual,
             confirm_start_in_background=not manual,
             fast_stop=not manual,
         )
@@ -663,7 +693,7 @@ class XiaoMusicDevice:
         self._stage_playlist_navigation_transition(name, reason="play_prev")
         return await self._play(
             name,
-            preserve_playlist=True,
+            preserve_playlist=manual,
             confirm_start_in_background=not manual,
             fast_stop=not manual,
         )
@@ -680,39 +710,22 @@ class XiaoMusicDevice:
         self._play_failed_cnt = 0
         self._play_fail_first_ts = 0.0
         self._play_fail_last_reason = ""
-        self._timer_expiry_false_count = 0
-        self._timer_expiry_playing_grace_count = 0
-        self._timer_expiry_unknown_grace_count = 0
-
-    def _cancel_owned_task(self, task_attr: str) -> None:
-        """Safely cancel an owned task, unless it is the current running task.
-
-        Self-cancellation would cause CancelledError in the middle of the caller's
-        execution, leaving broken state (is_playing=true, _start_time=0).
-        """
-        task = getattr(self, task_attr, None)
-        if task is None:
-            return
-        if task.done():
-            return
-        if task is asyncio.current_task():
-            # The owned task IS this coroutine — let it finish naturally.
-            # Its finally block will set the attr to None.
-            return
-        task.cancel()
-        setattr(self, task_attr, None)
 
     def _bump_play_session(self, reason: str = "") -> int:
         self._play_session_id += 1
-        self._cancel_owned_task("_duration_probe_task")
-        self._cancel_owned_task("_playback_confirm_task")
-        self._cancel_owned_task("_playback_status_probe_task")
+        if self._duration_probe_task and not self._duration_probe_task.done():
+            self._duration_probe_task.cancel()
+            self._duration_probe_task = None
+        if self._playback_confirm_task and not self._playback_confirm_task.done():
+            self._playback_confirm_task.cancel()
+            self._playback_confirm_task = None
+        if self._playback_status_probe_task and not self._playback_status_probe_task.done():
+            self._playback_status_probe_task.cancel()
+            self._playback_status_probe_task = None
         # BUG-011: 取消自动切歌守卫，防止 stop 后残留的守卫干扰新会话
-        self._cancel_owned_task("_autonext_guard_task")
-        self._timer_expiry_false_count = 0
-        self._bg_confirm_false_count = 0
-        self._timer_expiry_playing_grace_count = 0
-        self._timer_expiry_unknown_grace_count = 0
+        if self._autonext_guard_task and not self._autonext_guard_task.done():
+            self._autonext_guard_task.cancel()
+            self._autonext_guard_task = None
         self.log.info(
             "play_session_bump(session_id=%s, reason=%s)",
             self._play_session_id,
@@ -1054,9 +1067,6 @@ class XiaoMusicDevice:
         self._play_failed_cnt = 0
         self._play_fail_first_ts = 0.0
         self._play_fail_last_reason = ""
-        self._timer_expiry_false_count = 0
-        self._timer_expiry_playing_grace_count = 0
-        self._timer_expiry_unknown_grace_count = 0
 
         self.log.info(f"【{name}】已经开始播放了")
         if measure_status:
@@ -1166,24 +1176,13 @@ class XiaoMusicDevice:
         fast_stop: bool,
     ) -> None:
         confirm_profile = self._get_auto_next_confirm_profile()
-        try:
-            started = await self._confirm_playback_started(
-                name,
-                sid,
-                delay_sec=float(confirm_profile["delay_sec"]),
-                retries=int(confirm_profile["retries"]),
-                interval_sec=float(confirm_profile["interval_sec"]),
-            )
-        except Exception:
-            # Status check failed: treat as unknown, do not advance.
-            self.log.info(
-                "play_start_confirmation_error(did=%s, session_id=%s, name=%s)",
-                self.did,
-                sid,
-                name,
-                exc_info=True,
-            )
-            return
+        started = await self._confirm_playback_started(
+            name,
+            sid,
+            delay_sec=float(confirm_profile["delay_sec"]),
+            retries=int(confirm_profile["retries"]),
+            interval_sec=float(confirm_profile["interval_sec"]),
+        )
         self.log.info(
             "play_start_confirmation_result(did=%s, session_id=%s, started=%s background=true)",
             self.did,
@@ -1202,47 +1201,17 @@ class XiaoMusicDevice:
             current_url=current_url,
             origin_url=origin_url,
         )
-
-        if started is True or started is None:
-            # Playback confirmed or unknown: success path.
-            # Reset false counter.
-            self._bg_confirm_false_count = 0
+        if started is False:
+            proxy_url = ""
             if jellyfin_auto_candidate:
-                await asyncio.sleep(1)
-                if sid != self._play_session_id:
-                    return
-                try:
-                    if not await self.get_if_xiaoai_is_playing():
-                        proxy_url = await self._try_proxy_fallback(
-                            name=name,
-                            sid=sid,
-                            origin_url=origin_url,
-                            fast_stop=fast_stop,
-                            reason="not_playing",
-                            verify_started=True,
-                        )
-                        if proxy_url:
-                            await self._mark_play_started(
-                                name=name,
-                                sid=sid,
-                                cur_playlist=cur_playlist,
-                                measure_status=fast_stop,
-                            )
-                except Exception:
-                    pass
-            return
-
-        # started is False: non-destructive handling.
-        # Jellyfin proxy fallback (same as before).
-        if jellyfin_auto_candidate:
-            proxy_url = await self._try_proxy_fallback(
-                name=name,
-                sid=sid,
-                origin_url=origin_url,
-                fast_stop=fast_stop,
-                reason="play_start_not_confirmed",
-                verify_started=True,
-            )
+                proxy_url = await self._try_proxy_fallback(
+                    name=name,
+                    sid=sid,
+                    origin_url=origin_url,
+                    fast_stop=fast_stop,
+                    reason="play_start_not_confirmed",
+                    verify_started=True,
+                )
             if proxy_url:
                 await self._mark_play_started(
                     name=name,
@@ -1250,63 +1219,43 @@ class XiaoMusicDevice:
                     cur_playlist=cur_playlist,
                     measure_status=fast_stop,
                 )
-                self._bg_confirm_false_count = 0
                 return
 
-        # Non-jellyfin / jellyfin fallback failed: count consecutive False.
-        self._bg_confirm_false_count += 1
-        self.log.info(
-            "bg_confirm_false_count(did=%s, session_id=%s, count=%d, name=%s)",
-            self.did,
-            sid,
-            self._bg_confirm_false_count,
-            name,
-        )
+            # 自动切歌确认失败时，触发 playback failure 处理
+            # _handle_play_failure 会调度 _retry_next，song selection 修复后能正确获取下一首
+            await self._handle_play_failure(
+                name=name, sid=sid, reason="play_start_not_confirmed"
+            )
+            return
 
-        if self._bg_confirm_false_count < 2:
-            # First False: give one more grace check after delay.
-            await asyncio.sleep(1.5)
+        if jellyfin_auto_candidate:
+            await asyncio.sleep(1)
             if sid != self._play_session_id:
-                return
-            try:
-                started2 = await self._confirm_playback_started(
-                    name,
-                    sid,
-                    delay_sec=0.0,
-                    retries=2,
-                    interval_sec=0.5,
-                )
-            except Exception:
-                # Status check failed: unknown, do not advance.
                 self.log.info(
-                    "bg_confirm_retry_failed(did=%s, session_id=%s, name=%s)",
-                    self.did,
+                    "timer_discard_due_to_sid_mismatch(old_sid=%s, cur_sid=%s)",
                     sid,
-                    name,
+                    self._play_session_id,
                 )
                 return
-            if started2 is True or started2 is None:
-                self._bg_confirm_false_count = 0
-                return
-            # Second consecutive False.
-            self._bg_confirm_false_count = 2
-
-        # Two consecutive False: safe advance to next song.
-        self.log.info(
-            "bg_confirm_two_false_advancing(did=%s, session_id=%s, name=%s)",
-            self.did,
-            sid,
-            name,
-        )
-        self._bg_confirm_false_count = 0
-        if self._next_timer is not None:
-            self._next_timer.cancel()
             try:
-                await self._next_timer
-            except asyncio.CancelledError:
+                if not await self.get_if_xiaoai_is_playing():
+                    proxy_url = await self._try_proxy_fallback(
+                        name=name,
+                        sid=sid,
+                        origin_url=origin_url,
+                        fast_stop=fast_stop,
+                        reason="not_playing",
+                        verify_started=True,
+                    )
+                    if proxy_url:
+                        await self._mark_play_started(
+                            name=name,
+                            sid=sid,
+                            cur_playlist=cur_playlist,
+                            measure_status=fast_stop,
+                        )
+            except Exception:
                 pass
-            self._next_timer = None
-        await self._play_next()
 
     async def _confirm_playback_started(
         self,
@@ -1470,7 +1419,7 @@ class XiaoMusicDevice:
                 reason="outbound not allowlisted",
                 provider="yt-dlp",
             )
-            self.xiaomusic.last_download_result = asdict(res)
+            setattr(self.xiaomusic, "last_download_result", asdict(res))
             return
 
         if self._download_proc:
@@ -1534,7 +1483,7 @@ class XiaoMusicDevice:
             provider="yt-dlp",
             elapsed_ms=elapsed_ms,
         )
-        self.xiaomusic.last_download_result = asdict(res)
+        setattr(self.xiaomusic, "last_download_result", asdict(res))
 
     async def check_replay(self):
         """检查是否需要继续播放被打断的歌曲"""
@@ -1840,15 +1789,7 @@ class XiaoMusicDevice:
             return
 
         self.device.cur_playlist = playlist_name
-        # Shuffle when play_type is RND (persistent) OR context carries shuffle=true (single-session).
-        # WebUI next/prev no longer re-POSTs /play, so each external session bootstraps only once;
-        # subsequent control next/prev consume the existing snapshot via _play_next/prev.
-        should_shuffle = (
-            self.device.play_type == PLAY_TYPE_RND
-            or bool(context.get("shuffle", False))
-        )
-        self._playlist_session_shuffled = should_shuffle
-        if should_shuffle:
+        if self.device.play_type == PLAY_TYPE_RND:
             random.shuffle(playlist_items)
             self.log.info(
                 f"external_url playlist shuffled {playlist_name} {list2str([item.get('display_name', '') for item in playlist_items], self.config.verbose)}"
@@ -1872,7 +1813,6 @@ class XiaoMusicDevice:
 
     async def on_external_url_play(self, context: dict | None = None):
         """Reset local playlist progress state for external URL playback."""
-        self._playlist_session_shuffled = False  # reset; bootstrap may set to True
         previous_playlist = str(self.device.cur_playlist or "").strip()
         self._bump_play_session(reason="external_url_play")
         await self.cancel_group_next_timer()
@@ -2088,17 +2028,10 @@ class XiaoMusicDevice:
         )
 
     async def set_next_music_timeout(self, sec):
-        """设置下一首歌曲的播放定时器。
-
-        到期后不直接切歌：先检查设备播放状态，连续两个 False 才切歌。
-        设备在播放或状态检查异常/未知时，按固定短宽限重新调度。
-        """
+        """设置下一首歌曲的播放定时器"""
         await self.cancel_next_timer()
 
         sid = self._play_session_id
-        # NOTE: Do NOT reset _timer_expiry_false_count here.
-        # It is only reset on success (_mark_play_started) or after two-False advance.
-        # Resetting here would cause infinite reschedule loops.
 
         async def _do_next():
             try:
@@ -2113,71 +2046,13 @@ class XiaoMusicDevice:
                     return
                 self._log_measure("timer_fired", reset=True)
                 self.log.info(f"定时器时间到了 did: {self.did}")
+                # 定时器触发后先清理引用，避免任务自我取消导致逻辑混乱
                 self._next_timer = None
                 if self.device.play_type == PLAY_TYPE_SIN:
                     self.log.info(f"单曲播放不继续播放下一首 did: {self.did}")
                     await self.stop(arg1="notts")
-                    return
-
-                # Check device status before advancing.
-                try:
-                    is_playing = await self.get_if_xiaoai_is_playing()
-                except Exception:
-                    # Status check failed (unknown): grace-limited extension.
-                    self._timer_expiry_unknown_grace_count += 1
-                    self.log.info(
-                        "timer_expiry_status_check_failed(did=%s, unknown_grace=%d)",
-                        self.did,
-                        self._timer_expiry_unknown_grace_count,
-                    )
-                    if self._timer_expiry_unknown_grace_count > self.MAX_COMPLETION_GRACE_EXTENSIONS:
-                        # Max 3 unknown extensions reached: treat as complete.
-                        self._timer_expiry_unknown_grace_count = 0
-                        self._timer_expiry_playing_grace_count = 0
-                        self._timer_expiry_false_count = 0
-                        await self._play_next()
-                        return
-                    await self.set_next_music_timeout(3.0)
-                    return
-
-                if is_playing:
-                    # Device still playing: grace-limited extension (max 3).
-                    self._timer_expiry_false_count = 0
-                    self._timer_expiry_unknown_grace_count = 0
-                    self._timer_expiry_playing_grace_count += 1
-                    self.log.info(
-                        "timer_expiry_device_still_playing(did=%s, playing_grace=%d)",
-                        self.did,
-                        self._timer_expiry_playing_grace_count,
-                    )
-                    if self._timer_expiry_playing_grace_count > self.MAX_COMPLETION_GRACE_EXTENSIONS:
-                        # Max 3 playing extensions reached: treat as complete.
-                        self._timer_expiry_playing_grace_count = 0
-                        self.log.info(
-                            "timer_expiry_playing_grace_exhausted(did=%s), advancing",
-                            self.did,
-                        )
-                        await self._play_next()
-                        return
-                    await self.set_next_music_timeout(3.0)
-                    return
-
-                # Device not playing: increment false count.
-                self._timer_expiry_false_count += 1
-                self.log.info(
-                    "timer_expiry_false_count(did=%s, count=%d)",
-                    self.did,
-                    self._timer_expiry_false_count,
-                )
-
-                if self._timer_expiry_false_count < 2:
-                    # First False: reschedule with short grace.
-                    await self.set_next_music_timeout(3.0)
-                    return
-
-                # Two consecutive False: advance.
-                self._timer_expiry_false_count = 0
-                await self._play_next()
+                else:
+                    await self._play_next()
 
             except asyncio.CancelledError:
                 self.log.info(

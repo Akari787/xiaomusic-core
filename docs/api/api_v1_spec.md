@@ -1,8 +1,8 @@
 # XiaoMusic Runtime API v1 规范
 
-版本：v1.4
+版本：v1.3
 状态：正式契约
-最后更新：2026-07-23
+最后更新：2026-03-22
 适用范围：XiaoMusic Runtime HTTP API 与 SSE 状态流（WebUI、Home Assistant 与第三方调用）
 
 ---
@@ -732,7 +732,6 @@ v1 通过两个接口暴露播放器权威状态：
 - `query: string`，必填，非空
 - `source_hint: string`，可选，默认 `auto`
 - `options: object`，可选
-- `options.shuffle: boolean`，可选，默认 `false`
 
 `source_hint` 允许值：
 
@@ -756,31 +755,6 @@ v1 通过两个接口暴露播放器权威状态：
 - `data.extra`
 
 约束：成功响应中的 `transport` 表示动作已进入链路，不表示播放器已到达 `playing` 状态。调用方必须通过 `GET /api/v1/player/state` 或 SSE 流确认播放状态。
-
-指定歌单随机播放时，仍使用本接口（推荐 `source_hint=auto`，服务端从歌单成员自动推断来源）：
-
-```json
-{
-  "device_id": "<device_id>",
-  "query": "<playlist_name>",
-  "source_hint": "auto",
-  "options": {
-    "shuffle": true
-  }
-}
-```
-
-该请求的行为约束：
-
-- `query` 必须命中一个非空歌单。
-- 服务端从该歌单的结构化 membership 中随机选择起始曲目，**根据选中成员的 `entity_id` 前缀自动推断来源插件**（`jellyfin:` → jellyfin 插件，`local:` → local_library 插件）。
-- 不得要求调用方预先知道歌单成员的来源或手动选择曲目。
-- 为本次播放会话建立打乱后的歌单快照（shuffle context 传递到 device_player）。
-- 随机语义是“新 session 建立时洗牌一次”；同一 session 内不得因 next/previous 重新解析歌单、重建快照或再次洗牌。
-- 后续手动 next/previous 与自动切歌都沿本次会话的稳定打乱顺序移动。
-- `options.shuffle` 只影响本次播放会话，不修改设备持久化播放模式（`device.play_type` 不变）。
-- 不得为该能力恢复或新增 `/api/v1/playlist/*` 播放入口。
-- 完整控制不变量见 `docs/architecture/playback-control-model.md`。
 
 ### 12.2 `POST /api/v1/resolve`
 
@@ -897,8 +871,6 @@ v1 通过两个接口暴露播放器权威状态：
 
 成功响应必须包含 `data.transport`。成功响应不承诺切歌已完成，调用方须通过状态通道（SSE 中 `play_session_id` 变化且 `transport_state == "playing"`）确认切歌成功。
 
-调用方只允许表达“上一首”意图，不得根据页面歌曲列表自行计算目标曲目后调用 `POST /api/v1/play`。当存在 xiaomusic 管理的歌单 session 时，本操作必须消费该 session 的当前队列快照。
-
 ### 12.10 `POST /api/v1/control/next`
 
 用途：切到下一首。
@@ -910,8 +882,6 @@ v1 通过两个接口暴露播放器权威状态：
 ```
 
 成功响应必须包含 `data.transport`。成功响应不承诺切歌已完成，调用方须通过状态通道（SSE 中 `play_session_id` 变化且 `transport_state == "playing"`）确认切歌成功。
-
-调用方只允许表达“下一首”意图，不得根据页面歌曲列表自行计算目标曲目后调用 `POST /api/v1/play`。当存在 xiaomusic 管理的歌单 session 时，本操作必须消费该 session 的当前队列快照；不得隐式建立新 session 或重新洗牌。
 
 ### 12.11 `POST /api/v1/control/play-mode`
 

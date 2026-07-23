@@ -1,8 +1,8 @@
 # 系统总览（System Overview）
 
-版本：v1.1
+版本：v1.0
 状态：正式架构文档
-最后更新：2026-07-23
+最后更新：2026-03-28
 
 本文档是 xiaomusic-core 文档体系的总纲，定义系统一级边界、各模块职责与文档优先级关系。
 
@@ -16,9 +16,9 @@
 |---|---|---|
 | **api** | 对外 HTTP 接口层，承载 v1 Public API 与 Internal API | `xiaomusic/api/` |
 | **runtime** | 系统主协调对象，管理各子系统生命周期与依赖注入 | `xiaomusic/xiaomusic.py` |
-| **playback** | 播放编排层，负责策略决策、控制意图路由与状态快照输出；不直接持有设备运行时队列 | `xiaomusic/playback/`、`xiaomusic/core/` |
+| **playback** | 播放编排层，负责策略决策、队列管理与状态快照输出 | `xiaomusic/playback/`、`xiaomusic/core/` |
 | **source** | 媒体来源解析，提供可播放流 URL 与曲目事实 | `xiaomusic/adapters/sources/`、`xiaomusic/core/source/` |
-| **device** | 设备抽象、设备侧命令执行，以及每台设备当前 session 的队列快照与索引权威 | `xiaomusic/device_manager.py`、`xiaomusic/device_player.py`、`xiaomusic/core/device/` |
+| **device** | 设备抽象与设备侧命令执行 | `xiaomusic/device_manager.py`、`xiaomusic/device_player.py`、`xiaomusic/core/device/` |
 | **auth** | 小米账号认证状态管理与会话维护 | `xiaomusic/auth.py`、`xiaomusic/security/token_store.py` |
 | **config** | 运行时配置对象管理与持久化 | `xiaomusic/config.py`、`xiaomusic/config_manager.py` |
 | **relay** | 站内流媒体中转，建立 relay session 并输出 `/relay/stream/{sid}` 端点 | `xiaomusic/relay/` |
@@ -55,23 +55,8 @@ runtime
 
 - `source` 不得直接调用 `device`
 - `webui` 不得依赖 `playback` / `runtime` 内部对象
-- `webui` 不得为 next/previous 自行计算曲目并重新调用播放入口
 - `api` 层不得直接读取设备底层状态绕过 `playback` 快照构建器
-- `playback` / Facade 不得建立绕过 transport 的第二条队列导航路径
 - `relay` 不得主动触发播放命令（只提供流服务）
-
-next/previous 的标准调用链为：
-
-```text
-WebUI / 外部调用方
-  → Public API control intent
-  → PlaybackFacade
-  → PlaybackCoordinator
-  → TransportRouter
-  → XiaoMusicDevice._play_next / _play_prev
-```
-
-队列与索引只在 `XiaoMusicDevice` 中推进。详见 [`playback-control-model.md`](playback-control-model.md)。
 
 ---
 
@@ -150,5 +135,4 @@ WebUI / 外部调用方
 | `docs/architecture/runtime_architecture.md` | runtime 内部运转与生命周期 |
 | `docs/architecture/source_architecture.md` | source 边界与插件体系 |
 | `docs/architecture/webui_architecture.md` | WebUI 接口依赖边界 |
-| `docs/architecture/playback-control-model.md` | 播放队列、随机 session 与 next/previous 控制不变量 |
 | `docs/architecture/contributor_guide.md` | 改动前置规则与文档更新约束 |
