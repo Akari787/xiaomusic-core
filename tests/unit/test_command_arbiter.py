@@ -927,5 +927,3 @@ async def test_after_barrier_sequence_property_readonly():
     finally:
         block_play.set()
         await arb.close()
-
-
