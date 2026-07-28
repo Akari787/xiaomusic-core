@@ -6,6 +6,7 @@ import pytest
 
 from xiaomusic.core.coordinator.playback_coordinator import PlaybackCoordinator
 from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
+from xiaomusic.core.device.device_registry import DeviceRegistry
 from xiaomusic.core.models.device import DeviceProfile, DeviceReachability
 from xiaomusic.core.models.media import MediaRequest, PreparedStream, ResolvedMedia
 from xiaomusic.core.models.transport import TransportCapabilityMatrix
@@ -14,7 +15,6 @@ from xiaomusic.core.source.source_registry import SourceRegistry
 from xiaomusic.core.transport.transport import Transport
 from xiaomusic.core.transport.transport_policy import TransportPolicy
 from xiaomusic.core.transport.transport_router import TransportRouter
-from xiaomusic.core.device.device_registry import DeviceRegistry
 
 
 class _CyclingSourcePlugin(SourcePlugin):
@@ -38,7 +38,7 @@ class _CyclingSourcePlugin(SourcePlugin):
 class _TransportStub(Transport):
     name = "mina"
 
-    async def play_url(self, device_id: str, prepared: PreparedStream) -> dict:
+    async def play_url(self, device_id: str, prepared: PreparedStream, request_context: dict | None = None) -> dict:
         return {"ret": "OK", "device_id": device_id, "url": prepared.final_url}
 
     async def stop(self, device_id: str) -> dict:
@@ -74,10 +74,12 @@ class _RecordingTransportStub(Transport):
 
     def __init__(self) -> None:
         self.urls: list[str] = []
+        self.contexts: list[dict | None] = []
 
-    async def play_url(self, device_id: str, prepared: PreparedStream) -> dict:
+    async def play_url(self, device_id: str, prepared: PreparedStream, request_context: dict | None = None) -> dict:
         _ = device_id
         self.urls.append(prepared.final_url)
+        self.contexts.append(request_context)
         return {"ret": "OK", "url": prepared.final_url}
 
     async def stop(self, device_id: str) -> dict:
@@ -227,7 +229,7 @@ async def test_playback_coordinator_fallback_to_proxy_when_direct_not_started():
         outputs=[
             ResolvedMedia(
                 media_id="m-site",
-                source="site_media",
+                source="direct_url",
                 title="yt",
                 stream_url="https://googlevideo.example/v1.mp4",
                 expires_at=None,
@@ -253,7 +255,7 @@ async def test_playback_coordinator_fallback_to_proxy_when_direct_not_started():
     out = await coordinator.play(
         MediaRequest(
             request_id="r-proxy",
-            source_hint="site_media",
+            source_hint="cycling",
             query="https://www.youtube.com/watch?v=iPnaF8Ngk3Q",
             device_id="d1",
             context={
@@ -271,3 +273,6 @@ async def test_playback_coordinator_fallback_to_proxy_when_direct_not_started():
     assert transport.urls[1].startswith("http://127.0.0.1:58090/proxy")
     assert out["prepared_stream"].is_proxy is True
     assert out["outcome"].fallback_triggered is True
+    # Context dict identity: same object passed to both transport calls
+    assert len(transport.contexts) >= 2
+    assert transport.contexts[0] is transport.contexts[1]

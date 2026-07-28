@@ -40,7 +40,7 @@ from xiaomusic.const import (
     PLAY_TYPE_SIN,
 )
 from xiaomusic.device_player import XiaoMusicDevice
-
+from xiaomusic.playback.runtime_state import PlaybackPhase, PlaybackRuntimeState
 
 # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -52,6 +52,7 @@ def _make_playlist_items(names: list[str]) -> list[dict[str, str]]:
 def _make_device(play_type: int, playlist: list[str], cur_music: str = ""):
     """构造一个最简 XiaoMusicDevice 用于 get_music 测试。"""
     d = XiaoMusicDevice.__new__(XiaoMusicDevice)
+    d._runtime_state = PlaybackRuntimeState()
     d.log = types.SimpleNamespace(
         info=lambda *args, **kwargs: None,
         debug=lambda *args, **kwargs: None,
@@ -188,7 +189,7 @@ async def test_manual_play_prev_goes_to_prev_song():
     played: list[str] = []
 
     async def _play(name="", search_key="", preserve_playlist=False,  # noqa: ARG001
-                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
+                    confirm_start_in_background=False, fast_stop=False, **kw):  # noqa: ARG001
         played.append(name)
         return True
 
@@ -213,7 +214,7 @@ async def test_manual_play_prev_with_empty_name():
     played: list[str] = []
 
     async def _play(name="", search_key="", preserve_playlist=False,  # noqa: ARG001
-                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
+                    confirm_start_in_background=False, fast_stop=False, **kw):  # noqa: ARG001
         played.append(name)
         return True
 
@@ -233,7 +234,7 @@ async def test_manual_play_next_advances_even_in_one_mode():
     played: list[str] = []
 
     async def _play(name="", search_key="", preserve_playlist=False,  # noqa: ARG001
-                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
+                    confirm_start_in_background=False, fast_stop=False, **kw):  # noqa: ARG001
         played.append(name)
 
     d._play = _play
@@ -253,7 +254,7 @@ async def test_auto_next_in_one_mode_repeats_current():
     played: list[str] = []
 
     async def _play(name="", search_key="", preserve_playlist=False,  # noqa: ARG001
-                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
+                    confirm_start_in_background=False, fast_stop=False, **kw):  # noqa: ARG001
         played.append(name)
 
     d._play = _play
@@ -285,7 +286,7 @@ async def test_auto_next_in_all_mode_wraps():
     played: list[str] = []
 
     async def _play(name="", search_key="", preserve_playlist=False,  # noqa: ARG001
-                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
+                    confirm_start_in_background=False, fast_stop=False, **kw):  # noqa: ARG001
         played.append(name)
 
     d._play = _play
@@ -297,176 +298,127 @@ async def test_auto_next_in_all_mode_wraps():
 
 # ── _handle_play_failure 模式相关 ─────────────────────────────────────────
 
+
+async def _async_bool(value: bool) -> bool:
+    return value
+
+
+def _prepare_failure_device(play_type: int, *, sid: int, count: int = 0):
+    d = _make_device(play_type, ["song-a", "song-b", "song-c"], cur_music="song-b")
+    d._runtime_state = PlaybackRuntimeState(phase=PlaybackPhase.DISPATCHING)
+    d._command_arbiter = None
+    d.is_playing = True
+    d._degraded = False
+    d._degraded_notified = False
+    d._play_session_id = sid
+    d._play_fail_first_ts = 0.0
+    d._play_fail_last_reason = ""
+    d._play_failed_cnt = count
+    gate = asyncio.Event()
+
+    async def _wait_backoff(_delay):
+        await asyncio.wait_for(gate.wait(), timeout=5.0)
+
+    d._wait_failure_retry_backoff = _wait_backoff
+    return d, gate
+
+
+async def _finish_failure_retry(d, gate):
+    task = d._failure_retry_task
+    assert task is not None
+    gate.set()
+    await asyncio.wait_for(task, timeout=5.0)
+    await d.close_command_arbiter()
+
+
 @pytest.mark.asyncio
 async def test_handle_play_failure_sin_mode_stops_not_advances():
-    """SIN 模式播放失败：retry 应停止而非前进到下一首。"""
-    d = _make_device(PLAY_TYPE_SIN, ["song-a", "song-b"], cur_music="song-a")
-    d.get_next_music = lambda *, skip_one_repeat=False: d.get_music("next", skip_one_repeat=skip_one_repeat)
-    d.is_playing = True
-    d._last_cmd = "play"
-    d._degraded = False
-    d._play_session_id = 1
-    d._play_fail_first_ts = 0.0
-    d._play_failed_cnt = 0
-
+    """SIN 模式的失败策略通过 public stop，不提交 RETRY。"""
+    d, _gate = _prepare_failure_device(PLAY_TYPE_SIN, sid=1)
     stopped: list[str] = []
+    submits: list[dict] = []
 
-    async def _stop(arg1=""):  # noqa: ARG001
+    async def _stop(arg1=""):
         stopped.append(arg1)
+        return True
 
     d.stop = _stop
-    d.do_tts = lambda _value: None
-    d._stage_playlist_navigation_transition = lambda name, *, reason: None
+    d._submit_auto_retry = lambda *_args, **kwargs: submits.append(kwargs)
+    token = d._capture_lifecycle_token()
+    await d._handle_play_failure(
+        name="song-a", sid=1, reason="player_play_failed", token=token
+    )
 
-    # 触发一次播放失败
-    await d._handle_play_failure(name="song-a", sid=1, reason="player_play_failed")
-
-    # 等待 retry 执行
-    await asyncio.sleep(1.5)
-
-    # SIN 模式应调用 stop 而非 _play_next
     assert stopped == ["notts"]
+    assert submits == []
 
 
 @pytest.mark.asyncio
 async def test_handle_play_failure_one_mode_retries_same_song():
-    """ONE 模式播放失败：retry 应重复当前歌曲。"""
-    d = _make_device(PLAY_TYPE_ONE, ["song-a", "song-b"], cur_music="song-a")
-    d.get_next_music = lambda *, skip_one_repeat=False: d.get_music("next", skip_one_repeat=skip_one_repeat)
-    d.is_playing = True
-    d._last_cmd = "play"
-    d._degraded = False
-    d._play_session_id = 2
-    d._play_fail_first_ts = 0.0
-    d._play_failed_cnt = 0
+    """ONE 模式仍提交 RETRY_SAME，由 arbiter 执行物理重试。"""
+    d, gate = _prepare_failure_device(PLAY_TYPE_ONE, sid=2)
+    submits: list[dict] = []
+    d._submit_auto_retry = lambda *_args, **kwargs: submits.append(kwargs)
+    d.get_if_xiaoai_is_playing = lambda: _async_bool(False)
 
-    played: list[str] = []
+    token = d._capture_lifecycle_token()
+    await d._handle_play_failure(
+        name="song-a", sid=2, reason="player_play_failed", token=token
+    )
+    await _finish_failure_retry(d, gate)
 
-    async def _play(name="", search_key="", preserve_playlist=False,  # noqa: ARG001
-                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
-        played.append(name)
-
-    d._play = _play
-    d._stage_playlist_navigation_transition = lambda name, *, reason: None
-
-    await d._handle_play_failure(name="song-a", sid=2, reason="player_play_failed")
-
-    # 等待 retry 执行（最小 delay 1s）
-    await asyncio.sleep(1.5)
-
-    # ONE 模式应重复 song-a
-    assert played == ["song-a"]
+    assert len(submits) == 1
+    assert submits[0]["payload"] == {"name": "song-a", "retry_same_song": True}
 
 
 @pytest.mark.asyncio
 async def test_handle_play_failure_skips_retry_when_speaker_already_playing():
-    """P0: _retry_next 在音箱已播放时不切断当前歌曲。"""
-    d = _make_device(PLAY_TYPE_ALL, ["song-a", "song-b", "song-c"], cur_music="song-b")
-    d.get_next_music = lambda *, skip_one_repeat=False: d.get_music("next", skip_one_repeat=skip_one_repeat)
-    d.is_playing = True
-    d._last_cmd = "play"
-    d._degraded = False
-    d._play_session_id = 3
-    d._play_fail_first_ts = 0.0
-    d._play_failed_cnt = 0
+    """云端已确认播放时，retry runner 正常结束且不提交。"""
+    d, gate = _prepare_failure_device(PLAY_TYPE_ALL, sid=3)
+    submits: list[dict] = []
+    d._submit_auto_retry = lambda *_args, **kwargs: submits.append(kwargs)
+    d.get_if_xiaoai_is_playing = lambda: _async_bool(True)
 
-    # 模拟音箱已经实际在播放（云 API 延迟上报场景）
-    async def _fake_playing(device_id=None):  # noqa: ARG001
-        return True
-    d.get_if_xiaoai_is_playing = _fake_playing
+    token = d._capture_lifecycle_token()
+    await d._handle_play_failure(
+        name="song-b", sid=3, reason="play_start_not_confirmed", token=token
+    )
+    await _finish_failure_retry(d, gate)
 
-    played: list[str] = []
-
-    async def _play(name="", search_key="", preserve_playlist=False,  # noqa: ARG001
-                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
-        played.append(name)
-
-    d._play = _play
-    d._stage_playlist_navigation_transition = lambda name, *, reason: None
-    d.stop = lambda arg1="": None
-
-    await d._handle_play_failure(name="song-b", sid=3, reason="play_start_not_confirmed")
-
-    # 等待 retry 执行
-    await asyncio.sleep(1.5)
-
-    # 音箱已在播放 → 不应调用 _play_next → played 为空
-    assert played == []
+    assert submits == []
 
 
 @pytest.mark.asyncio
 async def test_handle_play_failure_retries_same_song_with_sync_stop():
-    """首次失败重试同一首歌，用 sync stop 而非 overlap 避免连锁失败。"""
-    d = _make_device(PLAY_TYPE_ALL, ["song-a", "song-b", "song-c"], cur_music="song-b")
-    d.get_next_music = lambda *, skip_one_repeat=False: d.get_music("next", skip_one_repeat=skip_one_repeat)
-    d.is_playing = True
-    d._last_cmd = "play"
-    d._degraded = False
-    d._play_session_id = 4
-    d._play_fail_first_ts = 0.0
-    d._play_failed_cnt = 1  # cnt <= 2 → 同首歌 sync 重试
+    """第二次失败仍提交 RETRY_SAME，不直接调用 `_play`."""
+    d, gate = _prepare_failure_device(PLAY_TYPE_ALL, sid=4, count=1)
+    submits: list[dict] = []
+    d._submit_auto_retry = lambda *_args, **kwargs: submits.append(kwargs)
+    d.get_if_xiaoai_is_playing = lambda: _async_bool(False)
 
-    async def _fake_not_playing(device_id=None):  # noqa: ARG001
-        return False
-    d.get_if_xiaoai_is_playing = _fake_not_playing
+    token = d._capture_lifecycle_token()
+    await d._handle_play_failure(
+        name="song-b", sid=4, reason="play_start_not_confirmed", token=token
+    )
+    await _finish_failure_retry(d, gate)
 
-    played: list[dict] = []
-
-    async def _play(name="", search_key="", preserve_playlist=False,  # noqa: ARG001
-                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
-        played.append({
-            "name": name,
-            "preserve_playlist": preserve_playlist,
-            "confirm_start_in_background": confirm_start_in_background,
-            "fast_stop": fast_stop,
-        })
-        return True
-
-    d._play = _play
-    d._stage_playlist_navigation_transition = lambda name, *, reason: None
-    d.stop = lambda arg1="": None
-
-    await d._handle_play_failure(name="song-b", sid=4, reason="play_start_not_confirmed")
-    await asyncio.sleep(3.5)  # cnt=1→delay=1s, cnt=2→delay=2s
-
-    assert len(played) == 1
-    assert played[0]["name"] == "song-b"  # 同一首歌
-    assert played[0]["preserve_playlist"] is True  # 不重建播放列表
-    assert played[0]["confirm_start_in_background"] is False  # sync 确认
-    assert played[0]["fast_stop"] is False  # sync stop
+    assert len(submits) == 1
+    assert submits[0]["payload"] == {"name": "song-b", "retry_same_song": True}
 
 
 @pytest.mark.asyncio
 async def test_handle_play_failure_falls_through_to_play_next_after_same_song_exhausted():
-    """同一首歌 sync 重试 2 次仍失败后，回退到 _play_next（跳过）。"""
-    d = _make_device(PLAY_TYPE_ALL, ["song-a", "song-b", "song-c"], cur_music="song-b")
-    d.get_next_music = lambda *, skip_one_repeat=False: d.get_music("next", skip_one_repeat=skip_one_repeat)
-    d.is_playing = True
-    d._last_cmd = "play"
-    d._degraded = False
-    d._play_session_id = 5
-    d._play_fail_first_ts = 0.0
-    d._play_failed_cnt = 3  # cnt > 2 → 回退到 _play_next
+    """第三次失败后提交 RETRY_NEXT，不从 runner 直达 `_play_next`."""
+    d, gate = _prepare_failure_device(PLAY_TYPE_ALL, sid=5, count=2)
+    submits: list[dict] = []
+    d._submit_auto_retry = lambda *_args, **kwargs: submits.append(kwargs)
+    d.get_if_xiaoai_is_playing = lambda: _async_bool(False)
 
-    async def _fake_not_playing(device_id=None):  # noqa: ARG001
-        return False
-    d.get_if_xiaoai_is_playing = _fake_not_playing
+    token = d._capture_lifecycle_token()
+    await d._handle_play_failure(
+        name="song-b", sid=5, reason="play_start_not_confirmed", token=token
+    )
+    await _finish_failure_retry(d, gate)
 
-    played: list[str] = []
-    event = asyncio.Event()
-
-    async def _play(name="", search_key="", preserve_playlist=False,  # noqa: ARG001
-                    confirm_start_in_background=False, fast_stop=False):  # noqa: ARG001
-        played.append(name)
-        event.set()
-        return True
-
-    d._play = _play
-    d._stage_playlist_navigation_transition = lambda name, *, reason: None
-    d.stop = lambda arg1="": None
-
-    await d._handle_play_failure(name="song-b", sid=5, reason="play_start_not_confirmed")
-    await asyncio.wait_for(event.wait(), timeout=10.0)
-
-    # cnt > 2 → 走 _play_next → 跳到 song-c
-    assert played == ["song-c"]
+    assert len(submits) == 1
+    assert submits[0]["payload"] == {"name": "song-b", "retry_same_song": False}

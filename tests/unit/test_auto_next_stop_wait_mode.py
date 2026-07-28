@@ -19,6 +19,8 @@ if "opencc" not in sys.modules:
     sys.modules["opencc"] = types.SimpleNamespace(OpenCC=_OpenCC)
 
 from xiaomusic.device_player import XiaoMusicDevice
+from xiaomusic.playback.runtime_state import PlaybackRuntimeState
+from xiaomusic.playback.task_registry import TaskKind
 
 
 @pytest.mark.parametrize(
@@ -66,7 +68,7 @@ async def test_execute_group_stop_overlap_returns_before_completion():
     d = XiaoMusicDevice.__new__(XiaoMusicDevice)
     d.log = logging.getLogger("stop-wait-overlap")
     d.config = types.SimpleNamespace(auto_next_stop_wait_mode="overlap", auto_next_stop_grace_ms=0)
-    d._inflight_fast_stop_tasks = set()
+    d._runtime_state = PlaybackRuntimeState()
 
     blocker = asyncio.Event()
     state = {"completed": False}
@@ -83,11 +85,11 @@ async def test_execute_group_stop_overlap_returns_before_completion():
     assert task is not None
     assert task.done() is False
     assert state["completed"] is False
-    assert len(d._inflight_fast_stop_tasks) == 1
+    assert d._playback_tasks.get_task(TaskKind.FAST_GROUP_STOP) is task
 
     blocker.set()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await asyncio.wait_for(task, timeout=5.0)
 
     assert state["completed"] is True
-    assert len(d._inflight_fast_stop_tasks) == 0
+    assert d._playback_tasks.get_task(TaskKind.FAST_GROUP_STOP) is None
+    await d._playback_tasks.close()

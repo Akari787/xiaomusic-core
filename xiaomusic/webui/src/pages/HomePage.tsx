@@ -1697,16 +1697,17 @@ export function HomePage() {
     setMessage(`${okText}，正在同步播放信息...`);
     try {
       if (pendingSelection && songs.length > 0) {
-        const currentIndex = Math.max(0, songs.findIndex((item) => item.id === effectiveTrackId));
-        const delta = action === "previous" ? -1 : 1;
-        const nextIndex = (currentIndex + delta + songs.length) % songs.length;
-        const nextItem = songs[nextIndex];
-        if (!nextItem) {
-          setMessage("当前歌单为空，请先刷新歌单或切换列表");
+        // When a playlist session with shuffle snapshot is active,
+        // use device-level next/prev to consume the existing snapshot.
+        // Do NOT call playPlaylistTrack — that would trigger a new
+        // POST /api/v1/play which destroys the shuffle snapshot.
+        const out = action === "previous" ? await v1Previous(did) : await v1Next(did);
+        if (isApiOk(out)) {
+          setMessage(okText);
           return;
         }
-        applyPendingTrack(nextItem.id, nextItem.title, effectivePlaylist);
-        await playPlaylistTrack(did, effectivePlaylist, nextItem.title, nextItem.id, nextItem.entity_id);
+        const err = apiErrorInfo(out);
+        setMessage(err.message || "执行失败");
         return;
       }
 

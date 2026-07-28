@@ -4,8 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from xiaomusic.core.models.media import PlayOptions
-from xiaomusic.core.models.media import DeliveryPlan, PreparedStream
+from xiaomusic.core.models.media import DeliveryPlan, PlayOptions, PreparedStream
 from xiaomusic.playback.facade import PlaybackFacade, build_track_id
 
 
@@ -428,7 +427,8 @@ async def test_build_player_state_snapshot_includes_volume_from_status_and_cache
 
     facade = PlaybackFacade(_XM({"status": 0, "volume": 41}))
     snapshot = await facade.build_player_state_snapshot("did-1")
-    assert snapshot["volume"] == 41
+    # Pure projection uses local cache, not cloud status volume
+    assert snapshot["volume"] == 27
 
     facade_cached = PlaybackFacade(_XM({"status": 0}))
     snapshot_cached = await facade_cached.build_player_state_snapshot("did-1")
@@ -745,3 +745,200 @@ async def test_player_state_idle_returns_empty_music() -> None:
 
     assert state["cur_music"] == ""
     assert state["is_playing"] is False
+
+
+# ── snapshot purity ────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_snapshot_never_calls_get_player_status():
+    """build_player_state_snapshot 不调用 get_player_status（async spy + counter）。"""
+    call_count = 0
+
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return False
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[float, float]:
+            return (0.0, 0.0)
+
+        @staticmethod
+        def get_cur_play_list(did: str) -> str:
+            return ""
+
+        @staticmethod
+        def playingmusic(did: str) -> str:
+            return ""
+
+        @staticmethod
+        async def get_player_status(did: str) -> dict:
+            nonlocal call_count
+            call_count += 1
+            return {"status": 0}
+
+    facade = PlaybackFacade(_XM())
+    snapshot = await facade.build_player_state_snapshot("did-test")
+    assert call_count == 0
+    assert snapshot["transport_state"] == "idle"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_calls_get_cur_music_once():
+    """设备存在且非 playing 时 get_cur_music 只调用一次。"""
+    cur_music_calls = 0
+
+    class _Dev:
+        is_playing = False
+        _next_timer = None
+        _last_cmd = "play"
+        _current_index = -1
+        _play_list_items = []
+        cur_playlist = ""
+        cur_music = "test-track"
+        _play_failed_cnt = 0
+        _degraded = False
+
+        def get_cur_music(self):
+            nonlocal cur_music_calls
+            cur_music_calls += 1
+            return self.cur_music
+
+        def _get_playlist_names(self):
+            return []
+
+    class _DevMgr:
+        devices = {"did-test": _Dev()}
+
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return False  # non-playing → enters derive branch with get_cur_music
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[float, float]:
+            return (0.0, 0.0)
+
+        @staticmethod
+        def get_cur_play_list(did: str) -> str:
+            return ""
+
+        @staticmethod
+        def playingmusic(did: str) -> str:
+            return ""
+
+        @staticmethod
+        async def get_player_status(did: str) -> dict:
+            return {"status": 0}
+
+        device_manager = _DevMgr()
+
+    facade = PlaybackFacade(_XM())
+    await facade.build_player_state_snapshot("did-test")
+    assert cur_music_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_snapshot_does_not_mutate_device_state():
+    """snapshot 不修改 device_player 关键字段，前后值完全一致。"""
+    import asyncio
+
+    timer_task = asyncio.create_task(asyncio.sleep(999))
+
+    class _Dev:
+        pass
+
+    dev = _Dev()
+    dev.is_playing = True
+    dev._next_timer = timer_task
+    dev._last_cmd = "play"
+    dev._current_index = 3
+    dev._play_list_items = [
+        {"display_name": "a", "legacy_name": "a"},
+        {"display_name": "b", "legacy_name": "b"},
+    ]
+    dev.cur_playlist = "BGM"
+    dev.cur_music = "a"
+    dev._play_failed_cnt = 0
+    dev._degraded = False
+
+    dev.get_cur_music = lambda: dev.cur_music
+    dev._get_playlist_names = lambda: [it["display_name"] for it in dev._play_list_items]
+
+    class _DevMgr:
+        devices = {"did-test": dev}
+
+    class _XM:
+        @staticmethod
+        def did_exist(did: str) -> bool:
+            return True
+
+        @staticmethod
+        def isplaying(did: str) -> bool:
+            return dev.is_playing
+
+        @staticmethod
+        def get_offset_duration(did: str) -> tuple[float, float]:
+            return (10.0, 120.0)
+
+        @staticmethod
+        def get_cur_play_list(did: str) -> str:
+            return ""
+
+        @staticmethod
+        def playingmusic(did: str) -> str:
+            return ""
+
+        @staticmethod
+        async def get_player_status(did: str) -> dict:
+            return {"status": 0}
+
+        device_manager = _DevMgr()
+
+    # Snapshot before values
+    before = {
+        "is_playing": dev.is_playing,
+        "_last_cmd": dev._last_cmd,
+        "_current_index": dev._current_index,
+        "_play_failed_cnt": dev._play_failed_cnt,
+        "_degraded": dev._degraded,
+        "_next_timer_is": dev._next_timer,
+        "_next_timer_cancelled": dev._next_timer.cancelled() if dev._next_timer else None,
+        "_next_timer_done": dev._next_timer.done() if dev._next_timer else None,
+    }
+
+    facade = PlaybackFacade(_XM())
+    s1 = await facade.build_player_state_snapshot("did-test")
+    s2 = await facade.build_player_state_snapshot("did-test")
+
+    # Output consistency
+    for key in ("transport_state", "position_ms", "duration_ms"):
+        assert s1[key] == s2[key], f"{key} changed between snapshots"
+
+    # Device state unchanged
+    after = {
+        "is_playing": dev.is_playing,
+        "_last_cmd": dev._last_cmd,
+        "_current_index": dev._current_index,
+        "_play_failed_cnt": dev._play_failed_cnt,
+        "_degraded": dev._degraded,
+        "_next_timer_is": dev._next_timer,
+        "_next_timer_cancelled": dev._next_timer.cancelled() if dev._next_timer else None,
+        "_next_timer_done": dev._next_timer.done() if dev._next_timer else None,
+    }
+    assert before == after, f"device state mutated: {before} -> {after}"
+
+    # Cleanup
+    dev._next_timer.cancel()
+    try:
+        await dev._next_timer
+    except asyncio.CancelledError:
+        pass
