@@ -6,7 +6,7 @@ on:
     paths:
       - "docs/**"
       - "README.md"
-      - "get_release.py"
+      - "scripts/docs/get_release.py"
       - ".github/workflows/static.yml"
   workflow_dispatch:
 
@@ -74,7 +74,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install requests
-          python get_release.py
+          python scripts/docs/get_release.py
 
       - name: Deploy to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4

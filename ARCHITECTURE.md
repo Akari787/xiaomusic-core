@@ -22,7 +22,7 @@ xiaomusic-core 是小米音箱的 Python 后端服务，提供音乐播放、设
    - 行为规范：读 `docs/spec/README.md`
 3. **涉及 API 必读**：`docs/api/api_v1_spec.md`
 4. **涉及状态/生命周期/跨层依赖**：读 `docs/architecture/state-authority.md` 与 `docs/architecture/constraints.md`
-5. **提交前必读**：`docs/ai-review-checklist.md`
+5. **提交前必读**：`docs/architecture/constraints.md` 与 `docs/architecture/contributor_guide.md`
 
 ---
 
@@ -69,7 +69,6 @@ xiaomusic-core 是小米音箱的 Python 后端服务，提供音乐播放、设
 2. `docs/spec/*`
 3. `docs/architecture/*`
 4. `ARCHITECTURE.md`
-5. `docs/archive/*`（历史归档，不作为当前实现依据）
 
 ---
 
@@ -79,7 +78,6 @@ xiaomusic-core 是小米音箱的 Python 后端服务，提供音乐播放、设
 |---|---|---|
 | [系统宪法](./docs/architecture/constraints.md) | 禁止和必须清单 | 改任何边界前 |
 | [状态权威](./docs/architecture/state-authority.md) | 每个状态的唯一权威归属 | 改状态字段前 |
-| [提交前检查](./docs/ai-review-checklist.md) | AI Review Checklist | 改代码前 |
 | [贡献指南](./docs/architecture/contributor_guide.md) | 改动前置规则与文档更新约束 | 改任何模块前 |
 
 ---
@@ -119,11 +117,10 @@ xiaomusic-core 是小米音箱的 Python 后端服务，提供音乐播放、设
 
 | 文档 | 说明 |
 |---|---|
-| [Architecture 文档地图](docs/architecture/README.md) | 架构文档索引：权威架构、深度审计、设计治理三类文档分类 |
+| [Architecture 文档地图](docs/architecture/README.md) | 架构文档索引 |
 | [Spec 文档地图](docs/spec/README.md) | 规范文档索引：core、playback、auth、relay 规范（规范 > 架构） |
 | [API v1 规范](docs/api/api_v1_spec.md) | v1 接口契约、白名单、错误模型、Class A/B/C 分级 |
 | [ADR 目录](docs/adr/README.md) | 架构决策记录 |
-| [AI Review Checklist](docs/ai-review-checklist.md) | 提交前检查清单 |
 
 ## ADR 流程
 

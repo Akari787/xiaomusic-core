@@ -237,4 +237,3 @@ if not url.startswith("http"):
 - [ADR-0004: 状态权威单一化](../adr/0004-state-authority.md)
 - [ADR-0005: 统一事件模型](../adr/0005-event-model.md)
 - [State Authority 偏差表](./state-authority.md)
-- [AI Review Checklist](../ai-review-checklist.md)

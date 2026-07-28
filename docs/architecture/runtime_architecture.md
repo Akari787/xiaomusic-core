@@ -46,7 +46,7 @@ api 层
 
 relay
     ├── **目标边界**：独立运行，runtime 提供配置，relay 不反向依赖 runtime
-    └── **当前实现**：RelayRuntime（`xiaomusic/relay/runtime.py`）仍直接持有 `xiaomusic` 引用（见 `docs/architecture/runtime-boundary.md` §2.4 危险信号）
+    └── **当前实现**：RelayRuntime（`xiaomusic/relay/runtime.py`）仍直接持有 `xiaomusic` 引用
 ```
 
 **关键约束：**

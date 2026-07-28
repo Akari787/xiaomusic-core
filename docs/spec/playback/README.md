@@ -11,8 +11,6 @@
 | `player_state_projection_spec.md` | 播放状态快照语义规范（字段定义、revision） | **核心权威** |
 | `player_stream_sse_spec.md` | SSE 推送协议规范 | **核心权威** |
 | `playback_coordinator_interface.md` | PlaybackCoordinator 接口约束 | **核心权威** |
-| `webui_playback_state_machine_mapping.md` | WebUI 状态机映射（迁移用，非当前依据） | 迁移参考 |
-| `auto_switch_delay_*.md` | 自动切歌延迟分析/验收 | 专项调研 |
 
 ## 关键约束
 
@@ -23,8 +21,6 @@
 ## 层级说明
 
 - **核心权威**：状态/SSE/接口规范，改动前必须阅读
-- **迁移参考**：历史映射文档，用于理解旧实现
-- **专项调研**：特定问题的深度分析
 
 ## 相关文档
 

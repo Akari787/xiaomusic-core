@@ -71,7 +71,6 @@
 3. docs/architecture/*             ← 系统结构、模块归属
    └─ system_overview.md           ← architecture 内优先级最高
 4. ARCHITECTURE.md                 ← 高层概述（与 system_overview 互补）
-5. docs/archive/*                  ← 历史归档，不作为当前实现依据
 ```
 
 ---
@@ -84,4 +83,3 @@
 | [API v1 规范](../api/api_v1_spec.md) | v1 接口契约、白名单、错误模型 |
 | [系统宪法](../architecture/constraints.md) | 禁止清单、必须清单 |
 | [ADR 目录](../adr/README.md) | 架构决策记录 |
-| [AI Review Checklist](../ai-review-checklist.md) | 提交前检查清单 |

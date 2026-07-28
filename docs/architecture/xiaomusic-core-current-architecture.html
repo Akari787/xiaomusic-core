@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>xiaomusic-core 当前架构</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #657086;
+      --line: #7c8799;
+      --paper: #f3f6fb;
+      --card: #ffffff;
+      --api: #fff0dc;
+      --api-border: #c87914;
+      --playback: #e9f3ff;
+      --playback-border: #4f7db7;
+      --runtime: #f1e9f5;
+      --runtime-border: #88659b;
+      --state: #e8f5e5;
+      --state-border: #648e5a;
+      --task: #fff7d9;
+      --task-border: #b4932f;
+      --shadow: 0 18px 50px rgba(31, 45, 72, .09);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 15% 0%, #e8f1ff 0, transparent 28rem),
+        radial-gradient(circle at 90% 20%, #f2eafa 0, transparent 25rem),
+        var(--paper);
+      font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+      line-height: 1.55;
+    }
+    .page { width: min(1560px, calc(100% - 32px)); margin: 0 auto; padding: 42px 0 64px; }
+    header { display: flex; justify-content: space-between; gap: 32px; align-items: end; margin-bottom: 24px; }
+    h1 { margin: 0 0 8px; font-size: clamp(28px, 3.8vw, 48px); letter-spacing: -.035em; }
+    .lead { margin: 0; color: var(--muted); font-size: 16px; max-width: 900px; }
+    .stamp { flex: 0 0 auto; padding: 8px 12px; border: 1px solid #ccd4e2; border-radius: 999px; background: rgba(255,255,255,.72); color: #536078; font-size: 13px; }
+    .diagram-shell { overflow: auto; border: 1px solid #d9e0eb; border-radius: 22px; background: rgba(255,255,255,.9); box-shadow: var(--shadow); }
+    svg { display: block; width: 100%; min-width: 1180px; height: auto; }
+    .layer { stroke-width: 2; rx: 18; }
+    .layer-label { font-size: 18px; font-weight: 800; fill: #29354b; letter-spacing: .03em; }
+    .node { stroke-width: 2; rx: 12; filter: url(#softShadow); }
+    .node-title { font-size: 17px; font-weight: 800; fill: #172033; text-anchor: middle; }
+    .node-sub { font-size: 13px; fill: #4f5c70; text-anchor: middle; }
+    .edge { fill: none; stroke: #637188; stroke-width: 2.2; marker-end: url(#arrow); }
+    .return { fill: none; stroke: #4f7db7; stroke-width: 2.2; stroke-dasharray: 8 7; marker-end: url(#arrowBlue); }
+    .edge-label { font-size: 12px; fill: #455269; paint-order: stroke; stroke: white; stroke-width: 4px; stroke-linejoin: round; text-anchor: middle; }
+    .rule-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 18px; }
+    .rule { padding: 16px 18px; border: 1px solid #d9e0eb; border-radius: 14px; background: rgba(255,255,255,.82); }
+    .rule b { display: block; margin-bottom: 4px; font-size: 14px; }
+    .rule span { color: var(--muted); font-size: 13px; }
+    .details { display: grid; grid-template-columns: 1.2fr .8fr; gap: 18px; margin-top: 18px; }
+    .panel { padding: 24px; border: 1px solid #d9e0eb; border-radius: 18px; background: rgba(255,255,255,.88); }
+    .panel h2 { margin: 0 0 14px; font-size: 20px; }
+    .chain { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .chain code { padding: 7px 10px; border-radius: 8px; background: #eef3fa; color: #273750; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; }
+    .chain i { color: #8792a4; font-style: normal; }
+    ul { margin: 10px 0 0; padding-left: 21px; }
+    li { margin: 7px 0; color: #405069; }
+    .legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 14px; color: #59677e; font-size: 13px; }
+    .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; border-radius: 3px; }
+    footer { margin-top: 20px; color: #768197; font-size: 12px; text-align: right; }
+    @media (max-width: 900px) {
+      .page { width: min(100% - 20px, 1560px); padding-top: 24px; }
+      header { display: block; }
+      .stamp { display: inline-block; margin-top: 12px; }
+      .rule-strip, .details { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <div>
+      <h1>xiaomusic-core 当前架构</h1>
+      <p class="lead">从 WebUI 和公共 API 到设备级命令仲裁、运行时状态与物理音箱的现行控制链。图中实线表示命令或数据流，蓝色虚线表示只读状态与观察回流。</p>
+    </div>
+    <div class="stamp">Current · T00–T08</div>
+  </header>
+
+  <section class="diagram-shell" aria-label="xiaomusic-core 分层架构图">
+    <svg viewBox="0 0 1560 1190" role="img" aria-labelledby="diagramTitle diagramDesc">
+      <title id="diagramTitle">xiaomusic-core 当前分层架构</title>
+      <desc id="diagramDesc">展示客户端、API、播放编排、运行时服务和设备执行五层，以及控制流和状态回流。</desc>
+      <defs>
+        <filter id="softShadow" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#26344d" flood-opacity=".10"/></filter>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#637188"/></marker>
+        <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#4f7db7"/></marker>
+      </defs>
+
+      <!-- layer backgrounds -->
+      <rect class="layer" x="30" y="24" width="1500" height="132" fill="#f6f7f9" stroke="#8a94a4"/>
+      <text class="layer-label" x="52" y="54">CLIENTS</text>
+      <rect class="layer" x="30" y="180" width="1500" height="150" fill="#fffaf2" stroke="var(--api-border)"/>
+      <text class="layer-label" x="52" y="211">API BOUNDARY · FASTAPI</text>
+      <rect class="layer" x="30" y="354" width="1500" height="236" fill="#f2f7ff" stroke="var(--playback-border)"/>
+      <text class="layer-label" x="52" y="385">PLAYBACK ORCHESTRATION</text>
+      <rect class="layer" x="30" y="614" width="1500" height="166" fill="#faf5fc" stroke="var(--runtime-border)"/>
+      <text class="layer-label" x="52" y="645">RUNTIME SERVICES</text>
+      <rect class="layer" x="30" y="804" width="1500" height="312" fill="#f4faf4" stroke="var(--state-border)"/>
+      <text class="layer-label" x="52" y="835">DEVICE EXECUTION · 每设备单一运行时权威</text>
+
+      <!-- clients -->
+      <g><rect class="node" x="130" y="70" width="270" height="62" fill="var(--playback)" stroke="var(--playback-border)"/><text class="node-title" x="265" y="96">WebUI</text><text class="node-sub" x="265" y="118">只发送播放与导航意图</text></g>
+      <g><rect class="node" x="640" y="70" width="310" height="62" fill="var(--playback)" stroke="var(--playback-border)"/><text class="node-title" x="795" y="96">Home Assistant / 第三方</text><text class="node-sub" x="795" y="118">POST /play · control intents</text></g>
+      <g><rect class="node" x="1160" y="70" width="260" height="62" fill="var(--runtime)" stroke="var(--runtime-border)"/><text class="node-title" x="1290" y="96">管理员</text><text class="node-sub" x="1290" y="118">认证 · 配置 · 文件管理</text></g>
+
+      <!-- API -->
+      <g><rect class="node" x="100" y="231" width="250" height="68" fill="var(--api)" stroke="var(--api-border)"/><text class="node-title" x="225" y="258">Public API</text><text class="node-sub" x="225" y="282">/api/v1/*</text></g>
+      <g><rect class="node" x="470" y="231" width="250" height="68" fill="var(--api)" stroke="var(--api-border)"/><text class="node-title" x="595" y="258">Internal API</text><text class="node-sub" x="595" y="282">/api/auth · /api/file</text></g>
+      <g><rect class="node" x="840" y="231" width="240" height="68" fill="var(--api)" stroke="var(--api-border)"/><text class="node-title" x="960" y="258">runtime_provider</text><text class="node-sub" x="960" y="282">依赖注入</text></g>
+      <g><rect class="node" x="1200" y="231" width="260" height="68" fill="var(--api)" stroke="var(--api-border)"/><text class="node-title" x="1330" y="258">Player State API / SSE</text><text class="node-sub" x="1330" y="282">只读快照与事件</text></g>
+
+      <!-- playback -->
+      <g><rect class="node" x="70" y="425" width="220" height="92" fill="var(--playback)" stroke="var(--playback-border)"/><text class="node-title" x="180" y="453">PlaybackFacade</text><text class="node-sub" x="180" y="476">唯一 API 门面</text><text class="node-sub" x="180" y="496">纯读状态投影</text></g>
+      <g><rect class="node" x="350" y="425" width="250" height="92" fill="var(--playback)" stroke="var(--playback-border)"/><text class="node-title" x="475" y="451">PlaybackCoordinator</text><text class="node-sub" x="475" y="475">resolve → prepare → dispatch</text><text class="node-sub" x="475" y="496">deferred accepted receipt</text></g>
+      <g><rect class="node" x="680" y="404" width="240" height="70" fill="var(--state)" stroke="var(--state-border)"/><text class="node-title" x="800" y="431">SourceRegistry</text><text class="node-sub" x="800" y="454">local · Jellyfin · URL · site</text></g>
+      <g><rect class="node" x="680" y="495" width="240" height="70" fill="var(--state)" stroke="var(--state-border)"/><text class="node-title" x="800" y="522">DeliveryAdapter</text><text class="node-sub" x="800" y="545">direct → proxy plan</text></g>
+      <g><rect class="node" x="1000" y="425" width="210" height="92" fill="var(--playback)" stroke="var(--playback-border)"/><text class="node-title" x="1105" y="455">TransportRouter</text><text class="node-sub" x="1105" y="479">capability policy</text></g>
+      <g><rect class="node" x="1280" y="425" width="210" height="92" fill="var(--playback)" stroke="var(--playback-border)"/><text class="node-title" x="1385" y="455">Mina / MiIO adapters</text><text class="node-sub" x="1385" y="479">Device callbacks</text></g>
+
+      <!-- runtime -->
+      <g><rect class="node" x="65" y="674" width="270" height="72" fill="var(--runtime)" stroke="var(--runtime-border)"/><text class="node-title" x="200" y="701">XiaoMusic Runtime</text><text class="node-sub" x="200" y="725">生命周期 · DI · EventBus</text></g>
+      <g><rect class="node" x="390" y="674" width="210" height="72" fill="var(--runtime)" stroke="var(--runtime-border)"/><text class="node-title" x="495" y="701">AuthManager</text><text class="node-sub" x="495" y="725">TokenStore</text></g>
+      <g><rect class="node" x="655" y="674" width="210" height="72" fill="var(--runtime)" stroke="var(--runtime-border)"/><text class="node-title" x="760" y="701">Config</text><text class="node-sub" x="760" y="725">ConfigManager</text></g>
+      <g><rect class="node" x="920" y="674" width="240" height="72" fill="var(--state)" stroke="var(--state-border)"/><text class="node-title" x="1040" y="701">MusicLibrary</text><text class="node-sub" x="1040" y="725">歌单成员与实体事实</text></g>
+      <g><rect class="node" x="1215" y="674" width="240" height="72" fill="var(--task)" stroke="var(--task-border)"/><text class="node-title" x="1335" y="701">Relay / Proxy</text><text class="node-sub" x="1335" y="725">可选流中转</text></g>
+
+      <!-- device -->
+      <g><rect class="node" x="60" y="905" width="190" height="76" fill="var(--state)" stroke="var(--state-border)"/><text class="node-title" x="155" y="933">DeviceManager</text><text class="node-sub" x="155" y="957">DID / profile registry</text></g>
+      <rect x="300" y="861" width="790" height="218" rx="15" fill="#fff" stroke="var(--state-border)" stroke-width="2"/>
+      <text class="layer-label" x="322" y="891">XiaoMusicDevice</text>
+      <g><rect class="node" x="326" y="920" width="220" height="112" fill="var(--task)" stroke="var(--task-border)"/><text class="node-title" x="436" y="949">DeviceCommandArbiter</text><text class="node-sub" x="436" y="975">单 worker · barrier</text><text class="node-sub" x="436" y="997">latest pending wins</text></g>
+      <g><rect class="node" x="570" y="920" width="155" height="112" fill="var(--state)" stroke="var(--state-border)"/><text class="node-title" x="647" y="949">RuntimeState</text><text class="node-sub" x="647" y="975">phase</text><text class="node-sub" x="647" y="997">lifecycle token</text></g>
+      <g><rect class="node" x="748" y="920" width="155" height="112" fill="var(--state)" stroke="var(--state-border)"/><text class="node-title" x="825" y="949">稳定队列</text><text class="node-sub" x="825" y="975">items · index</text><text class="node-sub" x="825" y="997">session id</text></g>
+      <g><rect class="node" x="926" y="920" width="138" height="112" fill="var(--task)" stroke="var(--task-border)"/><text class="node-title" x="995" y="949">TaskRegistry</text><text class="node-sub" x="995" y="975">timer · confirm</text><text class="node-sub" x="995" y="997">retry · probe</text></g>
+      <g><rect class="node" x="1150" y="905" width="170" height="76" fill="var(--api)" stroke="var(--api-border)"/><text class="node-title" x="1235" y="933">Mina / MiIO</text><text class="node-sub" x="1235" y="957">物理 dispatch</text></g>
+      <g><rect class="node" x="1370" y="905" width="140" height="76" fill="#f5f5f5" stroke="#778193" stroke-dasharray="6 5"/><text class="node-title" x="1440" y="933">小米音箱</text><text class="node-sub" x="1440" y="957">远端异步状态</text></g>
+      <text x="695" y="1063" class="node-sub">completion timer 是正常结束后 AUTO_NEXT 的唯一来源 · stale callback 静默丢弃</text>
+
+      <!-- command and data edges -->
+      <path class="edge" d="M265 132 V196 H225 V231"/><text class="edge-label" x="260" y="189">HTTP</text>
+      <path class="edge" d="M795 132 V170 H225 V231"/><text class="edge-label" x="575" y="164">HTTP</text>
+      <path class="edge" d="M1290 132 V210 H595 V231"/><text class="edge-label" x="1000" y="204">admin</text>
+      <path class="edge" d="M225 299 V425"/><text class="edge-label" x="270" y="349">play / control</text>
+      <path class="edge" d="M595 299 H960 V231"/><text class="edge-label" x="780" y="318">runtime context</text>
+      <path class="edge" d="M290 471 H350"/><text class="edge-label" x="320" y="461">orchestrate</text>
+      <path class="edge" d="M600 452 H680"/><text class="edge-label" x="640" y="443">resolve</text>
+      <path class="edge" d="M600 493 H640 V530 H680"/><text class="edge-label" x="635" y="523">prepare</text>
+      <path class="edge" d="M600 471 H1000"/><text class="edge-label" x="960" y="462">dispatch</text>
+      <path class="edge" d="M1210 471 H1280"/><text class="edge-label" x="1245" y="461">select</text>
+      <path class="edge" d="M960 299 V650 H200 V674"/><text class="edge-label" x="922" y="642">dependency injection</text>
+      <path class="edge" d="M335 710 H390"/><text class="edge-label" x="363" y="701">auth</text>
+      <path class="edge" d="M335 728 H640 V710 H655"/><text class="edge-label" x="620" y="701">config</text>
+      <path class="edge" d="M800 474 V636 H1040 V674"/><text class="edge-label" x="938" y="630">playlist facts</text>
+      <path class="edge" d="M800 565 V597 H1335 V674"/><text class="edge-label" x="1130" y="591">fallback stream</text>
+      <path class="edge" d="M200 746 V830 H155 V905"/><text class="edge-label" x="170" y="819">owns</text>
+      <path class="edge" d="M250 943 H300"/><text class="edge-label" x="274" y="934">DID</text>
+      <path class="edge" d="M1385 517 V812 H436 V920"/><text class="edge-label" x="1325" y="806">device callback</text>
+      <path class="edge" d="M546 955 H570"/>
+      <path class="edge" d="M546 997 H725 V976 H748"/><text class="edge-label" x="667" y="989">navigate</text>
+      <path class="edge" d="M903 976 H926"/>
+      <path class="edge" d="M436 1032 V1092 H1120 V943 H1150"/><text class="edge-label" x="1110" y="1085">physical command</text>
+      <path class="edge" d="M1320 943 H1370"/><text class="edge-label" x="1345" y="934">cloud / LAN</text>
+
+      <!-- status return -->
+      <path class="return" d="M647 920 V796 H180 V517"/><text class="edge-label" x="405" y="790">pure snapshot</text>
+      <path class="return" d="M180 425 V350 H1330 V299"/><text class="edge-label" x="1205" y="344">state / revision</text>
+      <path class="return" d="M1330 231 V168 H400 V132"/><text class="edge-label" x="1130" y="162">SSE / poll</text>
+    </svg>
+  </section>
+
+  <section class="rule-strip" aria-label="关键架构不变量">
+    <div class="rule"><b>单队列权威</b><span>队列快照、索引与播放 session 只属于每台 XiaoMusicDevice。</span></div>
+    <div class="rule"><b>API 无旁路</b><span>播放请求必须通过 PlaybackFacade 进入 Coordinator。</span></div>
+    <div class="rule"><b>意图式导航</b><span>next / previous 不重建队列、不重新洗牌，也不重新调用 /play。</span></div>
+    <div class="rule"><b>状态查询纯读</b><span>snapshot 不创建任务、不取消 timer，也不访问小米云。</span></div>
+  </section>
+
+  <section class="details">
+    <article class="panel">
+      <h2>标准播放控制链</h2>
+      <div class="chain">
+        <code>WebUI / Caller</code><i>→</i><code>Public API</code><i>→</i><code>PlaybackFacade</code><i>→</i><code>PlaybackCoordinator</code><i>→</i><code>TransportRouter</code><i>→</i><code>XiaoMusicDevice</code><i>→</i><code>Mina / MiIO</code><i>→</i><code>Speaker</code>
+      </div>
+      <ul>
+        <li>Coordinator 负责来源解析、投递计划与 transport 选择，不拥有设备队列。</li>
+        <li>direct → proxy fallback 在同一个设备 worker 中完成；同步响应只表示 accepted。</li>
+        <li>STOP / PAUSE 是 barrier，普通待处理意图按 latest-wins 收敛。</li>
+      </ul>
+    </article>
+    <aside class="panel">
+      <h2>图例与边界</h2>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--api);border:1px solid var(--api-border)"></i>API / 物理接口</span>
+        <span><i class="swatch" style="background:var(--playback);border:1px solid var(--playback-border)"></i>播放编排</span>
+        <span><i class="swatch" style="background:var(--runtime);border:1px solid var(--runtime-border)"></i>Runtime / Auth</span>
+        <span><i class="swatch" style="background:var(--state);border:1px solid var(--state-border)"></i>状态 / 事实</span>
+        <span><i class="swatch" style="background:var(--task);border:1px solid var(--task-border)"></i>任务 / 策略</span>
+      </div>
+      <ul>
+        <li>MusicLibrary 保存歌单成员事实。</li>
+        <li>RuntimeState 保存设备播放生命周期。</li>
+        <li>TaskRegistry 统一持有播放相关异步任务。</li>
+      </ul>
+    </aside>
+  </section>
+
+  <footer>基于现行源码与正式架构文档整理 · 可离线打开 · 无外部依赖</footer>
+</main>
+</body>
+</html>

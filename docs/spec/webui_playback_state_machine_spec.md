@@ -525,4 +525,4 @@ SSE 重连成功并收到初始 `player_state` 事件后，前端必须：
 - **`docs/spec/player_state_projection_spec.md`（投影规范）**：本文档的上位规范，定义 `serverState` 的字段模型与语义。本文档所有涉及字段语义的判断，以投影规范为准。
 - **`docs/spec/player_stream_sse_spec.md`（SSE 规范）**：定义 SSE 传输协议细节，包括连接行为、事件格式、重连机制与心跳。本文档的 SSE 消费逻辑必须与 SSE 规范保持一致。
 - **`docs/api/api_v1_spec.md`（API v1 契约）**：定义 `GET /api/v1/player/state` 与 `GET /api/v1/player/stream` 的接口契约。本文档的降级轮询与初始化逻辑以 API v1 契约为准。
-- **`docs/spec/playback/webui_playback_state_machine_mapping.md`（实现映射清单）**：基于旧模型的实现映射文档。该文档描述的旧实现结构（`mergePlayingViewState`、`stabilityWindow`、`localPlayback*` 等）属于本文档第 13 章定义的"应删除或降级"的旧逻辑，不再作为新实现的参考依据。
+旧 WebUI 实现映射已经归档，不再作为当前实现或文档依赖。历史结构（`mergePlayingViewState`、`stabilityWindow`、`localPlayback*` 等）统一按本文档第 13 章的迁移规则处理。

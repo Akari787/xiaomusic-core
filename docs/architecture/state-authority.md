@@ -8,12 +8,12 @@
 
 ### 1.1 所有状态汇总
 
-基于 `runtime-dependency.md`、`state-flow.md`、`lifecycle.md`、`source-system.md`、`runtime-boundary.md`、`api-contract.md` 的分析，汇总如下：
+基于系统审计分析，汇总如下：
 
 | 状态 | 文件 | 应有权威 | 当前实际权威 | 偏差说明 | 严重程度 |
 |---|---|---|---|---|---|
 | 播放状态（is_playing） | `device_player.py` | `device_player.py` | `device_player.py` + `xiaomusic.xiaomusic`（通过 xiaomusic 实例访问） | 当前权威正确，但 device_player 直接持有 xiaomusic 引用，访问路径不干净 | 低 |
-| 播放列表（_play_list） | `device_player.py` | `device_player.py` 或 `music_library.py`（单一权威） | `device_player.py` + `music_library.py`（双持有） | music_library 持有 music_list，device_player 持有 _play_list_items，两份数据未同步 | 中 |
+| 歌单事实与设备运行时队列 | `music_library.py` / `device_player.py` | `music_library` 拥有 membership；`device_player` 拥有当前 session 快照与索引 | 职责已分离 | `_play_list_items` 是从歌单事实建立的 session 快照，不得写回或在 next/previous 时重建 | 无 |
 | 认证状态（auth_state） | `auth.py` | `auth.py` | `auth.py`（正确） | 无偏差 | 无 |
 | Auth token（_mina_token） | `auth.py` | `auth.py` | `auth.py`（正确） | 无偏差 | 无 |
 | runtime_auth_ready | `auth.py` | `auth.py` | `auth.py`（正确） | 无偏差 | 无 |
@@ -58,11 +58,13 @@
 
 ## 3. 下一步建议
 
-### 3.1 立即可执行（低风险）
+### 3.1 已落地的低风险约束
 
-1. **统一播放列表权威**：选择 `music_library` 作为播放列表的单一权威，`device_player` 通过 query 接口访问，不自行缓存
-2. **为异步任务添加 owner 标注**：在 `_recovery_task`、`_next_timer`、`_duration_probe_task` 的创建处添加注释标注 owner
-3. **session 状态通过 manager 接口修改**：将 `_stop_oldest_active_session` 中的直接状态操作改为调用 `session_manager` 的 API
+1. **歌单事实与运行时队列分离**：`music_library` 提供 membership，`device_player` 只为当前 session 保存稳定队列快照与索引。
+2. **控制意图单入口**：WebUI next/previous 不点名曲目，统一经 Public API、Coordinator、Transport 进入设备导航。
+3. **随机 session 稳定**：新 session 只洗牌一次；手动和自动 next/previous 均消费同一快照。
+4. **异步任务 owner 明确**：延迟任务受 session ID 约束，旧回调不得覆盖新播放状态。
+5. **session 状态通过 manager 接口修改**：relay session 不得被其他模块越界写入。
 
 ### 3.2 中期重构（需要 ADR）
 
@@ -74,3 +76,11 @@
 
 1. **xiaomusic.xiaomusic 减肥**：作为应用入口，不承担具体业务逻辑
 2. **引入状态权威注册表**：将每个状态的权威显式注册，所有状态变化必须经过权威对应的接口
+
+当前播放控制模型见 [`playback-control-model.md`](playback-control-model.md)。
+
+## 4. T07 校正（2026-07-28）
+
+T03-T06 已落地后，播放 runtime 的实际权威为 `PlaybackRuntimeState.phase`、`LifecycleToken` 与 `PlaybackTaskRegistry`：Facade snapshot 只读投影 phase；Device arbiter 串行化命令；completion/failure policy 决定 timer completion 与 retry 行为。`_last_cmd` 仅保留为 legacy diagnostic，不能决定 Facade/state authority、failure/retry 或 completion 合法性。`_play_session_id` 只作 async media session invalidation id。
+
+查询约束：`get_offset_duration`、Facade snapshot 与 `player_state` 不创建/取消 task，不调用 Mina，不写 runtime state，不隐式修复；异常只返回安全投影并记录日志。`POST /api/v1/play` 可返回 deferred `accepted=true, started=null`；stop accepted 不等于物理 STOPPED，需通过状态快照确认。

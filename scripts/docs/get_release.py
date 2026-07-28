@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 import requests
 
@@ -57,7 +58,9 @@ def main():
         return
 
     versions = extract_tar_gz_files(releases)
-    save_to_json(versions, "docs/.vitepress/dist/versions.json")
+    repo_root = Path(__file__).resolve().parents[2]
+    output = repo_root / "docs" / ".vitepress" / "dist" / "versions.json"
+    save_to_json(versions, output)
 
 
 if __name__ == "__main__":

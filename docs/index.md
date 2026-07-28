@@ -28,33 +28,23 @@ features:
     details: 支持 Jellyfin 搜索与歌单同步
 ---
 
-## 深度体检
+## 用户 / 贡献者入口
 
-[执行方案](/plan/xiaomusic-core_深度体检与长期演化执行方案_v2)
+| 入口 | 说明 |
+|---|---|
+| [API v1 规范](api/api_v1_spec) | v1 接口契约、白名单、错误模型 |
+| [Architecture 文档地图](architecture/README) | 系统结构、模块边界、约束定义 |
+| [ADR 目录](adr/README) | 架构决策记录 |
+| [Spec 文档地图](spec/README) | 运行时行为规范（状态语义、SSE、auth 恢复等） |
 
-当前进度：阶段 5（已完成）
-
-产出文档索引：
-- [Day 0 现状快照](/snapshot/known-bugs) — 已知 bug、迷之能用、雷区
-- [架构审计报告](/architecture/runtime-dependency) — 运行时依赖、状态流、生命周期
-- [边界审计报告](/architecture/source-system) — Source 系统、Runtime 边界、API 契约
-- [状态权威偏差表](/architecture/state-authority) — 状态权威、质量门禁
-- [可观测性设计](/architecture/event-model) — 统一事件模型、Correlation ID、Snapshot 端点
-- [ADR 目录](/adr/) — 5 个架构决策记录
-- [系统宪法](/architecture/constraints) — 禁止清单、必须清单
-- [AI Review Checklist](/ai-review-checklist) — 提交前检查
-
----
-
-## AI 开工入口
+### AI 开工入口
 
 | 文档 | 说明 |
 |---|---|
-| [ARCHITECTURE.md](https://github.com/Akari787/xiaomusic-core/blob/main/ARCHITECTURE.md) | AI 开工协议：5步开工流程、九大边界、约束清单 |
+| [ARCHITECTURE.md](https://github.com/Akari787/xiaomusic-core/blob/main/ARCHITECTURE.md) | AI 开工协议：5 步开工流程、九大边界、约束清单 |
 | [Architecture 文档地图](architecture/README) | 架构文档索引 |
 | [Spec 文档地图](spec/README) | 规范文档索引（规范 > 架构） |
 | [API v1 规范](api/api_v1_spec) | v1 接口契约、白名单、错误模型 |
-| [AI Review Checklist](ai-review-checklist) | 提交前检查清单 |
 
 ## 专题入口
 
@@ -65,3 +55,4 @@ features:
 | WebUI playlist 状态 | [架构：webui_playlist_state](architecture/webui_playlist_state) |
 | 播放状态快照 | [spec：player_state_projection_spec](spec/player_state_projection_spec) |
 | SSE 推送协议 | [spec：player_stream_sse_spec](spec/player_stream_sse_spec) |
+| 播放控制模型 | [架构：playback-control-model](architecture/playback-control-model) |
