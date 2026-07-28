@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram id="current-architecture" name="Current Architecture">
+    <mxGraphModel dx="1800" dy="1350" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1350" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="xiaomusic-core 当前架构（T00–T08）" style="text;html=1;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="100" y="20" width="1600" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="clients" value="Clients" style="swimlane;startSize=30;container=1;pointerEvents=0;html=1;rounded=1;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="70" width="1600" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="webui" value="WebUI&#xa;只发送播放意图" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="clients">
+          <mxGeometry x="120" y="45" width="260" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="external" value="Home Assistant / 第三方调用方&#xa;POST /play · control intents" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="clients">
+          <mxGeometry x="670" y="45" width="300" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="operator" value="管理员&#xa;认证 / 配置 / 文件管理" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="clients">
+          <mxGeometry x="1220" y="45" width="260" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="apiLayer" value="API boundary · FastAPI" style="swimlane;startSize=30;container=1;pointerEvents=0;html=1;rounded=1;fillColor=#fff8ed;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="230" width="1600" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="publicApi" value="Public API&#xa;/api/v1/*" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="apiLayer">
+          <mxGeometry x="100" y="50" width="260" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="internalApi" value="Internal API&#xa;/api/auth · /api/file" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="apiLayer">
+          <mxGeometry x="520" y="50" width="260" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="runtimeProvider" value="runtime_provider&#xa;依赖注入" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="apiLayer">
+          <mxGeometry x="940" y="50" width="240" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="sse" value="Player State API / SSE&#xa;只读快照与事件" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="apiLayer">
+          <mxGeometry x="1320" y="50" width="240" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="playbackLayer" value="Playback orchestration" style="swimlane;startSize=30;container=1;pointerEvents=0;html=1;rounded=1;fillColor=#edf5ff;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="420" width="1600" height="250" as="geometry" />
+        </mxCell>
+        <mxCell id="facade" value="PlaybackFacade&#xa;唯一 API 门面&#xa;纯读状态投影" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="playbackLayer">
+          <mxGeometry x="50" y="70" width="240" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="coordinator" value="PlaybackCoordinator&#xa;resolve → prepare → dispatch&#xa;deferred accepted receipt" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="playbackLayer">
+          <mxGeometry x="350" y="70" width="270" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="sourceRegistry" value="SourceRegistry&#xa;local · Jellyfin · URL · site" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="playbackLayer">
+          <mxGeometry x="700" y="45" width="250" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="delivery" value="DeliveryAdapter&#xa;direct → proxy plan" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="playbackLayer">
+          <mxGeometry x="700" y="145" width="250" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="transportRouter" value="TransportRouter&#xa;capability policy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="playbackLayer">
+          <mxGeometry x="1030" y="70" width="230" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="transportCallbacks" value="Mina / MiIO adapters&#xa;Device callbacks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="playbackLayer">
+          <mxGeometry x="1320" y="70" width="230" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="runtimeLayer" value="Runtime services" style="swimlane;startSize=30;container=1;pointerEvents=0;html=1;rounded=1;fillColor=#f7f1fa;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="710" width="1600" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="runtime" value="XiaoMusic Runtime&#xa;生命周期 / 依赖注入 / EventBus" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="runtimeLayer">
+          <mxGeometry x="40" y="55" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="auth" value="AuthManager&#xa;TokenStore" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="runtimeLayer">
+          <mxGeometry x="410" y="55" width="220" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="config" value="Config / ConfigManager" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="runtimeLayer">
+          <mxGeometry x="700" y="55" width="220" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="musicLibrary" value="MusicLibrary&#xa;歌单成员与实体事实" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="runtimeLayer">
+          <mxGeometry x="990" y="45" width="240" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="relay" value="Relay / Proxy&#xa;可选流中转" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="runtimeLayer">
+          <mxGeometry x="1300" y="55" width="240" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="deviceLayer" value="Device execution · 每设备单一运行时权威" style="swimlane;startSize=30;container=1;pointerEvents=0;html=1;rounded=1;fillColor=#f4faf4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="930" width="1600" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="deviceManager" value="DeviceManager&#xa;DID / profile registry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="deviceLayer">
+          <mxGeometry x="30" y="80" width="210" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="devicePlayer" value="XiaoMusicDevice" style="swimlane;startSize=30;container=1;pointerEvents=0;html=1;rounded=1;fillColor=#ffffff;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="deviceLayer">
+          <mxGeometry x="290" y="40" width="820" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="arbiter" value="DeviceCommandArbiter&#xa;单 worker · barrier · latest wins" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" parent="devicePlayer">
+          <mxGeometry x="20" y="50" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="runtimeState" value="PlaybackRuntimeState&#xa;phase / lifecycle token" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="devicePlayer">
+          <mxGeometry x="270" y="50" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="queue" value="稳定队列快照&#xa;_play_list_items / index" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="devicePlayer">
+          <mxGeometry x="460" y="50" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="taskRegistry" value="PlaybackTaskRegistry&#xa;timer / confirm / retry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" parent="devicePlayer">
+          <mxGeometry x="650" y="50" width="150" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="physicalApi" value="Mina / MiIO&#xa;物理 dispatch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="deviceLayer">
+          <mxGeometry x="1160" y="80" width="190" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="speaker" value="小米音箱&#xa;远端异步状态" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;" vertex="1" parent="deviceLayer">
+          <mxGeometry x="1400" y="80" width="170" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="note" value="实线：命令 / 数据流　　虚线：状态 / 观察回流　　accepted ≠ physical completed" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;fontColor=#4b5563;" vertex="1" parent="1">
+          <mxGeometry x="300" y="1190" width="1200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" value="Legend" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#666666;verticalAlign=top;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="540" y="1230" width="720" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="legApi" value="API" style="rounded=1;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="legend"><mxGeometry x="20" y="35" width="100" height="25" as="geometry" /></mxCell>
+        <mxCell id="legPlayback" value="Playback" style="rounded=1;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="legend"><mxGeometry x="140" y="35" width="110" height="25" as="geometry" /></mxCell>
+        <mxCell id="legRuntime" value="Runtime / Auth" style="rounded=1;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="legend"><mxGeometry x="270" y="35" width="130" height="25" as="geometry" /></mxCell>
+        <mxCell id="legState" value="State / Facts" style="rounded=1;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="legend"><mxGeometry x="420" y="35" width="120" height="25" as="geometry" /></mxCell>
+        <mxCell id="legTask" value="Task / Policy" style="rounded=1;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="legend"><mxGeometry x="560" y="35" width="130" height="25" as="geometry" /></mxCell>
+
+        <mxCell id="e1" value="HTTP" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.25;entryY=0;" edge="1" parent="1" source="webui" target="publicApi"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e2" value="HTTP" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.75;entryY=0;" edge="1" parent="1" source="external" target="publicApi"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e3" value="admin" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="operator" target="internalApi"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e4" value="play / control" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="publicApi" target="facade"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e5" value="runtime context" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="internalApi" target="runtimeProvider"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e6" value="orchestrate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="facade" target="coordinator"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e7" value="resolve" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.3;entryX=0;entryY=0.5;" edge="1" parent="1" source="coordinator" target="sourceRegistry"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e8" value="prepare" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.7;entryX=0;entryY=0.5;" edge="1" parent="1" source="coordinator" target="delivery"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e9" value="dispatch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="coordinator" target="transportRouter"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e10" value="selected transport" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="transportRouter" target="transportCallbacks"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e11" value="dependency injection" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="runtimeProvider" target="runtime"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e12" value="token/session" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.35;entryX=0;entryY=0.35;" edge="1" parent="1" source="runtime" target="auth"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e13" value="configuration" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.65;entryX=0;entryY=0.5;" edge="1" parent="1" source="runtime" target="config"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e14" value="playlist facts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="sourceRegistry" target="musicLibrary"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e15" value="fallback stream" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="delivery" target="relay"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e16" value="device callback" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="transportCallbacks" target="arbiter"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e17" value="owns devices" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.25;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="runtime" target="deviceManager"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e18" value="select DID" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="deviceManager" target="devicePlayer"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e19" value="reduce phase" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.3;entryX=0;entryY=0.3;" edge="1" parent="1" source="arbiter" target="runtimeState"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e20" value="navigate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.7;entryX=0;entryY=0.5;" edge="1" parent="1" source="arbiter" target="queue"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e21" value="own async work" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="queue" target="taskRegistry"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e22" value="physical command" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0;entryY=0.5;" edge="1" parent="1" source="arbiter" target="physicalApi"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="425" y="1150" /><mxPoint x="1180" y="1150" /><mxPoint x="1180" y="1055" /></Array></mxGeometry></mxCell>
+        <mxCell id="e23" value="cloud / LAN" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="physicalApi" target="speaker"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e24" value="pure snapshot" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;strokeColor=#6c8ebf;endArrow=open;exitX=0.5;exitY=0;entryX=0.75;entryY=1;" edge="1" parent="1" source="runtimeState" target="facade"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="500" y="910" /><mxPoint x="500" y="690" /></Array></mxGeometry></mxCell>
+        <mxCell id="e25" value="state / revision" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;strokeColor=#6c8ebf;endArrow=open;exitX=1;exitY=0.3;entryX=0.5;entryY=1;" edge="1" parent="1" source="facade" target="sse"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1730" y="520" /><mxPoint x="1730" y="400" /><mxPoint x="1540" y="400" /></Array></mxGeometry></mxCell>
+        <mxCell id="e26" value="SSE / poll" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;strokeColor=#6c8ebf;endArrow=open;exitX=0.5;exitY=0;entryX=0.75;entryY=1;" edge="1" parent="1" source="sse" target="webui"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1640" y="215" /><mxPoint x="560" y="215" /></Array></mxGeometry></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

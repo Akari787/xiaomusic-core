@@ -32,12 +32,24 @@
 |---|---|---|
 | 播放状态（is_playing） | `device_player.py` | `device_player.get_state()` |
 | 播放列表 | `music_library.py` | `music_library.get_playlist_items()` |
-| 播放队列（当前设备） | `device_player.py` | `device_player.get_queue()` |
+| 播放队列快照与当前索引（当前设备 session） | `device_player.py` | 设备导航接口与状态快照；调用方不得直接计算或修改索引 |
 | 认证状态 | `auth.py` | `auth.get_status()` |
 | 设备列表 | `device_manager.py` | `device_manager.list_devices()` |
 | 流会话状态 | `stream_session_manager.py` | `session_manager.update_state()` 等 API |
 | 配置 | `config.py` | `config.get()` |
 | 事件订阅 | `event_bus.py` | `event_bus.subscribe()` |
+
+### 播放队列补充决策（2026-07-23）
+
+`music_library` 与 `device_player` 的职责必须区分：
+
+- `music_library` 拥有歌单 membership 与 entity record 的事实。
+- `device_player` 从上述事实建立当前设备 session 的运行时队列快照，并独占当前索引。
+- 随机模式在新 session 建立时生成稳定的打乱快照；next/previous 只移动索引。
+- WebUI、Facade、Coordinator 与 transport 均不得自行计算下一首曲目或重建队列。
+- UI next、系统控制 next 与自动完成最终必须汇入同一个 `device_player` 导航入口。
+
+这不是播放列表双写：运行时快照服务于 session 顺序与历史回退，不能反向作为歌单成员事实写回 `music_library`。
 
 ### 禁止的模式
 
@@ -86,3 +98,16 @@ session_manager.update_state(sid, "stopped", error_code=None)
 - [ ] 新代码是否在某模块中直接修改了其他模块持有的状态？
 - [ ] 是否引入了新的状态双写（某状态被两个模块同时持有）？
 - [ ] session 状态修改是否通过 `session_manager` 接口？
+- [ ] next/previous 是否只发送控制意图，并由 `device_player` 移动当前队列索引？
+- [ ] 是否错误地在 next/previous 中调用了新播放入口、重新解析歌单或重新洗牌？
+
+相关控制不变量见 [`../architecture/playback-control-model.md`](../architecture/playback-control-model.md)。
+
+## T07 补充决策（2026-07-28）
+
+- `PlaybackRuntimeState.phase` 是运行时播放状态权威；`LifecycleToken` 分别表达 queue session、command generation、track attempt。
+- `PlaybackTaskRegistry` 是 playback async task 的 owner；opaque task properties 仅为 test/legacy bridge，不承担 owner 职责。
+- `_last_cmd` 只允许作为 legacy diagnostic/logging，禁止参与 Facade snapshot、failure/retry/completion 判断。
+- `_play_session_id` 只用于 async media session invalidation，不复用为 queue/command/attempt ID。
+- 正常 completion 唯一由 duration timer expiry gate 负责。confirmation 只观察，不切歌；保留 T05 的 two-false 与 unknown grace 行为。
+- 查询路径必须纯读：状态异常不得写状态、创建/取消任务、调用 Mina 或隐式修复。

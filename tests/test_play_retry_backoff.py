@@ -1,57 +1,40 @@
-import asyncio
+"""T05-A pure completion-policy boundary tests.
+
+Owner lifecycle tests moved to tests/unit/test_t05b_failure_retry_owner.py.
+"""
 
 import pytest
 
 
-@pytest.mark.asyncio
-async def test_play_failure_backoff_and_degrade(monkeypatch):
-    from xiaomusic.device_player import XiaoMusicDevice
+@pytest.mark.parametrize(
+    ("count", "action", "delay"),
+    [
+        (1, "retry_same", 1.0),
+        (2, "retry_same", 2.0),
+        (3, "retry_next", 4.0),
+        (4, "retry_next", 8.0),
+        (5, "degraded", 0.0),
+    ],
+)
+def test_failure_policy_boundaries(count, action, delay):
+    from xiaomusic.playback.completion_policy import decide_failure_action
 
-    class Dummy:
-        def __init__(self):
-            self._play_fail_first_ts = 0.0
-            self._play_fail_last_reason = ""
-            self._play_failed_cnt = 0
-            self._degraded = False
-            self._degraded_notified = False
-            self._play_session_id = 1
-            self.is_playing = True
-            self._last_cmd = "play"
-            self.next_calls = 0
-            self.tts_calls = 0
+    decision = decide_failure_action(count, 0)
+    assert decision.action.value == action
+    assert decision.delay == delay
 
-        async def _play_next(self):
-            self.next_calls += 1
 
-        async def do_tts(self, msg):
-            self.tts_calls += 1
+def test_failure_policy_elapsed_and_single_play():
+    from xiaomusic.playback.completion_policy import (
+        FailureAction,
+        decide_failure_action,
+    )
 
-    d = Dummy()
+    assert decide_failure_action(1, 60).action is FailureAction.DEGRADED
+    assert decide_failure_action(1, 0, True).action is FailureAction.STOP
 
-    sleeps: list[float] = []
-    real_sleep = asyncio.sleep
 
-    async def fake_sleep(sec):
-        sleeps.append(float(sec))
-        if float(sec) == 0.0:
-            await real_sleep(0)
-        return None
+def test_failure_policy_delay_cap():
+    from xiaomusic.playback.completion_policy import decide_failure_action
 
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
-
-    # First 4 failures schedule retries with exponential backoff.
-    for i in range(4):
-        await XiaoMusicDevice._handle_play_failure(d, name="x", sid=1, reason="r")
-    # Allow scheduled tasks to run.
-    await asyncio.sleep(0)
-    # 5th failure should degrade and stop auto-next.
-    await XiaoMusicDevice._handle_play_failure(d, name="x", sid=1, reason="r")
-
-    assert d._degraded is True
-    assert d.tts_calls == 1
-    # Backoff sequence should start at 1s and grow.
-    backoff = [s for s in sleeps if s > 0]
-    assert backoff[0] == 1.0
-    assert backoff[1] == 2.0
-    assert backoff[2] == 4.0
-    assert backoff[3] == 8.0
+    assert decide_failure_action(4, 0).delay == 8.0

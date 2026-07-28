@@ -48,7 +48,7 @@ docker run -d --name xiaomusic-core \
 说明：
 
 - 若提供 `HTTP_AUTH_PASSWORD`，容器启动时会自动生成 bcrypt 哈希并用于运行时认证，无需手动生成
-- 若希望使用固定哈希，也可直接提供 `HTTP_AUTH_HASH`（可通过 `python scripts/generate_password_hash.py` 生成）
+- 若希望使用固定哈希，也可直接提供 `HTTP_AUTH_HASH`（可通过 `python scripts/auth/generate_password_hash.py` 生成）
 - 两者都提供时，优先使用 `HTTP_AUTH_HASH`
 - 启动后在设置页完成扫码登录即可使用
 
@@ -62,7 +62,6 @@ docker run -d --name xiaomusic-core \
 | [Architecture 文档地图](docs/architecture/README.md) | 架构文档索引 |
 | [Spec 文档地图](docs/spec/README.md) | 规范文档索引（规范 > 架构） |
 | [API v1 规范](docs/api/api_v1_spec.md) | v1 接口契约、白名单、错误模型 |
-| [AI Review Checklist](docs/ai-review-checklist.md) | 提交前检查清单 |
 
 ### 关键专题文档（按领域）
 

@@ -25,14 +25,13 @@ from xiaomusic.diagnostics import build_startup_diagnostics
 from xiaomusic.events import (
     CONFIG_CHANGED,
     DEVICE_CONFIG_CHANGED,
-    PLAYER_STATE_CHANGED,
     EventBus,
 )
 from xiaomusic.file_watcher import FileWatcherManager
 from xiaomusic.music_library import MusicLibrary
 from xiaomusic.online_music import OnlineMusicService
-from xiaomusic.plugin import PluginManager
 from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
+from xiaomusic.plugin import PluginManager
 from xiaomusic.security.token_store import TokenStore
 from xiaomusic.utils.network_utils import downloadfile
 from xiaomusic.utils.system_utils import deepcopy_data_no_sensitive_info
@@ -379,16 +378,24 @@ class XiaoMusic:
 
     # 播放一个 url
     async def play_url(self, did="", arg1="", **kwargs):
+        """Fast accepted external URL play via DeviceCommandArbiter.
+
+        Submits the intent and returns immediately with an accepted receipt.
+        Physical work (on_external_url_play / group_player_play /
+        on_external_url_play_started) is deferred to the arbiter executor.
+
+        Returns a JSON-serializable receipt dict with at least
+        {"accepted": True, "sequence": N}.
+        """
         self.log.info(f"手动推送链接：{arg1}")
         url = arg1
         device = self.device_manager.devices[did]
-        context = kwargs.get("context") or {}
+        raw_context = kwargs.get("context")
+        context = raw_context if isinstance(raw_context, dict) else {}
         resolved = kwargs.get("resolved") or {}
-        await device.on_external_url_play(context=context)
-        ret = await device.group_player_play(url)
-        if not (isinstance(ret, list) and all(ele is None for ele in ret)):
-            await device.on_external_url_play_started(context=context, resolved=resolved)
-        return ret
+        return await device.submit_external_url_play(
+            url=url, context=context, resolved=resolved
+        )
 
     # 口令:单曲循环
     async def set_play_type_one(self, did="", **kwargs):

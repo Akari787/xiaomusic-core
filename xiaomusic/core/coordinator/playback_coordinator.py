@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
 from xiaomusic.core.device.device_registry import DeviceRegistry
@@ -20,7 +22,7 @@ from xiaomusic.core.models.media import (
 )
 from xiaomusic.core.source.source_registry import SourceRegistry
 from xiaomusic.core.transport.transport_router import TransportRouter
-
+from xiaomusic.security.redaction import redact_text
 
 LOG = logging.getLogger("xiaomusic.core.playback_coordinator")
 
@@ -75,7 +77,7 @@ class PlaybackCoordinator:
                 last_expired_error = exc
                 continue
 
-            request_context = dict(request.context or {})
+            request_context = copy.deepcopy(request.context or {})
             request_context["_resolved_media"] = {
                 "media_id": getattr(resolved, "media_id", ""),
                 "title": getattr(resolved, "title", ""),
@@ -219,6 +221,19 @@ class PlaybackCoordinator:
         request_context: dict[str, Any],
     ) -> tuple[Any, PreparedStream, PlaybackOutcome]:
         attempts: list[PlaybackAttempt] = []
+        fallback = plan.fallback
+        request_context["_device_external_fallback"] = (
+            {
+                "final_url": fallback.final_url,
+                "source": fallback.source,
+                "is_proxy": fallback.is_proxy,
+            }
+            if fallback is not None
+            else None
+        )
+        request_context["_device_external_fallback"] = copy.deepcopy(
+            request_context["_device_external_fallback"]
+        )
         first = await self._dispatch_single(
             plan.primary, profile, capability, device_id, request_context
         )
@@ -276,23 +291,47 @@ class PlaybackCoordinator:
             capability_matrix=capability,
             request_context=request_context,
         )
-        started = await self._confirm_playback_started(device_id, request_context)
+        deferred_accepted = self._deferred_receipt_accepted(dispatch_result.data)
+        if deferred_accepted is True:
+            accepted = True
+            started = None
+        elif deferred_accepted is False:
+            accepted = False
+            started = None
+        else:
+            accepted = bool(dispatch_result.ok)
+            started = await self._confirm_playback_started(device_id, request_context)
         attempt = PlaybackAttempt(
             path="proxy" if prepared.is_proxy else "direct",
             transport=dispatch_result.transport,
             url=prepared.final_url,
-            accepted=bool(dispatch_result.ok),
+            accepted=accepted,
             started=started,
         )
         LOG.info(
             "core_chain prepared source=%s transport=%s final_url=%s path=%s started=%s",
             prepared.source,
             dispatch_result.transport,
-            prepared.final_url,
+            redact_text(prepared.final_url),
             attempt.path,
             str(started),
         )
         return dispatch_result, prepared, attempt
+
+    @staticmethod
+    def _deferred_receipt_accepted(data: Any) -> bool | None:
+        """Parse only the explicit Mina deferred receipt marker.
+
+        A transport payload is not a receipt merely because it is a dict;
+        the nested ``ret.accepted`` value must be an actual boolean.
+        """
+        if not isinstance(data, dict):
+            return None
+        receipt = data.get("ret")
+        if not isinstance(receipt, dict):
+            return None
+        accepted = receipt.get("accepted")
+        return accepted if isinstance(accepted, bool) else None
 
     @staticmethod
     def _attempt_passed(attempt: PlaybackAttempt) -> bool:

@@ -7,7 +7,6 @@ from typing import Any
 from xiaomusic.core.models.media import PreparedStream
 from xiaomusic.core.transport.transport import Transport
 
-
 LOG = logging.getLogger("xiaomusic.transport.mina")
 
 
@@ -37,7 +36,7 @@ class MinaTransport(Transport):
             ret = await self._xiaomusic.play_url(
                 did=device_id,
                 arg1=prepared.final_url,
-                context=request_context or {},
+                context=request_context if isinstance(request_context, dict) else {},
                 resolved=resolved,
             )
             out = {"ret": ret, "url": prepared.final_url}

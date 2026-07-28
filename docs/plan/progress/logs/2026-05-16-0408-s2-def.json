@@ -1,8 +1,0 @@
-{
-  "task": "s2-def",
-  "execute_time": "2026-05-16 04:08",
-  "status": "skipped",
-  "output_files": [],
-  "next_task": null,
-  "notes": "上一个任务正在执行中，跳过本次执行"
-}

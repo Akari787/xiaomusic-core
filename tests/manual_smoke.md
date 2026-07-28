@@ -101,7 +101,64 @@ docker compose -f docker-compose.hardened.yml restart
 find /app -maxdepth 2 -name pwn.txt || true
 ```
 
-## 6) 如何定位 outbound 失败原因（不含敏感信息）
+## 6) 随机歌单与 next/previous 控制链
+
+先用正式入口建立随机歌单 session：
+
+```bash
+curl -fsS -X POST http://127.0.0.1:58090/api/v1/play \
+  -H "Content-Type: application/json; charset=utf-8" \
+  -d '{
+    "device_id": "<DID>",
+    "query": "<PLAYLIST_NAME>",
+    "source_hint": "auto",
+    "options": {"shuffle": true}
+  }'
+```
+
+记录状态：
+
+```bash
+curl -fsS "http://127.0.0.1:58090/api/v1/player/state?device_id=<DID>"
+```
+
+然后依次执行：
+
+```bash
+curl -fsS -X POST http://127.0.0.1:58090/api/v1/control/next \
+  -H "Content-Type: application/json" \
+  -d '{"device_id":"<DID>"}'
+
+curl -fsS -X POST http://127.0.0.1:58090/api/v1/control/next \
+  -H "Content-Type: application/json" \
+  -d '{"device_id":"<DID>"}'
+
+curl -fsS -X POST http://127.0.0.1:58090/api/v1/control/previous \
+  -H "Content-Type: application/json" \
+  -d '{"device_id":"<DID>"}'
+```
+
+每次命令完成后重新读取 player state。期望：
+
+- `context.id` 始终为 `<PLAYLIST_NAME>`。
+- `play_session_id` 随每次实际切歌变化。
+- 索引轨迹为 `N → N+1 → N+2 → N+1`。
+- 最后一步的 `track.entity_id` 与第一次 next 后一致。
+- 整段操作只有一次 `external_url playlist shuffled` 和一次 `reason=external_url_play`。
+- next/previous 日志出现 `_play_next` / `_play_prev`，期间没有新的 `/api/v1/play`、playlist bootstrap 或 shuffle。
+- 不出现 `retry_same_song_with_sync_stop`、epoch 级 offset 或明文凭据。
+
+WebUI 门禁：
+
+```bash
+curl -fsS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:58090/webui/
+```
+
+还必须从 `/webui/` 的 `index.html` 读取实际 JS/CSS 文件名，并分别验证 HTTP 200 与非零响应体。不得只验证首页。
+
+> 控制命令成功只表示动作进入链路。以 player state 中的新 `play_session_id`、`transport_state=playing` 和实际曲目变化作为完成依据。远端音箱可能受认证刷新或云端限流影响，不要因请求较慢而改用 `/api/v1/play` 重试 next。
+
+## 7) 如何定位 outbound 失败原因（不含敏感信息）
 
 ```bash
 docker logs --tail 300 xiaomusic-core | grep -i -E "SECURITY:|outbound|blocked" || true

@@ -528,7 +528,7 @@
 
 ### 14.4 与 WebUI 相关规范的关系
 
-`docs/spec/webui_playback_state_machine_spec.md` 与 `docs/spec/playback/webui_playback_state_machine_mapping.md` 定义 WebUI 的前端展示状态机与实现映射。这些文档定义前端如何消费本文档所描述的状态快照，但不得在前端侧重新定义播放真相的来源。前端规范中凡涉及"以哪个字段为权威依据"的判断，必须与本文档第 12.3 节保持一致。
+`docs/spec/webui_playback_state_machine_spec.md` 定义 WebUI 的前端展示状态机与状态快照消费方式，但不得在前端侧重新定义播放真相的来源。前端规范中凡涉及“以哪个字段为权威依据”的判断，必须与本文档第 12.3 节保持一致。
 
 ### 14.5 与 `docs/spec/playback/playback_coordinator_interface.md` 的关系
 

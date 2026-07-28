@@ -5,28 +5,33 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from xiaomusic.adapters.mina import MinaTransport
 from xiaomusic.adapters.miio import MiioTransport
+from xiaomusic.adapters.mina import MinaTransport
 from xiaomusic.adapters.sources import register_default_source_plugins
 from xiaomusic.constants.api_fields import DEVICE_ID, REQUEST_ID
 from xiaomusic.core.coordinator import PlaybackCoordinator
-from xiaomusic.core.source.source_protocols import LinkPreparer
-from xiaomusic.managers.source_plugin_manager import SourcePluginManager
 from xiaomusic.core.delivery import DeliveryAdapter
 from xiaomusic.core.device import DeviceRegistry
 from xiaomusic.core.errors import (
     DeviceNotFoundError,
     InvalidRequestError,
-    TransportError,
 )
 from xiaomusic.core.models import MediaRequest, PlayOptions
+from xiaomusic.core.source.source_protocols import LinkPreparer
 from xiaomusic.core.transport import TransportPolicy, TransportRouter
-
+from xiaomusic.managers.source_plugin_manager import SourcePluginManager
+from xiaomusic.playback.runtime_state import (
+    PlaybackPhase,
+    PlaybackRuntimeState,
+    TrackReference,
+)
+from xiaomusic.security.redaction import redact_text
 
 LOG = logging.getLogger("xiaomusic.playback.facade")
 
@@ -94,7 +99,7 @@ class PlaybackFacade:
             ),
             plugins_dir=str(Path(conf_path) / "source_plugins"),
         )
-        setattr(self.xiaomusic, "source_plugin_manager", manager)
+        self.xiaomusic.source_plugin_manager = manager
         self._source_plugin_manager = manager
         return manager
 
@@ -117,9 +122,10 @@ class PlaybackFacade:
             getattr(self.xiaomusic, "music_library", None), "get_proxy_url", None
         )
         if callable(raw_proxy_builder):
-            proxy_builder = lambda origin_url, title: str(
-                raw_proxy_builder(origin_url, name=title)
-            )
+            def proxy_builder(origin_url, title):
+                return str(
+                            raw_proxy_builder(origin_url, name=title)
+                        )
         delivery_adapter = DeliveryAdapter(proxy_url_builder=proxy_builder)
         router = TransportRouter(policy=TransportPolicy())
         router.register_transport(MinaTransport(self.xiaomusic))
@@ -142,6 +148,28 @@ class PlaybackFacade:
             return [PlaybackFacade._serialize(item) for item in obj]
         if isinstance(obj, dict):
             return {str(k): PlaybackFacade._serialize(v) for k, v in obj.items()}
+        return obj
+
+    @staticmethod
+    def _sanitize_public_value(obj: Any) -> Any:
+        """Recursively redact sensitive values in public API responses.
+
+        Processes dict, list, and dataclass/plain-object structures.
+        Strings are passed through redact_text for api_key/token/password removal.
+        Internal dispatch values are NOT affected — this is only for public output.
+        """
+        if isinstance(obj, str):
+            return redact_text(obj)
+        if isinstance(obj, dict):
+            return {k: PlaybackFacade._sanitize_public_value(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [PlaybackFacade._sanitize_public_value(v) for v in obj]
+        if is_dataclass(obj) and not isinstance(obj, type):
+            raw = asdict(obj)
+            return PlaybackFacade._sanitize_public_value(raw)
+        if hasattr(obj, "__dict__") and not isinstance(obj, type):
+            raw = {k: getattr(obj, k) for k in obj.__dict__ if not k.startswith("_")}
+            return PlaybackFacade._sanitize_public_value(raw)
         return obj
 
     @staticmethod
@@ -356,8 +384,16 @@ class PlaybackFacade:
             raise InvalidRequestError("query is required")
         return q
 
-    @staticmethod
-    def _playlist_context(options: PlayOptions, query: str) -> tuple[str, str] | None:
+    def _playlist_context(self, options: PlayOptions, query: str) -> tuple[str, dict, dict, bool] | None:
+        """Extract playlist context and resolve a random member for shuffle.
+
+        Returns (playlist_name, member_info, entity_record, should_shuffle) or None.
+        member_info: membership data (item_id, entity_id, display_name, etc.)
+        entity_record: full entity from music_library.music_entities (url, duration, etc.)
+
+        When options.shuffle=True and query is a playlist name, a member is randomly
+        selected and its full entity record is looked up for source-aware routing.
+        """
         context_hint = (
             options.context_hint if isinstance(options.context_hint, dict) else {}
         )
@@ -380,12 +416,62 @@ class PlaybackFacade:
             payload.get("music_name")
             or payload.get("track_name")
             or options.title
-            or query
             or ""
         ).strip()
-        if context_type != "playlist" or not playlist_name or not music_name:
+
+        should_shuffle = bool(options.shuffle)
+        if should_shuffle and not music_name and not playlist_name and query:
+            playlist_name = query
+            context_type = "playlist"
+
+        if context_type != "playlist" or not playlist_name:
             return None
-        return playlist_name, music_name
+
+        # Resolve a random member from the playlist for source-aware routing.
+        music_library = getattr(self.xiaomusic, "music_library", None)
+        member_info: dict = {}
+        entity_record: dict = {}
+        if should_shuffle:
+            if music_library is None:
+                raise InvalidRequestError(
+                    f"playlist '{playlist_name}': music library not available"
+                )
+            getter = getattr(music_library, "get_playlist_items", None)
+            if callable(getter):
+                try:
+                    members = list(getter(playlist_name) or [])
+                except Exception:
+                    members = []
+                if not members:
+                    raise InvalidRequestError(
+                        f"playlist '{playlist_name}' is empty or not found"
+                    )
+                import random as _random
+                member_info = dict(_random.choice(members))
+                entity_id = str(member_info.get("entity_id") or "").strip()
+                if entity_id:
+                    music_entities = getattr(music_library, "music_entities", None)
+                    if isinstance(music_entities, dict):
+                        entity_record = dict(music_entities.get(entity_id) or {})
+                music_name = str(
+                    member_info.get("display_name")
+                    or member_info.get("legacy_name")
+                    or member_info.get("title")
+                    or member_info.get("name")
+                    or entity_record.get("canonical_name")
+                    or entity_record.get("display_name")
+                    or music_name
+                    or ""
+                ).strip()
+            else:
+                raise InvalidRequestError(
+                    f"playlist '{playlist_name}' not found in music library"
+                )
+
+        if not music_name:
+            music_name = query or ""
+
+        return playlist_name, member_info, entity_record, should_shuffle
 
     async def play(
         self,
@@ -404,19 +490,69 @@ class PlaybackFacade:
             raise DeviceNotFoundError("device not found")
 
         request_id_value = str(request_id or uuid4().hex[:16])
+        # Only call _playlist_context when hint is auto or local_library.
         playlist_context = (
             self._playlist_context(opts, q)
-            if normalized_hint == "local_library"
+            if normalized_hint in (None, "local_library")
             else None
         )
         if playlist_context is not None:
-            playlist_name, music_name = playlist_context
+            playlist_name, member_info, entity_record, should_shuffle = playlist_context
+
+            # Infer source from entity_record.
+            entity_id = str(entity_record.get("entity_id") or member_info.get("entity_id") or "").strip()
+            entity_source = str(entity_record.get("source") or "").strip().lower()
+
+            music_name = str(
+                entity_record.get("canonical_name")
+                or entity_record.get("display_name")
+                or member_info.get("display_name")
+                or member_info.get("legacy_name")
+                or member_info.get("title")
+                or member_info.get("name")
+                or opts.title
+                or ""
+            ).strip()
+
+            # Route to correct source plugin based on entity_id prefix.
+            if entity_id.startswith("jellyfin:") or entity_source == "jellyfin":
+                normalized_hint = "jellyfin"
+                q = music_name
+            elif entity_id.startswith("local:") or entity_source == "local":
+                normalized_hint = "local_library"
+                q = music_name
+            elif not entity_id and not entity_source:
+                # No source info: keep original hint, use music_name.
+                q = music_name
+            else:
+                q = music_name
+
+            # Build source_payload from entity_record (includes url, duration, etc.)
             merged_source_payload = (
                 dict(opts.source_payload) if isinstance(opts.source_payload, dict) else {}
             )
+            if entity_record:
+                merged_source_payload["entity_id"] = entity_id
+                merged_source_payload["source"] = entity_source or "unknown"
+                if entity_record.get("source_item_id"):
+                    merged_source_payload["id"] = str(entity_record["source_item_id"])
+                    merged_source_payload["media_id"] = str(entity_record["source_item_id"])
+                if entity_record.get("canonical_name") or entity_record.get("display_name"):
+                    merged_source_payload["title"] = music_name
+                if entity_record.get("origin_url"):
+                    merged_source_payload["url"] = str(entity_record["origin_url"])
+                if entity_record.get("path"):
+                    merged_source_payload["path"] = str(entity_record["path"])
+                if entity_record.get("duration"):
+                    try:
+                        merged_source_payload["duration"] = float(entity_record["duration"])
+                        merged_source_payload["duration_seconds"] = float(entity_record["duration"])
+                    except (TypeError, ValueError):
+                        pass
+            else:
+                merged_source_payload["entity_id"] = str(member_info.get("entity_id") or "")
             merged_source_payload.update(
                 {
-                    "source": "local_library",
                     "context_type": "playlist",
                     "playlist_name": playlist_name,
                     "context_name": playlist_name,
@@ -424,6 +560,8 @@ class PlaybackFacade:
                     "track_name": music_name,
                 }
             )
+            if member_info.get("item_id"):
+                merged_source_payload.setdefault("item_id", str(member_info.get("item_id") or ""))
             merged_context_hint = (
                 dict(opts.context_hint) if isinstance(opts.context_hint, dict) else {}
             )
@@ -511,7 +649,7 @@ class PlaybackFacade:
             context_id=playlist_context[0] if playlist_context is not None else "",
             play_session_id=current_play_session_id,
         )
-        return {
+        return self._sanitize_public_value({
             "status": "playing",
             DEVICE_ID: did,
             "source_plugin": prepared.source,
@@ -528,7 +666,7 @@ class PlaybackFacade:
                 "delivery_plan": self._serialize(result.get("delivery_plan")),
                 "playback_outcome": self._serialize(result.get("outcome")),
             },
-        }
+        })
 
     def _record_playback_capability_verify(
         self,
@@ -609,28 +747,28 @@ class PlaybackFacade:
     ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         result = await self._core().previous(did)
-        return {
+        return self._sanitize_public_value({
             "status": "ok",
             DEVICE_ID: did,
             "transport": result["transport"],
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
             "action": "previous",
             "extra": {"dispatch": result["dispatch"].data},
-        }
+        })
 
     async def next(
         self, device_id: str, request_id: str | None = None
     ) -> dict[str, Any]:
         did = self._validate_device_id(device_id)
         result = await self._core().next(did)
-        return {
+        return self._sanitize_public_value({
             "status": "ok",
             DEVICE_ID: did,
             "transport": result["transport"],
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
             "action": "next",
             "extra": {"dispatch": result["dispatch"].data},
-        }
+        })
 
     async def pause(
         self, device_id: str, request_id: str | None = None
@@ -732,14 +870,24 @@ class PlaybackFacade:
         if not bool(getattr(self.xiaomusic, "did_exist", lambda _did: False)(did)):
             raise DeviceNotFoundError("device not found")
 
+        # Deprecated direct-caller bridge. Real devices always use the pure
+        # runtime snapshot; the narrow fallback below serves old test/legacy
+        # objects that do not expose runtime state. Neither path mutates state
+        # or owns tasks.
+        device_player = getattr(
+            getattr(self.xiaomusic, "device_manager", None), "devices", {}
+        ).get(did)
+        if device_player is not None and callable(
+            getattr(device_player, "get_runtime_state", None)
+        ):
+            return await self.build_player_state_snapshot(did)
+
         is_playing = bool(getattr(self.xiaomusic, "isplaying", lambda _did: False)(did))
-        cur_music = ""
         raw_offset, raw_duration = getattr(
             self.xiaomusic, "get_offset_duration", lambda _did: (0, 0)
         )(did)
         offset = float(raw_offset or 0)
         duration = float(raw_duration or 0)
-
         raw_status: dict[str, Any] = {}
         try:
             out = await self.xiaomusic.get_player_status(did=did)
@@ -747,128 +895,133 @@ class PlaybackFacade:
                 raw_status = out
         except Exception:
             raw_status = {}
-
-        if int(raw_status.get("status", 0) or 0) == 1:
-            is_playing = True
-
+        is_playing = is_playing or int(raw_status.get("status", 0) or 0) == 1
+        cur_music = ""
         if is_playing:
             detail = raw_status.get("play_song_detail")
             if isinstance(detail, dict):
-                song_title = str(
+                cur_music = str(
                     detail.get("audio_name")
                     or detail.get("title")
                     or detail.get("name")
                     or ""
-                )
-                if song_title:
-                    cur_music = song_title
-                else:
+                ).strip()
+                if not cur_music:
                     cur_music = str(
                         getattr(self.xiaomusic, "playingmusic", lambda _did: "")(did)
                         or ""
                     )
-                try:
-                    detail_pos = float(detail.get("position") or 0)
-                except Exception:
-                    detail_pos = 0.0
-                try:
-                    detail_dur = float(detail.get("duration") or 0)
-                except Exception:
-                    detail_dur = 0.0
-
+                detail_pos = float(detail.get("position") or 0)
+                detail_dur = float(detail.get("duration") or 0)
                 if detail_pos > 0 and offset <= 0:
                     offset = detail_pos / 1000.0 if detail_pos > 10000 else detail_pos
                 if detail_dur > 0 and duration <= 0:
                     duration = detail_dur / 1000.0 if detail_dur > 10000 else detail_dur
             else:
-                # detail 不存在时，尝试从 playingmusic 获取
                 cur_music = str(
-                    getattr(self.xiaomusic, "playingmusic", lambda _did: "")(did) or ""
+                    getattr(self.xiaomusic, "playingmusic", lambda _did: "")(did)
+                    or ""
                 )
-
-        safe_offset = max(0, int(offset))
         safe_duration = max(0, int(duration))
-        if safe_duration > 0:
-            safe_offset = min(safe_offset, safe_duration)
-
-        # 获取播放上下文信息
-        context_type = None
-        context_id = None
-        context_name = None
-        current_index = None
-        current_track_id = ""
-
-        # 获取当前播放列表名称
-        cur_playlist = ""
-        try:
-            cur_playlist = str(
-                getattr(self.xiaomusic, "get_cur_play_list", lambda _did: "")(did) or ""
-            )
-        except Exception:
-            cur_playlist = ""
-
-        if cur_playlist:
-            context_type = "playlist"
-            context_id = cur_playlist
-            context_name = cur_playlist
-
-        # 获取当前歌曲在播放列表中的索引
-        device_player = None
-        try:
-            device_player = getattr(
-                getattr(self.xiaomusic, "device_manager", None), "devices", {}
-            ).get(did)
-        except Exception:
-            device_player = None
-
-        if device_player:
-            # 优先使用设备播放器内部的真实当前索引字段
-            try:
-                real_index = getattr(device_player, "_current_index", -1)
-                if real_index >= 0:
-                    current_index = real_index
-            except (ValueError, AttributeError):
-                pass
-
-            # 如果没有真实索引，使用兜底方案
-            if current_index is None and cur_music:
-                try:
-                    play_list = getattr(device_player, "_get_playlist_names", lambda: [])()
-                    if play_list and cur_music in play_list:
-                        current_index = play_list.index(cur_music)
-                except (ValueError, AttributeError):
-                    pass
-
-        # 为 cur_music 增加最终兜底
-        # 当 is_playing 为 true 但 cur_music 为空时，从 playlist_names[current_index] 获取
-        if is_playing and not cur_music and device_player and current_index is not None:
-            try:
-                play_list = getattr(device_player, "_get_playlist_names", lambda: [])()
-                if play_list and current_index >= 0 and current_index < len(play_list):
-                    cur_music = str(play_list[current_index] or "")
-            except (ValueError, AttributeError, IndexError):
-                pass
-
-        # 生成 current_track_id
-        # 使用 context_id + current_index + cur_music 的组合作为稳定标识
-        # 不依赖 cur_music 非空，只要 context_id 或 current_index 可用就生成
-        track_key = f"{context_id or 'default'}:{current_index if current_index is not None else -1}:{cur_music or ''}"
-        # 使用简单的哈希生成稳定 ID，不使用随机值
-
-        current_track_id = hashlib.md5(track_key.encode()).hexdigest()[:16]
-
+        safe_offset = min(max(0, int(offset)), safe_duration) if safe_duration else max(0, int(offset))
         return {
             "device_id": did,
             "is_playing": bool(is_playing),
             "cur_music": cur_music,
             "offset": safe_offset,
             "duration": safe_duration,
-            "current_track_id": current_track_id,
-            "current_index": current_index,
-            "context_type": context_type,
-            "context_id": context_id,
-            "context_name": context_name,
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
+        }
+
+    # ── runtime phase → transport_state mapping ───────────────────────────
+
+    _PHASE_TO_TRANSPORT: dict[PlaybackPhase, str] = {
+        PlaybackPhase.IDLE: "idle",
+        PlaybackPhase.RESOLVING: "starting",
+        PlaybackPhase.DISPATCHING: "starting",
+        PlaybackPhase.CONFIRMING: "starting",
+        PlaybackPhase.SWITCHING: "switching",
+        PlaybackPhase.PLAYING: "playing",
+        PlaybackPhase.PAUSED: "paused",
+        PlaybackPhase.STOPPING: "stopping",
+        PlaybackPhase.STOPPED: "stopped",
+        PlaybackPhase.FAILED: "error",
+    }
+
+    # phases where desired_track is preferred (pre-confirmation)
+    _DESIRED_TRACK_PHASES: frozenset[PlaybackPhase] = frozenset({
+        PlaybackPhase.RESOLVING,
+        PlaybackPhase.DISPATCHING,
+        PlaybackPhase.CONFIRMING,
+        PlaybackPhase.SWITCHING,
+    })
+
+    # phases where confirmed_track is preferred (post-confirmation, with
+    # fallback to desired)
+    _CONFIRMED_TRACK_PHASES: frozenset[PlaybackPhase] = frozenset({
+        PlaybackPhase.PLAYING,
+        PlaybackPhase.PAUSED,
+        PlaybackPhase.STOPPING,
+        PlaybackPhase.STOPPED,
+        PlaybackPhase.FAILED,
+    })
+
+    @staticmethod
+    def _project_runtime_snapshot(
+        device_player: Any,
+    ) -> dict[str, Any] | None:
+        """Pure read-only projection of runtime state for snapshot use.
+
+        Returns a dict with keys 'authoritative', 'transport_state',
+        'track_ref', and 'is_playing' when the device_player exposes a valid
+        PlaybackRuntimeState via ``get_runtime_state()``.
+
+        Returns None when runtime is unavailable (no device_player, no
+        get_runtime_state, wrong type, exception) so the caller can fall
+        back to legacy logic.
+        """
+        if device_player is None:
+            return None
+        getter = getattr(device_player, "get_runtime_state", None)
+        if not callable(getter):
+            return None
+        try:
+            state = getter()
+        except Exception:
+            return None
+        if not isinstance(state, PlaybackRuntimeState):
+            return None
+
+        phase: PlaybackPhase = state.phase
+        transport_state = PlaybackFacade._PHASE_TO_TRANSPORT.get(
+            phase, "idle"
+        )
+
+        # track selection: desired vs confirmed based on phase
+        track_ref: TrackReference | None = None
+        if phase in PlaybackFacade._DESIRED_TRACK_PHASES:
+            track_ref = state.desired_track
+        elif phase in PlaybackFacade._CONFIRMED_TRACK_PHASES:
+            track_ref = state.confirmed_track or state.desired_track
+        # IDLE → no track (track_ref stays None)
+
+        track_dict: dict[str, Any] | None = None
+        if track_ref is not None:
+            track_dict = {
+                "entity_id": track_ref.entity_id or "",
+                "playlist_item_id": track_ref.playlist_item_id or "",
+                "display_name": track_ref.display_name or "",
+                "source": track_ref.source or "",
+            }
+
+        is_playing = phase == PlaybackPhase.PLAYING
+
+        return {
+            "authoritative": True,
+            "transport_state": transport_state,
+            "track_ref": track_dict,
+            "is_playing": is_playing,
+            "phase": phase,
         }
 
     async def build_player_state_snapshot(self, device_id: str) -> dict[str, Any]:
@@ -890,161 +1043,30 @@ class PlaybackFacade:
         except Exception:
             device_player = None
 
-        is_playing = bool(getattr(self.xiaomusic, "isplaying", lambda _did: False)(did))
+        # ── try runtime projection ──────────────────────────────────────
+        runtime_proj = self._project_runtime_snapshot(device_player)
+        runtime_authoritative = bool(
+            runtime_proj is not None and runtime_proj.get("authoritative")
+        )
+
+        # ── position / duration / volume: always from local compat ──────
         raw_offset, raw_duration = getattr(
             self.xiaomusic, "get_offset_duration", lambda _did: (0, 0)
         )(did)
         offset_s = float(raw_offset or 0)
         duration_s = float(raw_duration or 0)
 
-        raw_status: dict[str, Any] = {}
-        try:
-            out = await self.xiaomusic.get_player_status(did=did)
-            if isinstance(out, dict):
-                raw_status = out
-        except Exception:
-            raw_status = {}
-
-        if int(raw_status.get("status", 0) or 0) == 1:
-            is_playing = True
-
-        transport_state = self._derive_transport_state(
-            device_player, is_playing, raw_status
-        )
-
-        volume_from_status = False
         current_volume = 0
-        if "volume" in raw_status and raw_status.get("volume") is not None:
+        if device_player is not None:
             try:
-                current_volume = int(float(raw_status.get("volume") or 0))
-                volume_from_status = True
-            except Exception:
-                current_volume = 0
-        if not volume_from_status and device_player is not None:
-            try:
-                current_volume = int(getattr(device_player, "_last_volume", 0) or 0)
+                current_volume = int(
+                    getattr(device_player, "_last_volume", 0) or 0
+                )
             except Exception:
                 current_volume = 0
         current_volume = max(0, min(100, int(current_volume or 0)))
 
-        runtime_track_ref: dict[str, Any] = {}
-        if device_player is not None:
-            getter = getattr(device_player, "get_current_track_reference", None)
-            if callable(getter):
-                try:
-                    runtime_track_ref = getter() or {}
-                except Exception:
-                    runtime_track_ref = {}
-
-        runtime_display_name = str(runtime_track_ref.get("display_name") or "").strip()
-        runtime_entity_id = str(runtime_track_ref.get("entity_id") or "").strip()
-        runtime_playlist_item_id = str(
-            runtime_track_ref.get("playlist_item_id") or ""
-        ).strip()
-
-        track_title = ""
-        track_artist: str | None = None
-        track_album: str | None = None
-        raw_track_source: str | None = None
-        track_source: str | None = None
-        track_identity_hint = ""
-        position_ms = 0
-        duration_ms = 0
-        detail: dict[str, Any] | None = None
-
-        if is_playing or transport_state in {"paused", "stopped"}:
-            if is_playing:
-                detail = raw_status.get("play_song_detail")
-                if isinstance(detail, dict):
-                    track_title = (
-                        str(
-                            detail.get("audio_name")
-                            or detail.get("title")
-                            or detail.get("name")
-                            or ""
-                        )
-                        .strip('"')
-                        .strip()
-                    )
-                    if not track_title:
-                        track_title = (
-                            str(runtime_display_name)
-                            or str(
-                                getattr(
-                                    self.xiaomusic, "playingmusic", lambda _did: ""
-                                )(did)
-                                or ""
-                            )
-                        ).strip('"').strip()
-
-                    artist = detail.get("artist") or detail.get("singer")
-                    if artist:
-                        track_artist = str(artist)
-                    album = detail.get("album")
-                    if album:
-                        track_album = str(album)
-                    source = detail.get("source")
-                    if source:
-                        raw_track_source = str(source)
-
-                    try:
-                        detail_pos = float(detail.get("position") or 0)
-                    except Exception:
-                        detail_pos = 0.0
-                    try:
-                        detail_dur = float(detail.get("duration") or 0)
-                    except Exception:
-                        detail_dur = 0.0
-
-                    if detail_pos > 0 and offset_s <= 0:
-                        offset_s = (
-                            detail_pos / 1000.0 if detail_pos > 10000 else detail_pos
-                        )
-                    if detail_dur > 0 and duration_s <= 0:
-                        duration_s = (
-                            detail_dur / 1000.0 if detail_dur > 10000 else detail_dur
-                        )
-                else:
-                    track_title = (
-                        str(runtime_display_name)
-                        or str(
-                            getattr(self.xiaomusic, "playingmusic", lambda _did: "")(
-                                did
-                            )
-                            or ""
-                        )
-                    ).strip('"').strip()
-
-            if not track_title and runtime_display_name:
-                track_title = runtime_display_name
-
-            if not track_title and device_player and transport_state != "idle":
-                try:
-                    cur_idx = getattr(device_player, "_current_index", -1)
-                    play_list = getattr(device_player, "_get_playlist_names", lambda: [])()
-                    if (
-                        cur_idx >= 0
-                        and isinstance(play_list, list)
-                        and cur_idx < len(play_list)
-                    ):
-                        track_title = str(play_list[cur_idx] or "")
-                except Exception:
-                    pass
-
-        position_ms = max(0, int(offset_s * 1000))
-        duration_ms = max(0, int(duration_s * 1000))
-        if duration_ms > 0:
-            position_ms = min(position_ms, duration_ms)
-
-        context_obj: dict[str, Any] | None = None
-        cur_playlist = ""
-        try:
-            cur_playlist = str(
-                getattr(self.xiaomusic, "get_cur_play_list", lambda _did: "")(did) or ""
-            )
-        except Exception:
-            cur_playlist = ""
-
+        # ── play_session_id: always from local compat ───────────────────
         play_session_id = ""
         if device_player:
             try:
@@ -1053,81 +1075,390 @@ class PlaybackFacade:
             except (ValueError, AttributeError):
                 play_session_id = ""
 
-        track_source = self._resolve_track_source(
-            device_id=did,
-            track_title=track_title,
-            context_id=cur_playlist,
-            raw_source=raw_track_source,
-            play_session_id=play_session_id,
-        )
-        music_library = getattr(self.xiaomusic, "music_library", None)
-        resolved_playlist_member = None
-        if music_library is not None:
-            resolver = getattr(music_library, "resolve_playlist_item_record", None)
-            if callable(resolver):
-                try:
-                    resolved_playlist_member = resolver(
-                        cur_playlist,
-                        item_name=track_title,
-                        item_id=str(
-                            runtime_playlist_item_id
-                            or (detail or {}).get("track_id")
-                            or (detail or {}).get("id")
-                            or ""
-                        ).strip(),
-                    )
-                except Exception:
-                    resolved_playlist_member = None
-        track_identity_hint = str(runtime_entity_id or "").strip() or self._resolve_track_identity_hint(
-            context_id=cur_playlist,
-            track_title=track_title,
-            detail=detail,
-        )
+        # ── cur_playlist (context id/name): always from local compat ────
+        cur_playlist = ""
+        try:
+            cur_playlist = str(
+                getattr(self.xiaomusic, "get_cur_play_list", lambda _did: "")(did)
+                or ""
+            )
+        except Exception:
+            cur_playlist = ""
 
+        # ── current_index: always from local compat ─────────────────────
         current_index: int | None = None
         if device_player:
             try:
-                play_list = getattr(device_player, "_get_playlist_names", lambda: [])()
-            except (ValueError, AttributeError):
-                play_list = []
-
-            try:
                 real_index = getattr(device_player, "_current_index", -1)
-                if real_index >= 0 and play_list and track_title:
-                    if real_index < len(play_list):
-                        list_title = str(play_list[real_index] or "")
-                        if list_title == track_title:
-                            current_index = real_index
-                        else:
-                            current_index = None
-                    else:
-                        current_index = None
-                elif real_index >= 0:
+                if real_index >= 0:
                     current_index = real_index
             except (ValueError, AttributeError):
                 pass
 
-            if current_index is None:
-                try:
-                    finder = getattr(device_player, "_find_playlist_index", None)
-                    if callable(finder):
-                        idx = finder(
-                            item_id=runtime_playlist_item_id,
-                            entity_id=track_identity_hint,
-                            display_name=track_title,
-                        )
-                        if idx >= 0:
-                            current_index = idx
-                except Exception:
-                    pass
+        # ── transport_state and track identity ──────────────────────────
+        track_title = ""
+        track_artist: str | None = None
+        track_album: str | None = None
+        raw_track_source: str | None = None
+        track_source: str | None = None
+        track_identity_hint = ""
+        track_id = ""
+        runtime_entity_id = ""
+        runtime_playlist_item_id = ""
+        detail: dict[str, Any] | None = None
 
-            if current_index is None and track_title and play_list:
+        if runtime_authoritative:
+            # ── authoritative path ──────────────────────────────────
+            assert runtime_proj is not None
+            transport_state = str(
+                runtime_proj.get("transport_state") or "idle"
+            )
+            # is_playing strictly from phase==PLAYING; legacy isplaying
+            # must never override pause / stop / error.
+            is_playing = bool(runtime_proj.get("is_playing") or False)
+
+            rt_track = runtime_proj.get("track_ref")
+            if isinstance(rt_track, dict):
+                runtime_entity_id = str(
+                    rt_track.get("entity_id") or ""
+                ).strip()
+                runtime_playlist_item_id = str(
+                    rt_track.get("playlist_item_id") or ""
+                ).strip()
+                track_title = str(
+                    rt_track.get("display_name") or ""
+                ).strip()
+                raw_track_source = (
+                    str(rt_track.get("source") or "").strip() or None
+                )
+
+            # Always route through _resolve_track_source for
+            # normalization (e.g. 'external' → resolved contextual
+            # source). The runtime raw source is passed as raw_source
+            # so the resolver can use it as a hint but still apply
+            # remembered / context fallback logic.
+            track_source = self._resolve_track_source(
+                device_id=did,
+                track_title=track_title,
+                context_id=cur_playlist,
+                raw_source=raw_track_source,
+                play_session_id=play_session_id,
+            )
+            # Guard: only accept normalized sources; raw runtime
+            # strings like 'external' must never leak to API.
+            if (
+                track_source is not None
+                and PlaybackFacade._normalize_track_source_value(
+                    track_source
+                )
+                is None
+            ):
+                track_source = None
+
+            # identity hint from runtime entity_id, fallback to resolver
+            track_identity_hint = runtime_entity_id or self._resolve_track_identity_hint(
+                context_id=cur_playlist,
+                track_title=track_title,
+                detail=None,
+            )
+
+            # track_id: prefer runtime playlist_item_id
+            music_library = getattr(self.xiaomusic, "music_library", None)
+            resolved_playlist_member = None
+            if (
+                music_library is not None
+                and (runtime_playlist_item_id or cur_playlist)
+            ):
+                resolver = getattr(
+                    music_library, "resolve_playlist_item_record", None
+                )
+                if callable(resolver):
+                    try:
+                        resolved_playlist_member = resolver(
+                            cur_playlist,
+                            item_name=track_title,
+                            item_id=runtime_playlist_item_id,
+                        )
+                    except Exception:
+                        resolved_playlist_member = None
+
+            if runtime_playlist_item_id:
+                track_id = runtime_playlist_item_id
+            elif (
+                resolved_playlist_member
+                and str(
+                    resolved_playlist_member.get("item_id") or ""
+                ).strip()
+            ):
+                track_id = str(
+                    resolved_playlist_member.get("item_id") or ""
+                ).strip()
+            elif track_title or current_index is not None or cur_playlist:
+                track_id = build_track_id(
+                    cur_playlist,
+                    current_index,
+                    track_title,
+                    identity_hint=track_identity_hint,
+                )
+
+        else:
+            # ── legacy fallback (unchanged behaviour) ───────────────
+            is_playing = bool(
+                getattr(self.xiaomusic, "isplaying", lambda _did: False)(did)
+            )
+
+            raw_status: dict[str, Any] = {}
+            if device_player is not None:
+                raw_status["status"] = 1 if is_playing else 0
+            if int(raw_status.get("status", 0) or 0) == 1:
+                is_playing = True
+
+            transport_state = self._derive_transport_state(
+                device_player, is_playing, raw_status
+            )
+
+            # legacy get_current_track_reference
+            runtime_track_ref: dict[str, Any] = {}
+            if device_player is not None:
+                getter = getattr(
+                    device_player, "get_current_track_reference", None
+                )
+                if callable(getter):
+                    try:
+                        runtime_track_ref = getter() or {}
+                    except Exception:
+                        runtime_track_ref = {}
+
+            runtime_display_name = str(
+                runtime_track_ref.get("display_name") or ""
+            ).strip()
+            runtime_entity_id = str(
+                runtime_track_ref.get("entity_id") or ""
+            ).strip()
+            runtime_playlist_item_id = str(
+                runtime_track_ref.get("playlist_item_id") or ""
+            ).strip()
+
+            if is_playing or transport_state in {"paused", "stopped"}:
+                if is_playing:
+                    detail = raw_status.get("play_song_detail")
+                    if isinstance(detail, dict):
+                        track_title = (
+                            str(
+                                detail.get("audio_name")
+                                or detail.get("title")
+                                or detail.get("name")
+                                or ""
+                            )
+                            .strip('"')
+                            .strip()
+                        )
+                        if not track_title:
+                            track_title = (
+                                str(runtime_display_name)
+                                or str(
+                                    getattr(
+                                        self.xiaomusic,
+                                        "playingmusic",
+                                        lambda _did: "",
+                                    )(did)
+                                    or ""
+                                )
+                            ).strip('"').strip()
+
+                        artist = detail.get("artist") or detail.get("singer")
+                        if artist:
+                            track_artist = str(artist)
+                        album = detail.get("album")
+                        if album:
+                            track_album = str(album)
+                        source = detail.get("source")
+                        if source:
+                            raw_track_source = str(source)
+
+                        try:
+                            detail_pos = float(detail.get("position") or 0)
+                        except Exception:
+                            detail_pos = 0.0
+                        try:
+                            detail_dur = float(detail.get("duration") or 0)
+                        except Exception:
+                            detail_dur = 0.0
+
+                        if detail_pos > 0 and offset_s <= 0:
+                            offset_s = (
+                                detail_pos / 1000.0
+                                if detail_pos > 10000
+                                else detail_pos
+                            )
+                        if detail_dur > 0 and duration_s <= 0:
+                            duration_s = (
+                                detail_dur / 1000.0
+                                if detail_dur > 10000
+                                else detail_dur
+                            )
+                    else:
+                        track_title = (
+                            str(runtime_display_name)
+                            or str(
+                                getattr(
+                                    self.xiaomusic,
+                                    "playingmusic",
+                                    lambda _did: "",
+                                )(did)
+                                or ""
+                            )
+                        ).strip('"').strip()
+
+                if not track_title and runtime_display_name:
+                    track_title = runtime_display_name
+
+                if (
+                    not track_title
+                    and device_player
+                    and transport_state != "idle"
+                ):
+                    try:
+                        cur_idx = getattr(
+                            device_player, "_current_index", -1
+                        )
+                        play_list = getattr(
+                            device_player,
+                            "_get_playlist_names",
+                            lambda: [],
+                        )()
+                        if (
+                            cur_idx >= 0
+                            and isinstance(play_list, list)
+                            and cur_idx < len(play_list)
+                        ):
+                            track_title = str(play_list[cur_idx] or "")
+                    except Exception:
+                        pass
+
+            # legacy track_source lookup
+            track_source = self._resolve_track_source(
+                device_id=did,
+                track_title=track_title,
+                context_id=cur_playlist,
+                raw_source=raw_track_source,
+                play_session_id=play_session_id,
+            )
+
+            music_library = getattr(self.xiaomusic, "music_library", None)
+            resolved_playlist_member = None
+            if music_library is not None:
+                resolver = getattr(
+                    music_library, "resolve_playlist_item_record", None
+                )
+                if callable(resolver):
+                    try:
+                        resolved_playlist_member = resolver(
+                            cur_playlist,
+                            item_name=track_title,
+                            item_id=str(
+                                runtime_playlist_item_id
+                                or (detail or {}).get("track_id")
+                                or (detail or {}).get("id")
+                                or ""
+                            ).strip(),
+                        )
+                    except Exception:
+                        resolved_playlist_member = None
+
+            track_identity_hint = str(
+                runtime_entity_id or ""
+            ).strip() or self._resolve_track_identity_hint(
+                context_id=cur_playlist,
+                track_title=track_title,
+                detail=detail,
+            )
+
+            if runtime_playlist_item_id:
+                track_id = runtime_playlist_item_id
+            elif (
+                resolved_playlist_member
+                and str(
+                    resolved_playlist_member.get("item_id") or ""
+                ).strip()
+            ):
+                track_id = str(
+                    resolved_playlist_member.get("item_id") or ""
+                ).strip()
+            elif (
+                track_title
+                or current_index is not None
+                or cur_playlist
+            ):
+                track_id = build_track_id(
+                    cur_playlist,
+                    current_index,
+                    track_title,
+                    identity_hint=track_identity_hint,
+                )
+
+            # current_index refinement (legacy path only)
+            if device_player:
                 try:
-                    if track_title in play_list:
-                        current_index = play_list.index(track_title)
+                    play_list = getattr(
+                        device_player, "_get_playlist_names", lambda: []
+                    )()
+                except (ValueError, AttributeError):
+                    play_list = []
+
+                try:
+                    real_index = getattr(
+                        device_player, "_current_index", -1
+                    )
+                    if (
+                        real_index >= 0
+                        and play_list
+                        and track_title
+                    ):
+                        if real_index < len(play_list):
+                            list_title = str(
+                                play_list[real_index] or ""
+                            )
+                            if list_title == track_title:
+                                current_index = real_index
+                            else:
+                                current_index = None
                 except (ValueError, AttributeError):
                     pass
 
+                if current_index is None:
+                    try:
+                        finder = getattr(
+                            device_player,
+                            "_find_playlist_index",
+                            None,
+                        )
+                        if callable(finder):
+                            idx = finder(
+                                item_id=runtime_playlist_item_id,
+                                entity_id=track_identity_hint,
+                                display_name=track_title,
+                            )
+                            if idx >= 0:
+                                current_index = idx
+                    except Exception:
+                        pass
+
+                if current_index is None and track_title and play_list:
+                    try:
+                        if track_title in play_list:
+                            current_index = play_list.index(track_title)
+                    except (ValueError, AttributeError):
+                        pass
+
+        # ── position_ms / duration_ms ───────────────────────────────────
+        position_ms = max(0, int(offset_s * 1000))
+        duration_ms = max(0, int(duration_s * 1000))
+        if duration_ms > 0:
+            position_ms = min(position_ms, duration_ms)
+
+        # ── context object ──────────────────────────────────────────────
+        context_obj: dict[str, Any] | None = None
         if cur_playlist or current_index is not None:
             context_obj = {
                 "id": cur_playlist or "default",
@@ -1135,24 +1466,12 @@ class PlaybackFacade:
                 "current_index": current_index,
             }
 
-        track_id = ""
-        if runtime_playlist_item_id:
-            track_id = runtime_playlist_item_id
-        elif resolved_playlist_member and str(resolved_playlist_member.get("item_id") or "").strip():
-            track_id = str(resolved_playlist_member.get("item_id") or "").strip()
-        elif track_title or current_index is not None or cur_playlist:
-            track_id = build_track_id(
-                cur_playlist,
-                current_index,
-                track_title,
-                identity_hint=track_identity_hint,
-            )
-
+        # ── track object ────────────────────────────────────────────────
         track_obj: dict[str, Any] | None = None
-        if transport_state not in {"idle"} and (track_title or track_id):
+        if transport_state != "idle" and (track_title or track_id):
             track_obj = {
                 "id": track_id,
-                "entity_id": track_identity_hint,
+                "entity_id": track_identity_hint or "",
                 "title": track_title,
             }
             if track_artist is not None:
@@ -1162,6 +1481,7 @@ class PlaybackFacade:
             if track_source is not None:
                 track_obj["source"] = track_source
 
+        # ── revision / snapshot ────────────────────────────────────────
         snapshot_key = self._make_snapshot_key(
             device_id=did,
             transport_state=transport_state,
@@ -1209,34 +1529,10 @@ class PlaybackFacade:
         if degraded or play_fail_cnt >= 3:
             return "error"
 
+        # Legacy fallback is deliberately derived from read-only observations.
+        # Command history is diagnostic only and cannot describe physical state.
         if is_playing:
-            try:
-                last_cmd = getattr(device_player, "_last_cmd", "") or ""
-            except (ValueError, AttributeError):
-                last_cmd = ""
-            if last_cmd in {"stop"}:
-                # BUG-011: 如果 device_player 自己认为已停止（is_playing=False），
-                # 说明本地 state machine 已处理 stop，此时播放器状态
-                # 可能只是延迟还没更新。返回 "stopped" 而非 "switching"，
-                # 避免 UI 长期卡在 switching。
-                player_is_playing = bool(
-                    getattr(device_player, "is_playing", False)
-                )
-                if not player_is_playing:
-                    return "stopped"
-                return "switching"
             return "playing"
-
-        try:
-            last_cmd = getattr(device_player, "_last_cmd", "") or ""
-        except (ValueError, AttributeError):
-            last_cmd = ""
-
-        if last_cmd == "stop":
-            return "stopped"
-
-        if last_cmd == "pause":
-            return "paused"
 
         # BUG-011: 非 playing 分支下的 switching 判定。
         # _next_timer 存在时通常表示正在等待自动切歌，属于正常的切换过渡状态。
@@ -1246,7 +1542,7 @@ class PlaybackFacade:
             next_timer = getattr(device_player, "_next_timer", None)
             current_index = getattr(device_player, "_current_index", -1)
             play_list = getattr(device_player, "_get_playlist_names", lambda: [])()
-            cur_music = getattr(device_player, "get_cur_music", lambda: "")()()
+            cur_music = getattr(device_player, "get_cur_music", lambda: "")()
             if callable(cur_music):
                 cur_music = cur_music() or ""
             player_is_playing = bool(
@@ -1254,16 +1550,9 @@ class PlaybackFacade:
             )
             if next_timer is not None:
                 if not player_is_playing:
-                    # BUG-011: 本地已停止但定时器仍在，残留定时器。
-                    # 主动清理并回退到命令态状态推导，避免 switching 长期卡住。
-                    try:
-                        next_timer.cancel()
-                    except Exception:
-                        pass
-                    try:
-                        setattr(device_player, "_next_timer", None)
-                    except Exception:
-                        pass
+                    # BUG-011: timer exists but player stopped — stale timer.
+                    # No side effects: pure projection must not cancel/clear timer.
+                    pass
                 else:
                     return "switching"
             if (
@@ -1280,9 +1569,6 @@ class PlaybackFacade:
                         return "switching"
         except Exception:
             pass
-
-        if last_cmd in {"play", "playlocal", "play_next", "play_prev", "playmusic"}:
-            return "starting"
 
         return "idle"
 

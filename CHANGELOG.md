@@ -1,3 +1,28 @@
+## v1.1.4 (2026-07-28)
+
+### 播放运行时架构
+
+- 引入设备级 `DeviceCommandArbiter`，统一 PLAY、NEXT、PREVIOUS、AUTO_NEXT、STOP、PAUSE、RESUME 与 RETRY；支持 barrier、latest-pending-wins 和 stale intent 静默失效。
+- 引入结构化 `PlaybackRuntimeState`、独立 lifecycle token，以及 `PlaybackTaskRegistry` 单一任务所有权，收口 confirmation、duration probe、completion timer 与 failure retry。
+- `get_offset_duration()` 保持纯读；正常 completion 只由 duration timer 提交 AUTO_NEXT，后台确认不再破坏性重播同曲。
+- `POST /api/v1/play` 支持来源感知的稳定随机队列；WebUI next/previous 只发送控制意图，不重建队列或重新洗牌。
+- Public API 与日志递归脱敏 token、API key、authorization、cookie 与 password。
+
+### WebUI、文档与仓库整理
+
+- WebUI 播放控制与设备 identity、队列 session 对齐；加入 lockfile，确保前端依赖和构建可复现。
+- 更新 API、ADR、Spec、运行时架构与播放控制模型，新增可编辑 Draw.io 和离线 HTML 架构图。
+- 公开仓库收敛到正式源码、测试、架构、API、ADR、Spec 与 Release Note；开发过程和旧工具不再进入发布树。
+
+### 验证
+
+- 播放域专项：655 passed。
+- WebUI：41 passed，production build 通过；VitePress build 通过。
+- 全量基线为 453 passed / 115 failed / 5 skipped；v1.1.4 候选为 1034 passed / 110 failed / 5 skipped，新增失败 0，消除既有失败 5。
+- OH2P 实机验证通过：`POST /api/v1/play` 17 ms、AUTO_NEXT 完整链、next burst latest-pending-wins、stop barrier、Raw Mina `status=2` / `volume=4`，30 秒无复播。
+
+详细说明见 `docs/release/v1.1.4.md`。
+
 ## v1.1.1 (2026-04-26)
 
 ### 相对 v1.1.0 的主要变化
