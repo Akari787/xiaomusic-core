@@ -22,8 +22,6 @@ jobs:
     # Only deploy from the repository default branch.
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -53,7 +51,7 @@ jobs:
 
       - name: Upload VitePress build log
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: vitepress-build-log
           path: docs/vitepress-build.log
