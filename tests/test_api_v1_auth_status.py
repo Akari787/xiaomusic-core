@@ -10,6 +10,7 @@ pytest.importorskip("qrcode")
 @pytest.mark.asyncio
 async def test_api_v1_auth_status_returns_v1_envelope_and_core_fields(monkeypatch):
     from xiaomusic.api.routers import system, v1
+    from xiaomusic.api.routers import v1_shared as _vs
 
     class _Auth:
         @staticmethod
@@ -54,8 +55,8 @@ async def test_api_v1_auth_status_returns_v1_envelope_and_core_fields(monkeypatc
     async def _fake_runtime_ready():
         return False
 
-    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
-    monkeypatch.setattr(v1, "_runtime_auth_ready_v1", _fake_runtime_ready)
+    monkeypatch.setattr(_vs, "_get_xiaomusic", lambda: _XM())
+    monkeypatch.setattr(_vs, "_runtime_auth_ready_v1", _fake_runtime_ready)
 
     monkeypatch.setattr(system, "xiaomusic", _XM())
     monkeypatch.setattr(system, "_runtime_auth_ready", _fake_runtime_ready)

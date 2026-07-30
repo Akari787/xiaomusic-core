@@ -10,17 +10,17 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
 from xiaomusic import __version__
 from xiaomusic.api import response as api_response
-from xiaomusic.api.models import ApiResponse
 from xiaomusic.api.dependencies import (
     AuthStaticFiles,
     reset_http_server,
 )
+from xiaomusic.api.models import ApiResponse
 
 if TYPE_CHECKING:
     from xiaomusic.xiaomusic import XiaoMusic
@@ -71,8 +71,8 @@ try:
         ExecNotAllowedError,
         ExecValidationError,
         OutboundBlockedError,
-        SelfUpdateDisabledError,
         SecurityError,
+        SelfUpdateDisabledError,
     )
 
     @app.exception_handler(SecurityError)
@@ -151,10 +151,20 @@ async def _handle_http_exception(request: Request, exc: HTTPException):
 async def _handle_validation_exception(request: Request, exc: RequestValidationError):
     if request.url.path.startswith("/api/v1/"):
         request_id = api_response.get_request_id() or uuid.uuid4().hex[:16]
+        errors = exc.errors()
+        # Convert non-serializable ctx.error (e.g. ValueError from model_validator)
+        for err in errors:
+            ctx = err.get("ctx") if isinstance(err, dict) else None
+            if isinstance(ctx, dict) and "error" in ctx and not isinstance(ctx["error"], (str, int, float, bool, list, dict, type(None))):
+                ctx["error"] = str(ctx["error"])
         body = ApiResponse(
             code=50001,
             message="invalid request",
-            data={"detail": exc.errors()},
+            data={
+                "error_code": "E_INVALID_REQUEST",
+                "stage": "request",
+                "detail": errors,
+            },
             request_id=request_id,
         ).model_dump()
         return JSONResponse(status_code=422, content=body)

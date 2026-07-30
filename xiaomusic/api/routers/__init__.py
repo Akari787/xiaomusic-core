@@ -17,7 +17,18 @@ def register_routers(app):
         app: FastAPI 应用实例
     """
     from xiaomusic.api import websocket
-    from xiaomusic.api.routers import device, file, music, playlist, plugin, relay, system, v1
+    from xiaomusic.api.routers import (
+        admin,
+        device,
+        diagnostics,
+        file,
+        music,
+        playlist,
+        plugin,
+        relay,
+        system,
+        v1,
+    )
 
     auth_dep = _verification_dependency()
 
@@ -26,6 +37,12 @@ def register_routers(app):
 
     # 正式维护的 API v1 命名空间。
     app.include_router(v1.router, tags=["API v1"], dependencies=[auth_dep])
+
+    # Admin API v1: source management, auth status (WebUI-visible, in schema).
+    app.include_router(admin.router, tags=["Admin API v1"], dependencies=[auth_dep])
+
+    # Internal diagnostics: debug endpoints excluded from public schema.
+    app.include_router(diagnostics.router, tags=["Internal Diagnostics"], dependencies=[auth_dep], include_in_schema=False)
 
     # 非 v1 的业务与辅助路由属于 Internal API，不进入公开 schema。
     app.include_router(device.router, tags=["设备控制"], dependencies=[auth_dep], include_in_schema=False)

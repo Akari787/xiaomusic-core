@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
@@ -13,15 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from xiaomusic import __version__
 from xiaomusic.api.api_error import ApiError
-from xiaomusic.constants.api_fields import (
-    DEVICE_ID,
-    OPTIONS,
-    QUERY,
-    REQUEST_ID,
-    SOURCE_HINT,
-)
 from xiaomusic.api.models import (
-    ApiResponse,
     ControlRequest,
     FavoritesRequest,
     LibraryRefreshRequest,
@@ -34,71 +25,44 @@ from xiaomusic.api.models import (
     TtsRequest,
     VolumeRequest,
 )
-from xiaomusic.api.runtime_provider import get_runtime
-from xiaomusic.core.errors import (
-    DeliveryPrepareError,
-    DeviceNotFoundError,
-    InvalidRequestError,
-    SourceResolveError,
-    TransportError,
+from xiaomusic.api.routers.v1_shared import (
+    _api_ok,
+    _api_response,
+    _bad_request,
+    _get_facade,
+    _map_api_exception,
+    _map_public_endpoint_exception,
+    _map_structured_endpoint_exception,
+    _next_request_id,
+    _runtime_auth_ready_v1,
+    auth_status_v1_svc,
+    diag_query_svc,
+    sources_delete_svc,
+    sources_disable_svc,
+    sources_enable_svc,
+    sources_list_svc,
+    sources_reload_svc,
+    sources_upload_svc,
+)
+from xiaomusic.api.routers.v1_shared import (
+    _get_xiaomusic as _v1_shared_get_xiaomusic,
+)
+from xiaomusic.constants.api_fields import (
+    DEVICE_ID,
+    OPTIONS,
+    QUERY,
+    REQUEST_ID,
+    SOURCE_HINT,
 )
 from xiaomusic.core.models import PlayOptions
-from xiaomusic.playback.facade import PlaybackFacade
 
-router = APIRouter()
-_facade: PlaybackFacade | None = None
-LOG = logging.getLogger("xiaomusic.api.v1")
-_PLAY_MODE_HANDLERS = {
-    "one": "set_play_type_one",
-    "all": "set_play_type_all",
-    "random": "set_play_type_rnd",
-    "single": "set_play_type_sin",
-    "sequence": "set_play_type_seq",
-}
+# Keep _get_xiaomusic and _require_device as local module-level functions
+# so tests can monkeypatch them directly on the v1 module.
+# _get_facade is imported from v1_shared (single source of truth — no duplicate facade).
 
 
 def _get_xiaomusic():
-    from xiaomusic.api.dependencies import xiaomusic
-
-    return xiaomusic
-
-
-def _get_facade() -> PlaybackFacade:
-    global _facade
-    if _facade is None:
-        _facade = PlaybackFacade(_get_xiaomusic(), link_preparer=get_runtime)
-    return _facade
-
-
-def _get_source_plugin_manager():
-    return _get_facade()._get_source_plugin_manager()
-
-
-def _next_request_id(raw: str | None = None) -> str:
-    return str(raw or uuid4().hex[:16])
-
-
-def _api_response(
-    code: int, message: str, data: dict[str, Any], request_id: str
-) -> dict[str, Any]:
-    return ApiResponse(
-        code=int(code), message=str(message), data=data, request_id=str(request_id)
-    ).model_dump()
-
-
-def _api_ok(data: dict[str, Any], request_id: str) -> dict[str, Any]:
-    return _api_response(0, "ok", data, request_id)
-
-
-def _bad_request(
-    request_id: str, message: str, *, field: str = "", allowed: list[str] | None = None
-) -> ApiError:
-    data: dict[str, Any] = {"error_code": "E_INVALID_REQUEST", "stage": "request"}
-    if field:
-        data["field"] = field
-    if allowed:
-        data["allowed"] = allowed
-    return ApiError(code=40001, message=message, data=data, request_id=request_id)
+    return _v1_shared_get_xiaomusic()
 
 
 def _require_device(device_id: str, request_id: str):
@@ -113,158 +77,16 @@ def _require_device(device_id: str, request_id: str):
     return xm
 
 
-def _map_api_exception(exc: Exception, request_id: str) -> dict[str, Any]:
-    if isinstance(exc, ApiError):
-        return _api_response(
-            exc.code, exc.message, exc.data, str(exc.request_id or request_id)
-        )
-    if isinstance(exc, InvalidRequestError):
-        return _api_response(
-            40001,
-            str(exc),
-            {
-                "error_type": exc.__class__.__name__,
-                "error_code": "E_INVALID_REQUEST",
-                "stage": "request",
-            },
-            request_id,
-        )
-    if isinstance(exc, SourceResolveError):
-        return _api_response(
-            20002,
-            "source resolve failed",
-            {
-                "error_type": exc.__class__.__name__,
-                "error_code": "E_RESOLVE_NONZERO_EXIT",
-                "stage": "resolve",
-            },
-            request_id,
-        )
-    if isinstance(exc, DeliveryPrepareError):
-        return _api_response(
-            30001,
-            "delivery prepare failed",
-            {
-                "error_type": exc.__class__.__name__,
-                "error_code": "E_STREAM_NOT_FOUND",
-                "stage": "prepare",
-            },
-            request_id,
-        )
-    if isinstance(exc, TransportError):
-        return _api_response(
-            40002,
-            "transport dispatch failed",
-            {
-                "error_type": exc.__class__.__name__,
-                "error_code": "E_XIAOMI_PLAY_FAILED",
-                "stage": "dispatch",
-            },
-            request_id,
-        )
-    if isinstance(exc, DeviceNotFoundError):
-        return _api_response(
-            40004,
-            "device not found",
-            {
-                "error_type": exc.__class__.__name__,
-                "error_code": "E_DEVICE_NOT_FOUND",
-                "stage": "request",
-            },
-            request_id,
-        )
-    return _api_response(
-        10000,
-        "internal error",
-        {
-            "error_type": exc.__class__.__name__,
-            "error_code": "E_INTERNAL",
-            "stage": "system",
-        },
-        request_id,
-    )
+router = APIRouter()
+LOG = logging.getLogger("xiaomusic.api.v1")
+_PLAY_MODE_HANDLERS = {
+    "one": "set_play_type_one",
+    "all": "set_play_type_all",
+    "random": "set_play_type_rnd",
+    "single": "set_play_type_sin",
+    "sequence": "set_play_type_seq",
+}
 
-
-def _map_structured_endpoint_exception(
-    exc: Exception,
-    request_id: str,
-    *,
-    default_error_code: str,
-    default_stage: str,
-    default_message: str,
-) -> dict[str, Any]:
-    if isinstance(
-        exc,
-        (
-            ApiError,
-            InvalidRequestError,
-            SourceResolveError,
-            DeliveryPrepareError,
-            TransportError,
-            DeviceNotFoundError,
-        ),
-    ):
-        return _map_api_exception(exc, request_id)
-    if isinstance(exc, PermissionError):
-        return _api_response(
-            40301,
-            str(exc),
-            {
-                "error_type": exc.__class__.__name__,
-                "error_code": "E_FORBIDDEN",
-                "stage": default_stage,
-            },
-            request_id,
-        )
-    if isinstance(exc, FileNotFoundError):
-        return _api_response(
-            40401,
-            str(exc),
-            {
-                "error_type": exc.__class__.__name__,
-                "error_code": "E_NOT_FOUND",
-                "stage": default_stage,
-            },
-            request_id,
-        )
-    if isinstance(exc, ValueError):
-        return _api_response(
-            40001,
-            str(exc),
-            {
-                "error_type": exc.__class__.__name__,
-                "error_code": "E_INVALID_REQUEST",
-                "stage": default_stage,
-            },
-            request_id,
-        )
-    return _api_response(
-        10000,
-        default_message,
-        {
-            "error_type": exc.__class__.__name__,
-            "error_code": default_error_code,
-            "stage": default_stage,
-        },
-        request_id,
-    )
-
-
-def _map_public_endpoint_exception(
-    exc: Exception,
-    request_id: str,
-    *,
-    default_error_code: str,
-    default_stage: str,
-    default_message: str,
-) -> dict[str, Any]:
-    return _map_structured_endpoint_exception(
-        exc,
-        request_id,
-        default_error_code=default_error_code,
-        default_stage=default_stage,
-        default_message=default_message,
-    )
 
 
 def _normalize_device(device: dict[str, Any]) -> dict[str, Any]:
@@ -277,16 +99,6 @@ def _normalize_device(device: dict[str, Any]) -> dict[str, Any]:
         "model": str(device.get("hardware") or ""),
         "online": bool(device.get("isOnline") or device.get("online") or False),
     }
-
-
-async def _runtime_auth_ready_v1() -> bool:
-    try:
-        am = getattr(_get_xiaomusic(), "auth_manager", None)
-        if am is None:
-            return False
-        return not await am.need_login()
-    except Exception:
-        return False
 
 
 async def _settings_snapshot(include_devices: bool) -> dict[str, Any]:
@@ -336,7 +148,8 @@ async def _settings_snapshot(include_devices: bool) -> dict[str, Any]:
 @router.post("/api/v1/play")
 async def api_v1_play(data: PlayRequest):
     request_id = _next_request_id(data.request_id)
-    options = PlayOptions.from_payload(getattr(data, OPTIONS, None))
+    raw_options = getattr(data, OPTIONS, None)
+    options = PlayOptions.from_payload(raw_options.model_dump() if raw_options is not None else None)
     try:
         facade = _get_facade()
         out = await facade.play(
@@ -391,7 +204,8 @@ async def api_v1_play(data: PlayRequest):
 @router.post("/api/v1/resolve")
 async def api_v1_resolve(data: ResolveRequest):
     request_id = _next_request_id(data.request_id)
-    options = PlayOptions.from_payload(getattr(data, OPTIONS, None))
+    raw_options = getattr(data, OPTIONS, None)
+    options = PlayOptions.from_payload(raw_options.model_dump() if raw_options is not None else None)
     try:
         out = await _get_facade().resolve(
             query=getattr(data, QUERY),
@@ -549,112 +363,84 @@ async def api_v1_devices():
         )
 
 
-@router.get("/api/v1/sources")
+@router.get("/api/v1/sources", include_in_schema=False, deprecated=True)
 async def api_v1_sources(request_id: str | None = None):
+    LOG.warning("deprecated route called: GET /api/v1/sources (use /api/admin/v1/sources)")
     rid = _next_request_id(request_id)
     try:
-        manager = _get_source_plugin_manager()
-        return _api_ok(
-            {
-                "registry_version": int(manager.registry_version),
-                "sources": manager.describe_plugins(),
-            },
-            request_id=rid,
-        )
+        return _api_ok(sources_list_svc(), request_id=rid)
     except Exception as exc:
         return _map_structured_endpoint_exception(
-            exc,
-            rid,
-            default_error_code="E_SOURCES_QUERY_FAILED",
-            default_stage="system",
-            default_message="sources query failed",
+            exc, rid, default_error_code="E_SOURCES_QUERY_FAILED",
+            default_stage="system", default_message="sources query failed",
         )
 
 
-@router.post("/api/v1/sources/reload")
+@router.post("/api/v1/sources/reload", include_in_schema=False, deprecated=True)
 async def api_v1_sources_reload(request_id: str | None = None):
+    LOG.warning("deprecated route called: POST /api/v1/sources/reload (use /api/admin/v1/sources/reload)")
     rid = _next_request_id(request_id)
     try:
-        manager = _get_source_plugin_manager()
-        return _api_ok(manager.reload_summary(), request_id=rid)
+        return _api_ok(sources_reload_svc(), request_id=rid)
     except Exception as exc:
         return _map_structured_endpoint_exception(
-            exc,
-            rid,
-            default_error_code="E_SOURCES_RELOAD_FAILED",
-            default_stage="system",
-            default_message="sources reload failed",
+            exc, rid, default_error_code="E_SOURCES_RELOAD_FAILED",
+            default_stage="system", default_message="sources reload failed",
         )
 
 
-@router.post("/api/v1/sources/upload")
+@router.post("/api/v1/sources/upload", include_in_schema=False, deprecated=True)
 async def api_v1_sources_upload(
     file: UploadFile = File(...), request_id: str | None = None
 ):
+    LOG.warning("deprecated route called: POST /api/v1/sources/upload (use /api/admin/v1/sources/upload)")
     rid = _next_request_id(request_id)
     try:
         content = await file.read()
-        manager = _get_source_plugin_manager()
-        item = manager.upload_plugin(file.filename or "", content)
-        return _api_ok(item, request_id=rid)
+        return _api_ok(sources_upload_svc(file.filename or "", content), request_id=rid)
     except Exception as exc:
         return _map_structured_endpoint_exception(
-            exc,
-            rid,
-            default_error_code="E_SOURCES_UPLOAD_FAILED",
-            default_stage="system",
-            default_message="sources upload failed",
+            exc, rid, default_error_code="E_SOURCES_UPLOAD_FAILED",
+            default_stage="system", default_message="sources upload failed",
         )
 
 
-@router.delete("/api/v1/sources/{name}")
+@router.delete("/api/v1/sources/{name}", include_in_schema=False, deprecated=True)
 async def api_v1_sources_delete(name: str, request_id: str | None = None):
+    LOG.warning("deprecated route called: DELETE /api/v1/sources/{name} (use /api/admin/v1/sources/{name})")
     rid = _next_request_id(request_id)
     try:
-        manager = _get_source_plugin_manager()
-        result = manager.uninstall_plugin(name)
-        return _api_ok(result, request_id=rid)
+        return _api_ok(sources_delete_svc(name), request_id=rid)
     except Exception as exc:
         return _map_structured_endpoint_exception(
-            exc,
-            rid,
-            default_error_code="E_SOURCES_DELETE_FAILED",
-            default_stage="system",
-            default_message="sources delete failed",
+            exc, rid, default_error_code="E_SOURCES_DELETE_FAILED",
+            default_stage="system", default_message="sources delete failed",
         )
 
 
-@router.put("/api/v1/sources/{name}/enable")
+@router.put("/api/v1/sources/{name}/enable", include_in_schema=False, deprecated=True)
 async def api_v1_sources_enable(name: str, request_id: str | None = None):
+    LOG.warning("deprecated route called: PUT /api/v1/sources/{name}/enable (use /api/admin/v1/sources/{name}/enable)")
     rid = _next_request_id(request_id)
     try:
-        manager = _get_source_plugin_manager()
-        item = manager.enable_plugin(name)
-        return _api_ok(item, request_id=rid)
+        return _api_ok(sources_enable_svc(name), request_id=rid)
     except Exception as exc:
         return _map_structured_endpoint_exception(
-            exc,
-            rid,
-            default_error_code="E_SOURCES_ENABLE_FAILED",
-            default_stage="system",
-            default_message="sources enable failed",
+            exc, rid, default_error_code="E_SOURCES_ENABLE_FAILED",
+            default_stage="system", default_message="sources enable failed",
         )
 
 
-@router.put("/api/v1/sources/{name}/disable")
+@router.put("/api/v1/sources/{name}/disable", include_in_schema=False, deprecated=True)
 async def api_v1_sources_disable(name: str, request_id: str | None = None):
+    LOG.warning("deprecated route called: PUT /api/v1/sources/{name}/disable (use /api/admin/v1/sources/{name}/disable)")
     rid = _next_request_id(request_id)
     try:
-        manager = _get_source_plugin_manager()
-        item = manager.disable_plugin(name)
-        return _api_ok(item, request_id=rid)
+        return _api_ok(sources_disable_svc(name), request_id=rid)
     except Exception as exc:
         return _map_structured_endpoint_exception(
-            exc,
-            rid,
-            default_error_code="E_SOURCES_DISABLE_FAILED",
-            default_stage="system",
-            default_message="sources disable failed",
+            exc, rid, default_error_code="E_SOURCES_DISABLE_FAILED",
+            default_stage="system", default_message="sources disable failed",
         )
 
 
@@ -758,123 +544,67 @@ async def api_v1_system_settings_item(data: SystemSettingItemUpdateRequest):
         )
 
 
-@router.get("/api/v1/auth/status")
+@router.get("/api/v1/auth/status", include_in_schema=False, deprecated=True)
 async def api_v1_auth_status(request_id: str | None = None):
+    LOG.warning("deprecated route called: GET /api/v1/auth/status (use /api/admin/v1/auth/status)")
     rid = _next_request_id(request_id)
     try:
-        runtime_auth_ready = await _runtime_auth_ready_v1()
-        am = getattr(_get_xiaomusic(), "auth_manager", None)
-        if am is not None and hasattr(am, "map_auth_public_status"):
-            data = am.map_auth_public_status(runtime_auth_ready=runtime_auth_ready)
-        else:
-            data = {
-                "status": "unknown",
-                "auth_mode": "unknown",
-                "status_reason": "unknown",
-                "recovery_failure_count": 0,
-            }
-        data["generated_at_ms"] = int(time.time() * 1000)
-        return _api_ok(data, request_id=rid)
+        return _api_ok(await auth_status_v1_svc(), request_id=rid)
     except Exception as exc:
         return _map_api_exception(exc, rid)
 
 
 # diagnostic endpoint - not in v1 whitelist, exclude from public schema
-@router.get("/api/v1/debug/auth_state", include_in_schema=False)
+@router.get("/api/v1/debug/auth_state", include_in_schema=False, deprecated=True)
 async def api_v1_debug_auth_state():
+    LOG.warning("deprecated route called: GET /api/v1/debug/auth_state (use /api/internal/diagnostics/auth_state)")
     request_id = _next_request_id(None)
     try:
-        am = getattr(_get_xiaomusic(), "auth_manager", None)
-        if am is not None and hasattr(am, "auth_debug_state"):
-            data = am.auth_debug_state()
-        else:
-            data = {
-                "auth_mode": "unknown",
-                "login_at": None,
-                "expires_at": None,
-                "ttl_remaining_seconds": None,
-                "last_refresh_trigger": "",
-                "last_auth_error": "",
-            }
-        return _api_ok(data, request_id=request_id)
+        return _api_ok(diag_query_svc("auth_state"), request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
 
 # diagnostic endpoint - not in v1 whitelist, exclude from public schema
-@router.get("/api/v1/debug/auth_recovery_state", include_in_schema=False)
+@router.get("/api/v1/debug/auth_recovery_state", include_in_schema=False, deprecated=True)
 async def api_v1_debug_auth_recovery_state():
+    LOG.warning("deprecated route called: GET /api/v1/debug/auth_recovery_state (use /api/internal/diagnostics/auth_recovery_state)")
     request_id = _next_request_id(None)
     try:
-        am = getattr(_get_xiaomusic(), "auth_manager", None)
-        if am is not None and hasattr(am, "auth_recovery_debug_state"):
-            data = am.auth_recovery_debug_state()
-        else:
-            data = {
-                "last_clear_short_session": {},
-                "last_login_exchange": {},
-                "last_runtime_rebind": {},
-                "last_playback_capability_verify": {},
-            }
-        return _api_ok(data, request_id=request_id)
+        return _api_ok(diag_query_svc("auth_recovery_state"), request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
 
 # diagnostic endpoint - not in v1 whitelist, exclude from public schema
-@router.get("/api/v1/debug/miaccount_login_trace", include_in_schema=False)
+@router.get("/api/v1/debug/miaccount_login_trace", include_in_schema=False, deprecated=True)
 async def api_v1_debug_miaccount_login_trace():
+    LOG.warning("deprecated route called: GET /api/v1/debug/miaccount_login_trace (use /api/internal/diagnostics/miaccount_login_trace)")
     request_id = _next_request_id(None)
     try:
-        am = getattr(_get_xiaomusic(), "auth_manager", None)
-        if am is not None and hasattr(am, "miaccount_login_trace_debug_state"):
-            data = am.miaccount_login_trace_debug_state()
-        else:
-            data = {
-                "login_input_snapshot": {},
-                "login_http_exchange": {},
-                "login_response_parse": {},
-                "token_writeback": {},
-                "post_login_runtime_seed": {},
-            }
-        return _api_ok(data, request_id=request_id)
+        return _api_ok(diag_query_svc("miaccount_login_trace"), request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
 
 # diagnostic endpoint - not in v1 whitelist, exclude from public schema
-@router.get("/api/v1/debug/auth_rebuild_state", include_in_schema=False)
+@router.get("/api/v1/debug/auth_rebuild_state", include_in_schema=False, deprecated=True)
 async def api_v1_debug_auth_rebuild_state():
+    LOG.warning("deprecated route called: GET /api/v1/debug/auth_rebuild_state (use /api/internal/diagnostics/auth_rebuild_state)")
     request_id = _next_request_id(None)
     try:
-        am = getattr(_get_xiaomusic(), "auth_manager", None)
-        if am is not None and hasattr(am, "auth_rebuild_debug_state"):
-            data = am.auth_rebuild_debug_state()
-        else:
-            data = {
-                "last_clear_short_session": {},
-                "last_rebuild_short_session": {},
-                "last_runtime_rebind": {},
-                "last_verify": {},
-            }
-        return _api_ok(data, request_id=request_id)
+        return _api_ok(diag_query_svc("auth_rebuild_state"), request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
 
 # diagnostic endpoint - not in v1 whitelist, exclude from public schema
-@router.get("/api/v1/debug/auth_runtime_reload_state", include_in_schema=False)
+@router.get("/api/v1/debug/auth_runtime_reload_state", include_in_schema=False, deprecated=True)
 async def api_v1_debug_auth_runtime_reload_state():
+    LOG.warning("deprecated route called: GET /api/v1/debug/auth_runtime_reload_state (use /api/internal/diagnostics/auth_runtime_reload_state)")
     request_id = _next_request_id(None)
     try:
-        am = getattr(_get_xiaomusic(), "auth_manager", None)
-        if am is not None and hasattr(am, "auth_runtime_reload_debug_state"):
-            data = am.auth_runtime_reload_debug_state()
-        else:
-            data = {
-                "last_reload_runtime": {},
-            }
-        return _api_ok(data, request_id=request_id)
+        return _api_ok(diag_query_svc("auth_runtime_reload_state"), request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
@@ -1225,23 +955,12 @@ async def api_v1_search_online(
 
 
 # diagnostic endpoint - not in v1 whitelist, exclude from public schema
-@router.get("/api/v1/debug/auth_short_session_rebuild_state", include_in_schema=False)
+@router.get("/api/v1/debug/auth_short_session_rebuild_state", include_in_schema=False, deprecated=True)
 async def api_v1_debug_auth_short_session_rebuild_state():
+    LOG.warning("deprecated route called: GET /api/v1/debug/auth_short_session_rebuild_state (use /api/internal/diagnostics/auth_short_session_rebuild_state)")
     request_id = _next_request_id(None)
     try:
-        am = getattr(_get_xiaomusic(), "auth_manager", None)
-        if am is not None and hasattr(am, "auth_short_session_rebuild_debug_state"):
-            data = am.auth_short_session_rebuild_debug_state()
-        else:
-            data = {
-                "last_short_session_rebuild": {},
-                "last_persistent_auth_relogin": {},
-                "last_runtime_rebind": {},
-                "last_verify": {},
-                "last_auth_recovery_flow": {},
-                "last_locked_transition": {},
-            }
-        return _api_ok(data, request_id=request_id)
+        return _api_ok(diag_query_svc("auth_short_session_rebuild_state"), request_id=request_id)
     except Exception as exc:
         return _map_api_exception(exc, request_id)
 
@@ -1293,7 +1012,6 @@ _player_stream_sub_lock = asyncio.Lock()
 
 async def _push_player_state_event(device_id: str) -> None:
     """Push current player state to all subscribers of this device."""
-    from xiaomusic.events import PLAYER_STATE_CHANGED
 
     facade = _get_facade()
     try:

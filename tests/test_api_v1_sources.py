@@ -4,6 +4,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from xiaomusic.api.routers import v1
+from xiaomusic.api.routers import v1_shared as _vs
+
+
+def _patch_manager(monkeypatch, mgr):
+    monkeypatch.setattr(_vs, "_get_source_plugin_manager", lambda: mgr())
 
 
 def _v1_client() -> TestClient:
@@ -35,7 +40,7 @@ def test_api_v1_sources_returns_registry_version_and_sources(monkeypatch):
                 },
             ]
 
-    monkeypatch.setattr(v1, "_get_source_plugin_manager", lambda: _Manager())
+    _patch_manager(monkeypatch, _Manager)
     client = _v1_client()
 
     response = client.get("/api/v1/sources")
@@ -80,7 +85,7 @@ def test_api_v1_sources_reload_returns_summary(monkeypatch):
                 "failed_count": 1,
             }
 
-    monkeypatch.setattr(v1, "_get_source_plugin_manager", lambda: _Manager())
+    _patch_manager(monkeypatch, _Manager)
     client = _v1_client()
 
     response = client.post("/api/v1/sources/reload")
@@ -113,7 +118,7 @@ def test_api_v1_sources_upload_returns_uploaded_plugin(monkeypatch):
                 "error": "",
             }
 
-    monkeypatch.setattr(v1, "_get_source_plugin_manager", lambda: _Manager())
+    _patch_manager(monkeypatch, _Manager)
     client = _v1_client()
 
     response = client.post(
@@ -139,7 +144,7 @@ def test_api_v1_sources_delete_rejects_builtin(monkeypatch):
         def uninstall_plugin(name: str):
             raise PermissionError(f"builtin source plugin cannot be deleted: {name}")
 
-    monkeypatch.setattr(v1, "_get_source_plugin_manager", lambda: _Manager())
+    _patch_manager(monkeypatch, _Manager)
     client = _v1_client()
 
     response = client.delete("/api/v1/sources/direct_url")
@@ -175,7 +180,7 @@ def test_api_v1_sources_enable_disable_returns_updated_item(monkeypatch):
                 "error": "",
             }
 
-    monkeypatch.setattr(v1, "_get_source_plugin_manager", lambda: _Manager())
+    _patch_manager(monkeypatch, _Manager)
     client = _v1_client()
 
     disable_response = client.put("/api/v1/sources/direct_url/disable")

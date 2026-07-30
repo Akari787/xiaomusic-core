@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from typing import Any, cast
-import pytest
 import json
 
+import pytest
+
 from xiaomusic.api.routers import v1
+from xiaomusic.api.routers import v1_shared as _vs
+
+
+def _patch_xm(monkeypatch, xm):
+    monkeypatch.setattr(_vs, "_get_xiaomusic", lambda: xm())
 
 
 def _parse_response(resp):
@@ -31,7 +36,7 @@ async def test_api_v1_debug_auth_state_success(monkeypatch):
     class _XM:
         auth_manager = _Auth()
 
-    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    _patch_xm(monkeypatch, _XM)
     out = await v1.api_v1_debug_auth_state()
     assert out["code"] == 0
     assert out["data"]["auth_mode"] == "healthy"
@@ -67,7 +72,7 @@ async def test_api_v1_debug_auth_recovery_state_success(monkeypatch):
     class _XM:
         auth_manager = _Auth()
 
-    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    _patch_xm(monkeypatch, _XM)
     out = await v1.api_v1_debug_auth_recovery_state()
     assert out["code"] == 0
     assert out["data"]["last_runtime_rebind"]["result"] == "ok"
@@ -109,7 +114,7 @@ async def test_api_v1_debug_miaccount_login_trace_success(monkeypatch):
     class _XM:
         auth_manager = _Auth()
 
-    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    _patch_xm(monkeypatch, _XM)
     out = await v1.api_v1_debug_miaccount_login_trace()
     assert out["code"] == 0
     assert out["data"]["login_http_exchange"]["result"] == "failed"
@@ -160,7 +165,7 @@ async def test_api_v1_debug_auth_rebuild_state_success(monkeypatch):
     class _XM:
         auth_manager = _Auth()
 
-    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    _patch_xm(monkeypatch, _XM)
     out = await v1.api_v1_debug_auth_rebuild_state()
     assert out["code"] == 0
     assert out["data"]["last_rebuild_short_session"]["result"] == "ok"
@@ -181,7 +186,7 @@ async def test_api_v1_debug_auth_runtime_reload_state_success(monkeypatch):
     class _XM:
         auth_manager = _Auth()
 
-    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    _patch_xm(monkeypatch, _XM)
     out = await v1.api_v1_debug_auth_runtime_reload_state()
     assert out["code"] == 0
     assert out["data"]["last_reload_runtime"]["result"] == "ok"
@@ -216,7 +221,7 @@ async def test_api_v1_debug_auth_short_session_rebuild_state_success(monkeypatch
     class _XM:
         auth_manager = _Auth()
 
-    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    _patch_xm(monkeypatch, _XM)
     out = await v1.api_v1_debug_auth_short_session_rebuild_state()
     assert out["code"] == 0
     assert out["data"]["last_short_session_rebuild"]["result"] == "ok"

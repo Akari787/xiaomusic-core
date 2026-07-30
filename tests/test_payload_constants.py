@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from xiaomusic.api.models.play_request import PlayRequest, ResolveRequest
-from xiaomusic.constants.api_fields import DEVICE_ID, OPTIONS, QUERY, REQUEST_ID, SOURCE_HINT
+from xiaomusic.constants.api_fields import (
+    DEVICE_ID,
+    OPTIONS,
+    QUERY,
+    REQUEST_ID,
+    SOURCE_HINT,
+)
 from xiaomusic.core.models.payload_keys import (
     KEY_DEVICE_ID,
     KEY_OPTIONS,
@@ -39,7 +45,7 @@ def test_request_models_accept_payload_with_shared_field_names() -> None:
     )
     assert play.device_id == "did-1"
     assert play.query.endswith("song.mp3")
-    assert play.options == {"timeout": 5}
+    assert play.options.timeout == 5
     assert play.request_id == "rid-1"
 
     resolve = ResolveRequest.model_validate(
@@ -51,3 +57,4 @@ def test_request_models_accept_payload_with_shared_field_names() -> None:
     )
     assert resolve.query == "keyword"
     assert resolve.source_hint == "site_media"
+    assert resolve.options.no_cache is True

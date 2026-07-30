@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from xiaomusic.api.routers import v1
+from xiaomusic.api.routers import v1_shared as _vs
 
 
 def _v1_client() -> TestClient:
@@ -284,8 +285,8 @@ def test_player_state_route_normalizes_jellyfin_track_source(monkeypatch):
         def get_cur_play_list(self, did: str) -> str:
             return "Jellyfin Favorites"
 
-    v1._facade = None
-    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    _vs._facade = None  # type: ignore[attr-defined]
+    monkeypatch.setattr(_vs, "_get_xiaomusic", lambda: _XM())
     client = _v1_client()
     resp = client.get("/api/v1/player/state", params={"device_id": "did-jf"})
     assert resp.status_code == 200

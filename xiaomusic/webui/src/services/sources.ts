@@ -61,17 +61,17 @@ async function safePut<T>(path: string, payload: unknown): Promise<ApiEnvelope<T
 }
 
 export async function fetchSources(): Promise<ApiEnvelope<SourcesData>> {
-  return await safeGet<SourcesData>("/api/v1/sources");
+  return await safeGet<SourcesData>("/api/admin/v1/sources");
 }
 
 export async function reloadSources(): Promise<ApiEnvelope<SourcesReloadData>> {
-  return await safePost<SourcesReloadData>("/api/v1/sources/reload", {});
+  return await safePost<SourcesReloadData>("/api/admin/v1/sources/reload", {});
 }
 
 export async function enableSource(name: string): Promise<ApiEnvelope<SourceItem>> {
-  return await safePut<SourceItem>(`/api/v1/sources/${encodeURIComponent(name)}/enable`, {});
+  return await safePut<SourceItem>(`/api/admin/v1/sources/${encodeURIComponent(name)}/enable`, {});
 }
 
 export async function disableSource(name: string): Promise<ApiEnvelope<SourceItem>> {
-  return await safePut<SourceItem>(`/api/v1/sources/${encodeURIComponent(name)}/disable`, {});
+  return await safePut<SourceItem>(`/api/admin/v1/sources/${encodeURIComponent(name)}/disable`, {});
 }
