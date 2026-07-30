@@ -474,4 +474,117 @@ describe("HomePage play button regression", () => {
     expect(text).not.toContain("兼容口令入口");
     expect(text).not.toContain("语音命令链路");
   });
+
+  it("ignores fake state from play response — playlist via local_library path", async () => {
+    // Inject a bogus/stale `state` into the play response to prove
+    // the homepage never consumes `response.data.state` from play commands.
+    mockedV1.play.mockResolvedValueOnce({
+      code: 0,
+      message: "ok",
+      data: {
+        status: "playing",
+        device_id: "981257654",
+        source_plugin: "local_library",
+        transport: "mina",
+        state: {
+          device_id: "981257654",
+          revision: 999,
+          play_session_id: "ps-fake-inline",
+          transport_state: "idle",
+          track: { id: "FakeStale", title: "FakeStale" },
+          context: null,
+          position_ms: 0,
+          duration_ms: 0,
+          volume: 99,
+          snapshot_at_ms: 1,
+        },
+      },
+      request_id: "rid-play-fake-state",
+    });
+
+    const playTooltip = Array.from(container.querySelectorAll(".control-button .tooltip")).find(
+      (el) => (el.textContent || "").trim() === "播放",
+    );
+    const playButton = playTooltip?.parentElement as HTMLElement | null;
+    expect(playButton).not.toBeNull();
+
+    await act(async () => {
+      playButton?.click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    // The inline fake state MUST NOT appear anywhere in the visible text.
+    const fullText = container.textContent || "";
+    expect(fullText).not.toContain("FakeStale");
+    expect(fullText).not.toContain("ps-fake-inline");
+
+    // Meanwhile message confirms the play was sent.
+    expect(fullText).toContain("已发送播放");
+
+    // Advance through one polling cycle — the authoritative polling
+    // state kicks in and delivers the real track.
+    await advanceAndFlush(5000);
+
+    // Now the real polling state (which knows about "Song A") must be visible.
+    const afterPollText = container.textContent || "";
+    expect(afterPollText).toContain("Song A");
+    expect(afterPollText).not.toContain("FakeStale");
+  });
+
+  it("ignores fake state from play response — playlist via jellyfin fallback", async () => {
+    // Primary local_library call fails, the fallback jellyfin call
+    // succeeds but also carries a stale state in its response.
+    mockedV1.play
+      .mockResolvedValueOnce({
+        code: 20002,
+        message: "resolve error",
+        data: { error_code: "E_RESOLVE_NONZERO_EXIT", stage: "resolve" },
+        request_id: "rid-play-fail",
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        message: "ok",
+        data: {
+          status: "playing",
+          device_id: "981257654",
+          source_plugin: "jellyfin",
+          transport: "mina",
+          state: {
+            device_id: "981257654",
+            revision: 888,
+            play_session_id: "ps-fake-fallback",
+            transport_state: "stopped",
+            track: { id: "StaleFallback", title: "StaleFallback" },
+            context: null,
+            position_ms: 0,
+            duration_ms: 0,
+            volume: 10,
+            snapshot_at_ms: 2,
+          },
+        },
+        request_id: "rid-play-fallback-fake-state",
+      });
+
+    const playTooltip = Array.from(container.querySelectorAll(".control-button .tooltip")).find(
+      (el) => (el.textContent || "").trim() === "播放",
+    );
+    const playButton = playTooltip?.parentElement as HTMLElement | null;
+
+    await act(async () => {
+      playButton?.click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    const fullText = container.textContent || "";
+    expect(fullText).not.toContain("StaleFallback");
+    expect(fullText).not.toContain("ps-fake-fallback");
+    expect(fullText).toContain("已发送播放");
+
+    // Polling delivers the authoritative real state.
+    await advanceAndFlush(5000);
+
+    const afterPollText = container.textContent || "";
+    expect(afterPollText).toContain("Song A");
+    expect(afterPollText).not.toContain("StaleFallback");
+  });
 });

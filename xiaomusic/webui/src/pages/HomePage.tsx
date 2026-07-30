@@ -1594,13 +1594,6 @@ export function HomePage() {
     return false;
   }
 
-  function applyPlayStateFromResponse(deviceId: string, state: PlayerStateData | undefined): void {
-    if (!state) {
-      return;
-    }
-    void applySnapshotFn(state, deviceId);
-  }
-
   async function playPlaylistTrack(
     deviceId: string,
     playlistName: string,
@@ -1645,7 +1638,6 @@ export function HomePage() {
 
     if (isApiOk(playResp)) {
       markPendingSubmitting();
-      applyPlayStateFromResponse(deviceId, playResp.data?.state);
       setMessage(`已发送播放《${picked}》`);
       return true;
     }
@@ -1678,7 +1670,6 @@ export function HomePage() {
       });
       if (isApiOk(fallbackResp)) {
         markPendingSubmitting();
-        applyPlayStateFromResponse(deviceId, fallbackResp.data?.state);
         setMessage(`已发送播放《${picked}》`);
         return true;
       }
@@ -1812,7 +1803,6 @@ export function HomePage() {
       const fallbackTriggered = Boolean(outcome.fallback_triggered);
       if (isApiOk(out)) {
         clearPendingSelection();
-        applyPlayStateFromResponse(activeDid, out.data?.state);
         setMessage(
           `播放已发送（来源: ${String(data.source_plugin || "unknown")}, 传输: ${String(data.transport || "unknown")}, 路径: ${
             finalPath || "unknown"

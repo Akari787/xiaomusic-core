@@ -40,7 +40,6 @@ export interface PlayData {
   stage?: string;
   sid?: string;
   error_code?: string;
-  state?: PlayerStateData;
   extra?: Record<string, unknown>;
 }
 
