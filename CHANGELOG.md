@@ -1,3 +1,30 @@
+## v1.1.5 (2026-07-30)
+
+### API 边界治理
+
+- Runtime Public API 的 OpenAPI 白名单收敛为 25 项正式接口；来源管理与认证状态迁入 `/api/admin/v1/*`，内部诊断迁入 `/api/internal/diagnostics/*`。
+- 原 `/api/v1/sources/*`、`/api/v1/auth/status` 与 `/api/v1/debug/*` 路径继续保留兼容，隐藏于公开 schema 并标记弃用。
+- 新旧管理与诊断路径复用同一业务实现和唯一 `PlaybackFacade`，避免运行时状态分叉。
+- `PlayRequest` / `ResolveRequest` 增加非空查询、来源枚举、结构化 options 与未知字段拒绝；v1 请求校验错误统一返回 `E_INVALID_REQUEST` / `stage=request`。
+
+### WebUI 状态通道收口
+
+- Sources 页面改用 Admin API。
+- 首页不再消费 `POST /api/v1/play` 响应中的即时 `state`；播放器展示仅接受 SSE 或 `/api/v1/player/state` 轮询产生的权威快照。
+- 增加过期命令快照忽略、Admin Sources 路径与生产路由装配回归测试。
+
+### 验证
+
+- Python API 与相关回归：90 passed；WebUI：48 passed。
+- 测试服务器 Docker 构建通过；版本、WebUI 静态资源、25 项 Public API、7 项 Admin API 与结构化 422 均通过运行时检查。
+- OH2P 实机通过：SSE 与 `/player/state` 均观察到权威 `playing`，Raw device `status=1`；验收后 stop，连续两次 probe `status=2`，10 秒无复播。
+- OH2P 将 volume 0 钳制为物理最低值 4；本次经用户确认后以最低物理音量 4 使用 8 秒静音媒体验收。
+
+### 兼容性
+
+- 本版不删除旧 API 路径，不改变 `/api/v1/play` 后端成功响应字段。
+- 旧管理与诊断路径将在后续破坏性版本中另行评估移除。
+
 ## v1.1.4 (2026-07-28)
 
 ### 播放运行时架构
