@@ -1846,6 +1846,20 @@ class SimpleAuthManager:
                 token_payload["yetAnotherServiceToken"] = user_data.get(
                     "yetAnotherServiceToken"
                 )
+            # miservice 的 MiAccount.mi_request(sid) 只在 token 中已存在该 sid 时才直接使用，
+            # 否则会退到 login(sid)；而本部署没有账号口令（.env 无密码），那条路必然失败。
+            # 持久化的 auth.json 把 micoapi 会话拆成了 ssecurity + serviceToken，这里把它
+            # 拼回 miservice 期望的 (ssecurity, serviceToken) 元组，运行时才能在“零登录”
+            # 前提下从磁盘重建（2026-09-19 事故：重启后永远只能走注定失败的 login）。
+            if token_payload.get("ssecurity") and (
+                token_payload.get("serviceToken")
+                or token_payload.get("yetAnotherServiceToken")
+            ):
+                token_payload["micoapi"] = (
+                    token_payload["ssecurity"],
+                    token_payload.get("serviceToken")
+                    or token_payload["yetAnotherServiceToken"],
+                )
             account.token = token_payload
 
     def get_cookie(self):

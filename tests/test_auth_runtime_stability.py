@@ -562,3 +562,33 @@ async def test_fast_path_failure_does_not_clobber_concurrent_runtime(auth_manage
             pass
 
     assert manager.mina_service is concurrent_runtime
+
+
+class _TokenAccount:
+    def __init__(self):
+        self.token = {}
+
+
+def test_set_token_rebuilds_micoapi_tuple(auth_manager):
+    """set_token 必须把持久化的 ssecurity + serviceToken 拼回 token["micoapi"]。
+
+    miservice 的 MiAccount.mi_request(sid) 只有在 token 中已存在该 sid 时才**不**触发
+    login；缺了它，运行时重建就必然退到注定失败的 login(sid)。
+    """
+    manager, _ = auth_manager
+    acct = _TokenAccount()
+    manager.set_token(acct)
+    assert acct.token.get("micoapi") == ("ssec", "short-token")
+
+
+def test_set_token_without_service_token_does_not_fake_micoapi(auth_manager):
+    """没有 serviceToken 时不得伪造 micoapi，否则会把失效会话伪装成可用。"""
+    manager, token_store = auth_manager
+    data = dict(token_store.get())
+    data.pop("serviceToken", None)
+    data.pop("yetAnotherServiceToken", None)
+    token_store._data = data
+
+    acct = _TokenAccount()
+    manager.set_token(acct)
+    assert "micoapi" not in acct.token
