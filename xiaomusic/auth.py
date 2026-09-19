@@ -588,6 +588,64 @@ class SimpleAuthManager:
                 )
                 return False
 
+            # 快速路径：已持有会话 token、但运行时未绑定（典型场景＝进程重启）。
+            # 先直接重绑运行时并校验，成功则完全不需要 login —— 既让重启免扫码恢复，
+            # 也避免无谓的 login 触发小米风控（2026-09-19 事故根因之一）。
+            if self.mina_service is None and (
+                auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
+            ):
+                rebind_out = await self._rebind_runtime_from_auth_data(auth_data)
+                rebind_verified = False
+                if rebind_out.get("ok"):
+                    try:
+                        if self.mina_service is None:
+                            raise RuntimeError("mina service unavailable")
+                        await self.mina_service.device_list()
+                        rebind_verified = True
+                    except Exception as exc:
+                        verify_error_text = str(exc)[:200]
+                        self._last_error = verify_error_text
+                        self._last_recovery_error_message = verify_error_text
+                        # 校验失败：清掉这个候选运行时，落回原有登录/重建流程
+                        self.mina_service = None
+                        self.login_signature = None
+                if rebind_verified:
+                    self._last_ok_ts = time.time()
+                    self._last_login_ts = time.time()
+                    self._last_error = ""
+                    self._retry_count = 0
+                    self._retry_count_effective = 0
+                    self._lock_counter = 0
+                    self._probe_failure_count = 0
+                    self._recovery_failure_count = 0
+                    self._state = self.STATE_HEALTHY
+                    self._last_recovery_result = "ok"
+                    self._last_recovery_stage = "verify"
+                    self._last_recovery_error_code = ""
+                    self._last_recovery_error_message = ""
+                    self._last_lock_transition_reason = ""
+                    self._last_retry_increment_reason = ""
+                    self._last_health_probe_result = "ok"
+                    self._last_health_probe_error = ""
+                    self._last_login_trace = {
+                        **self._last_login_trace,
+                        "stage": "runtime_rebind_fast_path",
+                        "result": "ok",
+                        "reason": reason,
+                        "used_path": "rebind_runtime_from_persisted_session",
+                        "login_result": False,
+                        "runtime_swap_attempted": True,
+                        "runtime_swap_applied": True,
+                        "verify_attempted": True,
+                        "verify_method": verify_method,
+                        "verify_error_text": "",
+                        "verify_auth_failure_detected": False,
+                    }
+                    self.log.info(
+                        "认证成功（已持有会话，直接重绑运行时，未发起登录）"
+                    )
+                    return True
+
             if self._has_persistent_auth_fields(auth_data) and not (
                 auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
             ):
@@ -1116,14 +1174,18 @@ class SimpleAuthManager:
         if remaining_ratio > threshold:
             return False
 
-        # 检查最小刷新间隔
+        # 检查最小刷新间隔。
+        # 注意：基准不能用 saveTime —— 它只在新 token 与旧 token 不同时才推进，
+        # token 一旦稳定就永远显得"很久没刷新"，守卫形同虚设（实测每 5 分钟就触发一次
+        # 强制登录，即 12 次/小时，正是 2026-09-19 事故的登录风暴来源）。
+        # 改用真正记录"上次成功认证时刻"的时间戳。
         now = time.time()
-        save_ts = self._read_save_time()
+        last_ok = self._last_login_ts or self._last_ok_ts
         min_interval = getattr(self.config, "auth_refresh_min_interval_minutes", 30) * 60
-        if save_ts > 0 and (now - save_ts) < min_interval:
+        if last_ok > 0 and (now - last_ok) < min_interval:
             self.log.info(
                 f"_maybe_scheduled_refresh: skip, min interval not met "
-                f"({now - save_ts:.0f}s < {min_interval}s)"
+                f"({now - last_ok:.0f}s < {min_interval}s)"
             )
             return False
 
