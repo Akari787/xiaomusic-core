@@ -403,3 +403,97 @@ def test_auth_manager_alias_remains_available():
     from xiaomusic.auth import AuthManager, SimpleAuthManager
 
     assert AuthManager is SimpleAuthManager
+
+
+# --- 快速路径（有会话 token、运行时未绑定）回归测试 ---------------------------------
+# 背景：重启后 auth.json 已有 serviceToken 但 mina_service 未绑定。旧实现在这种
+# 情况下会跳过重建、直接发起 MiAccount.login("micoapi")，被小米风控拦下。
+
+
+def _patch_client_session():
+    """把 ClientSession patch 成可 await close() 的假对象。"""
+    mock_session = MagicMock()
+    mock_session.return_value = MagicMock()
+    mock_session.return_value.cookie_jar = MagicMock()
+    mock_session.return_value.close = AsyncMock()
+    return mock_session
+
+
+def _patch_mi_account():
+    """兼容无参/有参两种 MiAccount 构造，并暴露可断言的 login()。"""
+    mock_account = MagicMock()
+    mock_account.return_value = MagicMock()
+    mock_account.return_value.token = {}
+    mock_account.return_value.login = AsyncMock()
+
+    def _factory(*args, **kwargs):  # noqa: ARG001
+        if not args and not kwargs:
+            raise TypeError()
+        return mock_account.return_value
+
+    mock_account.side_effect = _factory
+    return mock_account
+
+
+@pytest.mark.asyncio
+async def test_fast_path_binds_runtime_without_login(auth_manager):
+    """有 serviceToken 且运行时未绑定时：直接用持久 token 重绑，完全不发起 login。"""
+    manager, _ = auth_manager
+    manager.mina_service = None
+    manager.miio_service = None
+    manager.login_signature = None
+    manager._state = manager.STATE_DEGRADED
+
+    healthy = _HealthyRuntime()
+    with (
+        patch("xiaomusic.auth.ClientSession", _patch_client_session()),
+        patch("xiaomusic.auth.MiAccount", _patch_mi_account()) as mock_account,
+        patch("xiaomusic.auth.MiNAService", return_value=healthy),
+        patch("xiaomusic.auth.MiIOService", return_value=object()),
+    ):
+        ok = await manager._try_login(reason="test_fast_path")
+
+    assert ok is True
+    assert manager.mina_service is healthy
+    assert manager._state == manager.STATE_HEALTHY
+    mock_account.return_value.login.assert_not_awaited()
+    assert manager._last_fast_rebind_state.get("result") == "ok"
+
+
+@pytest.mark.asyncio
+async def test_fast_path_verify_failure_leaves_no_residue(auth_manager):
+    """校验失败时 self 不得被污染（尤其不得把运行时置空），并落回原有登录流程。"""
+    manager, _ = auth_manager
+    manager.mina_service = None
+    manager.miio_service = None
+    manager.login_signature = None
+    manager._state = manager.STATE_DEGRADED
+    keep_account = manager.login_account
+    keep_signature = manager.login_signature
+
+    with (
+        patch("xiaomusic.auth.ClientSession", _patch_client_session()),
+        patch("xiaomusic.auth.MiAccount", _patch_mi_account()),
+        patch("xiaomusic.auth.MiNAService", return_value=_FailingRuntime()),
+        patch("xiaomusic.auth.MiIOService", return_value=object()),
+        patch.object(
+            manager,
+            "_try_miaccount_persistent_auth_relogin",
+            AsyncMock(return_value={"ok": False, "error_code": "test"}),
+        ),
+        patch.object(
+            manager,
+            "_try_mijia_persistent_auth_relogin",
+            AsyncMock(return_value={"ok": False, "error_code": "test"}),
+        ),
+    ):
+        try:
+            await manager._try_login(reason="test_fast_path_verify_fail")
+        except Exception:
+            pass  # 完整登录同样失败，允许抛出
+
+    assert manager.mina_service is None  # 没有留下半成品运行时
+    assert manager.login_account is keep_account  # 没被候选替换
+    assert manager.login_signature is keep_signature
+    assert manager._last_fast_rebind_state.get("result") == "failed"
+    assert manager._last_fast_rebind_state.get("error")

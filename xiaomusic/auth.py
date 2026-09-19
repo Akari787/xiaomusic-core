@@ -269,6 +269,7 @@ class SimpleAuthManager:
         self._last_runtime_reload_state: dict[str, Any] = {}
         self._last_auto_runtime_reload_state: dict[str, Any] = {}
         self._last_short_session_rebuild_state: dict[str, Any] = {}
+        self._last_fast_rebind_state: dict[str, Any] = {}
         self._last_auth_recovery_flow_state: dict[str, Any] = {}
 
     def _get_random_device_id(self) -> str:
@@ -589,27 +590,32 @@ class SimpleAuthManager:
                 return False
 
             # 快速路径：已持有会话 token、但运行时未绑定（典型场景＝进程重启）。
-            # 先直接重绑运行时并校验，成功则完全不需要 login —— 既让重启免扫码恢复，
-            # 也避免无谓的 login 触发小米风控（2026-09-19 事故根因之一）。
+            # 先用持久 token 构造候选运行时并校验，**通过之后才提交到 self**；
+            # 成功则完全不需要 login —— 既让重启免扫码恢复，也避免无谓的 login
+            # 触发小米风控（2026-09-19 事故根因之一）。
+            # 原子性很重要：校验失败时 self 必须保持原样，否则会与并发的成功认证
+            # 互相覆盖（把别人刚建好的运行时置空 → 复现"认证不可用"）。
             if self.mina_service is None and (
                 auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
             ):
-                rebind_out = await self._rebind_runtime_from_auth_data(auth_data)
-                rebind_verified = False
-                if rebind_out.get("ok"):
-                    try:
-                        if self.mina_service is None:
-                            raise RuntimeError("mina service unavailable")
-                        await self.mina_service.device_list()
-                        rebind_verified = True
-                    except Exception as exc:
-                        verify_error_text = str(exc)[:200]
-                        self._last_error = verify_error_text
-                        self._last_recovery_error_message = verify_error_text
-                        # 校验失败：清掉这个候选运行时，落回原有登录/重建流程
-                        self.mina_service = None
-                        self.login_signature = None
-                if rebind_verified:
+                candidate = await self._build_verified_runtime_candidate(auth_data)
+                if candidate.get("ok"):
+                    old_session = self.mi_session
+                    if candidate.get("session") is not None:
+                        self.mi_session = candidate["session"]
+                        self.cookie_jar = self.mi_session.cookie_jar
+                        if (
+                            old_session is not None
+                            and old_session is not candidate["session"]
+                        ):
+                            try:
+                                await old_session.close()
+                            except Exception:
+                                pass
+                    self.login_account = candidate["account"]
+                    self.mina_service = candidate["mina_service"]
+                    self.miio_service = candidate["miio_service"]
+                    self.login_signature = self._get_login_signature()
                     self._last_ok_ts = time.time()
                     self._last_login_ts = time.time()
                     self._last_error = ""
@@ -627,6 +633,12 @@ class SimpleAuthManager:
                     self._last_retry_increment_reason = ""
                     self._last_health_probe_result = "ok"
                     self._last_health_probe_error = ""
+                    self._last_fast_rebind_state = {
+                        "result": "ok",
+                        "reason": reason,
+                        "used_path": "rebind_runtime_from_persisted_session",
+                        "ts": int(time.time() * 1000),
+                    }
                     self._last_login_trace = {
                         **self._last_login_trace,
                         "stage": "runtime_rebind_fast_path",
@@ -640,11 +652,45 @@ class SimpleAuthManager:
                         "verify_method": verify_method,
                         "verify_error_text": "",
                         "verify_auth_failure_detected": False,
+                        # 显式清掉上一轮可能残留的"需人工"判定，
+                        # 避免已 HEALTHY 仍报 need_qr_scan
+                        "need_qr_scan": False,
+                        "user_action_required": False,
+                        "long_term_expired": False,
                     }
                     self.log.info(
                         "认证成功（已持有会话，直接重绑运行时，未发起登录）"
                     )
                     return True
+
+                # 校验失败：self 未被改动，只记审计，落回原有登录/重建流程
+                verify_error_text = str(candidate.get("error") or "")[:200]
+                self._last_error = verify_error_text or "runtime rebind verify failed"
+                self._last_recovery_result = "failed"
+                self._last_recovery_stage = "runtime_rebind_fast_path"
+                self._last_recovery_error_code = "runtime_rebind_verify_failed"
+                self._last_recovery_error_message = self._last_error
+                self._last_fast_rebind_state = {
+                    "result": "failed",
+                    "reason": reason,
+                    "used_path": "rebind_runtime_from_persisted_session",
+                    "error": self._last_error,
+                    "ts": int(time.time() * 1000),
+                }
+                self._last_login_trace = {
+                    **self._last_login_trace,
+                    "stage": "runtime_rebind_fast_path",
+                    "result": "failed",
+                    "reason": reason,
+                    "used_path": "rebind_runtime_from_persisted_session",
+                    "login_result": False,
+                    "runtime_swap_attempted": False,
+                    "runtime_swap_applied": False,
+                    "verify_attempted": True,
+                    "verify_method": verify_method,
+                    "verify_error_text": self._last_error,
+                    "verify_auth_failure_detected": False,
+                }
 
             if self._has_persistent_auth_fields(auth_data) and not (
                 auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
@@ -1160,7 +1206,11 @@ class SimpleAuthManager:
         if self._state != self.STATE_HEALTHY:
             return False
 
-        self._sync_auth_ttl()
+        # TTL 基准取「saveTime 与上次成功认证时刻的较新者」。
+        # 只信 saveTime 不行：它仅在新 token 与旧 token 不同时才推进，token 一旦稳定
+        # 就永远显得已过期 —— 这正是登录风暴（实测 12 次/小时）的根因。
+        _effective_login_at = max(self._read_save_time(), self._last_login_ts or 0.0)
+        self._sync_auth_ttl(login_at_ts=_effective_login_at or None)
         if self._expires_at <= 0 or self._login_at <= 0:
             return False
 
@@ -1454,6 +1504,59 @@ class SimpleAuthManager:
             if latest.get("ssecurity"):
                 normalized["ssecurity"] = latest.get("ssecurity")
         return normalized
+
+    async def _build_verified_runtime_candidate(
+        self, auth_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """用持久化 token 构造候选运行时，并在**不修改 self 运行时字段**的前提下校验。
+
+        返回 {"ok": True, "account", "mina_service", "miio_service", "session"}
+        或 {"ok": False, "error"}。调用方校验通过后自行提交到 self。
+
+        这样做的目的：校验失败时不会留下半成品运行时，也不会覆盖并发成功的运行时。
+        注：沿用既有写法调用 self.set_token()，它会按持久数据幂等地写 self.device_id。
+        """
+        login_session = ClientSession()
+        session_used = False
+        try:
+            try:
+                account = MiAccount()
+            except TypeError:
+                session_used = True
+                account = MiAccount(
+                    login_session,
+                    auth_data.get("userId", ""),
+                    "",
+                    str(self.mi_token_home),
+                )
+            self.set_token(account)
+            try:
+                mina_service = MiNAService(account)
+            except TypeError:
+                mina_service = MiNAService()
+            try:
+                miio_service = MiIOService(account)
+            except TypeError:
+                miio_service = MiIOService()
+            await mina_service.device_list()
+            if not session_used:
+                try:
+                    await login_session.close()
+                except Exception:
+                    pass
+            return {
+                "ok": True,
+                "account": account,
+                "mina_service": mina_service,
+                "miio_service": miio_service,
+                "session": login_session if session_used else None,
+            }
+        except Exception as exc:
+            try:
+                await login_session.close()
+            except Exception:
+                pass
+            return {"ok": False, "error": str(exc)[:200]}
 
     async def _rebind_runtime_from_auth_data(self, auth_data: dict[str, Any]) -> dict[str, Any]:
         try:
