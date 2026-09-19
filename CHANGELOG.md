@@ -1,3 +1,38 @@
+## v1.1.6 (2026-09-19)
+
+### 认证恢复（重启免扫码）
+
+- `set_token` 重建 miservice 所需的 `micoapi` 会话元组。此前持久化的 `auth.json` 只保留平铺的
+  `ssecurity` / `serviceToken`，`set_token` 照原样平铺回写，从未拼回
+  `token["micoapi"]`；而 miservice 的 `mi_request(sid)` 只有在 token 中存在该 sid 时才**不**
+  触发 login，否则退回 `login(sid)`——本部署无账号口令，那条路必然失败。
+- `_try_login` 新增快速路径：运行时未绑定但已有会话 token 时，先用
+  `_build_verified_runtime_candidate` 构造候选并校验，**通过后才原子提交**到 self；
+  全程不发起 login。校验失败不写回 self，避免覆盖并发建立的运行时。
+- 修正登录凤暴根因：`_maybe_scheduled_refresh` 的 TTL 基准与最小间隔基准改用
+  “上次成功认证时刻”（`_last_login_ts` / `_last_ok_ts`），而非只在 token 变化时才推进的
+  `saveTime`（实测 12 次/小时强制登录）。
+
+### DNS 自愈（部署层，不在本仓库）
+
+- 新增宿主机侧看门人 `docker-dns-watchdog`（systemd timer，每 2 分钟）：检测“容器不能解析
+  而宿主可以解析”即重启容器重建 DNS sandbox；每容器每小时重启上限 3 次，到顶置位失败
+  并等待人工介入。
+
+### 时区
+
+- 仓库默认保持 `Asia/Shanghai`；本机部署通过 compose 覆盖为 `Asia/Tokyo`。
+
+### 验证
+
+- `tests/test_auth_runtime_stability.py`：14 passed（新增 5 条，关键几条已逐一验证
+  “对修复前代码必失败”）。
+- 测试服务器（192.168.7.178 / OH2P）实机：容器重建后日志出现
+  `认证成功（已持有会话，直接重绑运行时，未发起登录）`，**未扫码即恢复**；
+  随后 15 分钟内 `认证失败 / 87001 / 70016 / 认证不可用` 均为 0。
+- 播放实机：`/api/v1/play` → `code=0 status=playing transport=mina`，`player/state` 观察到
+  `playing` 且 `position_ms` 递增；stop 后 `transport=stopped`，原始设备 `status=2`。
+
 ## v1.1.5 (2026-07-30)
 
 ### API 边界治理
