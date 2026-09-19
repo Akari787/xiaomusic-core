@@ -497,3 +497,68 @@ async def test_fast_path_verify_failure_leaves_no_residue(auth_manager):
     assert manager.login_signature is keep_signature
     assert manager._last_fast_rebind_state.get("result") == "failed"
     assert manager._last_fast_rebind_state.get("error")
+
+
+class _FailingRuntimeWithHook:
+    """校验必定失败，但在失败前先执行一个钩子——用于模拟"并发的成功认证"。"""
+
+    def __init__(self, hook):
+        self._hook = hook
+
+    async def device_list(self):
+        if self._hook is not None:
+            self._hook()
+        raise RuntimeError(
+            "Error https://api2.mina.mi.com/admin/v2/device_list: Login failed"
+        )
+
+
+@pytest.mark.asyncio
+async def test_fast_path_failure_does_not_clobber_concurrent_runtime(auth_manager):
+    """失败路径不得写回 self，否则会抹掉并发成功建立的运行时。
+
+    这是 4cf0abd → eb1e56e 的**行为差异门禁**（不同于靠新属性是否存在）：
+    旧实现在候选校验失败时会执行 `self.mina_service = None`，把这里由钩子预置的
+    "另一个协程刚装上的运行时"抹掉；新实现不再写回，该运行时必须存活。
+    """
+    manager, _ = auth_manager
+    manager.mina_service = None
+    manager.miio_service = None
+    manager.login_signature = None
+    manager._state = manager.STATE_DEGRADED
+
+    concurrent_runtime = _HealthyRuntime()
+
+    def _concurrent_success():
+        # 模拟"另一个协程在候选校验期间完成了认证并装入运行时"
+        manager.mina_service = concurrent_runtime
+        manager.login_signature = manager._get_login_signature()
+
+    mock_account = _patch_mi_account()
+    mock_account.return_value.login = AsyncMock(return_value=False)
+
+    with (
+        patch("xiaomusic.auth.ClientSession", _patch_client_session()),
+        patch("xiaomusic.auth.MiAccount", mock_account),
+        patch(
+            "xiaomusic.auth.MiNAService",
+            return_value=_FailingRuntimeWithHook(_concurrent_success),
+        ),
+        patch("xiaomusic.auth.MiIOService", return_value=object()),
+        patch.object(
+            manager,
+            "_try_miaccount_persistent_auth_relogin",
+            AsyncMock(return_value={"ok": False, "error_code": "test"}),
+        ),
+        patch.object(
+            manager,
+            "_try_mijia_persistent_auth_relogin",
+            AsyncMock(return_value={"ok": False, "error_code": "test"}),
+        ),
+    ):
+        try:
+            await manager._try_login(reason="test_fast_path_concurrent")
+        except Exception:
+            pass
+
+    assert manager.mina_service is concurrent_runtime

@@ -604,6 +604,9 @@ class SimpleAuthManager:
                     if candidate.get("session") is not None:
                         self.mi_session = candidate["session"]
                         self.cookie_jar = self.mi_session.cookie_jar
+                        # 注：仅 legacy miservice（session_used=True）会走到这里。此 await
+                        # 期间 self.mi_session 已换新而 mina_service 尚未提交，并发的另一个
+                        # 快速路径可能重复构造候选；最终状态仍自洽且可自愈（审查确认非阻断）。
                         if (
                             old_session is not None
                             and old_session is not candidate["session"]
@@ -2446,6 +2449,7 @@ class SimpleAuthManager:
             "state": self._state,
             "cooldown_until": self._cooldown_until,
             "last_short_session_rebuild": self._last_short_session_rebuild_state,
+            "last_fast_rebind": self._last_fast_rebind_state,
             "last_persistent_auth_relogin": (
                 flow.get("fallback_attempt")
                 if str(flow.get("used_path", "")).startswith("mijia")
