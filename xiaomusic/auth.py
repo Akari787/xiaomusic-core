@@ -388,6 +388,13 @@ class SimpleAuthManager:
             return True
         return self._state == self.STATE_LOCKED and time.time() < self._locked_until
 
+    def _mark_verified_runtime_recovered(self) -> None:
+        """Verified runtime success clears the persistent manual-auth gate."""
+        self._state = self.STATE_HEALTHY
+        self._locked_until = 0
+        self._last_manual_login_required_reason = ""
+        self._last_lock_transition_reason = ""
+
     async def ensure_logged_in(
         self,
         force: bool = False,
@@ -654,7 +661,7 @@ class SimpleAuthManager:
                     self._last_runtime_verify_ts = now
                     self._last_session_success_ts = now
                     self._last_login_ts = now
-                    self._state = self.STATE_HEALTHY
+                    self._mark_verified_runtime_recovered()
                     self._last_recovery_result = "ok"
                     self._last_recovery_stage = "verify"
                     self._last_recovery_error_code = ""
@@ -717,6 +724,7 @@ class SimpleAuthManager:
                     self._last_retry_increment_reason = ""
                     self._last_health_probe_result = "ok"
                     self._last_health_probe_error = ""
+                    self._mark_verified_runtime_recovered()
                     self._last_fast_rebind_state = {
                         "result": "ok",
                         "reason": reason,
@@ -801,6 +809,7 @@ class SimpleAuthManager:
                     self._last_recovery_error_message = ""
                     self._last_lock_transition_reason = ""
                     self._last_retry_increment_reason = ""
+                    self._mark_verified_runtime_recovered()
                     self._last_login_trace = {
                         **self._last_login_trace,
                         "stage": "short_session_rebuild",
@@ -1033,12 +1042,11 @@ class SimpleAuthManager:
             self._lock_counter = 0
             self._probe_failure_count = 0
             self._recovery_failure_count = 0
-            self._state = self.STATE_HEALTHY
+            self._mark_verified_runtime_recovered()
             self._last_recovery_result = "ok"
             self._last_recovery_stage = "verify"
             self._last_recovery_error_code = ""
             self._last_recovery_error_message = ""
-            self._last_lock_transition_reason = ""
             self._last_retry_increment_reason = ""
             self._last_login_trace = {
                 **self._last_login_trace,
@@ -1880,7 +1888,7 @@ class SimpleAuthManager:
         self.cookie_jar = new_cookie_jar
         self.login_signature = self._get_login_signature()
         self._runtime_generation += 1
-        self._state = self.STATE_HEALTHY
+        self._mark_verified_runtime_recovered()
         self._last_recovery_result = "ok"
         self._last_recovery_error_code = ""
         self._last_recovery_error_message = ""
@@ -2621,7 +2629,7 @@ class SimpleAuthManager:
         )
         self.login_signature = self._get_login_signature()
         self._runtime_generation += 1
-        self._state = self.STATE_HEALTHY
+        self._mark_verified_runtime_recovered()
         if old_session is not self.mi_session:
             try:
                 await old_session.close()
@@ -2665,6 +2673,7 @@ class SimpleAuthManager:
             )
         success = bool(rebuild_out.get("ok"))
         if success:
+            self._mark_verified_runtime_recovered()
             self._last_recovery_result = "ok"
             self._last_recovery_stage = "verify"
             self._last_recovery_error_code = ""

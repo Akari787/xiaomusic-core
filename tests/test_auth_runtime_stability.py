@@ -516,6 +516,42 @@ async def test_ensure_auth_fatal_code_locks_once_and_short_circuits(
         assert await manager.ensure_auth() is False
 
     assert account._serviceLogin.await_count == 1
+    assert manager._last_manual_login_required_reason
+
+
+@pytest.mark.asyncio
+async def test_verified_recovery_clears_manual_lock_and_allows_ensure(
+    auth_manager, monkeypatch
+):
+    manager, token_store = auth_manager
+    manager.mina_service = _FailingRuntime()
+    expired = MagicMock()
+    expired.token = {}
+    expired._serviceLogin = AsyncMock(return_value={"code": 70016})
+
+    with patch("xiaomusic.auth.MiAccount", return_value=expired):
+        assert await manager.ensure_auth() is False
+    assert manager.is_auth_locked() is True
+
+    monkeypatch.setenv("AUTH_ACCESS_TOKEN", "replacement-runtime-token")
+    manager._build_verified_runtime_candidate = AsyncMock(return_value={
+        "ok": True,
+        "account": object(),
+        "mina_service": _HealthyRuntime(),
+        "miio_service": object(),
+        "session": None,
+        "device_id": token_store.get_persisted()["deviceId"],
+    })
+    out = await manager.manual_reload_runtime(reason="ut-recover-manual-lock")
+
+    assert out["refreshed"] is True
+    assert manager._state == manager.STATE_HEALTHY
+    assert manager.is_auth_locked() is False
+    assert manager._last_manual_login_required_reason == ""
+
+    monkeypatch.delenv("AUTH_ACCESS_TOKEN")
+    manager.mina_service = _HealthyRuntime()
+    assert await manager.ensure_auth() is True
 
 
 @pytest.mark.asyncio
