@@ -39,8 +39,12 @@ fast rebind 未成功后仍必须走 atomic rebuild；atomic 失败绝不能落�
 
 `_maybe_scheduled_refresh()`：
 
-- TTL 仅取持久 token `saveTime`。
-- runtime probe 成功不会更新 TTL 锚点。
+- 若持久 token 有明确、有效、正数的 `expires_in`，以 `saveTime + expires_in`
+  计算 TTL，使用 `auth_refresh_threshold`（安全夹在 `0.01..0.99`）按剩余比例触发，日志模式为 `ttl_ratio`。
+- 若 `expires_in` 缺失或无效，不伪造 TTL；以 `auth_refresh_interval_hours`
+  （安全正数下限 `0.01` 小时，默认 `12` 小时）作为固定刷新间隔，按持久
+  `saveTime` 计算 elapsed，日志模式为 `interval_fallback`，此路径不再乘阈值。
+- runtime probe 成功不会更新 TTL 锚点或 `saveTime`。
 - env override 直接记录 `scheduled_env_override_skip` 并返回。
 - 无 persistent capability 记录 capability skip。
 - 其他情况调用：

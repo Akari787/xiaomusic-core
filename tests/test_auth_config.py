@@ -28,3 +28,17 @@ def test_auth_refresh_intervals_use_new_env_names(monkeypatch, tmp_path):
     cfg = Config(conf_path=str(tmp_path))
     assert cfg.auth_refresh_interval_hours == 6
     assert cfg.auth_refresh_min_interval_minutes == 15
+
+
+def test_auth_refresh_config_values_are_safe(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTH_REFRESH_INTERVAL_HOURS", "invalid")
+    monkeypatch.setenv("AUTH_REFRESH_THRESHOLD", "2")
+    cfg = Config(conf_path=str(tmp_path))
+    assert cfg.auth_refresh_interval_hours == 12
+    assert cfg.auth_refresh_threshold == 0.99
+
+    monkeypatch.setenv("AUTH_REFRESH_INTERVAL_HOURS", "0")
+    monkeypatch.setenv("AUTH_REFRESH_THRESHOLD", "-1")
+    cfg = Config(conf_path=str(tmp_path))
+    assert cfg.auth_refresh_interval_hours == 0.01
+    assert cfg.auth_refresh_threshold == 0.01

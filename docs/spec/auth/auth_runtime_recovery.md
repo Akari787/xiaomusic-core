@@ -65,10 +65,15 @@ runtime probe 失败时：
 scheduled refresh 的触发条件：
 
 - 当前 state 为 `HEALTHY`。
-- TTL 低于阈值。
-- refresh attempt cooldown 已到期。
+- 有效 `expires_in` 时：`saveTime + expires_in` 的剩余比例低于配置阈值；阈值
+  `auth_refresh_threshold` 安全夹在 `0.01..0.99`，模式为 `ttl_ratio`。
+- 没有有效 `expires_in` 时：持久 `saveTime` 的 elapsed 达到
+  `auth_refresh_interval_hours`；该配置安全下限为 `0.01` 小时，默认 `12` 小时，
+  模式为 `interval_fallback`，不再额外乘阈值。
+- refresh attempt cooldown 已到期；它只约束 attempt timestamp。
 
-TTL 基准只允许使用持久 token `saveTime`。runtime probe 成功不得更新 TTL 锚点。
+两种模式都只使用持久 token `saveTime` 作为时间锚点。runtime probe 成功不得更新
+TTL/interval 锚点或 `saveTime`。
 
 执行规则：
 

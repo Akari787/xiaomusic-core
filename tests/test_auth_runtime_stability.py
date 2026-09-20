@@ -120,6 +120,9 @@ class _DummyConfig:
         self.auth_token_path = str(base / "auth.json")
         self.mi_did = "981257654"
         self.devices = {}
+        self.auth_refresh_interval_hours = 0.01
+        self.auth_refresh_min_interval_minutes = 30
+        self.auth_refresh_threshold = 0.3
 
     def get_one_device_id(self):
         return "dev0001"
@@ -241,6 +244,85 @@ async def test_scheduled_refresh_uses_attempt_cooldown_not_stale_login_time(auth
         assert await manager._maybe_scheduled_refresh() is False
 
     ensure.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unknown_ttl_uses_interval_fallback_and_atomic_rebuild(auth_manager):
+    manager, token_store = auth_manager
+    manager.config.auth_refresh_interval_hours = 0.01
+    manager.config.auth_refresh_min_interval_minutes = 1
+    now = 10_000.0
+    token_store._data["saveTime"] = int((now - 10) * 1000)
+    rebuild = AsyncMock(return_value={"ok": True})
+    manager.rebuild_short_session_from_persistent_auth = rebuild
+
+    with patch("xiaomusic.auth.time.time", return_value=now):
+        assert await manager._maybe_scheduled_refresh() is False
+    rebuild.assert_not_awaited()
+    assert manager._auth_refresh_mode == "interval_fallback"
+    assert manager._expires_at == 0.0
+    assert manager._ttl_remaining_seconds == 0
+
+    with patch("xiaomusic.auth.time.time", return_value=now + 30):
+        assert await manager._maybe_scheduled_refresh() is True
+    rebuild.assert_awaited_once_with(
+        reason="_maybe_scheduled_refresh",
+        atomic=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_ttl_uses_configured_threshold(auth_manager):
+    manager, token_store = auth_manager
+    now = 20_000.0
+    token_store._data.update({
+        "saveTime": int((now - 600) * 1000),
+        "expires_in": 1_000,
+    })
+    rebuild = AsyncMock(return_value={"ok": True})
+    manager.rebuild_short_session_from_persistent_auth = rebuild
+
+    manager.config.auth_refresh_threshold = 0.1
+    with patch("xiaomusic.auth.time.time", return_value=now):
+        assert await manager._maybe_scheduled_refresh() is False
+    rebuild.assert_not_awaited()
+
+    manager.config.auth_refresh_threshold = 0.5
+    with patch("xiaomusic.auth.time.time", return_value=now):
+        assert await manager._maybe_scheduled_refresh() is True
+    rebuild.assert_awaited_once()
+    assert manager._auth_refresh_mode == "ttl_ratio"
+    assert manager._auth_refresh_threshold == 0.5
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(-1, 0.01), (2, 0.99), ("invalid", 0.3)],
+)
+def test_invalid_threshold_is_safely_clamped(auth_manager, value, expected):
+    manager, _ = auth_manager
+    manager.config.auth_refresh_threshold = value
+    assert manager._auth_refresh_threshold_value() == expected
+
+
+@pytest.mark.asyncio
+async def test_interval_fallback_and_attempt_cooldown_are_independent(auth_manager):
+    manager, token_store = auth_manager
+    manager.config.auth_refresh_interval_hours = 0.01
+    manager.config.auth_refresh_min_interval_minutes = 1
+    now = 30_000.0
+    token_store._data["saveTime"] = int((now - 40) * 1000)
+    manager._last_refresh_attempt_ts = now - 30
+    rebuild = AsyncMock(return_value={"ok": True})
+    manager.rebuild_short_session_from_persistent_auth = rebuild
+
+    with patch("xiaomusic.auth.time.time", return_value=now):
+        assert await manager._maybe_scheduled_refresh() is False
+    rebuild.assert_not_awaited()
+
+    with patch("xiaomusic.auth.time.time", return_value=now + 31):
+        assert await manager._maybe_scheduled_refresh() is True
+    rebuild.assert_awaited_once()
 
 
 @pytest.mark.asyncio

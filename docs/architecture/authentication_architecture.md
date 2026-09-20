@@ -117,7 +117,12 @@ scheduled refresh 只调用 atomic persistent-auth rebuild：
 - 无 persistent auth capability：记录 capability skip。
 - 失败不降级仍健康的 runtime。
 - 失败/skip 都推进独立 refresh attempt cooldown。
-- TTL 只由持久 token 的 `saveTime` 驱动；runtime probe 成功不能续命。
+- 有效 `expires_in` 时，TTL 为 `saveTime + expires_in`，按
+  `auth_refresh_threshold` 的 `ttl_ratio` 模式触发；阈值安全夹在 `0.01..0.99`。
+- 无有效 `expires_in` 时，不伪造 TTL，按 `auth_refresh_interval_hours` 的
+  `interval_fallback` 模式比较 `saveTime` elapsed；配置下限为 `0.01` 小时，默认 `12` 小时，
+  不额外应用 ratio 阈值。
+- 两种模式都只由持久 token 的 `saveTime` 驱动；runtime probe 成功不能续命或更新锚点。
 - 成功后更新 session success、runtime verify 和 recovery debug 状态。
 
 ### 4.3 Manual reload

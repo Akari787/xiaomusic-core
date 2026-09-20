@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import warnings
 from dataclasses import asdict, dataclass, field
@@ -44,16 +45,56 @@ def default_auth_token_file() -> str:
     return os.getenv("XIAOMUSIC_AUTH_TOKEN_FILE", "auth.json")
 
 
+AUTH_REFRESH_INTERVAL_DEFAULT_HOURS = 12.0
+AUTH_REFRESH_INTERVAL_MIN_HOURS = 0.01
+AUTH_REFRESH_THRESHOLD_DEFAULT = 0.3
+AUTH_REFRESH_THRESHOLD_MIN = 0.01
+AUTH_REFRESH_THRESHOLD_MAX = 0.99
+
+
+def _safe_float_env(
+    name: str,
+    default: float,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    if not math.isfinite(value):
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
 def default_auth_refresh_interval_hours() -> float:
-    return float(os.getenv("AUTH_REFRESH_INTERVAL_HOURS", "12"))
+    return _safe_float_env(
+        "AUTH_REFRESH_INTERVAL_HOURS",
+        AUTH_REFRESH_INTERVAL_DEFAULT_HOURS,
+        minimum=AUTH_REFRESH_INTERVAL_MIN_HOURS,
+    )
 
 
 def default_auth_refresh_min_interval_minutes() -> int:
-    return int(os.getenv("AUTH_REFRESH_MIN_INTERVAL_MINUTES", "30"))
+    try:
+        value = int(os.getenv("AUTH_REFRESH_MIN_INTERVAL_MINUTES", "30"))
+    except (TypeError, ValueError):
+        value = 30
+    return max(0, value)
 
 
 def default_auth_refresh_threshold() -> float:
-    return float(os.getenv("AUTH_REFRESH_THRESHOLD", "0.3"))
+    return _safe_float_env(
+        "AUTH_REFRESH_THRESHOLD",
+        AUTH_REFRESH_THRESHOLD_DEFAULT,
+        minimum=AUTH_REFRESH_THRESHOLD_MIN,
+        maximum=AUTH_REFRESH_THRESHOLD_MAX,
+    )
 
 
 def default_user_key_word_dict():

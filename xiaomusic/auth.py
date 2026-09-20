@@ -10,6 +10,7 @@
 
 import asyncio
 import json
+import math
 import os
 import time
 from typing import Any, Callable, TypeVar
@@ -280,7 +281,10 @@ class SimpleAuthManager:
         self._last_auth_mode_transition: str = ""
         self._last_auth_error: str = ""
         self._token_save_ts = self._read_save_time
-        self._token_expires_in: int = 3600
+        self._auth_refresh_mode: str = "unknown"
+        self._auth_refresh_elapsed_seconds: float = 0.0
+        self._auth_refresh_threshold: float | None = None
+        self._auth_refresh_interval_seconds: float | None = None
 
         # keepalive 退化跟踪
         self._keepalive_degraded: bool = False
@@ -1293,44 +1297,83 @@ class SimpleAuthManager:
         state = dict(payload or {})
         self._last_auth_recovery_flow_state = state
 
+    @staticmethod
+    def _positive_finite_float(value: Any) -> float | None:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed) or parsed <= 0:
+            return None
+        return parsed
+
+    def _auth_refresh_threshold_value(self) -> float:
+        try:
+            value = float(getattr(self.config, "auth_refresh_threshold", 0.3))
+        except (TypeError, ValueError):
+            value = 0.3
+        if not math.isfinite(value):
+            value = 0.3
+        return min(0.99, max(0.01, value))
+
+    def _auth_refresh_interval_seconds_value(self) -> float:
+        value = self._positive_finite_float(
+            getattr(self.config, "auth_refresh_interval_hours", 12.0)
+        )
+        hours = max(0.01, value if value is not None else 12.0)
+        return hours * 3600
+
+    def _auth_refresh_min_interval_seconds_value(self) -> float:
+        try:
+            value = float(
+                getattr(self.config, "auth_refresh_min_interval_minutes", 30)
+            )
+        except (TypeError, ValueError):
+            value = 30.0
+        if not math.isfinite(value):
+            value = 30.0
+        return max(0.0, value * 60)
+
     def _sync_auth_ttl(
         self, auth_data: dict[str, Any] | None = None, login_at_ts: float | None = None
     ) -> None:
-        """根据 saveTime 同步 TTL 计算字段。
-
-        Args:
-            auth_data: 认证数据（默认从 token_store 读取）
-            login_at_ts: 登录时间戳秒（默认从 saveTime 反推）
-        """
+        """同步 saveTime 锚点和显式 TTL；未知 TTL 不伪造 expires_at。"""
         data = auth_data or self._get_auth_data()
+        self._auth_refresh_mode = "unknown"
+        self._auth_refresh_elapsed_seconds = 0.0
+        self._auth_refresh_threshold = None
+        self._auth_refresh_interval_seconds = None
         if not data:
             self._login_at = 0.0
             self._expires_at = 0.0
             self._ttl_remaining_seconds = 0
             return
 
-        # 计算登录时间
         if login_at_ts is not None:
             self._login_at = login_at_ts
         else:
             st = data.get("saveTime")
-            if st is not None:
-                self._login_at = float(st) / 1000.0
-            else:
+            try:
+                self._login_at = float(st) / 1000.0 if st is not None else 0.0
+            except (TypeError, ValueError):
                 self._login_at = 0.0
 
-        # 计算过期时间
-        expires_in = data.get("expires_in") or self._token_expires_in
-        if self._login_at > 0:
+        expires_in = self._positive_finite_float(data.get("expires_in"))
+        if expires_in is not None and self._login_at > 0:
+            self._auth_refresh_mode = "ttl_ratio"
+            self._auth_refresh_threshold = self._auth_refresh_threshold_value()
             self._expires_at = self._login_at + expires_in
-        else:
-            self._expires_at = 0.0
+            self._ttl_remaining_seconds = max(
+                0, int(self._expires_at - time.time())
+            )
+            return
 
-        # 计算剩余 TTL
-        if self._expires_at > 0:
-            self._ttl_remaining_seconds = max(0, int(self._expires_at - time.time()))
-        else:
-            self._ttl_remaining_seconds = 0
+        self._auth_refresh_mode = "interval_fallback"
+        self._auth_refresh_interval_seconds = self._auth_refresh_interval_seconds_value()
+        self._expires_at = 0.0
+        self._ttl_remaining_seconds = 0
+        if self._login_at > 0:
+            self._auth_refresh_elapsed_seconds = max(0.0, time.time() - self._login_at)
 
     async def _maybe_scheduled_refresh(self) -> bool:
         """计划内刷新候选；失败不破坏仍健康的 runtime。"""
@@ -1343,20 +1386,35 @@ class SimpleAuthManager:
             self._last_refresh_trigger = "scheduled_env_override_skip"
             return False
 
-        # TTL 只由持久化 token 的 saveTime 驱动。runtime probe 成功不能延长
-        # token TTL，否则健康探针会把已过期会话伪装成永不过期。
+        now = time.time()
         self._sync_auth_ttl(login_at_ts=None)
-        if self._expires_at <= 0 or self._login_at <= 0:
-            return False
-        total_ttl = self._expires_at - self._login_at
-        if total_ttl <= 0:
-            return False
-        remaining_ratio = self._ttl_remaining_seconds / total_ttl
-        if remaining_ratio > 0.3:
+        if self._login_at <= 0:
             return False
 
-        now = time.time()
-        min_interval = getattr(self.config, "auth_refresh_min_interval_minutes", 30) * 60
+        threshold = self._auth_refresh_threshold
+        if self._auth_refresh_mode == "ttl_ratio":
+            total_ttl = self._expires_at - self._login_at
+            if total_ttl <= 0 or threshold is None:
+                return False
+            remaining_ratio = self._ttl_remaining_seconds / total_ttl
+            due = remaining_ratio <= threshold
+            trigger_detail = (
+                f"mode=ttl_ratio ratio={remaining_ratio:.2f} "
+                f"threshold={threshold:.2f} ttl_remaining={self._ttl_remaining_seconds}s"
+            )
+        else:
+            interval_seconds = self._auth_refresh_interval_seconds or 12 * 3600
+            elapsed = max(0.0, now - self._login_at)
+            self._auth_refresh_elapsed_seconds = elapsed
+            due = elapsed >= interval_seconds
+            trigger_detail = (
+                f"mode=interval_fallback elapsed={elapsed:.0f}s "
+                f"interval={interval_seconds:.0f}s"
+            )
+        if not due:
+            return False
+
+        min_interval = self._auth_refresh_min_interval_seconds_value()
         # 节流基准是尝试，不是成功；失败和 capability skip 也占用冷却窗口。
         if (
             self._last_refresh_attempt_ts > 0
@@ -1368,8 +1426,6 @@ class SimpleAuthManager:
             )
             return False
 
-        # 没有可重建的长期凭据时，健康的短期 runtime 不应周期性进入必败 login。
-        # 真实失效由 ensure_auth 的 runtime probe 发现，再走恢复链。
         if not self._has_persistent_auth_fields(self._get_auth_data()):
             self._last_refresh_attempt_ts = now
             self._last_refresh_trigger = "scheduled_capability_skip"
@@ -1381,8 +1437,7 @@ class SimpleAuthManager:
         self._last_refresh_attempt_ts = now
         self._last_refresh_trigger = "scheduled"
         self.log.info(
-            f"_maybe_scheduled_refresh: triggering scheduled refresh "
-            f"ttl_remaining={self._ttl_remaining_seconds}s ratio={remaining_ratio:.2f}"
+            f"_maybe_scheduled_refresh: triggering scheduled refresh {trigger_detail}"
         )
         refresh = await self.rebuild_short_session_from_persistent_auth(
             reason="_maybe_scheduled_refresh",
@@ -1400,6 +1455,7 @@ class SimpleAuthManager:
             self._last_recovery_error_code = ""
             self._last_recovery_error_message = ""
             self._last_refresh_trigger = "scheduled"
+            self._sync_auth_ttl(login_at_ts=None)
             return True
 
         self._last_error = str(refresh.get("failed_reason") or "scheduled refresh failed")[:200]
@@ -1409,8 +1465,6 @@ class SimpleAuthManager:
             refresh.get("error_code") or "scheduled_refresh_failed"
         )
         self._last_recovery_error_message = self._last_error
-        # candidate failure is deliberately non-destructive; attempt timestamp already
-        # provides the independent cooldown for the next scheduled cycle.
         return False
 
     async def _try_miaccount_persistent_auth_relogin(

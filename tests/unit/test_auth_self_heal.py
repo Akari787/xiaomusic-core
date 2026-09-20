@@ -4,6 +4,7 @@ import sys
 import types
 import time
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -66,6 +67,7 @@ class _DummyConfig:
         self.devices = {}
         self.auth_refresh_interval_hours = 12
         self.auth_refresh_min_interval_minutes = 30
+        self.auth_refresh_threshold = 0.3
         self.mina_high_freq_min_interval_seconds = 8
         self.mina_auth_fail_threshold = 3
         self.mina_auth_cooldown_seconds = 600
@@ -565,34 +567,30 @@ async def test_high_freq_mina_call_rate_limit_and_circuit(auth_manager):
 
 @pytest.mark.asyncio
 async def test_scheduled_refresh_trigger(auth_manager):
+    now = 10_000.0
     auth_manager.config.auth_refresh_interval_hours = 0.01
     auth_manager.config.auth_refresh_min_interval_minutes = 1
-    auth_manager._last_refresh_ts = 0
+    auth_manager._get_auth_data = lambda: {
+        "passToken": "x",
+        "userId": "u",
+        "cUserId": "cu",
+        "psecurity": "ps",
+        "ssecurity": "ss",
+        "deviceId": "d1",
+        "serviceToken": "st",
+        "saveTime": int((now - 60) * 1000),
+    }
+    rebuild = AsyncMock(return_value={"ok": True})
+    auth_manager.rebuild_short_session_from_persistent_auth = rebuild
 
-    calls = {"refresh": 0, "rebuild": 0}
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("xiaomusic.auth.time.time", lambda: now)
+        assert await auth_manager._maybe_scheduled_refresh() is True
 
-    def _token_save_ts():
-        return time.time() - 7200
-
-    async def _refresh(reason, force=False):  # noqa: ARG001
-        calls["refresh"] += 1
-        return {
-            "refreshed": True,
-            "token_saved": True,
-            "last_error": None,
-            "fallback_allowed": False,
-        }
-
-    async def _rebuild(reason, allow_login_fallback=False):  # noqa: ARG001
-        calls["rebuild"] += 1
-        return True
-
-    auth_manager._token_save_ts = _token_save_ts
-    auth_manager.refresh_auth_if_needed = _refresh
-    auth_manager.rebuild_services = _rebuild
-
-    await auth_manager._maybe_scheduled_refresh()
-    assert calls == {"refresh": 1, "rebuild": 1}
+    rebuild.assert_awaited_once_with(
+        reason="_maybe_scheduled_refresh",
+        atomic=True,
+    )
 
 
 def test_auth_debug_state_has_required_fields(auth_manager):
