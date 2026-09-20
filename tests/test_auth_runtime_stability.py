@@ -138,6 +138,9 @@ class _DummyTokenStore:
     def get(self):
         return dict(self._data)
 
+    def get_persisted(self):
+        return dict(self._data)
+
     def update(self, data, reason=""):
         self.updated.append((dict(data), reason))
         self._data.update(data)
@@ -286,6 +289,27 @@ async def test_scheduled_refresh_failure_is_attempt_rate_limited(auth_manager):
 
 
 @pytest.mark.asyncio
+async def test_expired_service_token_probe_uses_atomic_rebuild_not_full_login(auth_manager):
+    manager, _ = auth_manager
+    manager.mina_service = _FailingRuntime()
+    atomic = AsyncMock(return_value={
+        "ok": True,
+        "used_path": "miaccount_persistent_auth_login",
+        "runtime_rebind_result": "ok",
+        "verify_result": "ok",
+    })
+    manager._atomic_persistent_auth_refresh = atomic
+    login_account = MagicMock()
+    login_account.login = AsyncMock(side_effect=AssertionError("expired token used full login"))
+
+    with patch("xiaomusic.auth.MiAccount", return_value=login_account):
+        assert await manager.ensure_auth() is True
+
+    atomic.assert_awaited_once()
+    login_account.login.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_probe_auth_failure_enters_recovery(auth_manager):
     manager, _ = auth_manager
     manager.mina_service = _FailingRuntime()
@@ -373,6 +397,21 @@ async def test_scheduled_refresh_full_chain_never_calls_account_login(auth_manag
 
 
 @pytest.mark.asyncio
+async def test_scheduled_refresh_skips_environment_credentials(auth_manager, monkeypatch):
+    manager, token_store = auth_manager
+    now = 60_000.0
+    token_store._data["saveTime"] = int((now - 3500) * 1000)
+    monkeypatch.setenv("AUTH_ACCESS_TOKEN", "runtime-only-access")
+    manager._atomic_persistent_auth_refresh = AsyncMock()
+
+    with patch("xiaomusic.auth.time.time", return_value=now):
+        assert await manager._maybe_scheduled_refresh() is False
+
+    manager._atomic_persistent_auth_refresh.assert_not_awaited()
+    assert manager._last_refresh_trigger == "scheduled_env_override_skip"
+
+
+@pytest.mark.asyncio
 async def test_manual_reload_full_chain_never_calls_account_login(auth_manager):
     manager, token_store = auth_manager
     account = MagicMock()
@@ -394,6 +433,53 @@ async def test_manual_reload_full_chain_never_calls_account_login(auth_manager):
     assert out["refreshed"] is True
     account.login.assert_not_awaited()
     assert token_store.get()["serviceToken"] == "manual-service-token"
+
+
+@pytest.mark.asyncio
+async def test_manual_reload_long_term_failure_maps_to_manual_login_required(auth_manager):
+    manager, _ = auth_manager
+    manager._state = manager.STATE_HEALTHY
+    manager.rebuild_short_session_from_persistent_auth = AsyncMock(return_value={
+        "ok": False,
+        "error_code": "service_login_failed",
+        "failed_reason": "expired",
+        "long_term_expired": True,
+        "need_qr_scan": True,
+        "user_action_required": True,
+        "runtime_rebind_result": "skipped",
+        "verify_result": "skipped",
+    })
+
+    out = await manager.manual_reload_runtime(reason="ut-manual-expired")
+
+    assert out["state_after"] == manager.STATE_LOCKED
+    assert out["runtime_auth_ready"] is False
+    assert out["need_qr_scan"] is True
+    public = manager.map_auth_public_status(runtime_auth_ready=False)
+    assert public["status_reason"] == "manual_login_required"
+
+
+@pytest.mark.asyncio
+async def test_manual_env_rebind_reloads_disk_without_rotating_token(auth_manager, monkeypatch):
+    manager, token_store = auth_manager
+    old_token = token_store.get()
+    monkeypatch.setenv("AUTH_ACCESS_TOKEN", "runtime-only-access")
+    manager._try_miaccount_persistent_auth_relogin = AsyncMock()
+    manager._build_verified_runtime_candidate = AsyncMock(return_value={
+        "ok": True,
+        "account": object(),
+        "mina_service": _HealthyRuntime(),
+        "miio_service": object(),
+        "session": None,
+        "device_id": old_token["deviceId"],
+    })
+
+    out = await manager.manual_reload_runtime(reason="ut-manual-env")
+
+    assert out["refreshed"] is True
+    assert out["token_store_reloaded"] is True
+    manager._try_miaccount_persistent_auth_relogin.assert_not_awaited()
+    assert token_store.get_persisted()["serviceToken"] == old_token["serviceToken"]
 
 
 @pytest.mark.asyncio
@@ -623,7 +709,9 @@ async def test_legacy_rebind_verify_failure_does_not_clobber_runtime(auth_manage
 
 @pytest.mark.asyncio
 async def test_preserved_candidate_with_expired_long_term_auth_degrades(auth_manager):
-    manager, _ = auth_manager
+    manager, token_store = auth_manager
+    for key in ("psecurity", "ssecurity", "cUserId", "deviceId", "serviceToken", "yetAnotherServiceToken"):
+        token_store._data.pop(key, None)
     manager._state = manager.STATE_HEALTHY
     account = MagicMock()
     account.token = {}
@@ -641,7 +729,9 @@ async def test_preserved_candidate_with_expired_long_term_auth_degrades(auth_man
 
 @pytest.mark.asyncio
 async def test_try_login_uses_fresh_login_session(auth_manager):
-    manager, _ = auth_manager
+    manager, token_store = auth_manager
+    for key in ("psecurity", "ssecurity", "cUserId", "deviceId", "serviceToken", "yetAnotherServiceToken"):
+        token_store._data.pop(key, None)
     old_session = manager.mi_session
     with (
         patch("xiaomusic.auth.MiAccount") as mock_account,
@@ -681,7 +771,9 @@ async def test_try_login_uses_fresh_login_session(auth_manager):
 
 @pytest.mark.asyncio
 async def test_try_login_verify_failure_keeps_existing_runtime(auth_manager):
-    manager, _ = auth_manager
+    manager, token_store = auth_manager
+    for key in ("psecurity", "ssecurity", "cUserId", "deviceId", "serviceToken", "yetAnotherServiceToken"):
+        token_store._data.pop(key, None)
     old_runtime = manager.mina_service
     with (
         patch("xiaomusic.auth.MiAccount") as mock_account,
@@ -715,7 +807,9 @@ async def test_try_login_verify_failure_keeps_existing_runtime(auth_manager):
 
 @pytest.mark.asyncio
 async def test_try_login_login_failure_stops_before_verify(auth_manager):
-    manager, _ = auth_manager
+    manager, token_store = auth_manager
+    for key in ("psecurity", "ssecurity", "cUserId", "deviceId", "serviceToken", "yetAnotherServiceToken"):
+        token_store._data.pop(key, None)
     with (
         patch("xiaomusic.auth.MiAccount") as mock_account,
         patch("xiaomusic.auth.MiNAService") as mock_mina,

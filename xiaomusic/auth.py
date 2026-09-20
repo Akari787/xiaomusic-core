@@ -554,11 +554,9 @@ class SimpleAuthManager:
         """
         if not _transition_owned:
             generation_before = self._runtime_generation
-            was_waiting = self._auth_transition_lock.locked()
             async with self._auth_transition_lock:
                 if (
-                    was_waiting
-                    and generation_before != self._runtime_generation
+                    generation_before != self._runtime_generation
                     and self._state == self.STATE_HEALTHY
                     and self.mina_service is not None
                 ):
@@ -730,9 +728,7 @@ class SimpleAuthManager:
                     "verify_auth_failure_detected": False,
                 }
 
-            if self._has_persistent_auth_fields(auth_data) and not (
-                auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
-            ):
+            if self._has_persistent_auth_fields(auth_data):
                 rebuild_out = await self.rebuild_short_session_from_persistent_auth(
                     reason=reason or "ensure_auth",
                     atomic=True,
@@ -802,6 +798,8 @@ class SimpleAuthManager:
                     "verify_error_text": self._last_error,
                     "verify_auth_failure_detected": False,
                 }
+                # 完整长期凭据存在时，atomic rebuild 是唯一恢复路径；失败不得
+                # 降级到没有明确凭据能力的 MiAccount.login/full login。
                 raise RuntimeError(self._last_error)
 
             login_session = ClientSession()
@@ -1253,6 +1251,12 @@ class SimpleAuthManager:
         if self._state != self.STATE_HEALTHY:
             return False
 
+        if os.getenv("AUTH_ACCESS_TOKEN") or os.getenv("AUTH_REFRESH_TOKEN"):
+            now = time.time()
+            self._last_refresh_attempt_ts = now
+            self._last_refresh_trigger = "scheduled_env_override_skip"
+            return False
+
         # TTL 只由持久化 token 的 saveTime 驱动。runtime probe 成功不能延长
         # token TTL，否则健康探针会把已过期会话伪装成永不过期。
         self._sync_auth_ttl(login_at_ts=None)
@@ -1665,27 +1669,6 @@ class SimpleAuthManager:
                 pass
         return {"ok": True, "result": "ok", "verify_result": "ok"}
 
-    def _strip_env_overrides_for_persistence(
-        self, candidate: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Keep runtime env credentials out of a persistent candidate commit."""
-        result = dict(candidate)
-        if self.token_store is None or not hasattr(self.token_store, "get_persisted"):
-            return result
-        persisted = self.token_store.get_persisted()
-        if os.getenv("AUTH_REFRESH_TOKEN"):
-            if "passToken" in persisted:
-                result["passToken"] = persisted["passToken"]
-            else:
-                result.pop("passToken", None)
-        if os.getenv("AUTH_ACCESS_TOKEN"):
-            for key in ("serviceToken", "yetAnotherServiceToken"):
-                if key in persisted:
-                    result[key] = persisted[key]
-                else:
-                    result.pop(key, None)
-        return result
-
     async def _atomic_persistent_auth_refresh(
         self, reason: str = "", _transition_owned: bool = False
     ) -> dict[str, Any]:
@@ -1757,12 +1740,12 @@ class SimpleAuthManager:
                 "atomic": True,
             }
 
-        candidate_auth_data = self._strip_env_overrides_for_persistence(
-            candidate_auth_data
+        env_override = bool(
+            os.getenv("AUTH_ACCESS_TOKEN") or os.getenv("AUTH_REFRESH_TOKEN")
         )
         candidate_auth_data["saveTime"] = int(time.time() * 1000)
         try:
-            if self.token_store is not None:
+            if self.token_store is not None and not env_override:
                 self.token_store.commit(
                     candidate_auth_data,
                     reason=reason or "scheduled_persistent_auth_refresh",
@@ -1819,7 +1802,7 @@ class SimpleAuthManager:
             "primary_result": "ok",
             "primary_error_code": "",
             "used_path": "miaccount_persistent_auth_login",
-            "service_token_written": self.token_store is not None,
+            "service_token_written": bool(self.token_store is not None and not env_override),
             "runtime_rebind_result": "ok",
             "verify_result": "ok",
             "atomic": True,
@@ -2513,6 +2496,52 @@ class SimpleAuthManager:
 
     # ==================== API 兼容接口 ====================
 
+    async def _atomic_runtime_rebind_current_auth(
+        self, reason: str = "", _transition_owned: bool = False
+    ) -> dict[str, Any]:
+        if not _transition_owned:
+            async with self._auth_transition_lock:
+                return await self._atomic_runtime_rebind_current_auth(
+                    reason=reason, _transition_owned=True
+                )
+        candidate = await self._build_verified_runtime_candidate(self._get_auth_data())
+        if not candidate.get("ok"):
+            return {
+                "ok": False,
+                "result": "failed",
+                "error_code": "verify_failed",
+                "failed_reason": str(candidate.get("error") or "runtime verify failed"),
+                "runtime_rebind_result": "skipped",
+                "verify_result": "failed",
+            }
+        old_session = self.mi_session
+        new_session = candidate.get("session") or self.mi_session
+        self.device_id = candidate.get("device_id") or self.device_id
+        self.login_account = candidate["account"]
+        self.mina_service = candidate["mina_service"]
+        self.miio_service = candidate["miio_service"]
+        self.mi_session = new_session
+        self.cookie_jar = (
+            new_session.cookie_jar
+            if candidate.get("session") is not None
+            else self.cookie_jar
+        )
+        self.login_signature = self._get_login_signature()
+        self._runtime_generation += 1
+        self._state = self.STATE_HEALTHY
+        if old_session is not self.mi_session:
+            try:
+                await old_session.close()
+            except Exception:
+                pass
+        return {
+            "ok": True,
+            "result": "ok",
+            "runtime_rebind_result": "ok",
+            "verify_result": "ok",
+            "used_path": "runtime_rebind_env_override",
+        }
+
     async def manual_reload_runtime(
         self, reason: str = "manual_refresh_runtime", **kwargs
     ) -> dict[str, Any]:
@@ -2527,10 +2556,20 @@ class SimpleAuthManager:
         cooldown_before = self._cooldown_until
         started_at = int(time.time() * 1000)
         preserve_healthy_runtime = state_before == self.STATE_HEALTHY
-        rebuild_out = await self.rebuild_short_session_from_persistent_auth(
-            reason=reason,
-            atomic=True,
+        token_store_reloaded = False
+        if self.token_store is not None:
+            self.token_store.reload_from_disk()
+            token_store_reloaded = True
+        env_override = bool(
+            os.getenv("AUTH_ACCESS_TOKEN") or os.getenv("AUTH_REFRESH_TOKEN")
         )
+        if env_override:
+            rebuild_out = await self._atomic_runtime_rebind_current_auth(reason=reason)
+        else:
+            rebuild_out = await self.rebuild_short_session_from_persistent_auth(
+                reason=reason,
+                atomic=True,
+            )
         success = bool(rebuild_out.get("ok"))
         if success:
             self._last_recovery_result = "ok"
@@ -2549,7 +2588,9 @@ class SimpleAuthManager:
             )[:200]
             self._last_error = self._last_recovery_error_message
         trace = {
-            "runtime_swap_attempted": bool(rebuild_out.get("runtime_rebind_result") != "skipped"),
+            "runtime_swap_attempted": bool(
+                rebuild_out.get("runtime_rebind_result") not in (None, "", "skipped")
+            ),
             "runtime_swap_applied": success,
             "verify_attempted": bool(rebuild_out.get("verify_result") != "skipped"),
             "verify_error_text": "" if success else self._last_error,
@@ -2559,17 +2600,47 @@ class SimpleAuthManager:
         failure_info = self._classify_auth_failure(
             self._last_error, self._get_auth_data()
         )
+        if any(
+            rebuild_out.get(key)
+            for key in ("long_term_expired", "need_qr_scan", "user_action_required")
+        ):
+            failure_info = {
+                **failure_info,
+                "long_term_expired": bool(rebuild_out.get("long_term_expired")),
+                "need_qr_scan": bool(rebuild_out.get("need_qr_scan")),
+                "user_action_required": bool(rebuild_out.get("user_action_required")),
+            }
+        self._last_login_trace = {
+            **self._last_login_trace,
+            "need_qr_scan": bool(failure_info["need_qr_scan"]),
+            "user_action_required": bool(failure_info["user_action_required"]),
+            "long_term_expired": bool(failure_info["long_term_expired"]),
+        }
+        manual_login_required = bool(
+            not success
+            and (
+                failure_info["long_term_expired"]
+                or failure_info["need_qr_scan"]
+                or failure_info["user_action_required"]
+            )
+        )
+        if manual_login_required:
+            self._state = self.STATE_LOCKED
+            self._locked_until = time.time() + 300
+            self._last_manual_login_required_reason = (
+                self._last_recovery_error_code or "manual auth required"
+            )
+            self._last_lock_transition_reason = "manual_reload:manual_login_required"
         if (
             not success
             and preserve_healthy_runtime
-            and not failure_info["long_term_expired"]
+            and not manual_login_required
         ):
             self._state = state_before
             self._locked_until = locked_before
             self._cooldown_until = cooldown_before
         runtime_auth_ready = bool(
-            success
-            or (preserve_healthy_runtime and not failure_info["long_term_expired"])
+            success or (preserve_healthy_runtime and not manual_login_required)
         )
         runtime_reload_state = {
             "reason": reason,
@@ -2622,9 +2693,9 @@ class SimpleAuthManager:
         return {
             "refreshed": success,
             "runtime_auth_ready": runtime_auth_ready,
-            "token_saved": success,
+            "token_saved": bool(success and not env_override),
             "token_loaded": bool(self._get_auth_data()),
-            "token_store_reloaded": self.token_store is not None,
+            "token_store_reloaded": token_store_reloaded,
             "runtime_rebound": success,
             "device_map_refreshed": success,
             "verify_result": "ok"
