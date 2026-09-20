@@ -74,7 +74,7 @@ def auth_manager(tmp_path: Path, monkeypatch):
 async def test_rebuild_short_session_from_persistent_auth_fails_when_persistent_auth_missing(auth_manager):
     manager, _ = auth_manager
 
-    out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-missing")
+    out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-missing", atomic=False)
 
     assert out["ok"] is False
     assert out["error_code"] == "missing_persistent_auth_fields"
@@ -117,7 +117,7 @@ async def test_rebuild_short_session_from_persistent_auth_records_success_state(
     monkeypatch.setattr(manager, "_try_miaccount_persistent_auth_relogin", _fake_relogin)
     monkeypatch.setattr(manager, "_rebind_runtime_from_auth_data", _fake_rebind)
 
-    out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-success")
+    out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-success", atomic=False)
 
     assert out["ok"] is True
     assert out["used_path"] == "miaccount_persistent_auth_login"
@@ -162,7 +162,7 @@ async def test_rebuild_short_session_from_persistent_auth_records_verify_failure
     monkeypatch.setattr(manager, "_try_miaccount_persistent_auth_relogin", _fake_relogin)
     monkeypatch.setattr(manager, "_rebind_runtime_from_auth_data", _fake_rebind)
 
-    out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-verify-fail")
+    out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-verify-fail", atomic=False)
 
     assert out["ok"] is False
     assert out["error_code"] == "verify_failed"
@@ -382,7 +382,7 @@ async def test_rebuild_short_session_fallback_path_success_is_observable(auth_ma
     monkeypatch.setattr(manager, "_try_mijia_persistent_auth_relogin", _fallback)
     monkeypatch.setattr(manager, "_rebind_runtime_from_auth_data", _fake_rebind)
 
-    out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-fallback")
+    out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-fallback", atomic=False)
 
     assert out["ok"] is True
     assert out["used_path"] == "mijia_persistent_auth_login"
@@ -428,7 +428,7 @@ async def test_rebuild_short_session_flow_records_failed_fallback_and_public_sta
     monkeypatch.setattr(manager, "_try_miaccount_persistent_auth_relogin", _primary)
     monkeypatch.setattr(manager, "_try_mijia_persistent_auth_relogin", _fallback)
 
-    out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-fallback-fail")
+    out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-fallback-fail", atomic=False)
 
     assert out["ok"] is False
     assert out["used_path"] == "mijia_persistent_auth_login"

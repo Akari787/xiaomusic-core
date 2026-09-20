@@ -148,6 +148,14 @@ class TokenStore:
     def get(self) -> dict[str, Any]:
         return deepcopy(self.load().data)
 
+    def get_persisted(self) -> dict[str, Any]:
+        """Return the disk-backed mirror without environment overrides."""
+        with self._lock:
+            if not self._loaded:
+                self._token = self._load_from_disk_unlocked()
+                self._loaded = True
+            return deepcopy(self._token)
+
     def update(self, new_token: dict[str, Any], reason: str = "") -> None:
         if not isinstance(new_token, dict):
             raise TypeError("new_token must be dict")

@@ -51,6 +51,13 @@ class MockTokenStore:
     def flush(self):
         pass
 
+    def commit(self, data, reason=""):
+        self._data = dict(data)
+        self._updated.append((data, reason))
+
+    def get_persisted(self):
+        return dict(self._data)
+
     def reload_from_disk(self):
         pass
 
@@ -78,6 +85,17 @@ class MockMiAccount:
         self.token["micoapi"] = ("test_ssecurity", "test_service_token")
         self.token["serviceToken"] = "test_service_token"
         self.token["yetAnotherServiceToken"] = "test_service_token"
+
+    async def _serviceLogin(self, _url):
+        return {
+            "code": 0,
+            "location": "https://account.example/redirect?nonce=n1",
+            "nonce": "n1",
+            "ssecurity": "test_ssecurity",
+        }
+
+    async def _securityTokenService(self, _location, _nonce, _ssecurity):
+        return "test_service_token"
 
 
 class MockMiNAService:
