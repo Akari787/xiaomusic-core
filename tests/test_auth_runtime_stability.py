@@ -233,6 +233,93 @@ async def test_manual_reload_failure_preserves_healthy_runtime(auth_manager):
 
 
 @pytest.mark.asyncio
+async def test_scheduled_refresh_uses_attempt_cooldown_not_stale_login_time(auth_manager):
+    manager, token_store = auth_manager
+    now = 10_000.0
+    token_store._data["saveTime"] = int((now - 3500) * 1000)
+    manager.config.auth_refresh_min_interval_minutes = 30
+    manager._last_login_ts = now - 7200
+    manager._last_runtime_verify_ts = now
+    manager._last_refresh_attempt_ts = now - 60
+
+    with patch("xiaomusic.auth.time.time", return_value=now), patch.object(
+        manager, "ensure_auth", new=AsyncMock(return_value=False)
+    ) as ensure:
+        assert await manager._maybe_scheduled_refresh() is False
+
+    ensure.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_refresh_failure_preserves_healthy_runtime(auth_manager):
+    manager, token_store = auth_manager
+    now = 20_000.0
+    token_store._data["saveTime"] = int((now - 3500) * 1000)
+    manager.config.auth_refresh_min_interval_minutes = 30
+    old_runtime = manager.mina_service
+
+    async def candidate(*, preserve_healthy_runtime, **_kwargs):
+        if not preserve_healthy_runtime:
+            manager._state = manager.STATE_DEGRADED
+        return False
+
+    with patch("xiaomusic.auth.time.time", return_value=now), patch.object(
+        manager, "_try_login", side_effect=candidate
+    ):
+        assert await manager._maybe_scheduled_refresh() is False
+
+    assert manager._state == manager.STATE_HEALTHY
+    assert manager.mina_service is old_runtime
+    assert manager._last_refresh_attempt_ts == now
+
+
+@pytest.mark.asyncio
+async def test_scheduled_refresh_failure_is_attempt_rate_limited(auth_manager):
+    manager, token_store = auth_manager
+    now = 30_000.0
+    token_store._data["saveTime"] = int((now - 3500) * 1000)
+    manager.config.auth_refresh_min_interval_minutes = 30
+    calls = AsyncMock(return_value=False)
+
+    with patch("xiaomusic.auth.time.time", return_value=now), patch.object(
+        manager, "ensure_auth", new=calls
+    ):
+        assert await manager._maybe_scheduled_refresh() is False
+        assert await manager._maybe_scheduled_refresh() is False
+
+    calls.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_probe_auth_failure_enters_recovery(auth_manager):
+    manager, _ = auth_manager
+    manager.mina_service = _FailingRuntime()
+    manager._try_login = AsyncMock(return_value=False)
+
+    assert await manager.ensure_auth() is False
+    assert manager._state == manager.STATE_DEGRADED
+    manager._try_login.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_refresh_skips_without_persistent_login_capability(auth_manager):
+    manager, token_store = auth_manager
+    now = 40_000.0
+    token_store._data.pop("psecurity")
+    token_store._data.pop("ssecurity")
+    token_store._data["saveTime"] = int((now - 3500) * 1000)
+    manager.config.auth_refresh_min_interval_minutes = 30
+    manager.ensure_auth = AsyncMock(return_value=False)
+
+    with patch("xiaomusic.auth.time.time", return_value=now):
+        assert await manager._maybe_scheduled_refresh() is False
+
+    manager.ensure_auth.assert_not_awaited()
+    assert manager._state == manager.STATE_HEALTHY
+    assert manager._last_refresh_trigger == "scheduled_capability_skip"
+
+
+@pytest.mark.asyncio
 async def test_try_login_uses_fresh_login_session(auth_manager):
     manager, _ = auth_manager
     old_session = manager.mi_session

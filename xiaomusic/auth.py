@@ -195,8 +195,13 @@ class SimpleAuthManager:
         self._state = self.STATE_HEALTHY
         self._locked_until: float = 0
         self._last_error: str = ""
+        # 三个时间轴保持独立：会话建立/刷新成功、runtime 健康验证、计划刷新尝试。
+        # _last_login_ts 保留为兼容字段，语义限定为会话候选提交成功时间。
         self._last_ok_ts: float = 0
         self._last_login_ts: float = 0
+        self._last_session_success_ts: float = 0
+        self._last_runtime_verify_ts: float = 0
+        self._last_refresh_attempt_ts: float = 0
 
         # 冷却机制
         self._cooldown_until: float = 0
@@ -442,9 +447,18 @@ class SimpleAuthManager:
             return False
 
         if force:
+            # force 是候选恢复/刷新，不代表当前 runtime 已失效。
+            # 健康 runtime 上的候选失败不得覆盖现状；真实失效仍由下面的 probe
+            # 路径先把状态置为 DEGRADED，再进入可破坏性的恢复流程。
             return await self._try_login(
                 reason=reason or "ensure_auth",
-                preserve_healthy_runtime=preserve_healthy_runtime,
+                preserve_healthy_runtime=(
+                    preserve_healthy_runtime
+                    or (
+                        self._state == self.STATE_HEALTHY
+                        and self.mina_service is not None
+                    )
+                ),
             )
 
         # 如果状态健康，快速返回
@@ -463,7 +477,9 @@ class SimpleAuthManager:
             try:
                 self._health_probe_attempted = True
                 await self.mina_service.device_list()
-                self._last_ok_ts = time.time()
+                now = time.time()
+                self._last_ok_ts = now
+                self._last_runtime_verify_ts = now
                 self._last_health_probe_result = "ok"
                 self._last_health_probe_error = ""
                 return True
@@ -619,8 +635,11 @@ class SimpleAuthManager:
                     self.mina_service = candidate["mina_service"]
                     self.miio_service = candidate["miio_service"]
                     self.login_signature = self._get_login_signature()
-                    self._last_ok_ts = time.time()
-                    self._last_login_ts = time.time()
+                    now = time.time()
+                    self._last_ok_ts = now
+                    self._last_runtime_verify_ts = now
+                    self._last_session_success_ts = now
+                    self._last_login_ts = now
                     self._last_error = ""
                     self._retry_count = 0
                     self._retry_count_effective = 0
@@ -702,8 +721,11 @@ class SimpleAuthManager:
                     reason=reason or "ensure_auth"
                 )
                 if rebuild_out.get("ok"):
-                    self._last_ok_ts = time.time()
-                    self._last_login_ts = time.time()
+                    now = time.time()
+                    self._last_ok_ts = now
+                    self._last_runtime_verify_ts = now
+                    self._last_session_success_ts = now
+                    self._last_login_ts = now
                     self._last_error = ""
                     self._retry_count = 0
                     self._retry_count_effective = 0
@@ -935,8 +957,11 @@ class SimpleAuthManager:
                 except Exception:
                     pass
             self.login_signature = self._get_login_signature()
-            self._last_ok_ts = time.time()
-            self._last_login_ts = time.time()
+            now = time.time()
+            self._last_ok_ts = now
+            self._last_runtime_verify_ts = now
+            self._last_session_success_ts = now
+            self._last_login_ts = now
             self._last_error = ""
             self._retry_count = 0
             self._retry_count_effective = 0
@@ -1199,59 +1224,56 @@ class SimpleAuthManager:
             self._ttl_remaining_seconds = 0
 
     async def _maybe_scheduled_refresh(self) -> bool:
-        """计划内定时静默刷新，返回是否执行了刷新。
-
-        触发条件：
-        1. auth_state 为 HEALTHY
-        2. 剩余 TTL < 阈值（默认 30%）
-        3. 距离上次刷新超过最小间隔
-        """
+        """计划内刷新候选；失败不破坏仍健康的 runtime。"""
         if self._state != self.STATE_HEALTHY:
             return False
 
-        # TTL 基准取「saveTime 与上次成功认证时刻的较新者」。
-        # 只信 saveTime 不行：它仅在新 token 与旧 token 不同时才推进，token 一旦稳定
-        # 就永远显得已过期 —— 这正是登录风暴（实测 12 次/小时）的根因。
-        _effective_login_at = max(self._read_save_time(), self._last_login_ts or 0.0)
-        self._sync_auth_ttl(login_at_ts=_effective_login_at or None)
+        # TTL 只由持久化 token 的 saveTime 驱动。runtime probe 成功不能延长
+        # token TTL，否则健康探针会把已过期会话伪装成永不过期。
+        self._sync_auth_ttl(login_at_ts=None)
         if self._expires_at <= 0 or self._login_at <= 0:
             return False
-
         total_ttl = self._expires_at - self._login_at
         if total_ttl <= 0:
             return False
-
         remaining_ratio = self._ttl_remaining_seconds / total_ttl
-        threshold = 0.3  # 剩余 30% 时触发
-
-        if remaining_ratio > threshold:
+        if remaining_ratio > 0.3:
             return False
 
-        # 检查最小刷新间隔。
-        # 注意：基准不能用 saveTime —— 它只在新 token 与旧 token 不同时才推进，
-        # token 一旦稳定就永远显得"很久没刷新"，守卫形同虚设（实测每 5 分钟就触发一次
-        # 强制登录，即 12 次/小时，正是 2026-09-19 事故的登录风暴来源）。
-        # 改用真正记录"上次成功认证时刻"的时间戳。
         now = time.time()
-        last_ok = self._last_login_ts or self._last_ok_ts
         min_interval = getattr(self.config, "auth_refresh_min_interval_minutes", 30) * 60
-        if last_ok > 0 and (now - last_ok) < min_interval:
+        # 节流基准是尝试，不是成功；失败和 capability skip 也占用冷却窗口。
+        if (
+            self._last_refresh_attempt_ts > 0
+            and now - self._last_refresh_attempt_ts < min_interval
+        ):
             self.log.info(
-                f"_maybe_scheduled_refresh: skip, min interval not met "
-                f"({now - last_ok:.0f}s < {min_interval}s)"
+                f"_maybe_scheduled_refresh: skip, attempt cooldown not met "
+                f"({now - self._last_refresh_attempt_ts:.0f}s < {min_interval}s)"
             )
             return False
 
+        # 没有可重建的长期凭据时，健康的短期 runtime 不应周期性进入必败 login。
+        # 真实失效由 ensure_auth 的 runtime probe 发现，再走恢复链。
+        if not self._has_persistent_auth_fields(self._get_auth_data()):
+            self._last_refresh_attempt_ts = now
+            self._last_refresh_trigger = "scheduled_capability_skip"
+            self.log.info(
+                "_maybe_scheduled_refresh: skip, persistent login capability unavailable"
+            )
+            return False
+
+        self._last_refresh_attempt_ts = now
         self._last_refresh_trigger = "scheduled"
         self.log.info(
             f"_maybe_scheduled_refresh: triggering scheduled refresh "
             f"ttl_remaining={self._ttl_remaining_seconds}s ratio={remaining_ratio:.2f}"
         )
-
-        success = await self.ensure_auth(
-            force=True, reason="_maybe_scheduled_refresh"
+        return await self.ensure_auth(
+            force=True,
+            reason="_maybe_scheduled_refresh",
+            preserve_healthy_runtime=True,
         )
-        return success
 
     async def _try_miaccount_persistent_auth_relogin(
         self, before: dict[str, Any] | None = None, reason: str = "", sid: str = "micoapi"
@@ -1756,7 +1778,9 @@ class SimpleAuthManager:
             if self.mina_service is None:
                 raise RuntimeError("mina service unavailable")
             await self.mina_service.device_list()
-            self._last_ok_ts = time.time()
+            now = time.time()
+            self._last_ok_ts = now
+            self._last_runtime_verify_ts = now
             flow["verify"] = {
                 "attempt_at": int(time.time() * 1000),
                 "used_path": used_path,
@@ -1983,7 +2007,9 @@ class SimpleAuthManager:
 
                 # 尝试调用
                 result = await fn(*args, **kwargs)
-                self._last_ok_ts = time.time()
+                now = time.time()
+                self._last_ok_ts = now
+                self._last_runtime_verify_ts = now
                 return result
 
             except Exception as e:
@@ -2215,7 +2241,9 @@ class SimpleAuthManager:
                         self._last_keepalive_probe_result = "ok"
                         self._last_keepalive_probe_error = ""
                         await self.mina_service.device_list()
-                        self._last_ok_ts = time.time()
+                        now = time.time()
+                        self._last_ok_ts = now
+                        self._last_runtime_verify_ts = now
                         # 恢复 keepalive 退化状态
                         if self._keepalive_degraded:
                             self._keepalive_degraded = False
