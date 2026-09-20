@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import types
 from pathlib import Path
@@ -142,6 +143,9 @@ class _DummyTokenStore:
 
     def flush(self):
         return None
+
+    def commit(self, data, reason=""):
+        self._data = dict(data)
 
     def reload_from_disk(self):
         return None
@@ -373,6 +377,7 @@ async def test_scheduled_refresh_full_chain_never_calls_account_login(auth_manag
 async def test_atomic_refresh_verify_failure_does_not_write_or_swap(auth_manager):
     manager, token_store = auth_manager
     old_runtime = manager.mina_service
+    old_device_id = manager.device_id
     old_token = token_store.get()
     manager._try_miaccount_persistent_auth_relogin = AsyncMock(return_value={
         "ok": True,
@@ -388,6 +393,119 @@ async def test_atomic_refresh_verify_failure_does_not_write_or_swap(auth_manager
     assert out["ok"] is False
     assert token_store.get() == old_token
     assert manager.mina_service is old_runtime
+    assert manager.device_id == old_device_id
+
+
+@pytest.mark.asyncio
+async def test_atomic_commit_failure_keeps_token_save_time_and_runtime(auth_manager):
+    manager, token_store = auth_manager
+    old_runtime = manager.mina_service
+    old_device_id = manager.device_id
+    old_token = token_store.get()
+    manager._try_miaccount_persistent_auth_relogin = AsyncMock(return_value={
+        "ok": True,
+        "auth_data": {**old_token, "serviceToken": "candidate-token"},
+    })
+    manager._build_verified_runtime_candidate = AsyncMock(return_value={
+        "ok": True,
+        "account": object(),
+        "mina_service": object(),
+        "miio_service": object(),
+        "session": None,
+        "device_id": "candidate-device",
+    })
+
+    def fail_commit(*_args, **_kwargs):
+        raise OSError("flush failed")
+
+    token_store.commit = fail_commit
+    out = await manager._atomic_persistent_auth_refresh(reason="ut-commit-fail")
+
+    assert out["ok"] is False
+    assert token_store.get() == old_token
+    assert manager.mina_service is old_runtime
+    assert manager.device_id == old_device_id
+
+
+@pytest.mark.asyncio
+async def test_transition_lock_serializes_scheduled_candidates(auth_manager):
+    manager, _ = auth_manager
+    active = 0
+    maximum = 0
+    sequence = []
+
+    async def candidate(_reason=""):
+        nonlocal active, maximum
+        active += 1
+        maximum = max(maximum, active)
+        sequence.append("start")
+        await asyncio.sleep(0)
+        sequence.append("end")
+        active -= 1
+        return {"ok": False, "failed_reason": "candidate failed"}
+
+    async def primary(**_kwargs):
+        nonlocal active, maximum
+        active += 1
+        maximum = max(maximum, active)
+        sequence.append("start")
+        await asyncio.sleep(0)
+        sequence.append("end")
+        active -= 1
+        return {
+            "ok": False,
+            "error_code": "test",
+            "failed_reason": "candidate failed",
+        }
+
+    manager._try_miaccount_persistent_auth_relogin = AsyncMock(side_effect=primary)
+    first, second = await asyncio.gather(
+        manager._atomic_persistent_auth_refresh("one"),
+        manager._atomic_persistent_auth_refresh("two"),
+    )
+
+    assert first["ok"] is False and second["ok"] is False
+    assert maximum == 1
+    assert sequence == ["start", "end", "start", "end"]
+    assert manager._auth_transition_lock is not manager._recovery_lock
+    assert manager._try_miaccount_persistent_auth_relogin.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_persistent_relogin_typeerror_session_is_closed(auth_manager):
+    manager, _ = auth_manager
+    session = MagicMock()
+    session.close = AsyncMock()
+    account = MagicMock()
+    account.token = {}
+    account._serviceLogin = AsyncMock(return_value={"code": 1})
+
+    with patch("xiaomusic.auth.ClientSession", return_value=session), patch(
+        "xiaomusic.auth.MiAccount", side_effect=[TypeError("legacy ctor"), account]
+    ):
+        out = await manager._try_miaccount_persistent_auth_relogin(
+            before=manager._get_auth_data(), reason="ut-close"
+        )
+
+    assert out["ok"] is False
+    session.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_legacy_rebind_verify_failure_does_not_clobber_runtime(auth_manager):
+    manager, _ = auth_manager
+    old_runtime = manager.mina_service
+    old_device_id = manager.device_id
+    manager._build_verified_runtime_candidate = AsyncMock(return_value={
+        "ok": False,
+        "error": "verify failed",
+    })
+
+    out = await manager._rebind_runtime_from_auth_data(manager._get_auth_data())
+
+    assert out["ok"] is False
+    assert manager.mina_service is old_runtime
+    assert manager.device_id == old_device_id
 
 
 @pytest.mark.asyncio

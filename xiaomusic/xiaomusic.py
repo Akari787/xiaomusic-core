@@ -882,25 +882,14 @@ class XiaoMusic:
                         len(cached),
                     )
                     return cached
-            # 认证失效时不在此路径重试风暴，改为返回缓存设备并等待人工重登。
-            try:
-                await self.auth_manager.ensure_logged_in(
-                    force=False,
-                    reason="getalldevices",
-                    prefer_refresh=True,
+            # mina_call/auth_call 已负责统一恢复；查询层只返回缓存，避免二次
+            # ensure/relogin 在并发查询中形成恢复风暴。
+            cached = self._cached_device_list()
+            if cached:
+                self.log.info(
+                    "getalldevices fallback to cached list count=%d", len(cached)
                 )
-                await self.device_manager.update_device_info(self.auth_manager)
-                device_list = await self.auth_manager.mina_call(
-                    "device_list", retry=0, ctx="getalldevices-retry"
-                )
-            except Exception as e2:
-                self.log.warning(f"Execption after reinit {e2}")
-                cached = self._cached_device_list()
-                if cached:
-                    self.log.info(
-                        "getalldevices fallback to cached list count=%d", len(cached)
-                    )
-                    return cached
+                return cached
         return device_list
 
     async def debug_play_by_music_url(self, arg1=None):

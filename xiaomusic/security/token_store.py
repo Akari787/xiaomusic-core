@@ -194,6 +194,41 @@ class TokenStore:
             except Exception as e:
                 self._log("warning", "TokenStore chmod 600 failed: %s", e)
 
+    def commit(self, new_token: dict[str, Any], reason: str = "") -> None:
+        """Atomically commit a candidate token and its persistence state.
+
+        With persistence enabled, the disk replacement completes before the in-memory
+        mirror changes. With ``persist_token=false``, this is an explicit memory-only
+        commit: no file is written and the committed mirror is clean because there is
+        no pending persistence obligation. On any persistence error, all three mirror
+        fields retain their pre-commit values.
+        """
+        if not isinstance(new_token, dict):
+            raise TypeError("new_token must be dict")
+        with self._lock:
+            old_token = deepcopy(self._token)
+            old_loaded = self._loaded
+            old_dirty = self._dirty
+            candidate = deepcopy(new_token)
+            persist_token = bool(getattr(self.config, "persist_token", True))
+            try:
+                if persist_token:
+                    self._atomic_write_unlocked(candidate)
+            except Exception:
+                self._token = old_token
+                self._loaded = old_loaded
+                self._dirty = old_dirty
+                raise
+            self._token = candidate
+            self._loaded = True
+            self._dirty = False
+            self._log(
+                "info",
+                "TokenStore commit complete reason=%s persisted=%s",
+                reason or "",
+                persist_token,
+            )
+
     def flush(self) -> None:
         with self._lock:
             persist_token = bool(getattr(self.config, "persist_token", True))

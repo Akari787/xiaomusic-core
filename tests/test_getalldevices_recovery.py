@@ -54,7 +54,7 @@ async def test_getalldevices_self_heal_when_devices_empty():
 
 
 @pytest.mark.asyncio
-async def test_getalldevices_rebuild_path_updates_device_manager():
+async def test_getalldevices_failure_returns_without_second_recovery_attempt():
     calls = {"mina": 0, "ensure": 0, "update": 0}
 
     class _Auth:
@@ -81,13 +81,14 @@ async def test_getalldevices_rebuild_path_updates_device_manager():
         auth_manager=_Auth(),
         device_manager=_DM(),
         log=types.SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+        _cached_device_list=lambda: [],
     )
 
     out = await XiaoMusic.getalldevices(fake)
-    assert len(out) == 1
-    assert calls["ensure"] == 1
-    assert calls["update"] == 1
-    assert calls["mina"] == 2
+    assert out == []
+    assert calls["ensure"] == 0
+    assert calls["update"] == 0
+    assert calls["mina"] == 1
 
 
 @pytest.mark.asyncio
@@ -123,5 +124,5 @@ async def test_getalldevices_repeated_failure_never_forces_login():
     await XiaoMusic.getalldevices(fake)
     await XiaoMusic.getalldevices(fake)
 
-    assert calls["ensure"] == 2
-    assert calls["force_values"] == [False, False]
+    assert calls["ensure"] == 0
+    assert calls["force_values"] == []

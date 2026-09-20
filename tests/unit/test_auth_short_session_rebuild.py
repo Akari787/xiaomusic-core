@@ -233,7 +233,9 @@ async def test_try_login_prefers_rebuild_when_short_session_missing(auth_manager
         def __init__(self, *args, **kwargs):  # noqa: ARG002
             raise AssertionError("full login path should not be used when short session is missing")
 
-    async def _fake_rebuild(reason=""):
+    async def _fake_rebuild(reason="", atomic=False, _transition_owned=False):
+        assert atomic is True
+        assert _transition_owned is True
         store.update(
             {
                 **store.get(),
@@ -292,7 +294,9 @@ async def test_try_login_short_session_rebuild_failure_exposes_rebuild_failed_st
         def __init__(self, *args, **kwargs):  # noqa: ARG002
             raise AssertionError("full login path should not be used when short session is missing")
 
-    async def _fake_rebuild(reason=""):
+    async def _fake_rebuild(reason="", atomic=False, _transition_owned=False):
+        assert atomic is True
+        assert _transition_owned is True
         manager._record_short_session_rebuild_state(
             {
                 "ok": False,

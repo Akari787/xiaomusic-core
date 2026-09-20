@@ -1,6 +1,8 @@
 import json
 import threading
 
+import pytest
+
 from xiaomusic.security.token_store import TokenStore
 
 
@@ -18,7 +20,6 @@ def test_flush_atomic_no_partial_json(tmp_path):
                 text = token_path.read_text(encoding="utf-8")
                 json.loads(text)
             except PermissionError:
-                # Windows can transiently deny reads during os.replace.
                 continue
             except json.JSONDecodeError as e:
                 errors.append(e)
@@ -75,3 +76,37 @@ def test_concurrent_updates_serialized(tmp_path):
     assert isinstance(data, dict)
     assert "seq" in data
     assert 0 <= int(data["seq"]) < count
+
+
+def test_commit_failure_keeps_memory_mirror_unchanged(tmp_path, monkeypatch):
+    token_path = tmp_path / "auth.json"
+    store = TokenStore(token_path)
+    store.save({"userId": "u0", "serviceToken": "s0"})
+    before = (dict(store._token), store._dirty, store._loaded)
+
+    def fail_write(_data):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "_atomic_write_unlocked", fail_write)
+    with pytest.raises(OSError):
+        store.commit({"userId": "u1", "serviceToken": "s1", "saveTime": 2})
+
+    assert store._token == before[0]
+    assert store._dirty == before[1]
+    assert store._loaded == before[2]
+    assert store.get() == before[0]
+
+
+def test_commit_persist_false_is_explicit_memory_only(tmp_path):
+    class Config:
+        persist_token = False
+        auth_token_path = str(tmp_path / "auth.json")
+
+    store = TokenStore(Config())
+    candidate = {"userId": "u1", "serviceToken": "memory-only", "saveTime": 3}
+
+    store.commit(candidate, reason="memory-only")
+
+    assert store.get() == candidate
+    assert store._dirty is False
+    assert not (tmp_path / "auth.json").exists()

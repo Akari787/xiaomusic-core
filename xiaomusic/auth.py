@@ -243,6 +243,10 @@ class SimpleAuthManager:
         self._recovery_task: asyncio.Task | None = None
         self._recovery_inflight: bool = False
 
+        # 认证事务锁：候选快照、verify、token/runtime 提交必须串行。
+        # _transition_owned 参数用于避免 _try_login -> atomic rebuild 重入死锁。
+        self._auth_transition_lock = asyncio.Lock()
+
         # singleflight 并发控制
         self._recovery_lock = asyncio.Lock()
         self._recovery_complete_event = asyncio.Event()
@@ -533,7 +537,10 @@ class SimpleAuthManager:
     # ==================== 核心恢复逻辑 ====================
 
     async def _try_login(
-        self, reason: str = "", preserve_healthy_runtime: bool = False
+        self,
+        reason: str = "",
+        preserve_healthy_runtime: bool = False,
+        _transition_owned: bool = False,
     ) -> bool:
         """
         简化的登录逻辑
@@ -544,6 +551,14 @@ class SimpleAuthManager:
         3. 先验证候选 runtime
         4. 验证成功后再原子替换当前 runtime
         """
+        if not _transition_owned:
+            async with self._auth_transition_lock:
+                return await self._try_login(
+                    reason=reason,
+                    preserve_healthy_runtime=preserve_healthy_runtime,
+                    _transition_owned=True,
+                )
+
         previous_state = self._state
         previous_locked_until = self._locked_until
         previous_cooldown_until = self._cooldown_until
@@ -614,21 +629,17 @@ class SimpleAuthManager:
                     if candidate.get("session") is not None:
                         self.mi_session = candidate["session"]
                         self.cookie_jar = self.mi_session.cookie_jar
-                        # 注：仅 legacy miservice（session_used=True）会走到这里。此 await
-                        # 期间 self.mi_session 已换新而 mina_service 尚未提交，并发的另一个
-                        # 快速路径可能重复构造候选；最终状态仍自洽且可自愈（审查确认非阻断）。
-                        if (
-                            old_session is not None
-                            and old_session is not candidate["session"]
-                        ):
-                            try:
-                                await old_session.close()
-                            except Exception:
-                                pass
+                    self.device_id = candidate.get("device_id") or self.device_id
                     self.login_account = candidate["account"]
                     self.mina_service = candidate["mina_service"]
                     self.miio_service = candidate["miio_service"]
                     self.login_signature = self._get_login_signature()
+                    # 旧 session 仍可见期间不 await close；先完成 runtime 引用替换。
+                    if old_session is not None and old_session is not self.mi_session:
+                        try:
+                            await old_session.close()
+                        except Exception:
+                            pass
                     now = time.time()
                     self._last_ok_ts = now
                     self._last_runtime_verify_ts = now
@@ -712,7 +723,9 @@ class SimpleAuthManager:
                 auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")
             ):
                 rebuild_out = await self.rebuild_short_session_from_persistent_auth(
-                    reason=reason or "ensure_auth"
+                    reason=reason or "ensure_auth",
+                    atomic=True,
+                    _transition_owned=True,
                 )
                 if rebuild_out.get("ok"):
                     now = time.time()
@@ -940,17 +953,17 @@ class SimpleAuthManager:
             if login_session_used:
                 self.mi_session = login_session
                 self.cookie_jar = self.mi_session.cookie_jar
-                if old_mi_session is not login_session:
-                    try:
-                        await old_mi_session.close()
-                    except Exception:
-                        pass
-            else:
+            self.login_signature = self._get_login_signature()
+            if login_session_used and old_mi_session is not login_session:
+                try:
+                    await old_mi_session.close()
+                except Exception:
+                    pass
+            if not login_session_used:
                 try:
                     await login_session.close()
                 except Exception:
                     pass
-            self.login_signature = self._get_login_signature()
             now = time.time()
             self._last_ok_ts = now
             self._last_runtime_verify_ts = now
@@ -1474,11 +1487,10 @@ class SimpleAuthManager:
                 "diagnostic": diagnostic,
             }
         finally:
-            if not login_session_used:
-                try:
-                    await login_session.close()
-                except Exception:
-                    pass
+            try:
+                await login_session.close()
+            except Exception:
+                pass
 
     async def _try_mijia_persistent_auth_relogin(
         self, auth_dir: str | None = None, sid: str = "micoapi"
@@ -1610,62 +1622,47 @@ class SimpleAuthManager:
             return {"ok": False, "error": str(exc)[:200]}
 
     async def _rebind_runtime_from_auth_data(self, auth_data: dict[str, Any]) -> dict[str, Any]:
-        try:
-            login_session = ClientSession()
-            login_session_used = False
-            try:
-                new_account = MiAccount()
-            except TypeError:
-                login_session_used = True
-                new_account = MiAccount(
-                    login_session,
-                    auth_data.get("userId", ""),
-                    "",
-                    str(self.mi_token_home),
-                )
-            self.set_token(new_account)
-            try:
-                new_mina_service = MiNAService(new_account)
-            except TypeError:
-                new_mina_service = MiNAService()
-            try:
-                new_miio_service = MiIOService(new_account)
-            except TypeError:
-                new_miio_service = MiIOService()
-            if login_session_used:
-                old_session = self.mi_session
-                self.mi_session = login_session
-                self.cookie_jar = self.mi_session.cookie_jar
-                if old_session is not login_session:
-                    try:
-                        await old_session.close()
-                    except Exception:
-                        pass
-            else:
-                try:
-                    await login_session.close()
-                except Exception:
-                    pass
-            self.login_account = new_account
-            self.mina_service = new_mina_service
-            self.miio_service = new_miio_service
-            self.login_signature = self._get_login_signature()
-            return {"ok": True, "result": "ok"}
-        except Exception as exc:
+        """Build, verify, then commit a runtime candidate without clobbering self."""
+        candidate = await self._build_verified_runtime_candidate(auth_data)
+        if not candidate.get("ok"):
             return {
                 "ok": False,
                 "result": "failed",
                 "error_code": "runtime_rebind_failed",
-                "failed_reason": str(exc)[:200],
+                "failed_reason": str(candidate.get("error") or "runtime candidate verify failed"),
             }
 
-    async def _atomic_persistent_auth_refresh(self, reason: str = "") -> dict[str, Any]:
+        old_session = self.mi_session
+        self.device_id = candidate.get("device_id") or self.device_id
+        self.login_account = candidate["account"]
+        self.mina_service = candidate["mina_service"]
+        self.miio_service = candidate["miio_service"]
+        if candidate.get("session") is not None:
+            self.mi_session = candidate["session"]
+            self.cookie_jar = self.mi_session.cookie_jar
+        self.login_signature = self._get_login_signature()
+        if self.mi_session is not old_session:
+            try:
+                await old_session.close()
+            except Exception:
+                pass
+        return {"ok": True, "result": "ok", "verify_result": "ok"}
+
+    async def _atomic_persistent_auth_refresh(
+        self, reason: str = "", _transition_owned: bool = False
+    ) -> dict[str, Any]:
         """刷新短会话并在 verify 后一次性提交 token/runtime。
 
         scheduled refresh 专用：不走 MiAccount.login，也不启用 MiJia 的 destructive
         fallback。primary persistent-auth 调用只生成候选 auth_data；候选 runtime
         验证失败时，token_store、saveTime 和当前 runtime 均保持不变。
         """
+        if not _transition_owned:
+            async with self._auth_transition_lock:
+                return await self._atomic_persistent_auth_refresh(
+                    reason=reason, _transition_owned=True
+                )
+
         auth_data = self._get_auth_data()
         if not self._has_persistent_auth_fields(auth_data):
             return {
@@ -1712,10 +1709,10 @@ class SimpleAuthManager:
         candidate_auth_data["saveTime"] = int(time.time() * 1000)
         try:
             if self.token_store is not None:
-                self.token_store.update(
-                    candidate_auth_data, reason=reason or "scheduled_persistent_auth_refresh"
+                self.token_store.commit(
+                    candidate_auth_data,
+                    reason=reason or "scheduled_persistent_auth_refresh",
                 )
-                self.token_store.flush()
         except Exception as exc:
             session = candidate.get("session")
             if session is not None:
@@ -1759,10 +1756,50 @@ class SimpleAuthManager:
         }
 
     async def rebuild_short_session_from_persistent_auth(
-        self, reason: str = "", atomic: bool = False
+        self,
+        reason: str = "",
+        atomic: bool = False,
+        _transition_owned: bool = False,
     ) -> dict[str, Any]:
         if atomic:
-            return await self._atomic_persistent_auth_refresh(reason=reason)
+            out = await self._atomic_persistent_auth_refresh(
+                reason=reason, _transition_owned=_transition_owned
+            )
+            finished_at = int(time.time() * 1000)
+            self._record_short_session_rebuild_state(out)
+            self._record_auth_recovery_flow_state({
+                "reason": reason,
+                "started_at": finished_at,
+                "primary_attempt": {
+                    "attempt_at": finished_at,
+                    "used_path": out.get("used_path", "miaccount_persistent_auth_login"),
+                    "error_code": out.get("error_code", ""),
+                    "result": "ok" if out.get("ok") else "failed",
+                },
+                "fallback_attempt": {
+                    "result": "skipped",
+                    "skipped_reason": "disabled_for_scheduled_refresh",
+                },
+                "rebind": {
+                    "result": out.get("runtime_rebind_result", "skipped"),
+                },
+                "verify": {
+                    "result": out.get("verify_result", "skipped"),
+                    "error_code": out.get("error_code", "")
+                    if out.get("verify_result") == "failed"
+                    else "",
+                },
+                "result": "ok" if out.get("ok") else "failed",
+                "used_path": out.get("used_path", "miaccount_persistent_auth_login"),
+                "atomic": True,
+                "finished_at": finished_at,
+            })
+            return out
+        if not _transition_owned:
+            async with self._auth_transition_lock:
+                return await self.rebuild_short_session_from_persistent_auth(
+                    reason=reason, atomic=False, _transition_owned=True
+                )
 
         auth_data = self._get_auth_data()
         started_at = int(time.time() * 1000)
@@ -1985,11 +2022,11 @@ class SimpleAuthManager:
         """设置 token 到 account；候选路径可使用未提交的 auth_data。"""
         user_data = dict(auth_data) if auth_data is not None else self._get_auth_data()
         if user_data:
-            self.device_id = user_data.get("deviceId", self.device_id)
+            candidate_device_id = user_data.get("deviceId") or self.device_id
             token_payload = {
                 "passToken": user_data["passToken"],
                 "userId": user_data["userId"],
-                "deviceId": self.device_id,
+                "deviceId": candidate_device_id,
             }
             for key in ("psecurity", "ssecurity", "cUserId"):
                 if user_data.get(key):
