@@ -884,18 +884,11 @@ class XiaoMusic:
                     return cached
             # 认证失效时不在此路径重试风暴，改为返回缓存设备并等待人工重登。
             try:
-                ensure_kwargs = {
-                    "force": True,
-                    "reason": "getalldevices",
-                    "prefer_refresh": True,
-                }
-                if (
-                    getattr(self.auth_manager, "mina_service", None) is not None
-                    and getattr(self.auth_manager, "_state", None)
-                    == getattr(self.auth_manager, "STATE_HEALTHY", object())
-                ):
-                    ensure_kwargs["preserve_healthy_runtime"] = True
-                await self.auth_manager.ensure_logged_in(**ensure_kwargs)
+                await self.auth_manager.ensure_logged_in(
+                    force=False,
+                    reason="getalldevices",
+                    prefer_refresh=True,
+                )
                 await self.device_manager.update_device_info(self.auth_manager)
                 device_list = await self.auth_manager.mina_call(
                     "device_list", retry=0, ctx="getalldevices-retry"

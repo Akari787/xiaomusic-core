@@ -66,7 +66,7 @@ async def test_getalldevices_rebuild_path_updates_device_manager():
 
         async def ensure_logged_in(self, force=False, reason="", prefer_refresh=False):
             calls["ensure"] += 1
-            assert force is True
+            assert force is False
             assert prefer_refresh is True
 
     class _DM:
@@ -88,3 +88,40 @@ async def test_getalldevices_rebuild_path_updates_device_manager():
     assert calls["ensure"] == 1
     assert calls["update"] == 1
     assert calls["mina"] == 2
+
+
+@pytest.mark.asyncio
+async def test_getalldevices_repeated_failure_never_forces_login():
+    calls = {"mina": 0, "ensure": 0, "force_values": []}
+
+    class _Auth:
+        async def mina_call(self, method, retry=1, ctx=""):
+            calls["mina"] += 1
+            raise RuntimeError("auth unavailable")
+
+        async def ensure_logged_in(self, force=False, reason="", prefer_refresh=False):
+            calls["ensure"] += 1
+            calls["force_values"].append(force)
+            return False
+
+        def is_auth_locked(self):
+            return False
+
+    class _DM:
+        devices = {}
+
+        async def update_device_info(self, auth_manager):  # noqa: ARG002
+            return None
+
+    fake = types.SimpleNamespace(
+        auth_manager=_Auth(),
+        device_manager=_DM(),
+        log=types.SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+        _cached_device_list=lambda: [],
+    )
+
+    await XiaoMusic.getalldevices(fake)
+    await XiaoMusic.getalldevices(fake)
+
+    assert calls["ensure"] == 2
+    assert calls["force_values"] == [False, False]

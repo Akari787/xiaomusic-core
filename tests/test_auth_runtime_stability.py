@@ -258,13 +258,14 @@ async def test_scheduled_refresh_failure_preserves_healthy_runtime(auth_manager)
     manager.config.auth_refresh_min_interval_minutes = 30
     old_runtime = manager.mina_service
 
-    async def candidate(*, preserve_healthy_runtime, **_kwargs):
-        if not preserve_healthy_runtime:
-            manager._state = manager.STATE_DEGRADED
-        return False
+    candidate = AsyncMock(return_value={
+        "ok": False,
+        "failed_reason": "verify failed",
+        "error_code": "verify_failed",
+    })
 
     with patch("xiaomusic.auth.time.time", return_value=now), patch.object(
-        manager, "_try_login", side_effect=candidate
+        manager, "_atomic_persistent_auth_refresh", new=candidate
     ):
         assert await manager._maybe_scheduled_refresh() is False
 
@@ -279,10 +280,14 @@ async def test_scheduled_refresh_failure_is_attempt_rate_limited(auth_manager):
     now = 30_000.0
     token_store._data["saveTime"] = int((now - 3500) * 1000)
     manager.config.auth_refresh_min_interval_minutes = 30
-    calls = AsyncMock(return_value=False)
+    calls = AsyncMock(return_value={
+        "ok": False,
+        "failed_reason": "verify failed",
+        "error_code": "verify_failed",
+    })
 
     with patch("xiaomusic.auth.time.time", return_value=now), patch.object(
-        manager, "ensure_auth", new=calls
+        manager, "_atomic_persistent_auth_refresh", new=calls
     ):
         assert await manager._maybe_scheduled_refresh() is False
         assert await manager._maybe_scheduled_refresh() is False
@@ -317,6 +322,90 @@ async def test_scheduled_refresh_skips_without_persistent_login_capability(auth_
     manager.ensure_auth.assert_not_awaited()
     assert manager._state == manager.STATE_HEALTHY
     assert manager._last_refresh_trigger == "scheduled_capability_skip"
+
+
+@pytest.mark.asyncio
+async def test_force_auth_does_not_implicitly_preserve_healthy_runtime(auth_manager):
+    manager, _ = auth_manager
+    attempt = AsyncMock(return_value=False)
+    manager._try_login = attempt
+
+    assert await manager.ensure_auth(force=True, reason="ut-explicit-force") is False
+    attempt.assert_awaited_once_with(
+        reason="ut-explicit-force", preserve_healthy_runtime=False
+    )
+
+
+@pytest.mark.asyncio
+async def test_scheduled_refresh_full_chain_never_calls_account_login(auth_manager):
+    manager, token_store = auth_manager
+    now = 50_000.0
+    token_store._data["saveTime"] = int((now - 3500) * 1000)
+    manager.config.auth_refresh_min_interval_minutes = 30
+
+    account = MagicMock()
+    account.token = {}
+    account.login = AsyncMock(side_effect=AssertionError("scheduled refresh called login"))
+    account._serviceLogin = AsyncMock(return_value={
+        "code": 0,
+        "location": "https://account.example/redirect?nonce=n1",
+        "nonce": "n1",
+        "ssecurity": "new-ssecurity",
+    })
+    account._securityTokenService = AsyncMock(return_value="new-service-token")
+    candidate_mina = _HealthyRuntime()
+
+    with patch("xiaomusic.auth.time.time", return_value=now), patch(
+        "xiaomusic.auth.MiAccount", return_value=account
+    ) as account_factory, patch(
+        "xiaomusic.auth.MiNAService", return_value=candidate_mina
+    ), patch("xiaomusic.auth.MiIOService", return_value=object()):
+        assert await manager._maybe_scheduled_refresh() is True
+
+    account_factory.assert_called()
+    account.login.assert_not_awaited()
+    assert manager.mina_service is candidate_mina
+    assert token_store.get()["serviceToken"] == "new-service-token"
+    assert int(token_store.get()["saveTime"]) == now * 1000
+
+
+@pytest.mark.asyncio
+async def test_atomic_refresh_verify_failure_does_not_write_or_swap(auth_manager):
+    manager, token_store = auth_manager
+    old_runtime = manager.mina_service
+    old_token = token_store.get()
+    manager._try_miaccount_persistent_auth_relogin = AsyncMock(return_value={
+        "ok": True,
+        "auth_data": {**old_token, "serviceToken": "candidate-token"},
+    })
+    manager._build_verified_runtime_candidate = AsyncMock(return_value={
+        "ok": False,
+        "error": "candidate verify failed",
+    })
+
+    out = await manager._atomic_persistent_auth_refresh(reason="ut-atomic")
+
+    assert out["ok"] is False
+    assert token_store.get() == old_token
+    assert manager.mina_service is old_runtime
+
+
+@pytest.mark.asyncio
+async def test_preserved_candidate_with_expired_long_term_auth_degrades(auth_manager):
+    manager, _ = auth_manager
+    manager._state = manager.STATE_HEALTHY
+    account = MagicMock()
+    account.token = {}
+    account.login = AsyncMock(side_effect=RuntimeError("passport token expired"))
+
+    with patch("xiaomusic.auth.MiAccount", return_value=account):
+        result = await manager.ensure_auth(
+            force=True, reason="ut-expired", preserve_healthy_runtime=True
+        )
+
+    assert result is False
+    assert manager._state == manager.STATE_DEGRADED
+    assert manager._last_login_trace["long_term_expired"] is True
 
 
 @pytest.mark.asyncio

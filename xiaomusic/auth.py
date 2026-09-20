@@ -452,13 +452,7 @@ class SimpleAuthManager:
             # 路径先把状态置为 DEGRADED，再进入可破坏性的恢复流程。
             return await self._try_login(
                 reason=reason or "ensure_auth",
-                preserve_healthy_runtime=(
-                    preserve_healthy_runtime
-                    or (
-                        self._state == self.STATE_HEALTHY
-                        and self.mina_service is not None
-                    )
-                ),
+                preserve_healthy_runtime=preserve_healthy_runtime,
             )
 
         # 如果状态健康，快速返回
@@ -1060,7 +1054,13 @@ class SimpleAuthManager:
                 failure_classification=failure_classification,
             )
 
-            if preserve_healthy_runtime and previous_state == self.STATE_HEALTHY:
+            if (
+                preserve_healthy_runtime
+                and previous_state == self.STATE_HEALTHY
+                and not failure_classification.get("long_term_expired")
+                and not failure_classification.get("need_qr_scan")
+                and not failure_classification.get("user_action_required")
+            ):
                 self._state = previous_state
                 self._locked_until = previous_locked_until
                 self._cooldown_until = previous_cooldown_until
@@ -1269,14 +1269,37 @@ class SimpleAuthManager:
             f"_maybe_scheduled_refresh: triggering scheduled refresh "
             f"ttl_remaining={self._ttl_remaining_seconds}s ratio={remaining_ratio:.2f}"
         )
-        return await self.ensure_auth(
-            force=True,
+        refresh = await self.rebuild_short_session_from_persistent_auth(
             reason="_maybe_scheduled_refresh",
-            preserve_healthy_runtime=True,
+            atomic=True,
         )
+        if refresh.get("ok"):
+            now = time.time()
+            self._last_session_success_ts = now
+            self._last_login_ts = now
+            self._last_ok_ts = now
+            self._last_runtime_verify_ts = now
+            self._last_error = ""
+            self._last_refresh_trigger = "scheduled"
+            return True
+
+        self._last_error = str(refresh.get("failed_reason") or "scheduled refresh failed")[:200]
+        self._last_recovery_result = "failed"
+        self._last_recovery_stage = "scheduled_refresh"
+        self._last_recovery_error_code = str(
+            refresh.get("error_code") or "scheduled_refresh_failed"
+        )
+        self._last_recovery_error_message = self._last_error
+        # candidate failure is deliberately non-destructive; attempt timestamp already
+        # provides the independent cooldown for the next scheduled cycle.
+        return False
 
     async def _try_miaccount_persistent_auth_relogin(
-        self, before: dict[str, Any] | None = None, reason: str = "", sid: str = "micoapi"
+        self,
+        before: dict[str, Any] | None = None,
+        reason: str = "",
+        sid: str = "micoapi",
+        writeback: bool = True,
     ) -> dict[str, Any]:
         auth_data = dict(before or {})
         if not self._has_persistent_auth_fields(auth_data):
@@ -1309,7 +1332,7 @@ class SimpleAuthManager:
                     "",
                     str(self.mi_token_home),
                 )
-            self.set_token(account)
+            self.set_token(account, auth_data=auth_data)
             resp = await account._serviceLogin(f"serviceLogin?sid={sid}&_json=true")
             if not isinstance(resp, dict):
                 return {
@@ -1433,12 +1456,11 @@ class SimpleAuthManager:
             merged["serviceToken"] = service_token
             merged["yetAnotherServiceToken"] = service_token
             merged["saveTime"] = int(time.time() * 1000)
-            if self.token_store is not None:
+            writeback_target = "none"
+            if writeback and self.token_store is not None:
                 self.token_store.update(merged, reason=reason or "persistent_auth_relogin")
                 self.token_store.flush()
                 writeback_target = "token_store"
-            else:
-                writeback_target = "none"
             return {
                 "ok": True,
                 "used_path": "miaccount_persistent_auth_login",
@@ -1448,6 +1470,7 @@ class SimpleAuthManager:
                 "sid": sid,
                 "http_stage": "redirect",
                 "writeback_target": writeback_target,
+                "auth_data": merged,
                 "diagnostic": diagnostic,
             }
         finally:
@@ -1554,7 +1577,9 @@ class SimpleAuthManager:
                     "",
                     str(self.mi_token_home),
                 )
-            self.set_token(account)
+            previous_device_id = self.device_id
+            self.set_token(account, auth_data=auth_data)
+            self.device_id = previous_device_id
             try:
                 mina_service = MiNAService(account)
             except TypeError:
@@ -1575,6 +1600,7 @@ class SimpleAuthManager:
                 "mina_service": mina_service,
                 "miio_service": miio_service,
                 "session": login_session if session_used else None,
+                "device_id": auth_data.get("deviceId") or previous_device_id,
             }
         except Exception as exc:
             try:
@@ -1633,7 +1659,111 @@ class SimpleAuthManager:
                 "failed_reason": str(exc)[:200],
             }
 
-    async def rebuild_short_session_from_persistent_auth(self, reason: str = "") -> dict[str, Any]:
+    async def _atomic_persistent_auth_refresh(self, reason: str = "") -> dict[str, Any]:
+        """刷新短会话并在 verify 后一次性提交 token/runtime。
+
+        scheduled refresh 专用：不走 MiAccount.login，也不启用 MiJia 的 destructive
+        fallback。primary persistent-auth 调用只生成候选 auth_data；候选 runtime
+        验证失败时，token_store、saveTime 和当前 runtime 均保持不变。
+        """
+        auth_data = self._get_auth_data()
+        if not self._has_persistent_auth_fields(auth_data):
+            return {
+                "ok": False,
+                "result": "failed",
+                "error_code": "missing_persistent_auth_fields",
+                "failed_reason": "missing_persistent_auth_fields",
+                "used_path": "miaccount_persistent_auth_login",
+                "atomic": True,
+            }
+
+        primary = await self._try_miaccount_persistent_auth_relogin(
+            before=auth_data,
+            reason=reason,
+            sid="micoapi",
+            writeback=False,
+        )
+        if not primary.get("ok"):
+            return {
+                "ok": False,
+                "result": "failed",
+                "error_code": str(primary.get("error_code") or "persistent_auth_relogin_failed"),
+                "failed_reason": str(primary.get("failed_reason") or "persistent_auth_relogin_failed"),
+                "used_path": "miaccount_persistent_auth_login",
+                "atomic": True,
+                "fallback": "disabled_for_scheduled_refresh",
+            }
+
+        candidate_auth_data = dict(primary.get("auth_data") or auth_data)
+        candidate = await self._build_verified_runtime_candidate(candidate_auth_data)
+        if not candidate.get("ok"):
+            return {
+                "ok": False,
+                "result": "failed",
+                "error_code": "verify_failed",
+                "failed_reason": str(candidate.get("error") or "runtime candidate verify failed"),
+                "used_path": "miaccount_persistent_auth_login",
+                "service_token_written": False,
+                "runtime_rebind_result": "skipped",
+                "verify_result": "failed",
+                "atomic": True,
+            }
+
+        candidate_auth_data["saveTime"] = int(time.time() * 1000)
+        try:
+            if self.token_store is not None:
+                self.token_store.update(
+                    candidate_auth_data, reason=reason or "scheduled_persistent_auth_refresh"
+                )
+                self.token_store.flush()
+        except Exception as exc:
+            session = candidate.get("session")
+            if session is not None:
+                try:
+                    await session.close()
+                except Exception:
+                    pass
+            return {
+                "ok": False,
+                "result": "failed",
+                "error_code": "token_commit_failed",
+                "failed_reason": str(exc)[:200],
+                "used_path": "miaccount_persistent_auth_login",
+                "service_token_written": False,
+                "runtime_rebind_result": "skipped",
+                "verify_result": "ok",
+                "atomic": True,
+            }
+
+        old_session = self.mi_session
+        self.device_id = candidate.get("device_id") or self.device_id
+        self.mi_session = candidate.get("session") or self.mi_session
+        if self.mi_session is not old_session:
+            self.cookie_jar = self.mi_session.cookie_jar
+            try:
+                await old_session.close()
+            except Exception:
+                pass
+        self.login_account = candidate["account"]
+        self.mina_service = candidate["mina_service"]
+        self.miio_service = candidate["miio_service"]
+        self.login_signature = self._get_login_signature()
+        return {
+            "ok": True,
+            "result": "ok",
+            "used_path": "miaccount_persistent_auth_login",
+            "service_token_written": self.token_store is not None,
+            "runtime_rebind_result": "ok",
+            "verify_result": "ok",
+            "atomic": True,
+        }
+
+    async def rebuild_short_session_from_persistent_auth(
+        self, reason: str = "", atomic: bool = False
+    ) -> dict[str, Any]:
+        if atomic:
+            return await self._atomic_persistent_auth_refresh(reason=reason)
+
         auth_data = self._get_auth_data()
         started_at = int(time.time() * 1000)
         flow: dict[str, Any] = {
@@ -1851,9 +1981,9 @@ class SimpleAuthManager:
 
     # ==================== Token 操作 ====================
 
-    def set_token(self, account):
-        """设置 token 到 account"""
-        user_data = self._get_auth_data()
+    def set_token(self, account, auth_data: dict[str, Any] | None = None):
+        """设置 token 到 account；候选路径可使用未提交的 auth_data。"""
+        user_data = dict(auth_data) if auth_data is not None else self._get_auth_data()
         if user_data:
             self.device_id = user_data.get("deviceId", self.device_id)
             token_payload = {
@@ -2425,7 +2555,9 @@ class SimpleAuthManager:
                 "last_ok_ts": int(self._last_ok_ts * 1000)
                 if self._last_ok_ts > 0
                 else None,
-                "last_refresh_ts": int(time.time() * 1000),
+                "last_refresh_attempt_ts": int(self._last_refresh_attempt_ts * 1000)
+                if self._last_refresh_attempt_ts > 0
+                else None,
             },
         }
 
@@ -2706,6 +2838,16 @@ class SimpleAuthManager:
             "lock_counter": self._lock_counter,
             "lock_counter_threshold": self._lock_counter_threshold,
             "last_ok_ts": int(self._last_ok_ts * 1000) if self._last_ok_ts > 0 else 0,
+            "last_session_success_ts": int(self._last_session_success_ts * 1000)
+            if self._last_session_success_ts > 0
+            else 0,
+            "last_runtime_verify_ts": int(self._last_runtime_verify_ts * 1000)
+            if self._last_runtime_verify_ts > 0
+            else 0,
+            "last_refresh_attempt_ts": int(self._last_refresh_attempt_ts * 1000)
+            if self._last_refresh_attempt_ts > 0
+            else 0,
+            "last_refresh_trigger": self._last_refresh_trigger,
             "cooldown_until_ts": int(self._cooldown_until * 1000)
             if self._cooldown_until > 0
             else 0,
