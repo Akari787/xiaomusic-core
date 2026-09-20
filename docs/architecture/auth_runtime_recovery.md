@@ -1,529 +1,231 @@
-# Auth 运行时恢复链说明
+# Auth 运行时恢复实现与观测参考
 
-> 适用范围：V1.1.1（auth 恢复链从零实现）当前代码实现。
-> 目标：说明正式状态接口、统一状态映射、short-session 重建主链、调试观测面与失败分类。
+> 本文对应 HEAD `66cc131` 的实际实现。它是实现/观测参考，不替代
+> [`docs/spec/auth/auth_runtime_recovery.md`](../spec/auth/auth_runtime_recovery.md) 的验收规范。
 
----
+## 1. 实现边界
 
-## 文档状态
+认证运行时分三层：
 
-**本文档定位**：V1.1.1 auth runtime recovery **实现说明/观测说明**文档，描述当前代码实现细节，**不是 auth 全局规范**。
+1. **persistent auth**：`passToken`、`psecurity`、`ssecurity`、`userId`、`cUserId`、`deviceId`。
+2. **short session**：`serviceToken`、`yetAnotherServiceToken`。
+3. **runtime**：`login_account`、`mina_service`、`miio_service`、session、cookie 和签名。
 
-**权威层级**：
-- 认证状态模型权威：`docs/architecture/authentication_architecture.md`
-- 行为规范权威：`docs/spec/auth/auth_runtime_recovery.md`
-- API 契约权威：`docs/api/api_v1_spec.md`
+`TokenStore`/`conf/auth.json` 是持久认证事实来源。env credential 是运行时覆盖，
+不属于持久事实，禁止写回磁盘。
 
-**本文档用途**：
-- 用于理解现有实现细节
-- 用于 debug 端点观测
-- 用于 failure classification 分类
+## 2. 认证入口
 
-**本文档约束**：本文档**不得覆盖** spec 与 api 契约的权威定义。
+### 2.1 `ensure_auth()` / `_try_login()`
 
----
-
-## 1. 背景与边界
-
-当前认证状态分为两层：
-
-- **长期态（persistent auth）**
-  - `userId`
-  - `passToken`
-  - `psecurity`
-  - `ssecurity`
-  - `cUserId`
-  - `deviceId`
-- **短期态（short session）**
-  - `serviceToken`
-  - `yetAnotherServiceToken`
-
-长期态持久化在 `conf/auth.json`，用于在短期态缺失时重新建立运行时认证能力。
-
-本轮 M4 的边界是：
-
-1. 建立统一的对外认证状态映射
-2. 新增正式 v1 端点 `/api/v1/auth/status`
-3. 为 short-session 缺失场景建立自动重建主链
-4. 用调试端点暴露 rebuild / rebind / verify 阶段结果
-
-本轮**不**把 `/api/v1/debug/*` 升格为正式 API；它们仍是调试级接口。
-
----
-
-## 2. 内部认证状态枚举
-
-`auth.py` 内部运行时状态枚举为：
-
-- `healthy`
-- `degraded`
-- `locked`
-
-代码位置：`xiaomusic/auth.py`
-
-```python
-STATE_HEALTHY = "healthy"
-STATE_DEGRADED = "degraded"
-STATE_LOCKED = "locked"
-```
-
-这三个状态是内部恢复状态机的基础输入；对外正式返回的 `status` 则进一步映射为：
-
-- `ok`
-- `degraded`
-- `failed`
-- `unknown`
-
----
-
-## 3. 正式接口：`/api/v1/auth/status`
-
-路由位置：`xiaomusic/api/routers/v1.py`
-
-该接口返回 v1 envelope，`data` 部分来自：
-
-- `AuthManager.map_auth_public_status(runtime_auth_ready=...)`
-- 并由路由附加 `generated_at_ms`
-
-### 3.1 正式字段定义
-
-当前实现中的正式字段如下：
-
-| 字段 | 类型 | 含义 |
-|---|---|---|
-| `status` | `ok \| degraded \| failed \| unknown` | 对外稳定状态 |
-| `auth_mode` | `healthy \| degraded \| locked \| unknown` | 内部认证模式 |
-| `status_reason` | `string` | 对外稳定原因码 |
-| `status_reason_detail` | `string` | 原因补充说明 |
-| `status_mapping_source` | `string` | 当前状态由哪条映射规则得出 |
-| `recovery_failure_count` | `int` | 恢复失败累计计数 |
-| `persistent_auth_available` | `bool` | 长期态是否完整可用 |
-| `short_session_available` | `bool` | `serviceToken / yetAnotherServiceToken` 是否存在 |
-| `runtime_auth_ready` | `bool` | 运行时 auth 对象是否已准备好 |
-| `auth_locked` | `bool` | 是否处于 locked |
-| `auth_lock_until` | `int` | lock 截止时间戳（ms） |
-| `auth_lock_reason` | `string` | 当前 lock 原因 |
-| `auth_lock_transition_reason` | `string` | 最近进入 locked 的转换原因 |
-| `auth_lock_counter` | `int` | lock 计数 |
-| `auth_lock_counter_threshold` | `int` | 进入 locked 的阈值 |
-| `manual_login_required_reason` | `string` | 需要人工重新登录时的原因 |
-| `runtime_not_ready_reason` | `string` | 短期态存在但 runtime 未就绪时的说明 |
-| `last_error` | `string` | 最近认证错误 |
-| `rebuild_failed` | `bool` | 最近一次 short-session rebuild 是否失败 |
-| `rebuild_error_code` | `string` | 最近 rebuild 的失败码 |
-| `rebuild_failed_reason` | `string` | 最近 rebuild 的失败说明 |
-| `generated_at_ms` | `int` | 路由生成时间 |
-
----
-
-## 4. 统一状态映射
-
-### 4.1 入口
-
-统一映射由两层函数组成：
-
-1. `auth_public_status_snapshot(runtime_auth_ready=None)`
-   - 聚合内部状态、debug 状态和 rebuild 状态
-   - 输出最小公共快照
-2. `map_auth_public_status(runtime_auth_ready=None)`
-   - 将内部状态快照映射为正式对外口径
-
-### 4.2 映射规则
-
-当前映射顺序如下：
-
-#### 规则 1：`auth_locked == true`
-
-- 若同时满足人工登录相关条件：
-  - `need_qr_scan == true`，或
-  - `long_term_expired == true`，或
-  - `user_action_required == true`
-- 则映射为：
-  - `status_reason = "manual_login_required"`
-  - `status_mapping_source = "locked_manual"`
-
-否则映射为：
-- `status_reason = "temporarily_locked"`
-- `status_mapping_source = "locked_temporary"`
-
-#### 规则 2：长期态缺失
-
-当 `persistent_auth_available == false`：
-
-- `status_reason = "persistent_auth_missing"`
-- `status_reason_detail = "all long-lived auth fields missing from token"`
-- `status_mapping_source = "persistent_auth_missing"`
-
-#### 规则 3：长期态存在，但短期态缺失
-
-当：
-- `persistent_auth_available == true`
-- `short_session_available == false`
-
-分两种情况：
-
-1. 最近 rebuild 已失败：
-   - `status_reason = "short_session_rebuild_failed"`
-   - `status_reason_detail = "rebuild failed: <rebuild_error_code>"`
-   - `status_mapping_source = "short_session_rebuild_failed"`
-
-2. 最近 rebuild 尚未失败记录：
-   - `status_reason = "short_session_missing"`
-   - `status_reason_detail = "short-lived session tokens missing"`
-   - `status_mapping_source = "short_session_missing"`
-
-#### 规则 4：长期态与短期态都存在，但 runtime 未就绪
-
-当：
-- `persistent_auth_available == true`
-- `short_session_available == true`
-- `runtime_auth_ready == false`
-
-映射为：
-- `status_reason = "runtime_not_ready"`
-- `status_mapping_source = "runtime_not_ready"`
-
-#### 规则 5：其他情况
-
-默认：
-- `status_reason = "healthy"`
-- `status_mapping_source = "healthy"`
-
-### 4.3 `status` 对外枚举映射
-
-在 `status_reason` 选定后，再计算正式 `status`：
-
-- `status_reason == "healthy"` → `status = "ok"`
-- `auth_mode == "locked"` → `status = "failed"`
-- `auth_mode in {"healthy", "degraded"}` 且 `status_reason != "healthy"` → `status = "degraded"`
-- 其他情况 → `status = "unknown"`
-
----
-
-## 5. short-session rebuild 双路径流程
-
-入口函数：`rebuild_short_session_from_persistent_auth(reason="")`
-
-### 5.1 文字流程图
+`ensure_auth()` 先做 runtime probe。probe 失败后，`_try_login()` 在 transition lock
+内按以下顺序工作：
 
 ```text
-读取 auth.json / token_store
-  -> 检查长期态是否完整
-    -> 否：直接失败，error_code=missing_persistent_auth_fields
-    -> 是：继续
-  -> primary: _try_miaccount_persistent_auth_relogin(before, reason, sid="micoapi")
-    -> 成功：进入 rebind
-    -> 失败：进入 fallback
-  -> fallback: _try_mijia_persistent_auth_relogin(auth_dir, sid="micoapi")
-    -> 成功：进入 rebind
-    -> 失败：整个 rebuild 失败
-  -> 检查 serviceToken / yetAnotherServiceToken 是否已写回
-    -> 否：失败，error_code=service_token_not_written
-    -> 是：继续
-  -> runtime rebind: _rebind_runtime_from_auth_data(merged_auth_data)
-    -> 失败：error_code=runtime_rebind_failed
-    -> 成功：继续
-  -> verify: await self.mina_service.device_list()
-    -> 失败：error_code=verify_failed
-    -> 成功：rebuild 完成
+读取 auth_data
+  -> env override？runtime rebind/verify（不换票）
+  -> mina_service 缺失？尝试 persisted short-session fast rebind/verify
+  -> 完整 persistent auth？atomic short-session rebuild
+  -> 没有明确 persistent capability 时，才允许进入显式 full-login 场景
 ```
 
-### 5.2 primary 路径
+**自然过期边界**：即使磁盘仍保留旧 `serviceToken`，只要完整 persistent auth 存在，
+fast rebind 未成功后仍必须走 atomic rebuild；atomic 失败绝不能落到无口令
+`MiAccount.login`。
 
-函数：`_try_miaccount_persistent_auth_relogin()`
+完整无口令 login 不是 scheduled、manual、persistent-auth recovery 的 fallback。
 
-当前真实主路径：
+### 2.2 Scheduled refresh
 
-1. 使用 `MiAccount._serviceLogin("serviceLogin?sid=micoapi&_json=true")`
-2. 从返回结果提取：
-   - `location`
-   - `nonce`
-   - `ssecurity`
-3. 再调用：
-   - `MiAccount._securityTokenService(location, nonce, ssecurity)`
-4. 成功后写回：
-   - `serviceToken`
-   - `yetAnotherServiceToken`
-   - `ssecurity`
-5. 若存在 `token_store`，通过 `token_store.update(...); flush()` 持久化
+`_maybe_scheduled_refresh()`：
 
-### 5.3 fallback 路径
+- TTL 仅取持久 token `saveTime`。
+- runtime probe 成功不会更新 TTL 锚点。
+- env override 直接记录 `scheduled_env_override_skip` 并返回。
+- 无 persistent capability 记录 capability skip。
+- 其他情况调用：
 
-函数：`_try_mijia_persistent_auth_relogin()`
-
-当前 fallback 路径：
-
-1. 实例化 `MiJiaAPI`
-2. 调用：
-   - `MiJiaAPI.rebuild_service_cookies_from_persistent_auth("micoapi")`
-3. 从最新 auth 数据中回填：
-   - `serviceToken`
-   - `yetAnotherServiceToken`
-   - `ssecurity`
-4. 作为 fallback 的 relogin 结果返回给 rebuild 主函数
-
-### 5.4 rebind 阶段
-
-函数：`_rebind_runtime_from_auth_data(auth_data)`
-
-作用：
-
-- 用新的 auth 数据重新创建：
-  - `MiAccount`
-  - `MiNAService`
-  - `MiIOService`
-- 更新：
-  - `self.login_account`
-  - `self.mina_service`
-  - `self.miio_service`
-  - `self.login_signature`
-
-成功返回：
-
-```json
-{"ok": true, "result": "ok"}
+```python
+await rebuild_short_session_from_persistent_auth(
+    reason="_maybe_scheduled_refresh",
+    atomic=True,
+)
 ```
 
-失败返回：
+scheduled 失败不修改仍健康 runtime；attempt timestamp 独立负责 cooldown。
 
-```json
-{
-  "ok": false,
-  "result": "failed",
-  "error_code": "runtime_rebind_failed",
-  "failed_reason": "..."
-}
+### 2.3 Manual reload
+
+`manual_reload_runtime()`：
+
+1. 有 TokenStore 时先调用 `reload_from_disk()`。
+2. env 模式调用当前 auth data 的 atomic runtime rebind/verify；不调用
+   `_serviceLogin`、不调用 `MiAccount.login`、不写 token。
+3. 非 env 模式调用 atomic persistent refresh。
+4. verified success 清理 manual login gate；fatal 失败映射到
+   `manual_login_required`。
+
+返回中的 `token_store_reloaded` 只有真实执行 `reload_from_disk()` 后才能为 true。
+`runtime_swap_attempted` 只在结果明确表示尝试时为 true，缺省/`None`/`skipped` 均为 false。
+
+## 3. Atomic rebuild 实现
+
+入口默认值为：
+
+```python
+rebuild_short_session_from_persistent_auth(reason="", atomic=True)
 ```
 
-### 5.5 verify 阶段
+生产入口均显式使用 `atomic=True`。`atomic=False` 仅为 legacy 兼容路径。
 
-verify 当前最小标准为：
+### 3.1 Candidate pipeline
 
-- `self.mina_service` 可用
-- `await self.mina_service.device_list()` 成功
+```text
+persistent auth snapshot
+  -> _try_miaccount_persistent_auth_relogin(writeback=False)
+  -> candidate auth data
+  -> _build_verified_runtime_candidate(candidate_auth_data)
+  -> candidate device_list verify
+  -> TokenStore.commit(candidate_auth_data)（env 时跳过）
+  -> 一次性同步 runtime 引用
+  -> generation += 1
+  -> await close old session
+```
 
-成功后：
-- `self._last_ok_ts` 更新
-- rebuild 结果记为成功
+candidate verify 失败时：
 
-失败后：
-- `error_code = "verify_failed"`
+- 不调用 TokenStore.commit
+- 不更新 `saveTime`
+- 不替换旧 runtime
+- 不关闭仍在使用的旧 session
 
----
+TokenStore commit 失败时同样保留旧 token 镜像和旧 runtime。
 
-## 6. 阶段化调试结构
+### 3.2 Runtime 一次性提交
 
-### 6.1 `last_auth_recovery_flow`
+下列引用在任何 close await 前同步完成：
 
-`/api/v1/debug/auth_short_session_rebuild_state` 中的 `last_auth_recovery_flow` 表示最近一次 short-session 恢复链的阶段化流转。
+```text
+device_id
+login_account
+mina_service
+miio_service
+mi_session
+cookie_jar
+login_signature
+_runtime_generation
+```
 
-当前字段：
+旧 session 只在新 runtime 完整可见后关闭。取消 close await 不会造成新 session+旧
+service 的半提交状态。
 
-| 字段 | 含义 |
-|---|---|
-| `reason` | 触发 rebuild 的原因，例如 `init_all_data` |
-| `started_at` | 本次恢复链开始时间（ms） |
-| `primary_attempt` | primary 路径结果 |
-| `fallback_attempt` | fallback 路径结果；未命中时为 `{"result": "skipped"}` |
-| `rebind` | runtime rebind 结果 |
-| `verify` | verify 结果 |
-| `result` | 整个恢复链最终结果：`running / ok / failed` |
-| `used_path` | 最终实际命中的路径，例如 `miaccount_persistent_auth_login` 或 `mijia_persistent_auth_login` |
-| `finished_at` | 本次恢复链结束时间（ms） |
+### 3.3 TokenStore commit
 
-其中阶段节点统一使用以下字段风格：
+`TokenStore.commit()` 持锁工作：
 
-| 字段 | 含义 |
-|---|---|
-| `attempt_at` | 阶段执行时间（ms） |
-| `used_path` | 该阶段关联路径 |
-| `error_code` | 阶段失败码；成功时为空字符串 |
-| `result` | `ok / failed / skipped` |
+- `persist_token=true`：原子文件替换成功后才更新 `_token/_dirty/_loaded`。
+- `persist_token=false`：明确为仅内存提交，不写磁盘且不保留 dirty。
+- 异常时内存镜像三字段保持原值。
 
-### 6.2 `last_short_session_rebuild`
+历史 `update()+flush()` 仍可被兼容代码使用，但不是 atomic 主路径。
 
-`last_short_session_rebuild` 是对最近一次 rebuild 结果的压缩摘要，字段如下：
+## 4. Persistent relogin 与 session
 
-| 字段 | 含义 |
-|---|---|
-| `ok` | 本次 rebuild 是否成功 |
-| `result` | `ok / failed` |
-| `used_path` | 最终实际命中的 rebuild 路径 |
-| `error_code` | 最终失败码；成功时为空 |
-| `failed_reason` | 失败原因说明；成功时为空 |
-| `service_token_written` | 是否已经把短期 token 写回持久层/合并后的 auth 数据 |
-| `runtime_rebind_result` | `ok / failed / skipped` |
-| `verify_result` | `ok / failed / skipped` |
-| `ts` | 该摘要写入时间（ms） |
+`_try_miaccount_persistent_auth_relogin()` 只返回候选 token 数据和分类结果，不把
+创建的 ClientSession 交给 runtime。TypeError legacy constructor 路径也会关闭创建的
+session。
 
-### 6.3 `auth_short_session_rebuild_debug_state()` 返回结构
+serviceLogin 非零 code 分类：
 
-该调试接口当前返回：
+- `70016`、`87001`：`long_term_expired/need_qr_scan/user_action_required=true`。
+- 未知非零 code，例如 `10001`、`500`：可属于 auth error，但不自动推断需要扫码。
+- `service_login_failed` 和 `service_login_code_*` 是 auth 域错误标签，不等于长期失效。
 
-| 字段 | 含义 |
-|---|---|
-| `state` | 当前内部 auth mode |
-| `cooldown_until` | 冷却截止时间 |
-| `last_short_session_rebuild` | 最近一次 rebuild 摘要 |
-| `last_persistent_auth_relogin` | 最近一次真正使用的 relogin 阶段；若最终路径为 `mijia*`，则取 fallback，否则取 primary |
-| `last_runtime_rebind` | 最近一次 rebind 结果 |
-| `last_verify` | 最近一次 verify 结果 |
-| `last_auth_recovery_flow` | 最近一次完整恢复链阶段流 |
+## 5. Fatal manual gate
 
----
+fatal 分类首次失败即进入持久 manual gate：
 
-## 7. Debug 端点说明
+```text
+state = LOCKED
+_last_manual_login_required_reason != ""
+locked_until 不作为人工 gate 的过期条件
+```
 
-下列端点均为**调试级**接口，不承诺正式 v1 稳定兼容：
+非 force `ensure_auth()` 在 probe 前短路，不重复访问小米服务。
 
-| 端点 | 作用 |
-|---|---|
-| `/api/v1/debug/auth_state` | 查看当前 auth mode、lock 信息、最近错误、状态映射相关基础数据 |
-| `/api/v1/debug/auth_recovery_state` | 查看恢复任务、退避、计数器、终止阶段与终止错误码 |
-| `/api/v1/debug/miaccount_login_trace` | 查看最近一次 MiAccount 登录/换票轨迹 |
-| `/api/v1/debug/auth_rebuild_state` | 当前复用 `auth_debug_state()`，作为 rebuild 相关兼容调试面 |
-| `/api/v1/debug/auth_runtime_reload_state` | 查看 runtime reload 相关状态 |
-| `/api/v1/debug/auth_short_session_rebuild_state` | 查看 short-session rebuild 的 primary/fallback/rebind/verify 阶段流 |
+verified runtime recovery 成功统一调用内部 success helper：
 
-M4 收口最关键的 debug 端点是：
+- state=`HEALTHY`
+- `locked_until=0`
+- 清空 `_last_manual_login_required_reason`
+- 清空 lock transition reason
 
-- `/api/v1/debug/auth_short_session_rebuild_state`
+失败恢复不调用该 helper。`clear_auth_lock()` 仍是显式人工/二维码成功入口。
 
-因为它直接反映：
-- rebuild 是否发生
-- primary 是否命中
-- fallback 是否命中
-- rebind / verify 是否成功
-- 最终失败码是什么
+## 6. Transition lock 与 generation
 
----
+`_auth_transition_lock` 覆盖候选快照、verify、commit、runtime swap 的事务边界。
 
-## 8. 失败分类与 `error_code` 清单
+调用者等待 lock 前保存 generation；获得 lock 后：
 
-### 8.1 primary: `_try_miaccount_persistent_auth_relogin()`
+```text
+若 generation 已变化
+且当前 state=HEALTHY
+且 runtime ready
+=> 复用前一个成功事务，不重复 login/rebuild
+```
 
-| `error_code` | 含义 |
-|---|---|
-| `missing_persistent_auth_fields` | 长期态字段不完整 |
-| `invalid_service_login_response` | `_serviceLogin()` 返回结构非法 |
-| `service_login_failed` | `_serviceLogin()` 返回 code 非 0 |
-| `redirect_missing_location` | 登录返回缺 `location` |
-| `redirect_missing_nonce` | 重定向参数缺 `nonce` |
-| `redirect_missing_ssecurity` | 重定向或 auth_data 缺 `ssecurity` |
-| `security_token_service_failed` | `_securityTokenService()` 调用失败 |
-| `empty_service_token` | `_securityTokenService()` 返回空 token |
+generation 只在 verified runtime 成功提交后递增。reason 字符串不参与判断。
 
-### 8.2 fallback: `_try_mijia_persistent_auth_relogin()`
+## 7. 时间与观测字段
 
-| `error_code` | 含义 |
-|---|---|
-| `missing_persistent_auth_fields` | 长期态字段不完整 |
-| `mijia_persistent_auth_login_failed` | MiJia fallback 调用异常 |
-| `invalid_mijia_relogin_response` | MiJia fallback 返回结构非法 |
+| 字段 | 语义 | 不得承担的语义 |
+|---|---|---|
+| `_last_session_success_ts` | session 建立/刷新成功 | 不作 health probe 或 cooldown |
+| `_last_runtime_verify_ts` | runtime 验证成功 | 不延长 token TTL |
+| `_last_refresh_attempt_ts` | scheduled 尝试/skip | 不代表 token 成功 |
+| `TokenStore.saveTime` | 持久 token 发行/刷新事实 | 不被 probe 时间覆盖 |
 
-### 8.3 rebuild 主函数: `rebuild_short_session_from_persistent_auth()`
+相关 debug flow：
 
-| `error_code` | 含义 |
-|---|---|
-| `missing_persistent_auth_fields` | 进入主函数时长期态不完整 |
-| `persistent_auth_relogin_failed` | primary/fallback 最终都未返回可用 relogin 结果时的兜底码 |
-| `service_token_not_written` | relogin 成功但最终没有拿到 `serviceToken / yetAnotherServiceToken` |
-| `runtime_rebind_failed` | rebind 失败 |
-| `verify_failed` | verify 失败 |
+- `started_at` / `finished_at`
+- `primary_attempt`
+- `fallback_attempt`（scheduled atomic 中明确 skipped）
+- `rebind`
+- `verify`
+- `result`
 
-说明：
-- 若 primary 失败且 fallback 也失败，最终 `error_code` 会优先透传 fallback/primary 的真实错误码；只有没有真实错误码时才退回 `persistent_auth_relogin_failed`。
-- `map_auth_public_status()` 只把最近 rebuild 的终态压缩为：
-  - `short_session_rebuild_failed`
-  - 以及其对应的 `rebuild_error_code`
+primary token exchange 成功但 candidate verify 失败时，必须显示：
 
----
+```text
+primary_attempt.result = ok
+verify.result = failed
+```
 
-## 9. 与 `/api/auth/status` 的关系
+## 8. 公共状态映射
 
-`/api/auth/status` 是**内部 API**，主要供 WebUI / 内部认证流程使用，不承诺长期兼容。
+`map_auth_public_status()` 的重点结果：
 
-`/api/v1/auth/status` 是**正式 v1 端点**。
+- persistent auth 缺失：`persistent_auth_missing`
+- short-session rebuild 失败：`short_session_rebuild_failed`
+- runtime 未准备：`runtime_not_ready`
+- fatal auth + manual gate：`manual_login_required`
+- 健康：`healthy` / `status=ok`
 
-二者的关系是：
+70016/87001 第一次失败即为 `manual_login_required`；未知 serviceLogin 非零 code
+不得误报扫码。
 
-1. `system.py::_build_auth_status_payload()` 内部会优先调用：
-   - `am.map_auth_public_status(runtime_auth_ready=runtime_ready)`
-2. 因此 `/api/auth/status` 与 `/api/v1/auth/status` 在以下字段上共享同一口径来源：
-   - `status`
-   - `auth_mode`
-   - `status_reason`
-   - `status_reason_detail`
-   - `status_mapping_source`
-   - `recovery_failure_count`
-   - `rebuild_failed`
-   - `rebuild_error_code`
-   - `rebuild_failed_reason`
-3. 区别只在于：
-   - `/api/auth/status` 还包含内部场景需要的额外字段，如 `token_file`、`token_exists`、`token_valid`、`cloud_available`、`login_in_progress`
-   - `/api/v1/auth/status` 返回的是正式 v1 envelope，字段更克制、更稳定
-
-结论：
-- **状态映射不再由 router 各自拼装**
-- **system / v1 / debug 通过 auth manager 共享同一状态映射来源**
-
----
-
-## 10. 当前实现口径与限制
-
-1. `/api/v1/auth/status` 已是正式端点
-2. `map_auth_public_status()` 是统一对外映射入口
-3. short-session rebuild 已具备：
-   - primary
-   - fallback
-   - rebind
-   - verify
-   - 阶段化 debug flow
-4. `/api/v1/debug/*` 仍是调试级，不承诺正式兼容
-5. 当前只保留最近一次：
-   - `last_short_session_rebuild`
-   - `last_auth_recovery_flow`
-   不保留历史序列
-6. fallback 路径已编码实现，但是否命中取决于真实运行环境；应以 debug flow 和日志为准判断
-
----
-
-## 11. 代码定位
+## 9. 代码定位
 
 - `xiaomusic/auth.py`
-  - `auth_public_status_snapshot()`
-  - `map_auth_public_status()`
-  - `_try_miaccount_persistent_auth_relogin()`
-  - `_try_mijia_persistent_auth_relogin()`
-  - `_rebind_runtime_from_auth_data()`
+  - `ensure_auth()` / `_try_login()`
+  - `_maybe_scheduled_refresh()`
   - `rebuild_short_session_from_persistent_auth()`
-  - `auth_short_session_rebuild_debug_state()`
-- `xiaomusic/api/routers/v1.py`
-  - `GET /api/v1/auth/status`
-  - `GET /api/v1/debug/auth_*`
-- `xiaomusic/api/routers/system.py`
-  - `_build_auth_status_payload()`
-  - `GET /api/auth/status`
-
----
-
-## 12. 验收关注点
-
-若后续继续验收或排查，应重点核对：
-
-1. `/api/v1/auth/status` 是否返回正式字段且口径稳定
-2. `status_reason` 是否与实际恢复阶段一致
-3. `/api/v1/debug/auth_short_session_rebuild_state` 中：
-   - `last_auth_recovery_flow.used_path`
-   - `primary_attempt`
-   - `fallback_attempt`
-   - `rebind`
-   - `verify`
-   是否与日志一致
-4. 恢复成功后：
-   - `short_session_available == true`
-   - `runtime_auth_ready == true`
-   - `status == ok`
-5. 恢复失败后：
-   - `status_reason == short_session_rebuild_failed`
-   - `rebuild_error_code` 与 debug flow 中最终失败码一致
+  - `_atomic_persistent_auth_refresh()`
+  - `_atomic_runtime_rebind_current_auth()`
+  - `_try_miaccount_persistent_auth_relogin()`
+  - `manual_reload_runtime()`
+- `xiaomusic/security/token_store.py`
+  - `TokenStore.commit()`
+  - `TokenStore.reload_from_disk()`
+- 观测端点：`/api/v1/auth/status` 与 `/api/v1/debug/auth_*`
