@@ -47,6 +47,10 @@ AUTH_STRICT_ERROR_KEYWORDS = (
     "token expired",
     "refresh token expired",
     "passport token expired",
+    "70016",
+    "87001",
+    "service_login_failed",
+    "service_login_code_",
 )
 
 LONG_TERM_AUTH_FAILURE_HINTS = (
@@ -135,6 +139,21 @@ def is_auth_error_strict(exc=None, resp=None, body=None) -> bool:
 
     lowered = " ".join(text_parts).lower()
     return any(word in lowered for word in AUTH_STRICT_ERROR_KEYWORDS)
+
+
+def is_long_term_auth_failure_text(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "70016",
+            "87001",
+            "service_login_failed",
+            "service_login_code_",
+            "refresh token expired",
+            "passport token expired",
+        )
+    )
 
 
 def is_network_error(exc=None, resp=None, body=None) -> bool:
@@ -419,7 +438,7 @@ class SimpleAuthManager:
             }
 
         if is_auth_error_strict(exc=RuntimeError(err_text)):
-            long_term_expired = any(
+            long_term_expired = is_long_term_auth_failure_text(lowered) or any(
                 hint in lowered for hint in LONG_TERM_AUTH_FAILURE_HINTS
             )
             return {
@@ -621,6 +640,33 @@ class SimpleAuthManager:
                     self._last_error, auth_data
                 )
                 return False
+
+            if os.getenv("AUTH_ACCESS_TOKEN") or os.getenv("AUTH_REFRESH_TOKEN"):
+                env_rebind = await self._atomic_runtime_rebind_current_auth(
+                    reason=reason or "env_override_rebind",
+                    _transition_owned=True,
+                )
+                if env_rebind.get("ok"):
+                    now = time.time()
+                    self._last_ok_ts = now
+                    self._last_runtime_verify_ts = now
+                    self._last_session_success_ts = now
+                    self._last_login_ts = now
+                    self._state = self.STATE_HEALTHY
+                    self._last_recovery_result = "ok"
+                    self._last_recovery_stage = "verify"
+                    self._last_recovery_error_code = ""
+                    self._last_recovery_error_message = ""
+                    return True
+                self._last_error = str(
+                    env_rebind.get("failed_reason") or "env runtime rebind failed"
+                )[:200]
+                self._last_recovery_stage = "env_override_rebind"
+                self._last_recovery_error_code = str(
+                    env_rebind.get("error_code") or "env_runtime_rebind_failed"
+                )
+                self._last_recovery_error_message = self._last_error
+                raise RuntimeError(self._last_error)
 
             # 快速路径：已持有会话 token、但运行时未绑定（典型场景＝进程重启）。
             # 先用持久 token 构造候选运行时并校验，**通过之后才提交到 self**；
@@ -1038,11 +1084,16 @@ class SimpleAuthManager:
         except Exception as e:
             self._last_error = str(e)[:200]
             self.log.error(f"认证失败: {e}")
+            preserved_stage = self._last_recovery_stage
             failure_classification = self._classify_auth_failure(
                 self._last_error, auth_data
             )
             self._last_recovery_result = "failed"
-            self._last_recovery_stage = "verify" if verify_attempted else "login"
+            self._last_recovery_stage = (
+                preserved_stage
+                if preserved_stage in ("short_session_rebuild", "env_override_rebind")
+                else ("verify" if verify_attempted else "login")
+            )
             self._last_recovery_error_code = failure_classification["error_type"]
             self._last_recovery_error_message = self._last_error
             self._last_login_trace = {
@@ -1158,6 +1209,10 @@ class SimpleAuthManager:
         仅在 token 内容发生变化时才更新 saveTime，防止每次调用都刷新 TTL。
         """
         if self.token_store is None:
+            return
+        # 环境凭据只属于运行时接管，任何认证路径都不得固化到 token_store。
+        if os.getenv("AUTH_ACCESS_TOKEN") or os.getenv("AUTH_REFRESH_TOKEN"):
+            self.log.info("persist_auth_data: skipped because env credentials override runtime")
             return
 
         merged = dict(auth_data or {})
@@ -1401,15 +1456,18 @@ class SimpleAuthManager:
                 "security_token_service_invoked": False,
             }
             if int(resp.get("code", -1)) != 0:
+                error_text = f"service_login_code_{resp.get('code')}"
+                classification = self._classify_auth_failure(error_text, auth_data)
                 return {
                     "ok": False,
                     "used_path": "miaccount_persistent_auth_login",
                     "error_code": "service_login_failed",
-                    "failed_reason": f"service_login_code_{resp.get('code')}",
+                    "failed_reason": error_text,
                     "error_message": str(resp),
                     "http_stage": "serviceLogin",
                     "writeback_target": "none",
                     "sid": sid,
+                    **classification,
                     "diagnostic": diagnostic,
                 }
             if not location:
@@ -1711,14 +1769,26 @@ class SimpleAuthManager:
                 "failed_reason": str(exc)[:200],
             }
         if not primary.get("ok"):
+            primary_error = str(
+                primary.get("failed_reason")
+                or primary.get("error_code")
+                or "persistent_auth_relogin_failed"
+            )
+            classification = {
+                key: bool(primary.get(key))
+                for key in ("long_term_expired", "need_qr_scan", "user_action_required")
+            }
+            if not any(classification.values()):
+                classification = self._classify_auth_failure(primary_error, auth_data)
             return {
                 "ok": False,
                 "result": "failed",
                 "error_code": str(primary.get("error_code") or "persistent_auth_relogin_failed"),
                 "primary_error_code": str(primary.get("error_code") or "persistent_auth_relogin_failed"),
                 "primary_result": "failed",
-                "failed_reason": str(primary.get("failed_reason") or "persistent_auth_relogin_failed"),
+                "failed_reason": primary_error,
                 "used_path": "miaccount_persistent_auth_login",
+                **classification,
                 "atomic": True,
                 "fallback": "disabled_for_scheduled_refresh",
             }

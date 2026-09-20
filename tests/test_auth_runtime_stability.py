@@ -310,6 +310,29 @@ async def test_expired_service_token_probe_uses_atomic_rebuild_not_full_login(au
 
 
 @pytest.mark.asyncio
+async def test_probe_failure_env_override_uses_runtime_rebind_only(auth_manager, monkeypatch):
+    manager, _ = auth_manager
+    monkeypatch.setenv("AUTH_ACCESS_TOKEN", "runtime-access")
+    manager.mina_service = _FailingRuntime()
+    rebind = AsyncMock(return_value={
+        "ok": True,
+        "runtime_rebind_result": "ok",
+        "verify_result": "ok",
+    })
+    manager._atomic_runtime_rebind_current_auth = rebind
+    manager._try_miaccount_persistent_auth_relogin = AsyncMock()
+    account = MagicMock()
+    account.login = AsyncMock(side_effect=AssertionError("env path called login"))
+
+    with patch("xiaomusic.auth.MiAccount", return_value=account):
+        assert await manager.ensure_auth() is True
+
+    rebind.assert_awaited_once()
+    manager._try_miaccount_persistent_auth_relogin.assert_not_awaited()
+    account.login.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_probe_auth_failure_enters_recovery(auth_manager):
     manager, _ = auth_manager
     manager.mina_service = _FailingRuntime()
@@ -439,24 +462,40 @@ async def test_manual_reload_full_chain_never_calls_account_login(auth_manager):
 async def test_manual_reload_long_term_failure_maps_to_manual_login_required(auth_manager):
     manager, _ = auth_manager
     manager._state = manager.STATE_HEALTHY
-    manager.rebuild_short_session_from_persistent_auth = AsyncMock(return_value={
-        "ok": False,
-        "error_code": "service_login_failed",
-        "failed_reason": "expired",
-        "long_term_expired": True,
-        "need_qr_scan": True,
-        "user_action_required": True,
-        "runtime_rebind_result": "skipped",
-        "verify_result": "skipped",
-    })
+    account = MagicMock()
+    account.token = {}
+    account._serviceLogin = AsyncMock(return_value={"code": 70016})
+    account.login = AsyncMock(side_effect=AssertionError("manual expired path called login"))
 
-    out = await manager.manual_reload_runtime(reason="ut-manual-expired")
+    with patch("xiaomusic.auth.MiAccount", return_value=account):
+        out = await manager.manual_reload_runtime(reason="ut-manual-expired")
 
     assert out["state_after"] == manager.STATE_LOCKED
     assert out["runtime_auth_ready"] is False
     assert out["need_qr_scan"] is True
     public = manager.map_auth_public_status(runtime_auth_ready=False)
     assert public["status_reason"] == "manual_login_required"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("service_code", [70016, 87001])
+async def test_service_login_codes_propagate_manual_auth_classification(
+    auth_manager, service_code
+):
+    manager, _ = auth_manager
+    account = MagicMock()
+    account.token = {}
+    account._serviceLogin = AsyncMock(return_value={"code": service_code})
+
+    with patch("xiaomusic.auth.MiAccount", return_value=account):
+        out = await manager._try_miaccount_persistent_auth_relogin(
+            before=manager._get_auth_data(), reason="ut-code"
+        )
+
+    assert out["error_code"] == "service_login_failed"
+    assert out["long_term_expired"] is True
+    assert out["need_qr_scan"] is True
+    assert out["user_action_required"] is True
 
 
 @pytest.mark.asyncio
