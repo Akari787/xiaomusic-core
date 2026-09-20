@@ -5,6 +5,8 @@
 最后更新：2026-04-09  
 适用范围：`xiaomusic/auth.py`、`xiaomusic/api/routers/system.py` 的自动触发 runtime reload 验收边界
 
+> **历史专项记录**：本文冻结 2026-04 的验收口径，正文中的 fresh full-login 主线不代表当前生产恢复路径。当前行为与验收以 [`auth_runtime_recovery.md`](auth_runtime_recovery.md) 为准。
+
 ---
 
 ## 文档状态

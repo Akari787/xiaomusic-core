@@ -5,6 +5,8 @@
 最后更新：2026-04-09  
 适用范围：`xiaomusic/auth.py` 内认证错误判定、恢复链路与状态转移
 
+> **历史专项记录**：本文冻结 2026-04 的状态机阶段，正文中的 fresh full-login 与旧 fallback 描述不代表当前生产恢复链。当前状态、fatal gate、atomic transaction 与验收口径以 [`auth_runtime_recovery.md`](auth_runtime_recovery.md) 为准。
+
 ---
 
 ## 1. 文档目的

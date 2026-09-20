@@ -5,6 +5,8 @@
 最后更新：2026-03-29
 适用范围：`xiaomusic/auth.py` 内 fallback 恢复路径的行为边界
 
+> **历史专项记录**：本文冻结 2026-03 的 destructive fallback 调查。当前生产调用均使用 `atomic=True`；`atomic=False` fallback 只作显式 legacy 兼容，不得依据本文把它恢复为默认主线。当前行为以 [`auth_runtime_recovery.md`](auth_runtime_recovery.md) 为准。
+
 ---
 
 ## 文档状态

@@ -5,6 +5,8 @@
 最后更新：2026-04-09  
 适用范围：`xiaomusic/auth.py` 内 runtime reload / `_try_login()` / runtime rebind / verify 路径的行为边界
 
+> **历史专项记录**：本文冻结 2026-04 的 fresh-session 修补阶段，正文中的 `MiAccount.login("micoapi")` 主线已被后续 atomic persistent-auth recovery 取代。当前行为以 [`auth_runtime_recovery.md`](auth_runtime_recovery.md) 为准。
+
 ---
 
 ## 1. 文档目的
