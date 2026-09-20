@@ -499,6 +499,44 @@ async def test_service_login_codes_propagate_manual_auth_classification(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("service_code", [70016, 87001])
+async def test_ensure_auth_fatal_code_locks_once_and_short_circuits(
+    auth_manager, service_code
+):
+    manager, _ = auth_manager
+    manager.mina_service = _FailingRuntime()
+    account = MagicMock()
+    account.token = {}
+    account._serviceLogin = AsyncMock(return_value={"code": service_code})
+
+    with patch("xiaomusic.auth.MiAccount", return_value=account):
+        assert await manager.ensure_auth() is False
+        assert manager._state == manager.STATE_LOCKED
+        assert manager.map_auth_public_status(runtime_auth_ready=False)["status_reason"] == "manual_login_required"
+        assert await manager.ensure_auth() is False
+
+    assert account._serviceLogin.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("service_code", [10001, 500])
+async def test_unknown_service_login_code_is_not_manual_login_required(
+    auth_manager, service_code
+):
+    manager, _ = auth_manager
+    manager.mina_service = _FailingRuntime()
+    account = MagicMock()
+    account.token = {}
+    account._serviceLogin = AsyncMock(return_value={"code": service_code})
+
+    with patch("xiaomusic.auth.MiAccount", return_value=account):
+        assert await manager.ensure_auth() is False
+
+    assert manager._last_manual_login_required_reason == ""
+    assert manager.map_auth_public_status(runtime_auth_ready=False)["status_reason"] != "manual_login_required"
+
+
+@pytest.mark.asyncio
 async def test_manual_env_rebind_reloads_disk_without_rotating_token(auth_manager, monkeypatch):
     manager, token_store = auth_manager
     old_token = token_store.get()
@@ -747,7 +785,7 @@ async def test_legacy_rebind_verify_failure_does_not_clobber_runtime(auth_manage
 
 
 @pytest.mark.asyncio
-async def test_preserved_candidate_with_expired_long_term_auth_degrades(auth_manager):
+async def test_preserved_candidate_with_expired_long_term_auth_locks_for_manual_login(auth_manager):
     manager, token_store = auth_manager
     for key in ("psecurity", "ssecurity", "cUserId", "deviceId", "serviceToken", "yetAnotherServiceToken"):
         token_store._data.pop(key, None)
@@ -762,8 +800,9 @@ async def test_preserved_candidate_with_expired_long_term_auth_degrades(auth_man
         )
 
     assert result is False
-    assert manager._state == manager.STATE_DEGRADED
+    assert manager._state == manager.STATE_LOCKED
     assert manager._last_login_trace["long_term_expired"] is True
+    assert manager._last_manual_login_required_reason
 
 
 @pytest.mark.asyncio

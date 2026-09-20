@@ -148,8 +148,6 @@ def is_long_term_auth_failure_text(text: str) -> bool:
         for marker in (
             "70016",
             "87001",
-            "service_login_failed",
-            "service_login_code_",
             "refresh token expired",
             "passport token expired",
         )
@@ -385,7 +383,9 @@ class SimpleAuthManager:
             return True
 
     def is_auth_locked(self) -> bool:
-        """保持向后兼容的锁定判定"""
+        """保持向后兼容的锁定判定；人工认证要求需显式清除。"""
+        if self._state == self.STATE_LOCKED and self._last_manual_login_required_reason:
+            return True
         return self._state == self.STATE_LOCKED and time.time() < self._locked_until
 
     async def ensure_logged_in(
@@ -468,6 +468,8 @@ class SimpleAuthManager:
         """
         # 如果在冷却期，检查是否过期
         if not force and time.time() < self._cooldown_until:
+            return False
+        if not force and self._last_manual_login_required_reason:
             return False
 
         if force:
@@ -1096,6 +1098,24 @@ class SimpleAuthManager:
             )
             self._last_recovery_error_code = failure_classification["error_type"]
             self._last_recovery_error_message = self._last_error
+            if (
+                failure_classification.get("long_term_expired")
+                or failure_classification.get("need_qr_scan")
+                or failure_classification.get("user_action_required")
+            ):
+                self._state = self.STATE_LOCKED
+                self._locked_until = 0
+                self._last_manual_login_required_reason = (
+                    self._last_recovery_error_code or "manual auth required"
+                )
+                self._last_lock_transition_reason = (
+                    f"{self._last_recovery_stage}:manual_login_required"
+                )
+            fatal_auth = bool(
+                failure_classification.get("long_term_expired")
+                or failure_classification.get("need_qr_scan")
+                or failure_classification.get("user_action_required")
+            )
             self._last_login_trace = {
                 **self._last_login_trace,
                 "stage": self._last_recovery_stage,
@@ -1141,6 +1161,9 @@ class SimpleAuthManager:
                 self._retry_count = previous_retry_count
                 self._retry_count_effective = previous_retry_count_effective
                 self._lock_counter = previous_lock_counter
+                return False
+
+            if fatal_auth:
                 return False
 
             self._state = self.STATE_DEGRADED
@@ -3169,6 +3192,7 @@ class SimpleAuthManager:
 
     def clear_auth_lock(self, reason: str = "", mode: str = "degraded"):
         """清除认证锁定"""
+        self._last_manual_login_required_reason = ""
         if mode == "healthy":
             self._state = self.STATE_HEALTHY
             self._auth_mode = self.STATE_HEALTHY
