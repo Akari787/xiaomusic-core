@@ -82,3 +82,64 @@ async def test_api_v1_auth_status_returns_v1_envelope_and_core_fields(monkeypatc
     assert v1_out["data"]["status_reason"] == system_out["status_reason"]
     assert v1_out["data"]["recovery_failure_count"] == system_out["recovery_failure_count"]
     assert v1_out["data"]["status_mapping_source"] == system_out["status_mapping_source"]
+
+
+@pytest.mark.asyncio
+async def test_system_auth_payload_uses_minimal_exchange_capability(monkeypatch):
+    from xiaomusic.api.routers import system
+
+    class _Auth:
+        @staticmethod
+        def auth_status_snapshot():
+            return {
+                "state": "healthy",
+                "auth_mode": "healthy",
+                "persistent_auth_available": True,
+                "short_session_available": False,
+            }
+
+        @staticmethod
+        def auth_debug_state():
+            return {}
+
+        @staticmethod
+        def auth_short_session_rebuild_debug_state():
+            return {"last_short_session_rebuild": {}}
+
+        @staticmethod
+        def map_auth_public_status(runtime_auth_ready=False):
+            return {
+                "status": "degraded",
+                "auth_mode": "healthy",
+                "status_reason": "short_session_missing",
+                "runtime_auth_ready": runtime_auth_ready,
+            }
+
+    class _TokenStore:
+        path = None
+
+        @staticmethod
+        def get():
+            return {"userId": "u", "passToken": "p", "deviceId": "d"}
+
+    class _XM:
+        auth_manager = _Auth()
+        token_store = _TokenStore()
+
+    async def _runtime_ready():
+        return False
+
+    monkeypatch.setattr(system, "xiaomusic", _XM())
+    monkeypatch.setattr(system, "config", type("_C", (), {
+        "auth_token_path": "conf/auth.json",
+        "qrcode_timeout": 120,
+        "httpauth_username": "basic-user",
+        "httpauth_password": "basic-pass",
+    })())
+    monkeypatch.setattr(system, "_runtime_auth_ready", _runtime_ready)
+    monkeypatch.setattr(system, "qrcode_login_task", None)
+    monkeypatch.setattr(system, "qrcode_login_started_at", 0.0)
+    monkeypatch.setattr(system, "qrcode_login_error", "")
+
+    out = await system._build_auth_status_payload()
+    assert out["persistent_auth_available"] is True

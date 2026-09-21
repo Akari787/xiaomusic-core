@@ -560,9 +560,12 @@ async def test_manual_reload_long_term_failure_maps_to_manual_login_required(aut
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("service_code", [70016, 87001])
+@pytest.mark.parametrize(
+    ("service_code", "expected_class"),
+    [(70016, "credential_session_rejected"), (87001, "interactive_captcha_challenge")],
+)
 async def test_service_login_codes_propagate_manual_auth_classification(
-    auth_manager, service_code
+    auth_manager, service_code, expected_class
 ):
     manager, _ = auth_manager
     account = MagicMock()
@@ -578,9 +581,7 @@ async def test_service_login_codes_propagate_manual_auth_classification(
     assert out["long_term_expired"] is False
     assert out["need_qr_scan"] is True
     assert out["user_action_required"] is True
-    assert out["auth_class"] in {
-        "credential_session_rejected", "interactive_captcha_challenge"
-    }
+    assert out["auth_class"] == expected_class
 
 
 @pytest.mark.asyncio
@@ -869,22 +870,32 @@ async def test_transition_lock_serializes_scheduled_candidates(auth_manager):
 
 
 @pytest.mark.asyncio
-async def test_persistent_relogin_typeerror_session_is_closed(auth_manager):
+async def test_persistent_relogin_typeerror_session_is_closed_and_store_is_memory(
+    auth_manager,
+):
     manager, _ = auth_manager
     session = MagicMock()
     session.close = AsyncMock()
     account = MagicMock()
     account.token = {}
     account._serviceLogin = AsyncMock(return_value={"code": 1})
+    sentinel = Path(manager.mi_token_home)
+    sentinel.write_text("canonical-sentinel", encoding="utf-8")
 
     with patch("xiaomusic.auth.ClientSession", return_value=session), patch(
         "xiaomusic.auth.MiAccount", side_effect=[TypeError("legacy ctor"), account]
-    ):
+    ) as factory:
         out = await manager._try_miaccount_persistent_auth_relogin(
             before=manager._get_auth_data(), reason="ut-close"
         )
 
+    from xiaomusic.auth import _MemoryTokenStore
+
     assert out["ok"] is False
+    assert isinstance(account.token_store, _MemoryTokenStore)
+    assert account.token_store.load_token()["passToken"] == manager._get_auth_data()["passToken"]
+    assert factory.call_count == 2
+    assert sentinel.read_text(encoding="utf-8") == "canonical-sentinel"
     session.close.assert_awaited_once()
 
 
@@ -929,6 +940,8 @@ async def test_preserved_candidate_with_expired_long_term_auth_locks_for_manual_
 @pytest.mark.asyncio
 async def test_try_login_without_minimal_capability_requires_qr_without_login(auth_manager):
     manager, token_store = auth_manager
+    manager.config.httpauth_username = "basic-user"
+    manager.config.httpauth_password = "basic-pass"
     for key in ("psecurity", "ssecurity", "cUserId", "deviceId", "serviceToken", "yetAnotherServiceToken"):
         token_store._data.pop(key, None)
     with patch("xiaomusic.auth.MiAccount") as mock_account:
@@ -1017,6 +1030,30 @@ def test_generic_login_failed_is_not_long_term_expired(auth_manager):
     assert out["long_term_expired"] is False
     assert out["need_qr_scan"] is False
     assert out["user_action_required"] is False
+
+
+@pytest.mark.parametrize(
+    ("service_code", "expected_class"),
+    [(70016, "credential_session_rejected"), (87001, "interactive_captcha_challenge")],
+)
+def test_challenge_classification_precedes_missing_minimal_fields(
+    auth_manager, service_code, expected_class
+):
+    manager, _ = auth_manager
+    out = manager._classify_auth_failure(
+        f"service_login_code_{service_code}", {}
+    )
+    assert out["auth_class"] == expected_class
+    assert out["long_term_expired"] is False
+    assert out["need_qr_scan"] is True
+    assert out["user_action_required"] is True
+
+
+def test_captcha_url_classification_precedes_missing_minimal_fields(auth_manager):
+    manager, _ = auth_manager
+    out = manager._classify_auth_failure('{"code": 87001, "captchaUrl": "https://captcha"}', {})
+    assert out["auth_class"] == "interactive_captcha_challenge"
+    assert out["long_term_expired"] is False
 
 
 def test_network_error_is_not_auth_expiration(auth_manager):
@@ -1225,25 +1262,26 @@ def test_set_token_without_service_token_does_not_fake_micoapi(auth_manager):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("auth_class", "code"),
-    [("credential_session_rejected", 70016), ("interactive_captcha_challenge", 87001)],
+    ("code", "expected_class"),
+    [(70016, "credential_session_rejected"), (87001, "interactive_captcha_challenge")],
 )
 async def test_scheduled_challenge_keeps_healthy_and_suspends_network(
-    auth_manager, auth_class, code
+    auth_manager, code, expected_class
 ):
     manager, token_store = auth_manager
     now = 100_000.0
     token_store._data["saveTime"] = int((now - 3500) * 1000)
     manager.config.auth_refresh_min_interval_minutes = 0
+    classification = manager._classify_auth_failure(
+        f"service_login_code_{code}", token_store.get()
+    )
+    assert classification["auth_class"] == expected_class
     manager.rebuild_short_session_from_persistent_auth = AsyncMock(
         return_value={
             "ok": False,
             "error_code": "service_login_failed",
             "failed_reason": f"service_login_code_{code}",
-            "auth_class": auth_class,
-            "long_term_expired": False,
-            "need_qr_scan": True,
-            "user_action_required": True,
+            **classification,
         }
     )
 

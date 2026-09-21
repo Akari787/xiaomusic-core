@@ -107,7 +107,8 @@ verify、commit 或 candidate 构造失败时，旧 token、旧 runtime 和旧 g
 1. 取得 transition lock。
 2. 若有完整 persistent auth，优先 atomic short-session rebuild。
 3. 即使旧 `serviceToken` 仍存在，也不得跳过 rebuild。
-4. atomic rebuild 失败不得进入无口令 `MiAccount.login`。
+4. atomic rebuild 失败不得进入无口令 `MiAccount.login`；当前 Config 只有 HTTP Basic 账号字段，
+   不提供 Xiaomi 账号/密码，因此不存在 legacy full-login 能力。
 5. Reactive/manual reload 的 `70016`（credential/session rejected）或 `87001`/`captchaUrl`
    （interactive captcha challenge）首次即进入持久 `manual_login_required`，但
    `long_term_expired=false`；后续非 force ensure 短路。Scheduled 保持 healthy 并挂起后续
@@ -138,7 +139,8 @@ manual reload：
 1. 若有 TokenStore，先执行 `reload_from_disk()`。
 2. env override 模式只 rebind/verify，不换票、不持久化环境凭据。
 3. 普通模式使用 atomic persistent refresh。
-4. 70016/87001 等 fatal 认证失败映射为 `manual_login_required`。
+4. credential/session rejection、captcha 等 manual-intervention/challenge 类失败映射为
+   `manual_login_required`；这不等同于 `long_term_expired`。
 5. verified runtime recovery 成功后清除人工认证锁和 reason，恢复 `HEALTHY`。
 
 ### 4.4 Generation 与 transition lock

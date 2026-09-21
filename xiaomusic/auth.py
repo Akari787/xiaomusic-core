@@ -59,11 +59,6 @@ LONG_TERM_AUTH_FAILURE_HINTS = (
     "passport token expired",
     "service token expired",
     "servicetoken expired",
-    "need qr",
-    "scan qr",
-    "qr login",
-    "account locked",
-    "login required",
 )
 
 # 网络错误关键词
@@ -364,31 +359,19 @@ class SimpleAuthManager:
         self, session: ClientSession, user_id: str, password: str = "", token: dict[str, Any] | None = None
     ):
         """Construct MiAccount without exposing the canonical persistent token path."""
+        memory_store = _MemoryTokenStore(token)
         try:
-            return MiAccount(session, user_id, password, _MemoryTokenStore(token))
+            return MiAccount(session, user_id, password, memory_store)
         except TypeError:
-            # Test doubles and older miservice builds may only expose MiAccount().
-            return MiAccount()
+            # Older miservice builds/test doubles may only expose MiAccount().
+            # Explicitly replace any constructor default store with our memory store.
+            account = MiAccount()
+            account.token_store = memory_store
+            if getattr(account, "token", None) is None:
+                account.token = memory_store.load_token() or {}
+            return account
 
-    def _configured_legacy_credentials(self, auth_data: dict[str, Any]) -> tuple[str, str] | None:
-        username = (
-            getattr(self.config, "mi_username", "")
-            or getattr(self.config, "mi_account", "")
-            or getattr(self.config, "xiaomi_username", "")
-            or os.getenv("XIAOMUSIC_MI_USERNAME", "")
-            or os.getenv("XIAOMI_USERNAME", "")
-            or os.getenv("MI_USERNAME", "")
-        )
-        password = (
-            getattr(self.config, "mi_password", "")
-            or getattr(self.config, "xiaomi_password", "")
-            or os.getenv("XIAOMUSIC_MI_PASSWORD", "")
-            or os.getenv("XIAOMI_PASSWORD", "")
-            or os.getenv("MI_PASSWORD", "")
-        )
-        if username and password:
-            return str(username), str(password)
-        return None
+    # The current Config intentionally has no Xiaomi username/password fields.
 
     # ==================== 公共接口 ====================
 
@@ -683,23 +666,12 @@ class SimpleAuthManager:
         previous_retry_count_effective = self._retry_count_effective
         previous_lock_counter = self._lock_counter
         auth_data = self._get_auth_data()
-        old_mi_session = self.mi_session
         runtime_swap_attempted = False
         runtime_swap_applied = False
         verify_attempted = False
         verify_method = "device_list"
         verify_error_text = ""
         login_error_text = ""
-        login_result = False
-        login_session = None
-        token_changed_after_login = False
-        candidate_runtime_account_ready = False
-        candidate_runtime_cookie_ready = False
-        pre_login_serviceToken_present = bool(auth_data.get("serviceToken"))
-        pre_login_yetAnotherServiceToken_present = bool(
-            auth_data.get("yetAnotherServiceToken")
-        )
-        pre_login_micoapi_present = bool(auth_data.get("micoapi"))
         failure_classification: dict[str, Any] = {
             "error_type": "runtime_error",
             "long_term_expired": False,
@@ -936,241 +908,19 @@ class SimpleAuthManager:
                     "verify_error_text": self._last_error,
                     "verify_auth_failure_detected": False,
                 }
-                # 完整长期凭据存在时，atomic rebuild 是唯一恢复路径；失败不得
-                # 降级到没有明确凭据能力的 MiAccount.login/full login。
+                # 三字段最小能力存在时，atomic rebuild 是唯一恢复路径；失败不得
+                # 降级到不存在于当前 Config 的 legacy full-login。
                 raise RuntimeError(self._last_error)
 
-            legacy_credentials = self._configured_legacy_credentials(auth_data)
-            if not legacy_credentials:
-                self._last_error = "persistent auth capability unavailable; QR login required"
-                self._last_recovery_stage = "read_auth"
-                self._last_recovery_error_code = "missing_persistent_auth_fields"
-                failure_classification = self._classify_auth_failure(self._last_error, {})
-                raise RuntimeError(self._last_error)
-
-            login_session = ClientSession()
-            login_session_used = True
-            new_account = self._new_isolated_mi_account(
-                login_session, legacy_credentials[0], legacy_credentials[1]
-            )
-            self.set_token(new_account)
-
-            def _snapshot_runtime_token_state(account):
-                token = dict(getattr(account, "token", {}) or {})
-                micoapi_value = token.get("micoapi")
-                has_micoapi = bool(
-                    isinstance(micoapi_value, (tuple, list))
-                    and len(micoapi_value) >= 2
-                    and micoapi_value[0]
-                    and micoapi_value[1]
-                )
-                cookie_ready = False
-                try:
-                    session = getattr(account, "session", None)
-                    cookie_jar = getattr(session, "cookie_jar", None)
-                    if cookie_jar is not None:
-                        cookie_ready = bool(
-                            cookie_jar.filter_cookies("https://api2.mina.mi.com")
-                        )
-                except Exception:
-                    cookie_ready = False
-                return {
-                    "has_passToken": bool(token.get("passToken")),
-                    "has_yetAnotherServiceToken": bool(token.get("yetAnotherServiceToken")),
-                    "has_serviceToken": bool(token.get("serviceToken")),
-                    "has_micoapi": has_micoapi,
-                    "cookie_ready": cookie_ready,
-                    "signature": (
-                        bool(token.get("passToken")),
-                        bool(token.get("userId")),
-                        bool(token.get("deviceId")),
-                        bool(token.get("psecurity")),
-                        bool(token.get("ssecurity")),
-                        bool(token.get("cUserId")),
-                        bool(token.get("serviceToken")),
-                        bool(token.get("yetAnotherServiceToken")),
-                        has_micoapi,
-                        cookie_ready,
-                    ),
-                }
-
-            pre_login_snapshot = _snapshot_runtime_token_state(new_account)
-            self._last_login_trace = {
-                "stage": "login_input_snapshot",
-                "reason": reason,
-                "has_passToken": bool(auth_data.get("passToken")),
-                "has_psecurity": bool(auth_data.get("psecurity")),
-                "has_ssecurity": bool(auth_data.get("ssecurity")),
-                "has_userId": bool(auth_data.get("userId")),
-                "has_cUserId": bool(auth_data.get("cUserId")),
-                "has_deviceId": bool(auth_data.get("deviceId")),
-                "has_serviceToken": pre_login_serviceToken_present,
-                "has_yetAnotherServiceToken": pre_login_yetAnotherServiceToken_present,
-                "pre_login_serviceToken_present": pre_login_serviceToken_present,
-                "pre_login_yetAnotherServiceToken_present": pre_login_yetAnotherServiceToken_present,
-                "pre_login_micoapi_present": pre_login_micoapi_present,
-                "post_login_serviceToken_present": False,
-                "post_login_yetAnotherServiceToken_present": False,
-                "post_login_micoapi_present": False,
-                "token_changed_after_login": False,
-                "candidate_runtime_account_ready": False,
-                "candidate_runtime_cookie_ready": False,
-                "login_result": False,
-                "login_error": "",
-                "verify_method": verify_method,
-                "ts": int(time.time() * 1000),
-                "runtime_swap_attempted": False,
-                "runtime_swap_applied": False,
-                "verify_attempted": False,
-                "verify_error_text": "",
-                "verify_auth_failure_detected": False,
-                "login_error_text": "",
-            }
-
-            try:
-                login_result = bool(await new_account.login("micoapi"))
-            except Exception as login_err:
-                login_error_text = str(login_err)[:200]
-                self.log.warning(f"login failed, trying direct: {login_err}")
-                self._last_login_trace = {
-                    **self._last_login_trace,
-                    "stage": "login_http_exchange",
-                    "result": "failed",
-                    "error": login_error_text,
-                    "login_error": login_error_text,
-                    "login_error_text": login_error_text,
-                }
-            else:
-                if not login_result:
-                    login_error_text = "login returned false"
-
-            post_login_snapshot = _snapshot_runtime_token_state(new_account)
-            token_changed_after_login = (
-                pre_login_snapshot["signature"] != post_login_snapshot["signature"]
-            )
-            candidate_runtime_account_ready = bool(
-                login_result
-                and post_login_snapshot["has_micoapi"]
-                and post_login_snapshot["has_serviceToken"]
-            )
-            candidate_runtime_cookie_ready = bool(
-                login_result and post_login_snapshot["cookie_ready"]
-            )
-            self._last_login_trace = {
-                **self._last_login_trace,
-                "login_result": bool(login_result),
-                "login_error": login_error_text,
-                "post_login_serviceToken_present": post_login_snapshot["has_serviceToken"],
-                "post_login_yetAnotherServiceToken_present": post_login_snapshot["has_yetAnotherServiceToken"],
-                "post_login_micoapi_present": post_login_snapshot["has_micoapi"],
-                "token_changed_after_login": token_changed_after_login,
-                "candidate_runtime_account_ready": candidate_runtime_account_ready,
-                "candidate_runtime_cookie_ready": candidate_runtime_cookie_ready,
-            }
-
-            if not candidate_runtime_account_ready:
-                self._last_error = "Login failed"
-                raise RuntimeError(login_error_text or self._last_error)
-
-            try:
-                new_mina_service = MiNAService(new_account)
-            except TypeError:
-                new_mina_service = MiNAService()
-            try:
-                new_miio_service = MiIOService(new_account)
-            except TypeError:
-                new_miio_service = MiIOService()
-
-            runtime_swap_attempted = True
-            self._last_login_trace = {
-                **self._last_login_trace,
-                "runtime_swap_attempted": True,
-            }
-
-            verify_attempted = True
-            try:
-                await new_mina_service.device_list()
-            except Exception as verify_err:
-                verify_error_text = str(verify_err)[:200]
-                raise
-
-            self.mina_service = new_mina_service
-            self.miio_service = new_miio_service
-            self.login_account = new_account
-            if login_session_used:
-                self.mi_session = login_session
-                self.cookie_jar = self.mi_session.cookie_jar
-            self.login_signature = self._get_login_signature()
-            self._runtime_generation += 1
-            if login_session_used and old_mi_session is not login_session:
-                try:
-                    await old_mi_session.close()
-                except Exception:
-                    pass
-            if not login_session_used:
-                try:
-                    await login_session.close()
-                except Exception:
-                    pass
-            now = time.time()
-            self._last_ok_ts = now
-            self._last_runtime_verify_ts = now
-            self._last_session_success_ts = now
-            self._last_login_ts = now
-            self._last_error = ""
-            self._retry_count = 0
-            self._retry_count_effective = 0
-            self._lock_counter = 0
-            self._probe_failure_count = 0
-            self._recovery_failure_count = 0
-            self._mark_verified_runtime_recovered()
-            self._last_recovery_result = "ok"
-            self._last_recovery_stage = "verify"
-            self._last_recovery_error_code = ""
-            self._last_recovery_error_message = ""
-            self._last_retry_increment_reason = ""
-            self._last_login_trace = {
-                **self._last_login_trace,
-                "stage": "post_login_runtime_seed",
-                "result": "ok",
-                "login_result": bool(login_result),
-                "login_error": login_error_text,
-                "post_login_serviceToken_present": bool(
-                    new_account.token.get("serviceToken")
-                ),
-                "post_login_yetAnotherServiceToken_present": bool(
-                    new_account.token.get("yetAnotherServiceToken")
-                ),
-                "post_login_micoapi_present": bool(
-                    isinstance(new_account.token.get("micoapi"), (tuple, list))
-                    and len(new_account.token.get("micoapi", (None, None))) >= 2
-                    and bool(new_account.token.get("micoapi", (None, None))[0])
-                    and bool(new_account.token.get("micoapi", (None, None))[1])
-                ),
-                "token_changed_after_login": token_changed_after_login,
-                "candidate_runtime_account_ready": candidate_runtime_account_ready,
-                "candidate_runtime_cookie_ready": candidate_runtime_cookie_ready,
-                "runtime_seed_has_serviceToken": bool(
-                    new_account.token.get("serviceToken")
-                ),
-                "runtime_seed_has_yetAnotherServiceToken": bool(
-                    new_account.token.get("yetAnotherServiceToken")
-                ),
-                "runtime_seed_has_ssecurity": bool(
-                    new_account.token.get("micoapi", (None, None))[0]
-                ),
-                "runtime_swap_attempted": runtime_swap_attempted,
-                "runtime_swap_applied": True,
-                "verify_method": verify_method,
-                "verify_attempted": verify_attempted,
-                "verify_error_text": "",
-                "verify_auth_failure_detected": False,
-                "login_error_text": login_error_text,
-            }
-
-            self._persist_auth_data(auth_data, new_account, "login")
-            self.log.info("认证成功")
-            return True
+            # Config exposes only HTTP Basic credentials, not Xiaomi account/password.
+            # There is therefore no legacy full-login capability in this application.
+            # Missing the three-field exchange capability goes straight to QR/manual flow;
+            # never invoke a password-based full login.
+            self._last_error = "persistent auth capability unavailable; QR login required"
+            self._last_recovery_stage = "read_auth"
+            self._last_recovery_error_code = "missing_persistent_auth_fields"
+            failure_classification = self._classify_auth_failure(self._last_error, {})
+            raise RuntimeError(self._last_error)
 
         except Exception as e:
             self._last_error = str(e)[:200]
@@ -1226,12 +976,6 @@ class SimpleAuthManager:
                 "login_error_text": login_error_text,
                 **failure_classification,
             }
-
-            if login_session is not None:
-                try:
-                    await login_session.close()
-                except Exception:
-                    pass
 
             self._recovery_failure_count += 1
             counted, increment_reason = self._should_count_lock_failure(
@@ -1896,7 +1640,7 @@ class SimpleAuthManager:
     ) -> dict[str, Any]:
         """刷新短会话并在 verify 后一次性提交 token/runtime。
 
-        scheduled refresh 专用：不走 MiAccount.login，也不启用 MiJia 的 destructive
+        scheduled refresh 专用：不走 password-based full login，也不启用 MiJia 的 destructive
         fallback。primary persistent-auth 调用只生成候选 auth_data；候选 runtime
         验证失败时，token_store、saveTime 和当前 runtime 均保持不变。
         """

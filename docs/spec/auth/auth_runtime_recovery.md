@@ -110,7 +110,10 @@ user_action_required = true
 
 - 明确的 refresh/passport/service token expired
 - 必要认证字段结构缺失
-- 明确的 need/scan QR、account locked、login required 证据
+
+need/scan QR、account locked、login required 只证明需要人工介入或交互挑战，
+只映射 `need_qr_scan/user_action_required` 与对应 `auth_class`，不得设置
+`long_term_expired`。
 
 `70016` 分类为 `credential_session_rejected`，`87001` 或 `captchaUrl` 分类为
 `interactive_captcha_challenge`；这两类不得设置 `long_term_expired`，但无头恢复可设置
