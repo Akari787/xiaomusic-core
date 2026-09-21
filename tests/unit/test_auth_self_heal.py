@@ -1024,7 +1024,7 @@ async def test_rebuild_service_cookies_short_circuits_when_nonce_missing(
     assert out["failed_reason"] == "service_login_response_missing_nonce"
     assert out["http_stage"] == "redirect"
     assert out["writeback_target"] == "none"
-    assert out["used_path"] == "miaccount_persistent_auth_login"
+    assert out["used_path"] == "miaccount_persistent_auth_exchange"
     assert calls["security"] == 0
     diag = out["diagnostic"]
     assert diag["service_login_code"] == 0
@@ -1135,7 +1135,7 @@ async def test_rebuild_short_session_reports_service_token_not_written_when_fall
             "http_stage": "redirect",
             "writeback_target": "none",
             "sid": sid,
-            "used_path": "miaccount_persistent_auth_login",
+            "used_path": "miaccount_persistent_auth_exchange",
         }
 
     async def _fallback(*, auth_dir, sid="micoapi"):  # noqa: ARG001
@@ -1163,7 +1163,7 @@ async def test_rebuild_short_session_reports_service_token_not_written_when_fall
     assert out["error_code"] == "service_token_not_written"
     assert out["failed_reason"] == "service_token_not_written"
     assert out["writeback_target"] == "none"
-    assert out["path_attempts"][0]["used_path"] == "miaccount_persistent_auth_login"
+    assert out["path_attempts"][0]["used_path"] == "miaccount_persistent_auth_exchange"
     assert out["path_attempts"][1]["used_path"] == "mijia_persistent_auth_login"
 
 
@@ -1273,7 +1273,7 @@ async def test_rebuild_short_session_uses_second_persistent_path_before_refresh_
             "ok": False,
             "error_code": "redirect_failed",
             "failed_reason": "redirect_http_status",
-            "used_path": "miaccount_persistent_auth_login",
+            "used_path": "miaccount_persistent_auth_exchange",
             "sid": sid,
         }
 
@@ -1360,7 +1360,7 @@ async def test_init_all_data_records_recovery_flow_on_success(auth_manager):
     async def _rebuild(reason):  # noqa: ARG001
         auth_manager._last_short_session_rebuild_detail = {
             "ok": True,
-            "used_path": "miaccount_persistent_auth_login",
+            "used_path": "miaccount_persistent_auth_exchange",
         }
         return True
 
@@ -1562,7 +1562,7 @@ async def test_ensure_logged_in_updates_cookie_rebuild_outcome_for_miaccount_str
     async def _short_rebuild(reason):  # noqa: ARG001
         auth_manager._last_short_session_rebuild_detail = {
             "ok": True,
-            "used_path": "miaccount_persistent_auth_login",
+            "used_path": "miaccount_persistent_auth_exchange",
         }
         return True
 

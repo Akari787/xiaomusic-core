@@ -105,7 +105,7 @@ async def test_rebuild_short_session_from_persistent_auth_records_success_state(
     async def _fake_relogin(before=None, reason="", sid="micoapi"):
         return {
             "ok": True,
-            "used_path": "miaccount_persistent_auth_login",
+            "used_path": "miaccount_persistent_auth_exchange",
             "serviceToken": "st",
             "yetAnotherServiceToken": "st2",
         }
@@ -124,7 +124,7 @@ async def test_rebuild_short_session_from_persistent_auth_records_success_state(
     out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-success", atomic=False)
 
     assert out["ok"] is True
-    assert out["used_path"] == "miaccount_persistent_auth_login"
+    assert out["used_path"] == "miaccount_persistent_auth_exchange"
     assert out["service_token_written"] is True
     state = manager.auth_short_session_rebuild_debug_state()["last_short_session_rebuild"]
     assert state["result"] == "ok"
@@ -151,7 +151,7 @@ async def test_rebuild_short_session_from_persistent_auth_records_verify_failure
     async def _fake_relogin(before=None, reason="", sid="micoapi"):
         return {
             "ok": True,
-            "used_path": "miaccount_persistent_auth_login",
+            "used_path": "miaccount_persistent_auth_exchange",
             "serviceToken": "st",
         }
 
@@ -197,6 +197,7 @@ async def test_try_miaccount_persistent_auth_relogin_writes_service_token(auth_m
         async def _serviceLogin(self, path):
             return {
                 "code": 0,
+                "captchaUrl": None,
                 "location": "https://api2.mina.mi.com/sts?nonce=abc",
                 "ssecurity": "ss-new",
             }
@@ -213,7 +214,7 @@ async def test_try_miaccount_persistent_auth_relogin_writes_service_token(auth_m
     )
 
     assert out["ok"] is True
-    assert out["used_path"] == "miaccount_persistent_auth_login"
+    assert out["used_path"] == "miaccount_persistent_auth_exchange"
     assert store.get()["serviceToken"] == "new-st"
     assert store.get()["yetAnotherServiceToken"] == "new-st"
 
@@ -252,7 +253,7 @@ async def test_try_login_prefers_rebuild_when_short_session_missing(auth_manager
             {
                 "ok": True,
                 "result": "ok",
-                "used_path": "miaccount_persistent_auth_login",
+                "used_path": "miaccount_persistent_auth_exchange",
                 "service_token_written": True,
                 "runtime_rebind_result": "ok",
                 "verify_result": "ok",
@@ -262,7 +263,7 @@ async def test_try_login_prefers_rebuild_when_short_session_missing(auth_manager
         return {
             "ok": True,
             "result": "ok",
-            "used_path": "miaccount_persistent_auth_login",
+            "used_path": "miaccount_persistent_auth_exchange",
             "service_token_written": True,
             "runtime_rebind_result": "ok",
             "verify_result": "ok",
@@ -305,7 +306,7 @@ async def test_try_login_short_session_rebuild_failure_exposes_rebuild_failed_st
             {
                 "ok": False,
                 "result": "failed",
-                "used_path": "miaccount_persistent_auth_login",
+                "used_path": "miaccount_persistent_auth_exchange",
                 "error_code": "redirect_http_401",
                 "failed_reason": "redirect_http_401",
                 "service_token_written": False,
@@ -316,7 +317,7 @@ async def test_try_login_short_session_rebuild_failure_exposes_rebuild_failed_st
         return {
             "ok": False,
             "result": "failed",
-            "used_path": "miaccount_persistent_auth_login",
+            "used_path": "miaccount_persistent_auth_exchange",
             "error_code": "redirect_http_401",
             "failed_reason": "redirect_http_401",
             "service_token_written": False,
@@ -353,7 +354,7 @@ async def test_rebuild_short_session_fallback_path_success_is_observable(auth_ma
     async def _primary(before=None, reason="", sid="micoapi"):
         return {
             "ok": False,
-            "used_path": "miaccount_persistent_auth_login",
+            "used_path": "miaccount_persistent_auth_exchange",
             "error_code": "redirect_missing_nonce",
             "failed_reason": "service_login_response_missing_nonce",
         }
@@ -416,7 +417,7 @@ async def test_rebuild_short_session_flow_records_failed_fallback_and_public_sta
     async def _primary(before=None, reason="", sid="micoapi"):
         return {
             "ok": False,
-            "used_path": "miaccount_persistent_auth_login",
+            "used_path": "miaccount_persistent_auth_exchange",
             "error_code": "redirect_missing_nonce",
             "failed_reason": "service_login_response_missing_nonce",
         }

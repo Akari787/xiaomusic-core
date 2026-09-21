@@ -163,10 +163,34 @@ def is_long_term_auth_failure_text(text: str) -> bool:
     )
 
 
-def classify_auth_challenge(text: str) -> str:
-    """Return the stable auth challenge category carried by an error."""
-    lowered = str(text or "").lower()
-    if "captchaurl" in lowered or "87001" in lowered or "captcha" in lowered:
+def classify_auth_challenge(evidence: Any) -> str:
+    """Classify structured service-login evidence without null-key false positives."""
+    payload = evidence
+    if isinstance(payload, str):
+        try:
+            parsed = json.loads(payload)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            payload = parsed
+
+    if isinstance(payload, dict):
+        code = payload.get("code")
+        try:
+            code = int(code) if code is not None else None
+        except (TypeError, ValueError):
+            code = None
+        captcha_url = payload.get("captchaUrl")
+        if captcha_url is None:
+            captcha_url = payload.get("captchaurl")
+        if code == 87001 or bool(captcha_url):
+            return "interactive_captcha_challenge"
+        if code == 70016:
+            return "credential_session_rejected"
+        return ""
+
+    lowered = str(evidence or "").lower()
+    if "87001" in lowered:
         return "interactive_captcha_challenge"
     if "70016" in lowered:
         return "credential_session_rejected"
@@ -489,11 +513,16 @@ class SimpleAuthManager:
         }
 
     def _classify_auth_failure(
-        self, err_text: str, auth_data: dict[str, Any]
+        self,
+        err_text: str,
+        auth_data: dict[str, Any],
+        auth_evidence: Any = None,
     ) -> dict[str, Any]:
         """Classify failures without treating private SSO codes as token expiry."""
         lowered = str(err_text or "").lower()
-        challenge = classify_auth_challenge(lowered)
+        challenge = classify_auth_challenge(
+            auth_evidence if auth_evidence is not None else lowered
+        )
         if is_network_error(exc=RuntimeError(err_text)):
             return {
                 "error_type": "network_error",
@@ -1336,7 +1365,7 @@ class SimpleAuthManager:
         if not self._has_persistent_auth_fields(auth_data):
             return {
                 "ok": False,
-                "used_path": "miaccount_persistent_auth_login",
+                "used_path": "miaccount_persistent_auth_exchange",
                 "error_code": "missing_persistent_auth_fields",
                 "failed_reason": "missing_persistent_auth_fields",
                 "error_message": "missing_persistent_auth_fields",
@@ -1345,7 +1374,7 @@ class SimpleAuthManager:
                 "sid": sid,
                 "diagnostic": {
                     "reason": reason,
-                    "via": "miaccount_persistent_auth_login",
+                    "via": "miaccount_persistent_auth_exchange",
                     "response_valid": False,
                 },
             }
@@ -1360,7 +1389,7 @@ class SimpleAuthManager:
             if not isinstance(resp, dict):
                 return {
                     "ok": False,
-                    "used_path": "miaccount_persistent_auth_login",
+                    "used_path": "miaccount_persistent_auth_exchange",
                     "error_code": "invalid_service_login_response",
                     "failed_reason": "invalid_service_login_response",
                     "error_message": "invalid_service_login_response",
@@ -1369,7 +1398,7 @@ class SimpleAuthManager:
                     "sid": sid,
                     "diagnostic": {
                         "reason": reason,
-                        "via": "miaccount_persistent_auth_login",
+                        "via": "miaccount_persistent_auth_exchange",
                         "response_valid": False,
                     },
                 }
@@ -1382,7 +1411,7 @@ class SimpleAuthManager:
             ssecurity = str(resp.get("ssecurity", "") or auth_data.get("ssecurity", "") or "")
             diagnostic = {
                 "reason": reason,
-                "via": "miaccount_persistent_auth_login",
+                "via": "miaccount_persistent_auth_exchange",
                 "service_login_code": resp.get("code"),
                 "has_location": bool(location),
                 "has_nonce": bool(nonce),
@@ -1391,12 +1420,22 @@ class SimpleAuthManager:
                 "security_token_service_invoked": False,
             }
             response_text = json.dumps(resp, ensure_ascii=False, default=str)
-            if int(resp.get("code", -1)) != 0 or "captchaUrl" in resp or "captchaurl" in response_text.lower():
+            response_code = resp.get("code")
+            try:
+                response_code = int(response_code) if response_code is not None else None
+            except (TypeError, ValueError):
+                response_code = None
+            captcha_url = resp.get("captchaUrl")
+            if captcha_url is None:
+                captcha_url = resp.get("captchaurl")
+            if (response_code is not None and response_code != 0) or bool(captcha_url):
                 error_text = f"service_login_code_{resp.get('code')} {response_text[:500]}"
-                classification = self._classify_auth_failure(error_text, auth_data)
+                classification = self._classify_auth_failure(
+                    error_text, auth_data, auth_evidence=resp
+                )
                 return {
                     "ok": False,
-                    "used_path": "miaccount_persistent_auth_login",
+                    "used_path": "miaccount_persistent_auth_exchange",
                     "error_code": "service_login_failed",
                     "failed_reason": error_text,
                     "error_message": str(resp),
@@ -1409,7 +1448,7 @@ class SimpleAuthManager:
             if not location:
                 return {
                     "ok": False,
-                    "used_path": "miaccount_persistent_auth_login",
+                    "used_path": "miaccount_persistent_auth_exchange",
                     "error_code": "redirect_missing_location",
                     "failed_reason": "service_login_response_missing_location",
                     "error_message": "serviceLogin response missing location",
@@ -1422,7 +1461,7 @@ class SimpleAuthManager:
                 diagnostic["blocked_before_security_token_service"] = True
                 return {
                     "ok": False,
-                    "used_path": "miaccount_persistent_auth_login",
+                    "used_path": "miaccount_persistent_auth_exchange",
                     "error_code": "redirect_missing_nonce",
                     "failed_reason": "service_login_response_missing_nonce",
                     "error_message": "serviceLogin response missing nonce; skip _securityTokenService",
@@ -1435,7 +1474,7 @@ class SimpleAuthManager:
                 diagnostic["blocked_before_security_token_service"] = True
                 return {
                     "ok": False,
-                    "used_path": "miaccount_persistent_auth_login",
+                    "used_path": "miaccount_persistent_auth_exchange",
                     "error_code": "redirect_missing_ssecurity",
                     "failed_reason": "service_login_response_missing_ssecurity",
                     "error_message": "serviceLogin response missing ssecurity",
@@ -1451,7 +1490,7 @@ class SimpleAuthManager:
             except Exception as exc:
                 return {
                     "ok": False,
-                    "used_path": "miaccount_persistent_auth_login",
+                    "used_path": "miaccount_persistent_auth_exchange",
                     "error_code": "security_token_service_failed",
                     "failed_reason": str(exc)[:200],
                     "error_message": str(exc)[:200],
@@ -1463,7 +1502,7 @@ class SimpleAuthManager:
             if not service_token:
                 return {
                     "ok": False,
-                    "used_path": "miaccount_persistent_auth_login",
+                    "used_path": "miaccount_persistent_auth_exchange",
                     "error_code": "empty_service_token",
                     "failed_reason": "empty_service_token",
                     "error_message": "empty_service_token",
@@ -1489,7 +1528,7 @@ class SimpleAuthManager:
                 writeback_target = "token_store"
             return {
                 "ok": True,
-                "used_path": "miaccount_persistent_auth_login",
+                "used_path": "miaccount_persistent_auth_exchange",
                 "serviceToken": service_token,
                 "yetAnotherServiceToken": service_token,
                 "ssecurity": ssecurity,
@@ -1680,7 +1719,7 @@ class SimpleAuthManager:
                 "primary_error_code": "missing_persistent_auth_fields",
                 "primary_result": "failed",
                 "failed_reason": "missing_persistent_auth_fields",
-                "used_path": "miaccount_persistent_auth_login",
+                "used_path": "miaccount_persistent_auth_exchange",
                 "atomic": True,
             }
 
@@ -1718,7 +1757,7 @@ class SimpleAuthManager:
                 "primary_error_code": str(primary.get("error_code") or "persistent_auth_relogin_failed"),
                 "primary_result": "failed",
                 "failed_reason": primary_error,
-                "used_path": "miaccount_persistent_auth_login",
+                "used_path": "miaccount_persistent_auth_exchange",
                 **classification,
                 "atomic": True,
                 "fallback": "disabled_for_scheduled_refresh",
@@ -1734,7 +1773,7 @@ class SimpleAuthManager:
                 "primary_result": "ok",
                 "primary_error_code": "",
                 "failed_reason": str(candidate.get("error") or "runtime candidate verify failed"),
-                "used_path": "miaccount_persistent_auth_login",
+                "used_path": "miaccount_persistent_auth_exchange",
                 "service_token_written": False,
                 "runtime_rebind_result": "skipped",
                 "verify_result": "failed",
@@ -1765,7 +1804,7 @@ class SimpleAuthManager:
                 "primary_result": "ok",
                 "primary_error_code": "",
                 "failed_reason": str(exc)[:200],
-                "used_path": "miaccount_persistent_auth_login",
+                "used_path": "miaccount_persistent_auth_exchange",
                 "service_token_written": False,
                 "runtime_rebind_result": "skipped",
                 "verify_result": "ok",
@@ -1802,7 +1841,7 @@ class SimpleAuthManager:
             "result": "ok",
             "primary_result": "ok",
             "primary_error_code": "",
-            "used_path": "miaccount_persistent_auth_login",
+            "used_path": "miaccount_persistent_auth_exchange",
             "service_token_written": bool(self.token_store is not None and not env_override),
             "runtime_rebind_result": "ok",
             "verify_result": "ok",
@@ -1827,7 +1866,7 @@ class SimpleAuthManager:
                 "started_at": started_at,
                 "primary_attempt": {
                     "attempt_at": started_at,
-                    "used_path": out.get("used_path", "miaccount_persistent_auth_login"),
+                    "used_path": out.get("used_path", "miaccount_persistent_auth_exchange"),
                     "error_code": out.get("primary_error_code", "")
                     if not out.get("primary_result") == "ok"
                     else "",
@@ -1848,7 +1887,7 @@ class SimpleAuthManager:
                     else "",
                 },
                 "result": "ok" if out.get("ok") else "failed",
-                "used_path": out.get("used_path", "miaccount_persistent_auth_login"),
+                "used_path": out.get("used_path", "miaccount_persistent_auth_exchange"),
                 "atomic": True,
                 "finished_at": finished_at,
             })
@@ -1876,7 +1915,7 @@ class SimpleAuthManager:
             out = {
                 "ok": False,
                 "result": "failed",
-                "used_path": "miaccount_persistent_auth_login",
+                "used_path": "miaccount_persistent_auth_exchange",
                 "error_code": "missing_persistent_auth_fields",
                 "failed_reason": "missing_persistent_auth_fields",
                 "service_token_written": False,
@@ -1885,12 +1924,12 @@ class SimpleAuthManager:
             }
             flow["primary_attempt"] = {
                 "attempt_at": started_at,
-                "used_path": "miaccount_persistent_auth_login",
+                "used_path": "miaccount_persistent_auth_exchange",
                 "error_code": "missing_persistent_auth_fields",
                 "result": "failed",
             }
             flow["result"] = "failed"
-            flow["used_path"] = "miaccount_persistent_auth_login"
+            flow["used_path"] = "miaccount_persistent_auth_exchange"
             flow["finished_at"] = int(time.time() * 1000)
             self._record_short_session_rebuild_state(out)
             self._record_auth_recovery_flow_state(flow)
@@ -1903,7 +1942,7 @@ class SimpleAuthManager:
         )
         flow["primary_attempt"] = {
             "attempt_at": int(time.time() * 1000),
-            "used_path": str(primary.get("used_path", "") or "miaccount_persistent_auth_login"),
+            "used_path": str(primary.get("used_path", "") or "miaccount_persistent_auth_exchange"),
             "error_code": str(primary.get("error_code", "") or ""),
             "result": "ok" if primary.get("ok") else "failed",
         }
@@ -1925,7 +1964,7 @@ class SimpleAuthManager:
             else:
                 relogin = fallback if fallback else primary
 
-        used_path = str(relogin.get("used_path", "") or "miaccount_persistent_auth_login")
+        used_path = str(relogin.get("used_path", "") or "miaccount_persistent_auth_exchange")
         flow["used_path"] = used_path
         if not bool(relogin.get("ok", False)):
             out = {
@@ -2637,12 +2676,9 @@ class SimpleAuthManager:
             )
         )
         if manual_login_required:
-            self._state = self.STATE_LOCKED
-            self._locked_until = time.time() + 300
-            self._last_manual_login_required_reason = (
+            self._enter_manual_login_gate(
                 self._last_recovery_error_code or "manual auth required"
             )
-            self._last_lock_transition_reason = "manual_reload:manual_login_required"
         if (
             not success
             and preserve_healthy_runtime

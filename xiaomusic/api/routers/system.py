@@ -212,7 +212,7 @@ async def getsetting(need_device_list: bool = False):
         data["jellyfin_api_key"] = "******"
 
     def _token_valid(j: dict) -> bool:
-        # auth token must contain serviceToken to be usable
+        # Current short session is usable and its related persistent fields are present.
         st = j.get("serviceToken") or j.get("yetAnotherServiceToken")
         return bool(j.get("userId") and j.get("passToken") and j.get("ssecurity") and st)
 

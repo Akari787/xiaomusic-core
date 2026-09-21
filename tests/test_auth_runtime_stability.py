@@ -377,7 +377,7 @@ async def test_expired_service_token_probe_uses_atomic_rebuild_not_full_login(au
     manager.mina_service = _FailingRuntime()
     atomic = AsyncMock(return_value={
         "ok": True,
-        "used_path": "miaccount_persistent_auth_login",
+        "used_path": "miaccount_persistent_auth_exchange",
         "runtime_rebind_result": "ok",
         "verify_result": "ok",
     })
@@ -1445,6 +1445,7 @@ async def test_scheduled_service_login_challenge_keeps_healthy_and_suspends(
     account._serviceLogin = AsyncMock(
         return_value={
             "code": code,
+            "captchaUrl": None,
             "location": "https://account.example/redirect?nonce=n1",
             "nonce": "n1",
             "ssecurity": "ssec",

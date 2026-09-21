@@ -13,6 +13,8 @@
 | short session | `serviceToken`、`yetAnotherServiceToken` | 短期业务会话；旧 token 存在不代表仍有效 |
 | runtime | account、Mina/MiIO service、session、cookie、signature、device_id | 进程内、必须经过 verify 才能成为当前运行态 |
 
+当前 primary 观测值为 `miaccount_persistent_auth_exchange`：它表示 `passToken → serviceToken` exchange via `serviceLogin`，不是 `MiAccount.login`。
+
 `AUTH_ACCESS_TOKEN` / `AUTH_REFRESH_TOKEN` 仅是运行时覆盖，不是持久事实：
 
 - 不得写入 TokenStore 或磁盘。

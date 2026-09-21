@@ -68,7 +68,7 @@
 **不包括**：
 - manual runtime reload（`POST /api/auth/refresh`）
 - manual QR login
-- primary path（`miaccount_persistent_auth_login`）
+- primary path（`miaccount_persistent_auth_exchange`）：`passToken → serviceToken` exchange via serviceLogin；不调用 `MiAccount.login`
 
 ---
 

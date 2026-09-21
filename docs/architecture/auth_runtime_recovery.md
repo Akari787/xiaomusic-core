@@ -14,6 +14,8 @@
 `TokenStore`/`conf/auth.json` 是持久认证事实来源。env credential 是运行时覆盖，
 不属于持久事实，禁止写回磁盘。
 
+当前 primary 观测值为 `miaccount_persistent_auth_exchange`：它表示 `passToken → serviceToken` exchange via `serviceLogin`，不是 `MiAccount.login`。
+
 ## 2. 认证入口
 
 ### 2.1 `ensure_auth()` / `_try_login()`
