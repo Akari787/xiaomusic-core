@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -156,8 +156,24 @@ async def test_startup_env_override_does_not_use_disk_save_time(
         assert debug["login_at"] == 0.0
         assert debug["expires_at"] == 0.0
         assert debug["ttl_remaining_seconds"] == 0
+        assert manager._auth_refresh_mode == "unknown"
     finally:
         await manager.mi_session.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("login_at_ts", [float("nan"), float("inf"), float("-inf")])
+async def test_sync_auth_ttl_nonfinite_login_at_is_zero(auth_setup, login_at_ts):
+    _, manager = auth_setup
+    valid_data = {"saveTime": 1789970602396}
+
+    manager._sync_auth_ttl(valid_data, login_at_ts=login_at_ts)
+
+    debug = manager.auth_debug_state()
+    assert debug["login_at"] == 0.0
+    assert debug["expires_at"] == 0.0
+    assert debug["ttl_remaining_seconds"] == 0
+    assert manager._auth_refresh_mode == "interval_fallback"
 
 
 @pytest.mark.asyncio
