@@ -173,17 +173,26 @@ async def get_logint_status(api: MiJiaAPI, lp: str):
     global qrcode_login_error
     try:
         await asyncio.to_thread(api.get_logint_status, lp)
-        qrcode_login_error = ""
-        # 扫码登录成功后立即重建认证状态，避免前端刷新后仍使用旧会话
+        am = getattr(xiaomusic, "auth_manager", None)
+        if am is None or not hasattr(am, "manual_reload_runtime"):
+            raise RuntimeError("auth manager runtime reload unavailable")
+
+        # QR 登录已将新 auth 写入磁盘；先 reload 并用其中现有 short session
+        # 构建、验证、原子替换 runtime。这里严禁再次做 passToken exchange/login。
+        refreshed = await am.manual_reload_runtime(
+            reason="qrcode_login_success", rebind_current_auth=True
+        )
+        if not bool(refreshed.get("refreshed")) or not bool(
+            refreshed.get("runtime_auth_ready")
+        ):
+            raise RuntimeError(
+                str(refreshed.get("last_error") or "qrcode runtime rebind failed")
+            )
+
+        # 认证 runtime 已 verified 后，才刷新设备/媒体数据；reinit 此时只能复用
+        # 已绑定 runtime，不得成为 full login/exchange 的入口。
         await xiaomusic.reinit()
-        # If auth was previously locked by backoff/circuit-breaker,
-        # clear the lock after successful QR login + reinit.
-        try:
-            am = getattr(xiaomusic, "auth_manager", None)
-            if am is not None and hasattr(am, "clear_auth_lock"):
-                am.clear_auth_lock(reason="qrcode_login_success", mode="healthy")
-        except Exception:
-            log.exception("clear auth lock after qrcode login failed")
+        qrcode_login_error = ""
     except asyncio.CancelledError:
         log.info("qrcode login polling cancelled")
         raise

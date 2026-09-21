@@ -473,7 +473,7 @@ class SimpleAuthManager:
         return True
 
     def _mark_verified_runtime_recovered(self) -> None:
-        """Verified runtime success clears manual and scheduled gates."""
+        """Verified runtime success clears manual/scheduled gates and old errors."""
         self._state = self.STATE_HEALTHY
         self._locked_until = 0
         self._last_manual_login_required_reason = ""
@@ -481,6 +481,9 @@ class SimpleAuthManager:
         self._scheduled_refresh_suspended = False
         self._scheduled_refresh_suspend_reason = ""
         self._scheduled_refresh_suspend_code = ""
+        self._last_error = ""
+        self._last_recovery_error_code = ""
+        self._last_recovery_error_message = ""
 
     async def ensure_logged_in(
         self,
@@ -2580,23 +2583,30 @@ class SimpleAuthManager:
     # ==================== API 兼容接口 ====================
 
     async def _atomic_runtime_rebind_current_auth(
-        self, reason: str = "", _transition_owned: bool = False
+        self,
+        reason: str = "",
+        _transition_owned: bool = False,
+        used_path: str = "runtime_rebind_env_override",
     ) -> dict[str, Any]:
         if not _transition_owned:
             async with self._auth_transition_lock:
                 return await self._atomic_runtime_rebind_current_auth(
-                    reason=reason, _transition_owned=True
+                    reason=reason, _transition_owned=True, used_path=used_path
                 )
         candidate = await self._build_verified_runtime_candidate(self._get_auth_data())
         if not candidate.get("ok"):
-            return {
+            out = {
                 "ok": False,
                 "result": "failed",
                 "error_code": "verify_failed",
                 "failed_reason": str(candidate.get("error") or "runtime verify failed"),
                 "runtime_rebind_result": "skipped",
                 "verify_result": "failed",
+                "used_path": used_path,
+                "service_token_written": False,
             }
+            self._record_short_session_rebuild_state(out)
+            return out
         old_session = self.mi_session
         new_session = candidate.get("session") or self.mi_session
         self.device_id = candidate.get("device_id") or self.device_id
@@ -2617,13 +2627,27 @@ class SimpleAuthManager:
                 await old_session.close()
             except Exception:
                 pass
-        return {
+        out = {
             "ok": True,
             "result": "ok",
             "runtime_rebind_result": "ok",
             "verify_result": "ok",
-            "used_path": "runtime_rebind_env_override",
+            "used_path": used_path,
+            "service_token_written": False,
         }
+        self._record_short_session_rebuild_state(out)
+        self._record_auth_recovery_flow_state({
+            "reason": reason,
+            "primary_attempt": {"result": "skipped", "used_path": used_path},
+            "fallback_attempt": {"result": "skipped"},
+            "rebind": {"result": "ok", "used_path": used_path},
+            "verify": {"result": "ok", "used_path": used_path},
+            "result": "ok",
+            "used_path": used_path,
+            "service_token_written": False,
+            "finished_at": int(time.time() * 1000),
+        })
+        return out
 
     async def manual_reload_runtime(
         self, reason: str = "manual_refresh_runtime", **kwargs
@@ -2643,11 +2667,19 @@ class SimpleAuthManager:
         if self.token_store is not None:
             self.token_store.reload_from_disk()
             token_store_reloaded = True
+            self._sync_auth_ttl()
         env_override = bool(
             os.getenv("AUTH_ACCESS_TOKEN") or os.getenv("AUTH_REFRESH_TOKEN")
         )
-        if env_override:
-            rebuild_out = await self._atomic_runtime_rebind_current_auth(reason=reason)
+        rebind_current_auth = bool(kwargs.get("rebind_current_auth", False))
+        if rebind_current_auth:
+            rebuild_out = await self._atomic_runtime_rebind_current_auth(
+                reason=reason, used_path="qrcode_persisted_short_session_rebind"
+            )
+        elif env_override:
+            rebuild_out = await self._atomic_runtime_rebind_current_auth(
+                reason=reason, used_path="runtime_rebind_env_override"
+            )
         else:
             rebuild_out = await self.rebuild_short_session_from_persistent_auth(
                 reason=reason,
@@ -2681,27 +2713,61 @@ class SimpleAuthManager:
             "started_at": started_at,
             "finished_at": int(time.time() * 1000),
         }
-        failure_info = self._classify_auth_failure(
-            self._last_error, self._get_auth_data()
-        )
-        if any(
-            rebuild_out.get(key)
-            for key in ("long_term_expired", "need_qr_scan", "user_action_required")
-        ):
+        if success:
+            # A successful runtime verify must not be classified from a stale/empty
+            # error string. Keep the login trace explicitly clean and auditable.
             failure_info = {
-                **failure_info,
-                "auth_class": rebuild_out.get("auth_class") or failure_info.get("auth_class", ""),
-                "long_term_expired": bool(rebuild_out.get("long_term_expired")),
-                "need_qr_scan": bool(rebuild_out.get("need_qr_scan")),
-                "user_action_required": bool(rebuild_out.get("user_action_required")),
+                "error_type": "",
+                "auth_class": "",
+                "long_term_expired": False,
+                "need_qr_scan": False,
+                "user_action_required": False,
             }
-        self._last_login_trace = {
-            **self._last_login_trace,
-            "auth_class": failure_info.get("auth_class", ""),
-            "need_qr_scan": bool(failure_info["need_qr_scan"]),
-            "user_action_required": bool(failure_info["user_action_required"]),
-            "long_term_expired": bool(failure_info["long_term_expired"]),
-        }
+            self._last_refresh_trigger = reason
+            self._last_login_trace = {
+                **self._last_login_trace,
+                "stage": "runtime_rebind_current_auth"
+                if rebind_current_auth
+                else "manual_reload_runtime",
+                "result": "ok",
+                "reason": reason,
+                "used_path": rebuild_out.get("used_path", ""),
+                "auth_class": "",
+                "error_type": "",
+                "need_qr_scan": False,
+                "user_action_required": False,
+                "long_term_expired": False,
+                "login_result": False,
+                "runtime_swap_attempted": True,
+                "runtime_swap_applied": True,
+                "verify_attempted": True,
+                "verify_method": "device_list",
+                "verify_error_text": "",
+                "verify_auth_failure_detected": False,
+            }
+        else:
+            failure_info = self._classify_auth_failure(
+                self._last_error, self._get_auth_data()
+            )
+            if any(
+                rebuild_out.get(key)
+                for key in ("long_term_expired", "need_qr_scan", "user_action_required")
+            ):
+                failure_info = {
+                    **failure_info,
+                    "auth_class": rebuild_out.get("auth_class") or failure_info.get("auth_class", ""),
+                    "long_term_expired": bool(rebuild_out.get("long_term_expired")),
+                    "need_qr_scan": bool(rebuild_out.get("need_qr_scan")),
+                    "user_action_required": bool(rebuild_out.get("user_action_required")),
+                }
+            self._last_login_trace = {
+                **self._last_login_trace,
+                "auth_class": failure_info.get("auth_class", ""),
+                "error_type": failure_info.get("error_type", ""),
+                "need_qr_scan": bool(failure_info["need_qr_scan"]),
+                "user_action_required": bool(failure_info["user_action_required"]),
+                "long_term_expired": bool(failure_info["long_term_expired"]),
+            }
         manual_login_required = bool(
             not success
             and (
