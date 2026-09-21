@@ -153,7 +153,16 @@ class AuthStaticFiles(StaticFiles):
 
     async def __call__(self, scope, receive, send) -> None:
         request = Request(scope, receive)
-        if not config.disable_httpauth:
+        root_path = str(scope.get("root_path") or "").rstrip("/")
+        request_path = str(scope.get("path") or "")
+        public_audio_paths = {"/static/silence.mp3", "/static/search.mp3"}
+        path_candidates = {
+            request_path,
+            request.url.path,
+            f"{root_path}{request_path}",
+        }
+        is_public_audio = bool(path_candidates & public_audio_paths)
+        if not config.disable_httpauth and not is_public_audio:
             verification(await security(request))
         await super().__call__(scope, receive, send)
 

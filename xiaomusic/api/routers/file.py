@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import shutil
+from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import aiohttp
@@ -24,10 +25,17 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from starlette.background import BackgroundTask
 
 from xiaomusic.api import response as api_response
-from xiaomusic.api.dependencies import config, log, verification, xiaomusic
+from xiaomusic.api.dependencies import (
+    config,
+    log,
+    strict_verification,
+    verification,
+    xiaomusic,
+)
 from xiaomusic.api.models import (
     DownloadOneMusic,
     DownloadPlayList,
@@ -53,6 +61,8 @@ from xiaomusic.utils.network_utils import (
 )
 
 router = APIRouter()
+media_router = APIRouter()
+proxy_security = HTTPBasic(auto_error=False)
 
 
 def _encode_proxy_urlb64(url: str) -> str:
@@ -404,23 +414,31 @@ def _legacy_link_auth_removed_response() -> JSONResponse:
     )
 
 
-@router.get("/music/{file_path:path}")
+def _resolve_media_file(root: str, relative_path: str) -> Path:
+    """Resolve a media path without prefix or symlink traversal."""
+    root_path = Path(root).resolve()
+    candidate = (root_path / relative_path).resolve()
+    try:
+        candidate.relative_to(root_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="File not found") from exc
+    if not candidate.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return candidate
+
+
+@media_router.get("/music/{file_path:path}")
 async def music_file(request: Request, file_path: str, key: str = "", code: str = ""):
     """音乐文件访问"""
     if key or code:
         return _legacy_link_auth_removed_response()
 
-    absolute_path = os.path.abspath(config.music_path)
-    absolute_file_path = os.path.normpath(os.path.join(absolute_path, file_path))
-    if not absolute_file_path.startswith(absolute_path):
-        raise HTTPException(status_code=404, detail="File not found")
-    if not os.path.exists(absolute_file_path):
-        raise HTTPException(status_code=404, detail="File not found")
+    absolute_file_path = _resolve_media_file(config.music_path, file_path)
 
     # 移除MP3 ID3 v2标签和填充
     if config.remove_id3tag and is_mp3(file_path):
         log.info(f"remove_id3tag:{config.remove_id3tag}, is_mp3:True ")
-        temp_mp3_file = remove_id3_tags(absolute_file_path, config)
+        temp_mp3_file = remove_id3_tags(str(absolute_file_path), config)
         if temp_mp3_file:
             log.info(f"ID3 tag removed {absolute_file_path} to {temp_mp3_file}")
             redirect = safe_redirect(f"/music/{temp_mp3_file}")
@@ -431,7 +449,7 @@ async def music_file(request: Request, file_path: str, key: str = "", code: str 
 
     force_convert_m4a = is_m4a(file_path)
     if force_convert_m4a or (config.convert_to_mp3 and not is_mp3(file_path)):
-        temp_mp3_file = convert_file_to_mp3(absolute_file_path, config)
+        temp_mp3_file = convert_file_to_mp3(str(absolute_file_path), config)
         if temp_mp3_file:
             if force_convert_m4a:
                 log.info(f"M4A auto converted: {absolute_file_path} to {temp_mp3_file}")
@@ -443,10 +461,10 @@ async def music_file(request: Request, file_path: str, key: str = "", code: str 
         else:
             log.warning(f"Failed to convert file to MP3 format: {absolute_file_path}")
 
-    return FileResponse(absolute_file_path)
+    return FileResponse(str(absolute_file_path))
 
 
-@router.options("/music/{file_path:path}")
+@media_router.options("/music/{file_path:path}")
 async def music_options():
     """音乐文件 OPTIONS"""
     headers = {
@@ -455,20 +473,31 @@ async def music_options():
     return Response(headers=headers)
 
 
-@router.get("/picture/{file_path:path}")
+@media_router.get("/picture/{file_path:path}")
 async def get_picture(request: Request, file_path: str, key: str = "", code: str = ""):
     """图片文件访问"""
     if key or code:
         return _legacy_link_auth_removed_response()
 
-    absolute_path = os.path.abspath(config.picture_cache_path)
-    absolute_file_path = os.path.normpath(os.path.join(absolute_path, file_path))
-    if not absolute_file_path.startswith(absolute_path):
-        raise HTTPException(status_code=404, detail="File not found")
-    if not os.path.exists(absolute_file_path):
-        raise HTTPException(status_code=404, detail="File not found")
+    absolute_file_path = _resolve_media_file(config.picture_cache_path, file_path)
 
-    return FileResponse(absolute_file_path)
+    return FileResponse(str(absolute_file_path))
+
+
+def _authorize_proxy_request(
+    urlb64: str,
+    credentials: HTTPBasicCredentials | None,
+) -> None:
+    """Require Basic auth for legacy proxy URLs when auth is enabled."""
+    if str(urlb64 or "").startswith("t.") or config.disable_httpauth:
+        return
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required for legacy proxy URLs",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    strict_verification(credentials)
 
 
 async def _proxy_handler(urlb64: str, is_radio: bool):
@@ -635,8 +664,12 @@ async def _proxy_handler(urlb64: str, is_radio: bool):
         raise HTTPException(status_code=500, detail=f"发生错误: {str(e)}") from e
 
 
-@router.get("/proxy/{type}", summary="类型化代理接口")
-async def proxy_with_type(type: str, urlb64: str):
+@media_router.get("/proxy/{type}", summary="类型化代理接口")
+async def proxy_with_type(
+    type: str,
+    urlb64: str,
+    credentials: HTTPBasicCredentials | None = Depends(proxy_security),
+):
     """支持路径参数的代理接口
 
     Args:
@@ -646,15 +679,20 @@ async def proxy_with_type(type: str, urlb64: str):
     if type not in ("music", "radio"):
         raise HTTPException(status_code=400, detail="type 参数必须是 music 或 radio")
 
+    _authorize_proxy_request(urlb64, credentials)
     is_radio = type == "radio"
     return await _proxy_handler(urlb64, is_radio=is_radio)
 
 
-@router.get("/proxy", summary="基于正常下载逻辑的代理接口")
-async def proxy(urlb64: str):
+@media_router.get("/proxy", summary="基于正常下载逻辑的代理接口")
+async def proxy(
+    urlb64: str,
+    credentials: HTTPBasicCredentials | None = Depends(proxy_security),
+):
     """代理接口（向后兼容）
 
     Args:
         urlb64: Base64编码的URL
     """
+    _authorize_proxy_request(urlb64, credentials)
     return await _proxy_handler(urlb64, is_radio=False)

@@ -50,5 +50,6 @@ def register_routers(app):
     app.include_router(playlist.router, tags=["播放列表"], dependencies=[auth_dep], include_in_schema=False)
     app.include_router(relay.router, tags=["Relay"], dependencies=[auth_dep], include_in_schema=False)
     app.include_router(file.router, tags=["文件操作"], dependencies=[auth_dep], include_in_schema=False)
+    app.include_router(file.media_router, tags=["媒体访问"], include_in_schema=False)
     app.include_router(plugin.router, tags=["插件管理"], dependencies=[auth_dep], include_in_schema=False)
     app.include_router(websocket.router, tags=["WebSocket"], include_in_schema=False)

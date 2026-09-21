@@ -10,6 +10,7 @@ def test_router_registration_marks_internal_routers_hidden_from_schema():
     assert 'app.include_router(device.router, tags=["设备控制"], dependencies=[auth_dep], include_in_schema=False)' in text
     assert 'app.include_router(music.router, tags=["音乐管理"], dependencies=[auth_dep], include_in_schema=False)' in text
     assert 'app.include_router(file.router, tags=["文件操作"], dependencies=[auth_dep], include_in_schema=False)' in text
+    assert 'app.include_router(file.media_router, tags=["媒体访问"], include_in_schema=False)' in text
 
 
 def test_internal_route_files_have_internal_api_comments():
