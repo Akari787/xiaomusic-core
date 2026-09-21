@@ -11,6 +11,8 @@ services:
     environment:
       TZ: Asia/Shanghai
       XIAOMUSIC_PUBLIC_PORT: 58090
+      HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:-}
+      HTTP_AUTH_PASSWORD: ${HTTP_AUTH_PASSWORD:-}
       XIAOMUSIC_DISABLE_HTTPAUTH: "false"
       XIAOMUSIC_HTTPAUTH_USERNAME: ${XIAOMUSIC_HTTPAUTH_USERNAME:-admin}
       # Persist logs under conf/ (writable even with read_only rootfs)

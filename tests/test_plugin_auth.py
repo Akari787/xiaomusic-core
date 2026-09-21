@@ -78,6 +78,52 @@ def test_sensitive_plugin_routes_ignore_legacy_no_auth_override(monkeypatch, tmp
     assert manager.updated == [("safe", "safe.js")]
     assert manager.reload_count == 1
 
+    for filename in ("../evil.js", "..\\\\evil.js"):
+        rejected = client.post(
+            "/api/js-plugins/upload",
+            headers=headers,
+            files={"file": (filename, b"module.exports = {};", "application/javascript")},
+        )
+        assert rejected.status_code == 400
+        assert rejected.json()["success"] is False
+    assert not (tmp_path / "evil.js").exists()
+    assert sorted(path.name for path in (tmp_path / "plugins").iterdir()) == ["safe.js"]
+
+
+def test_production_assembly_keeps_plugin_auth_strict(monkeypatch):
+    from xiaomusic.api.dependencies import no_verification, verification
+    from xiaomusic.api.routers import register_routers
+
+    app = FastAPI()
+    register_routers(app)
+    app.dependency_overrides[verification] = no_verification
+    assert TestClient(app).get("/api/js-plugins").status_code == 401
+
+
+def test_auth_static_files_calls_verification_without_assert(monkeypatch, tmp_path):
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.txt").write_text("ok", encoding="utf-8")
+    password = "static-test-password"
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    monkeypatch.setattr(
+        dependencies,
+        "config",
+        SimpleNamespace(disable_httpauth=False, httpauth_username="admin"),
+    )
+    monkeypatch.setattr(
+        dependencies,
+        "get_auth_settings",
+        lambda: SimpleNamespace(HTTP_AUTH_HASH=hashed),
+    )
+    app = FastAPI()
+    app.mount("/static", dependencies.AuthStaticFiles(directory=static_dir), name="static")
+    client = TestClient(app)
+    assert client.get("/static/index.txt").status_code == 401
+    assert client.get(
+        "/static/index.txt", headers=_basic("admin", password)
+    ).text == "ok"
+
 
 def test_strict_auth_keeps_explicit_legacy_username(monkeypatch):
     password = "legacy-password"

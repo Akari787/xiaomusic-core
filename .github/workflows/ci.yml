@@ -58,6 +58,13 @@ jobs:
         run: |
           docker run --rm ${{ env.LOCAL_IMAGE }}:${{ github.ref_name }}-${{ matrix.platform }} /app/.venv/bin/python3 -c "import xiaomusic; print('ok')"
 
+      - name: Run Node runtime security tests for ${{ matrix.platform }}
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/tests/node_security.test.cjs:/app/tests/node_security.test.cjs:ro" \
+            ${{ env.LOCAL_IMAGE }}:${{ github.ref_name }}-${{ matrix.platform }} \
+            node --test /app/tests/node_security.test.cjs
+
       - name: Show image size for ${{ matrix.platform }}
         run: |
           docker image inspect ${{ env.LOCAL_IMAGE }}:${{ github.ref_name }}-${{ matrix.platform }} --format='{{.Size}}'

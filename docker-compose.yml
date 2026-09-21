@@ -14,7 +14,8 @@ services:
       XIAOMUSIC_DISABLE_HTTPAUTH: "false"
       XIAOMUSIC_HTTPAUTH_USERNAME: ${XIAOMUSIC_HTTPAUTH_USERNAME:-admin}
       API_SECRET: ${API_SECRET:-}
-      HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:?HTTP_AUTH_HASH is required}
+      HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:-}
+      HTTP_AUTH_PASSWORD: ${HTTP_AUTH_PASSWORD:-}
     volumes:
       - ./conf:/app/conf
       - ./music:/app/music
@@ -35,7 +36,8 @@ services:
       XIAOMUSIC_DISABLE_HTTPAUTH: "false"
       XIAOMUSIC_HTTPAUTH_USERNAME: ${XIAOMUSIC_HTTPAUTH_USERNAME:-admin}
       API_SECRET: ${API_SECRET:-}
-      HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:?HTTP_AUTH_HASH is required}
+      HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:-}
+      HTTP_AUTH_PASSWORD: ${HTTP_AUTH_PASSWORD:-}
     volumes:
       - ./conf:/app/conf
       - ./music:/app/music

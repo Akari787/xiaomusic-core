@@ -32,7 +32,7 @@ test('runtime security packages resolve and can be required', () => {
   assert.ok(process.versions.node.split('.')[0] >= 20);
 });
 
-async function requestAcrossRedirect(options) {
+async function requestAcrossRedirect(options, client = 'follow') {
   const seen = {};
   const target = http.createServer((req, res) => {
     seen.apiKey = req.headers['x-api-key'];
@@ -46,13 +46,18 @@ async function requestAcrossRedirect(options) {
   await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
   await new Promise(resolve => redirect.listen(0, '127.0.0.1', resolve));
   try {
-    await new Promise((resolve, reject) => {
-      follow.http.get(
-        `http://127.0.0.1:${redirect.address().port}/redirect`,
-        options,
-        response => { response.resume(); response.on('end', resolve); },
-      ).on('error', reject);
-    });
+    const url = `http://127.0.0.1:${redirect.address().port}/redirect`;
+    if (client === 'axios') {
+      await axios.get(url, options);
+    } else {
+      await new Promise((resolve, reject) => {
+        follow.http.get(
+          url,
+          options,
+          response => { response.resume(); response.on('end', resolve); },
+        ).on('error', reject);
+      });
+    }
     return seen;
   } finally {
     await new Promise(resolve => redirect.close(resolve));
@@ -78,6 +83,25 @@ test('follow-redirects honors explicit sensitiveHeaders across cross-origin redi
     headers: { 'x-api-key': 'caller-header' },
     sensitiveHeaders: ['X-API-Key'],
   });
+  assert.equal(seen.apiKey, undefined);
+});
+
+test('axios http adapter applies redirect header policy by default', async () => {
+  const seen = await requestAcrossRedirect({
+    headers: {
+      authorization: 'Basic built-in-sensitive',
+      'x-api-key': 'caller-header',
+    },
+  }, 'axios');
+  assert.equal(seen.authorization, undefined);
+  assert.equal(seen.apiKey, 'caller-header');
+});
+
+test('axios http adapter honors explicit sensitiveHeaders', async () => {
+  const seen = await requestAcrossRedirect({
+    headers: { 'x-api-key': 'caller-header' },
+    sensitiveHeaders: ['X-API-Key'],
+  }, 'axios');
   assert.equal(seen.apiKey, undefined);
 });
 

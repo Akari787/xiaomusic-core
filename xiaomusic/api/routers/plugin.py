@@ -1,5 +1,6 @@
 """插件管理路由"""
 
+import ntpath
 import os
 
 import aiofiles
@@ -115,9 +116,25 @@ def uninstall_js_plugin(plugin_name: str):
 async def upload_js_plugin(file: UploadFile = File(...)):
     """上传 JS 插件"""
     try:
-        # 验证文件扩展名
-        if not file.filename.endswith(".js"):
-            raise HTTPException(status_code=400, detail="只允许上传 .js 文件")
+        filename = file.filename or ""
+        # 只允许单一 .js basename，拒绝 POSIX/Windows 路径和目录穿越。
+        safe_basename = (
+            bool(filename)
+            and filename.endswith(".js")
+            and filename != ".js"
+            and "\x00" not in filename
+            and not os.path.isabs(filename)
+            and not ntpath.isabs(filename)
+            and filename == os.path.basename(filename)
+            and filename == ntpath.basename(filename)
+        )
+        if not safe_basename:
+            return api_response.fail(
+                "E_BAD_REQUEST",
+                "插件文件名必须是单一 .js 文件名",
+                http_status=400,
+                contract="success_error",
+            )
 
         # 使用 JSPluginManager 中定义的插件目录
         if (

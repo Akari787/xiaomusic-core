@@ -154,7 +154,7 @@ class AuthStaticFiles(StaticFiles):
     async def __call__(self, scope, receive, send) -> None:
         request = Request(scope, receive)
         if not config.disable_httpauth:
-            assert verification(await security(request))
+            verification(await security(request))
         await super().__call__(scope, receive, send)
 
 
