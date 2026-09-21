@@ -11,6 +11,8 @@ services:
     environment:
       TZ: Asia/Shanghai
       XIAOMUSIC_PUBLIC_PORT: 58090
+      XIAOMUSIC_DISABLE_HTTPAUTH: "false"
+      XIAOMUSIC_HTTPAUTH_USERNAME: ${XIAOMUSIC_HTTPAUTH_USERNAME:-admin}
       # Persist logs under conf/ (writable even with read_only rootfs)
       XIAOMUSIC_LOG_FILE: /app/conf/xiaomusic.log.txt
       # Security defaults

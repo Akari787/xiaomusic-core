@@ -15,11 +15,11 @@ from fastapi import (
 
 from xiaomusic.api import response as api_response
 from xiaomusic.api.dependencies import (
-    verification,
+    strict_verification,
     xiaomusic,
 )
 
-router = APIRouter(dependencies=[Depends(verification)])
+router = APIRouter(dependencies=[Depends(strict_verification)])
 
 
 @router.get("/api/js-plugins")

@@ -6,6 +6,7 @@ public_port: 58090
 
 # Core playback defaults
 disable_httpauth: false
+httpauth_username: admin
 enable_analytics: false
 enable_self_update: false
 persist_token: true

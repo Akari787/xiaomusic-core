@@ -176,9 +176,9 @@ class Config:
     ignore_tag_dirs: str = os.getenv("XIAOMUSIC_IGNORE_TAG_DIRS", "")
     music_path_depth: int = int(os.getenv("XIAOMUSIC_MUSIC_PATH_DEPTH", "10"))
     disable_httpauth: bool = (
-        os.getenv("XIAOMUSIC_DISABLE_HTTPAUTH", "true").lower() == "true"
+        os.getenv("XIAOMUSIC_DISABLE_HTTPAUTH", "false").lower() == "true"
     )
-    httpauth_username: str = os.getenv("XIAOMUSIC_HTTPAUTH_USERNAME", "")
+    httpauth_username: str = os.getenv("XIAOMUSIC_HTTPAUTH_USERNAME", "admin")
     httpauth_password: str = os.getenv("XIAOMUSIC_HTTPAUTH_PASSWORD", "")
     music_list_url: str = os.getenv("XIAOMUSIC_MUSIC_LIST_URL", "")
     music_list_json: str = os.getenv("XIAOMUSIC_MUSIC_LIST_JSON", "")

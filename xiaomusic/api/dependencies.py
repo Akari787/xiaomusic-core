@@ -6,6 +6,7 @@ from typing import (
     Annotated,
 )
 
+import bcrypt
 from fastapi import (
     Depends,
     HTTPException,
@@ -17,7 +18,6 @@ from fastapi.security import (
     HTTPBasicCredentials,
 )
 from fastapi.staticfiles import StaticFiles
-import bcrypt
 
 from xiaomusic.core.settings import get_auth_settings
 
@@ -102,10 +102,8 @@ config: "Config" = _LazyProxy("_config")  # type: ignore
 log: "logging.Logger" = _LazyProxy("_log")  # type: ignore
 
 
-def verification(
-    credentials: Annotated[HTTPBasicCredentials, Depends(security)],
-):
-    """HTTP Basic 认证"""
+def _verify_basic_credentials(credentials: HTTPBasicCredentials) -> bool:
+    """校验 Basic 凭据；调用方决定是否启用该校验。"""
     current_username_bytes = credentials.username.encode("utf8")
     correct_username_bytes = config.httpauth_username.encode("utf8")
     is_correct_username = secrets.compare_digest(
@@ -126,6 +124,20 @@ def verification(
             headers={"WWW-Authenticate": "Basic"},
         )
     return True
+
+
+def verification(
+    credentials: Annotated[HTTPBasicCredentials, Depends(security)],
+):
+    """HTTP Basic 认证（可由全局 legacy no-auth 模式覆盖）。"""
+    return _verify_basic_credentials(credentials)
+
+
+def strict_verification(
+    credentials: Annotated[HTTPBasicCredentials, Depends(security)],
+):
+    """敏感路由的强制 Basic 认证，不受全局 no-auth override 影响。"""
+    return _verify_basic_credentials(credentials)
 
 
 def no_verification():
