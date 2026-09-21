@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from xiaomusic.api.routers import system
 from tests import test_auth_runtime_stability as runtime_tests
+from xiaomusic.api.routers import system
 
 
 @pytest.fixture
