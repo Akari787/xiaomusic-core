@@ -9,10 +9,18 @@ from xiaomusic.config import Config
 def test_env_example_quotes_bcrypt_hash_to_survive_compose_interpolation():
     env_example = Path(__file__).parents[1] / ".env.example"
     lines = env_example.read_text(encoding="utf-8").splitlines()
-    hash_lines = [line for line in lines if "HTTP_AUTH_HASH=" in line]
-    assert hash_lines == ["# HTTP_AUTH_HASH='$2b$12$replace_with_bcrypt_hash'"]
+    auth_example_lines = [
+        line for line in lines
+        if "HTTP_AUTH_PASSWORD=" in line or "HTTP_AUTH_HASH=" in line
+    ]
+    assert auth_example_lines == [
+        "# HTTP_AUTH_PASSWORD='replace_with_a_strong_password'",
+        "# HTTP_AUTH_HASH='$2b$12$replace_with_bcrypt_hash'",
+    ]
+    assert all(line.startswith("# ") and line.count("'") == 2 for line in auth_example_lines)
     assert not any(
-        line.strip().startswith("HTTP_AUTH_HASH=") for line in lines
+        line.strip().startswith(("HTTP_AUTH_PASSWORD=", "HTTP_AUTH_HASH="))
+        for line in lines
     )
 
 
