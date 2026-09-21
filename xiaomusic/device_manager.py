@@ -152,9 +152,15 @@ class DeviceManager:
 
         Args:
             auth_manager: 认证管理器实例
+
+        Returns:
+            bool: 是否成功完成设备信息刷新。
         """
-        await auth_manager.try_update_device_id()
+        result = await auth_manager.try_update_device_id()
+        if result is None:
+            return False
         self._update_devices()
+        return True
 
     def set_devices(self, devices: dict[str, XiaoMusicDevice]):
         """设置设备实例字典

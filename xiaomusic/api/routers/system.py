@@ -189,9 +189,9 @@ async def get_logint_status(api: MiJiaAPI, lp: str):
                 str(refreshed.get("last_error") or "qrcode runtime rebind failed")
             )
 
-        # 认证 runtime 已 verified 后，才刷新设备/媒体数据；reinit 此时只能复用
-        # 已绑定 runtime，不得成为 full login/exchange 的入口。
-        await xiaomusic.reinit()
+        # 认证 runtime 已 verified 后，才刷新设备/媒体数据；verified-only
+        # reinit 禁止 can_login/need_login/ensure_logged_in 及 exchange/login。
+        await xiaomusic.reinit(auth_already_verified=True)
         qrcode_login_error = ""
     except asyncio.CancelledError:
         log.info("qrcode login polling cancelled")

@@ -1,3 +1,6 @@
+import json
+import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -23,15 +26,36 @@ async def test_qrcode_poll_rebinds_before_reinit_and_does_not_clear_lock(monkeyp
     class _Auth:
         async def manual_reload_runtime(self, **kwargs):
             calls.append(("reload", kwargs))
-            return {"refreshed": True, "runtime_auth_ready": True}
+            return {
+                "refreshed": True,
+                "runtime_auth_ready": True,
+                "token_saved": False,
+                "device_map_refreshed": True,
+            }
 
-    async def _reinit():
-        calls.append(("reinit",))
+        async def need_login(self):
+            raise AssertionError("QR reinit probed auth")
+
+        async def ensure_logged_in(self, **kwargs):
+            raise AssertionError("QR reinit entered login")
+
+        async def init_all_data(self, **kwargs):
+            assert kwargs == {"verified_runtime_only": True}
+            calls.append(("verified-only-init", kwargs))
+
+    auth_manager_stub = _Auth()
+
+    async def _reinit(**kwargs):
+        assert kwargs == {"auth_already_verified": True}
+        calls.append(("reinit", kwargs))
+        await auth_manager_stub.init_all_data(
+            verified_runtime_only=kwargs["auth_already_verified"]
+        )
 
     monkeypatch.setattr(
         system,
         "xiaomusic",
-        SimpleNamespace(auth_manager=_Auth(), reinit=_reinit),
+        SimpleNamespace(auth_manager=auth_manager_stub, reinit=_reinit),
     )
     monkeypatch.setattr(system, "qrcode_login_error", "old error")
 
@@ -43,7 +67,8 @@ async def test_qrcode_poll_rebinds_before_reinit_and_does_not_clear_lock(monkeyp
             "reload",
             {"reason": "qrcode_login_success", "rebind_current_auth": True},
         ),
-        ("reinit",),
+        ("reinit", {"auth_already_verified": True}),
+        ("verified-only-init", {"verified_runtime_only": True}),
     ]
     assert system.qrcode_login_error == ""
 
@@ -118,6 +143,8 @@ async def test_manual_reload_qrcode_rebind_uses_persisted_short_session_without_
 
     assert out["refreshed"] is True
     assert out["runtime_auth_ready"] is True
+    assert out["token_saved"] is False
+    assert out["device_map_refreshed"] is True
     assert manager.mina_service is candidate["mina_service"]
     assert manager.mina_service is not old_runtime
     assert manager._state == manager.STATE_HEALTHY
@@ -168,3 +195,125 @@ async def test_manual_reload_qrcode_failure_preserves_healthy_runtime_and_gate(a
     assert manager._scheduled_refresh_suspend_code == "old_gate"
     assert manager._last_error == "new verify failed"
     assert manager.auth_short_session_rebuild_debug_state()["last_short_session_rebuild"]["result"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_qrcode_rebind_uses_new_disk_auth_and_converges_public_status(auth_manager):
+    manager, _ = auth_manager
+    token_path = Path(manager.auth_token_path)
+    disk_token = {
+        **manager._get_auth_data(),
+        "serviceToken": "disk-new-service-token",
+        "yetAnotherServiceToken": "disk-new-yast",
+        "saveTime": 1789967294853,
+    }
+    token_path.write_text(json.dumps(disk_token), encoding="utf-8")
+    from xiaomusic.security.token_store import TokenStore
+
+    manager.token_store = TokenStore(manager.config, runtime_tests._DummyLog())
+    seen = {}
+
+    async def _candidate(auth_data):
+        seen.update(auth_data)
+        return {
+            "ok": True,
+            "account": object(),
+            "mina_service": object(),
+            "miio_service": object(),
+            "session": None,
+            "device_id": auth_data["deviceId"],
+        }
+
+    manager._build_verified_runtime_candidate = _candidate
+    manager._last_short_session_rebuild_state = {
+        "result": "failed", "error_code": "old_rebuild"
+    }
+    manager._last_auth_recovery_flow_state = {"result": "failed", "used_path": "old"}
+    manager._last_error = "old 70016"
+    manager._retry_count = 3
+    manager._retry_count_effective = 4
+    manager._lock_counter = 5
+    manager._probe_failure_count = 6
+    manager._recovery_failure_count = 7
+    manager._cooldown_until = time.time() + 300
+    manager._last_retry_increment_reason = "old failure"
+    manager._last_health_probe_result = "failed"
+    manager._last_health_probe_error = "old probe"
+    manager._last_ok_ts = 1
+    manager._last_runtime_verify_ts = 1
+    manager._last_session_success_ts = 1
+    manager._last_login_ts = 1
+
+    out = await manager.manual_reload_runtime(
+        reason="qrcode_login_success", rebind_current_auth=True
+    )
+
+    assert seen["serviceToken"] == "disk-new-service-token"
+    assert seen["yetAnotherServiceToken"] == "disk-new-yast"
+    assert seen["saveTime"] == 1789967294853
+    assert out["token_saved"] is False
+    assert out["device_map_refreshed"] is True
+    assert out["timestamps"]["saveTime"] > 1
+    assert out["timestamps"]["last_ok_ts"] > 1
+    assert manager._last_runtime_verify_ts > 1
+    assert manager._last_session_success_ts > 1
+    status = manager.map_auth_public_status(runtime_auth_ready=True)
+    snapshot = manager.auth_public_status_snapshot(runtime_auth_ready=True)
+    assert status["status_reason"] == "healthy"
+    assert status["rebuild_failed"] is False
+    assert status["last_error"] == ""
+    assert snapshot["rebuild_failed"] is False
+    assert snapshot["last_error"] == ""
+    auth_snapshot = manager.auth_status_snapshot()
+    assert auth_snapshot["recovery_failure_count"] == 0
+    assert auth_snapshot["retry_count"] == 0
+    assert auth_snapshot["retry_count_effective"] == 0
+    assert auth_snapshot["lock_counter"] == 0
+    assert auth_snapshot["cooldown_until_ts"] == 0
+    assert manager._retry_count == 0
+    assert manager._retry_count_effective == 0
+    assert manager._lock_counter == 0
+    assert manager._probe_failure_count == 0
+    assert manager._recovery_failure_count == 0
+    assert manager._cooldown_until == 0
+    assert manager._last_retry_increment_reason == ""
+    assert manager._last_health_probe_result == "ok"
+    assert manager._last_health_probe_error == ""
+
+
+@pytest.mark.asyncio
+async def test_env_rebind_does_not_overwrite_short_session_history(auth_manager, monkeypatch):
+    manager, _ = auth_manager
+    sentinel_rebuild = {"result": "failed", "error_code": "historical"}
+    sentinel_flow = {"result": "failed", "used_path": "historical"}
+    manager._last_short_session_rebuild_state = dict(sentinel_rebuild)
+    manager._last_auth_recovery_flow_state = dict(sentinel_flow)
+    manager._build_verified_runtime_candidate = AsyncMock(return_value={
+        "ok": True,
+        "account": object(),
+        "mina_service": object(),
+        "miio_service": object(),
+        "session": None,
+        "device_id": manager.device_id,
+    })
+    monkeypatch.setenv("AUTH_ACCESS_TOKEN", "env-only")
+
+    out = await manager.manual_reload_runtime(reason="ut-env-rebind")
+
+    assert out["token_saved"] is False
+    assert manager._last_short_session_rebuild_state == sentinel_rebuild
+    assert manager._last_auth_recovery_flow_state == sentinel_flow
+
+
+@pytest.mark.asyncio
+async def test_verified_only_init_skips_auth_probe_and_login(auth_manager):
+    manager, _ = auth_manager
+    manager.need_login = AsyncMock(side_effect=AssertionError("verified-only need_login"))
+    manager.ensure_logged_in = AsyncMock(side_effect=AssertionError("verified-only login"))
+    manager.device_manager.update_device_info = AsyncMock(return_value=True)
+
+    await manager.init_all_data(verified_runtime_only=True)
+
+    manager.need_login.assert_not_awaited()
+    manager.ensure_logged_in.assert_not_awaited()
+    manager.device_manager.update_device_info.assert_awaited_once_with(manager)

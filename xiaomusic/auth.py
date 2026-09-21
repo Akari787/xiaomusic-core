@@ -402,9 +402,23 @@ class SimpleAuthManager:
         """保持向后兼容的属性"""
         return is_auth_error
 
-    async def init_all_data(self):
-        """初始化所有数据，检查登录状态"""
+    async def init_all_data(self, verified_runtime_only: bool = False):
+        """初始化所有数据，检查登录状态。
+
+        ``verified_runtime_only`` is used after a QR current-auth rebind.  The
+        runtime has already passed verification, so this branch must never probe
+        auth state or enter any recovery/login path; it only refreshes data that
+        depends on the verified runtime.
+        """
         self.mi_token_home = os.path.join(self.config.conf_path, ".mi.token")
+
+        if verified_runtime_only:
+            try:
+                await self.device_manager.update_device_info(self)
+            except Exception as exc:
+                self.log.warning("verified-only device refresh failed: %s", exc)
+            self._apply_runtime_cookie()
+            return
 
         # 检查是否可以登录
         if not await self.can_login():
@@ -424,10 +438,12 @@ class SimpleAuthManager:
 
         # 更新设备信息
         await self.device_manager.update_device_info(self)
+        self._apply_runtime_cookie()
 
-        # 设置cookie
+    def _apply_runtime_cookie(self) -> None:
+        """Apply persisted cookies without invoking authentication recovery."""
         cookie_jar = self.get_cookie()
-        if cookie_jar:
+        if cookie_jar and self.mi_session is not None:
             self.mi_session.cookie_jar.update_cookies(cookie_jar)
             self.cookie_jar = self.mi_session.cookie_jar
 
@@ -481,6 +497,15 @@ class SimpleAuthManager:
         self._scheduled_refresh_suspended = False
         self._scheduled_refresh_suspend_reason = ""
         self._scheduled_refresh_suspend_code = ""
+        self._retry_count = 0
+        self._retry_count_effective = 0
+        self._lock_counter = 0
+        self._probe_failure_count = 0
+        self._recovery_failure_count = 0
+        self._cooldown_until = 0.0
+        self._last_retry_increment_reason = ""
+        self._last_health_probe_result = "ok"
+        self._last_health_probe_error = ""
         self._last_error = ""
         self._last_recovery_error_code = ""
         self._last_recovery_error_message = ""
@@ -2270,7 +2295,7 @@ class SimpleAuthManager:
             return devices
         except Exception as e:
             self.log.warning(f"更新设备ID失败: {e}")
-            return {}
+            return None
 
     # ==================== 带恢复的调用 ====================
 
@@ -2587,11 +2612,15 @@ class SimpleAuthManager:
         reason: str = "",
         _transition_owned: bool = False,
         used_path: str = "runtime_rebind_env_override",
+        record_rebuild: bool = False,
     ) -> dict[str, Any]:
         if not _transition_owned:
             async with self._auth_transition_lock:
                 return await self._atomic_runtime_rebind_current_auth(
-                    reason=reason, _transition_owned=True, used_path=used_path
+                    reason=reason,
+                    _transition_owned=True,
+                    used_path=used_path,
+                    record_rebuild=record_rebuild,
                 )
         candidate = await self._build_verified_runtime_candidate(self._get_auth_data())
         if not candidate.get("ok"):
@@ -2605,7 +2634,8 @@ class SimpleAuthManager:
                 "used_path": used_path,
                 "service_token_written": False,
             }
-            self._record_short_session_rebuild_state(out)
+            if record_rebuild:
+                self._record_short_session_rebuild_state(out)
             return out
         old_session = self.mi_session
         new_session = candidate.get("session") or self.mi_session
@@ -2621,6 +2651,11 @@ class SimpleAuthManager:
         )
         self.login_signature = self._get_login_signature()
         self._runtime_generation += 1
+        verified_at = time.time()
+        self._last_ok_ts = verified_at
+        self._last_runtime_verify_ts = verified_at
+        self._last_session_success_ts = verified_at
+        self._last_login_ts = verified_at
         self._mark_verified_runtime_recovered()
         if old_session is not self.mi_session:
             try:
@@ -2635,18 +2670,19 @@ class SimpleAuthManager:
             "used_path": used_path,
             "service_token_written": False,
         }
-        self._record_short_session_rebuild_state(out)
-        self._record_auth_recovery_flow_state({
-            "reason": reason,
-            "primary_attempt": {"result": "skipped", "used_path": used_path},
-            "fallback_attempt": {"result": "skipped"},
-            "rebind": {"result": "ok", "used_path": used_path},
-            "verify": {"result": "ok", "used_path": used_path},
-            "result": "ok",
-            "used_path": used_path,
-            "service_token_written": False,
-            "finished_at": int(time.time() * 1000),
-        })
+        if record_rebuild:
+            self._record_short_session_rebuild_state(out)
+            self._record_auth_recovery_flow_state({
+                "reason": reason,
+                "primary_attempt": {"result": "skipped", "used_path": used_path},
+                "fallback_attempt": {"result": "skipped"},
+                "rebind": {"result": "ok", "used_path": used_path},
+                "verify": {"result": "ok", "used_path": used_path},
+                "result": "ok",
+                "used_path": used_path,
+                "service_token_written": False,
+                "finished_at": int(time.time() * 1000),
+            })
         return out
 
     async def manual_reload_runtime(
@@ -2674,11 +2710,15 @@ class SimpleAuthManager:
         rebind_current_auth = bool(kwargs.get("rebind_current_auth", False))
         if rebind_current_auth:
             rebuild_out = await self._atomic_runtime_rebind_current_auth(
-                reason=reason, used_path="qrcode_persisted_short_session_rebind"
+                reason=reason,
+                used_path="qrcode_persisted_short_session_rebind",
+                record_rebuild=True,
             )
         elif env_override:
             rebuild_out = await self._atomic_runtime_rebind_current_auth(
-                reason=reason, used_path="runtime_rebind_env_override"
+                reason=reason,
+                used_path="runtime_rebind_env_override",
+                record_rebuild=False,
             )
         else:
             rebuild_out = await self.rebuild_short_session_from_persistent_auth(
@@ -2703,6 +2743,13 @@ class SimpleAuthManager:
                 rebuild_out.get("failed_reason") or "manual reload failed"
             )[:200]
             self._last_error = self._last_recovery_error_message
+        device_map_refreshed = False
+        if success:
+            try:
+                update_result = await self.device_manager.update_device_info(self)
+                device_map_refreshed = update_result is not False
+            except Exception as exc:
+                self.log.warning("runtime reload device refresh failed: %s", exc)
         trace = {
             "runtime_swap_attempted": bool(
                 rebuild_out.get("runtime_rebind_result") not in (None, "", "skipped")
@@ -2710,6 +2757,7 @@ class SimpleAuthManager:
             "runtime_swap_applied": success,
             "verify_attempted": bool(rebuild_out.get("verify_result") != "skipped"),
             "verify_error_text": "" if success else self._last_error,
+            "device_map_refreshed": device_map_refreshed,
             "started_at": started_at,
             "finished_at": int(time.time() * 1000),
         }
@@ -2842,11 +2890,16 @@ class SimpleAuthManager:
         return {
             "refreshed": success,
             "runtime_auth_ready": runtime_auth_ready,
-            "token_saved": bool(success and not env_override),
+            "token_saved": bool(
+                success
+                and not env_override
+                and not rebind_current_auth
+                and rebuild_out.get("service_token_written", False)
+            ),
             "token_loaded": bool(self._get_auth_data()),
             "token_store_reloaded": token_store_reloaded,
             "runtime_rebound": success,
-            "device_map_refreshed": success,
+            "device_map_refreshed": bool(trace.get("device_map_refreshed", False)),
             "verify_result": "ok"
             if success
             else ("failed" if trace.get("verify_attempted") else "skipped"),
