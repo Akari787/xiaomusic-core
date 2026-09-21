@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field
 from typing import get_args, get_origin, get_type_hints
 from urllib.parse import urlparse
 
+from xiaomusic.config_model import try_validate_config_model
 from xiaomusic.const import (
     PLAY_TYPE_ALL,
     PLAY_TYPE_ONE,
@@ -17,7 +18,6 @@ from xiaomusic.const import (
     PLAY_TYPE_SEQ,
     PLAY_TYPE_SIN,
 )
-from xiaomusic.config_model import try_validate_config_model
 from xiaomusic.utils.system_utils import validate_proxy
 
 

@@ -9,10 +9,22 @@ const qs = require('qs');
 const undici = require('undici');
 
 function versionAtLeast(version, major, minor, patch) {
-  const [a, b, c] = version.split('.').map(Number);
-  return [a, b, c].join('.') >= [major, minor, patch].join('.') ||
-    (a > major || (a === major && (b > minor || (b === minor && c >= patch))));
+  const actual = version.split('.').map(Number);
+  const required = [major, minor, patch];
+  for (let index = 0; index < required.length; index += 1) {
+    const current = actual[index] ?? 0;
+    if (current !== required[index]) return current > required[index];
+  }
+  return true;
 }
+
+test('versionAtLeast compares numeric version components at boundaries', () => {
+  assert.equal(versionAtLeast('7.9.0', 7, 29, 0), false);
+  assert.equal(versionAtLeast('7.28.9', 7, 29, 0), false);
+  assert.equal(versionAtLeast('7.29.0', 7, 29, 0), true);
+  assert.equal(versionAtLeast('7.29.1', 7, 29, 0), true);
+  assert.equal(versionAtLeast('8.0.0', 7, 29, 0), true);
+});
 
 test('runtime security packages resolve and can be required', () => {
   for (const value of [axios, FormData, follow, qs, undici]) assert.ok(value);
@@ -83,7 +95,12 @@ test('form-data percent-encodes CRLF in field names and filenames', () => {
   assert.doesNotMatch(fileBody, /\r\nInjected:/);
 });
 
-test('qs parse/stringify handles the advisory PoC shape', () => {
+test('qs handles the official GHSA-4mjr constructor/isBuffer PoC', () => {
+  const parsed = qs.parse('x%5Bconstructor%5D%5BisBuffer%5D=y', { plainObjects: true });
+  assert.doesNotThrow(() => qs.stringify(parsed));
+});
+
+test('qs parse/stringify handles the additional advisory PoC shape', () => {
   const parsed = qs.parse('a[0]=x&a[1]=y&comma=1,2', { comma: true });
   assert.doesNotThrow(() => qs.stringify(parsed, { comma: true, encodeValuesOnly: true }));
 });
