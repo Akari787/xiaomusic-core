@@ -86,6 +86,19 @@ NETWORK_ERROR_KEYWORDS = (
 T = TypeVar("T")
 
 
+class _MemoryTokenStore:
+    """MiAccount-compatible token store that can never touch .mi.token."""
+
+    def __init__(self, token: dict[str, Any] | None = None):
+        self.token = dict(token or {})
+
+    def load_token(self):
+        return dict(self.token) or None
+
+    def save_token(self, token=None):
+        self.token = dict(token or {})
+
+
 def is_auth_error(exc=None, resp=None, body=None) -> bool:
     """判断是否是认证错误"""
     status = None
@@ -147,12 +160,22 @@ def is_long_term_auth_failure_text(text: str) -> bool:
     return any(
         marker in lowered
         for marker in (
-            "70016",
-            "87001",
             "refresh token expired",
             "passport token expired",
+            "required field missing",
+            "missing_persistent_auth_fields",
         )
     )
+
+
+def classify_auth_challenge(text: str) -> str:
+    """Return the stable auth challenge category carried by an error."""
+    lowered = str(text or "").lower()
+    if "captchaurl" in lowered or "87001" in lowered or "captcha" in lowered:
+        return "interactive_captcha_challenge"
+    if "70016" in lowered:
+        return "credential_session_rejected"
+    return ""
 
 
 def is_network_error(exc=None, resp=None, body=None) -> bool:
@@ -241,6 +264,9 @@ class SimpleAuthManager:
         self._last_status_mapping_source: str = ""
         self._last_manual_login_required_reason: str = ""
         self._last_runtime_not_ready_reason: str = ""
+        self._scheduled_refresh_suspended: bool = False
+        self._scheduled_refresh_suspend_reason: str = ""
+        self._scheduled_refresh_suspend_code: str = ""
         self._health_probe_attempted: bool = False
         self._keepalive_probe_attempted: bool = False
         self._background_recovery_attempted: bool = False
@@ -320,15 +346,49 @@ class SimpleAuthManager:
         return 0.0
 
     def _has_persistent_auth_fields(self, auth_data: dict[str, Any]) -> bool:
-        """判断是否具备可用于重登的长生命周期认证字段。"""
+        """Minimal exchange capability: userId + passToken + deviceId."""
         return bool(
             auth_data.get("userId")
             and auth_data.get("passToken")
-            and auth_data.get("psecurity")
-            and auth_data.get("ssecurity")
-            and auth_data.get("cUserId")
             and auth_data.get("deviceId")
         )
+
+    def _has_complete_auth_diagnostics(self, auth_data: dict[str, Any]) -> bool:
+        return bool(
+            auth_data.get("psecurity")
+            and auth_data.get("ssecurity")
+            and auth_data.get("cUserId")
+        )
+
+    def _new_isolated_mi_account(
+        self, session: ClientSession, user_id: str, password: str = "", token: dict[str, Any] | None = None
+    ):
+        """Construct MiAccount without exposing the canonical persistent token path."""
+        try:
+            return MiAccount(session, user_id, password, _MemoryTokenStore(token))
+        except TypeError:
+            # Test doubles and older miservice builds may only expose MiAccount().
+            return MiAccount()
+
+    def _configured_legacy_credentials(self, auth_data: dict[str, Any]) -> tuple[str, str] | None:
+        username = (
+            getattr(self.config, "mi_username", "")
+            or getattr(self.config, "mi_account", "")
+            or getattr(self.config, "xiaomi_username", "")
+            or os.getenv("XIAOMUSIC_MI_USERNAME", "")
+            or os.getenv("XIAOMI_USERNAME", "")
+            or os.getenv("MI_USERNAME", "")
+        )
+        password = (
+            getattr(self.config, "mi_password", "")
+            or getattr(self.config, "xiaomi_password", "")
+            or os.getenv("XIAOMUSIC_MI_PASSWORD", "")
+            or os.getenv("XIAOMI_PASSWORD", "")
+            or os.getenv("MI_PASSWORD", "")
+        )
+        if username and password:
+            return str(username), str(password)
+        return None
 
     # ==================== 公共接口 ====================
 
@@ -393,11 +453,14 @@ class SimpleAuthManager:
         return self._state == self.STATE_LOCKED and time.time() < self._locked_until
 
     def _mark_verified_runtime_recovered(self) -> None:
-        """Verified runtime success clears the persistent manual-auth gate."""
+        """Verified runtime success clears manual and scheduled gates."""
         self._state = self.STATE_HEALTHY
         self._locked_until = 0
         self._last_manual_login_required_reason = ""
         self._last_lock_transition_reason = ""
+        self._scheduled_refresh_suspended = False
+        self._scheduled_refresh_suspend_reason = ""
+        self._scheduled_refresh_suspend_code = ""
 
     async def ensure_logged_in(
         self,
@@ -430,19 +493,31 @@ class SimpleAuthManager:
     def _classify_auth_failure(
         self, err_text: str, auth_data: dict[str, Any]
     ) -> dict[str, Any]:
-        """将失败分类为网络/认证/运行时错误。"""
-        lowered = err_text.lower()
+        """Classify failures without treating private SSO codes as token expiry."""
+        lowered = str(err_text or "").lower()
+        challenge = classify_auth_challenge(lowered)
         if is_network_error(exc=RuntimeError(err_text)):
             return {
                 "error_type": "network_error",
+                "auth_class": "network_error",
                 "long_term_expired": False,
                 "need_qr_scan": False,
                 "user_action_required": False,
             }
 
+        if challenge:
+            return {
+                "error_type": "auth_error",
+                "auth_class": challenge,
+                "long_term_expired": False,
+                "need_qr_scan": True,
+                "user_action_required": True,
+            }
+
         if not auth_data or not self._has_persistent_auth_fields(auth_data):
             return {
                 "error_type": "missing_long_term_auth",
+                "auth_class": "missing_persistent_capability",
                 "long_term_expired": True,
                 "need_qr_scan": True,
                 "user_action_required": True,
@@ -454,6 +529,7 @@ class SimpleAuthManager:
             )
             return {
                 "error_type": "auth_error",
+                "auth_class": "token_expired" if long_term_expired else "auth_error",
                 "long_term_expired": long_term_expired,
                 "need_qr_scan": long_term_expired,
                 "user_action_required": long_term_expired,
@@ -461,6 +537,7 @@ class SimpleAuthManager:
 
         return {
             "error_type": "runtime_error",
+            "auth_class": "runtime_error",
             "long_term_expired": False,
             "need_qr_scan": False,
             "user_action_required": False,
@@ -863,19 +940,19 @@ class SimpleAuthManager:
                 # 降级到没有明确凭据能力的 MiAccount.login/full login。
                 raise RuntimeError(self._last_error)
 
-            login_session = ClientSession()
-            login_session_used = False
-            try:
-                new_account = MiAccount()
-            except TypeError:
-                login_session_used = True
-                new_account = MiAccount(
-                    login_session,
-                    user_id,
-                    "",
-                    str(self.mi_token_home),
-                )
+            legacy_credentials = self._configured_legacy_credentials(auth_data)
+            if not legacy_credentials:
+                self._last_error = "persistent auth capability unavailable; QR login required"
+                self._last_recovery_stage = "read_auth"
+                self._last_recovery_error_code = "missing_persistent_auth_fields"
+                failure_classification = self._classify_auth_failure(self._last_error, {})
+                raise RuntimeError(self._last_error)
 
+            login_session = ClientSession()
+            login_session_used = True
+            new_account = self._new_isolated_mi_account(
+                login_session, legacy_credentials[0], legacy_credentials[1]
+            )
             self.set_token(new_account)
 
             def _snapshot_runtime_token_state(account):
@@ -1110,15 +1187,21 @@ class SimpleAuthManager:
             )
             self._last_recovery_error_code = failure_classification["error_type"]
             self._last_recovery_error_message = self._last_error
-            if (
+            auth_class = str(failure_classification.get("auth_class") or "")
+            scheduled_refresh = "scheduled" in str(reason or "").lower()
+            manual_gate = bool(
                 failure_classification.get("long_term_expired")
-                or failure_classification.get("need_qr_scan")
-                or failure_classification.get("user_action_required")
-            ):
+                or auth_class in {"credential_session_rejected", "interactive_captcha_challenge"}
+                or (
+                    failure_classification.get("need_qr_scan")
+                    and not scheduled_refresh
+                )
+            )
+            if manual_gate and not scheduled_refresh:
                 self._state = self.STATE_LOCKED
                 self._locked_until = 0
                 self._last_manual_login_required_reason = (
-                    self._last_recovery_error_code or "manual auth required"
+                    auth_class or self._last_recovery_error_code or "manual auth required"
                 )
                 self._last_lock_transition_reason = (
                     f"{self._last_recovery_stage}:manual_login_required"
@@ -1161,11 +1244,9 @@ class SimpleAuthManager:
             )
 
             if (
-                preserve_healthy_runtime
+                (preserve_healthy_runtime or scheduled_refresh)
                 and previous_state == self.STATE_HEALTHY
-                and not failure_classification.get("long_term_expired")
-                and not failure_classification.get("need_qr_scan")
-                and not failure_classification.get("user_action_required")
+                and not manual_gate
             ):
                 self._state = previous_state
                 self._locked_until = previous_locked_until
@@ -1285,8 +1366,7 @@ class SimpleAuthManager:
         except Exception as e:
             self.log.warning(f"persist token merge failed: {e}")
 
-        self.token_store.update(merged, reason=reason or "login")
-        self.token_store.flush()
+        self.token_store.commit(merged, reason=reason or "login")
 
     def _record_short_session_rebuild_state(self, payload: dict[str, Any]) -> None:
         state = dict(payload or {})
@@ -1376,8 +1456,11 @@ class SimpleAuthManager:
             self._auth_refresh_elapsed_seconds = max(0.0, time.time() - self._login_at)
 
     async def _maybe_scheduled_refresh(self) -> bool:
-        """计划内刷新候选；失败不破坏仍健康的 runtime。"""
+        """计划内刷新候选；认证拒绝/captcha 后挂起到 verified recovery。"""
         if self._state != self.STATE_HEALTHY:
+            return False
+        if self._scheduled_refresh_suspended:
+            self._last_refresh_trigger = "scheduled_refresh_suspended"
             return False
 
         if os.getenv("AUTH_ACCESS_TOKEN") or os.getenv("AUTH_REFRESH_TOKEN"):
@@ -1465,6 +1548,16 @@ class SimpleAuthManager:
             refresh.get("error_code") or "scheduled_refresh_failed"
         )
         self._last_recovery_error_message = self._last_error
+        failure_classification = dict(refresh)
+        auth_class = str(failure_classification.get("auth_class") or "")
+        if auth_class in {"credential_session_rejected", "interactive_captcha_challenge"}:
+            self._scheduled_refresh_suspended = True
+            self._scheduled_refresh_suspend_code = auth_class
+            self._scheduled_refresh_suspend_reason = self._last_error
+            self._last_refresh_trigger = "scheduled_refresh_suspended"
+            self.log.warning(
+                "scheduled refresh suspended after %s: %s", auth_class, self._last_error
+            )
         return False
 
     async def _try_miaccount_persistent_auth_relogin(
@@ -1493,18 +1586,10 @@ class SimpleAuthManager:
             }
 
         login_session = ClientSession()
-        login_session_used = False
         try:
-            try:
-                account = MiAccount()
-            except TypeError:
-                login_session_used = True
-                account = MiAccount(
-                    login_session,
-                    auth_data.get("userId", ""),
-                    "",
-                    str(self.mi_token_home),
-                )
+            account = self._new_isolated_mi_account(
+                login_session, auth_data.get("userId", ""), token=auth_data
+            )
             self.set_token(account, auth_data=auth_data)
             resp = await account._serviceLogin(f"serviceLogin?sid={sid}&_json=true")
             if not isinstance(resp, dict):
@@ -1540,8 +1625,9 @@ class SimpleAuthManager:
                 "blocked_before_security_token_service": False,
                 "security_token_service_invoked": False,
             }
-            if int(resp.get("code", -1)) != 0:
-                error_text = f"service_login_code_{resp.get('code')}"
+            response_text = json.dumps(resp, ensure_ascii=False, default=str)
+            if int(resp.get("code", -1)) != 0 or "captchaUrl" in resp or "captchaurl" in response_text.lower():
+                error_text = f"service_login_code_{resp.get('code')} {response_text[:500]}"
                 classification = self._classify_auth_failure(error_text, auth_data)
                 return {
                     "ok": False,
@@ -1634,8 +1720,7 @@ class SimpleAuthManager:
             merged["saveTime"] = int(time.time() * 1000)
             writeback_target = "none"
             if writeback and self.token_store is not None:
-                self.token_store.update(merged, reason=reason or "persistent_auth_relogin")
-                self.token_store.flush()
+                self.token_store.commit(merged, reason=reason or "persistent_auth_relogin")
                 writeback_target = "token_store"
             return {
                 "ok": True,
@@ -1742,16 +1827,10 @@ class SimpleAuthManager:
         login_session = ClientSession()
         session_used = False
         try:
-            try:
-                account = MiAccount()
-            except TypeError:
-                session_used = True
-                account = MiAccount(
-                    login_session,
-                    auth_data.get("userId", ""),
-                    "",
-                    str(self.mi_token_home),
-                )
+            session_used = True
+            account = self._new_isolated_mi_account(
+                login_session, auth_data.get("userId", ""), token=auth_data
+            )
             previous_device_id = self.device_id
             self.set_token(account, auth_data=auth_data)
             self.device_id = previous_device_id
@@ -1863,6 +1942,8 @@ class SimpleAuthManager:
                 key: bool(primary.get(key))
                 for key in ("long_term_expired", "need_qr_scan", "user_action_required")
             }
+            if primary.get("auth_class"):
+                classification["auth_class"] = primary["auth_class"]
             if not any(classification.values()):
                 classification = self._classify_auth_failure(primary_error, auth_data)
             return {
@@ -2109,8 +2190,7 @@ class SimpleAuthManager:
         )
         if self.token_store is not None and service_token_written:
             merged["saveTime"] = int(time.time() * 1000)
-            self.token_store.update(merged, reason=reason or "short_session_rebuild")
-            self.token_store.flush()
+            self.token_store.commit(merged, reason=reason or "short_session_rebuild")
 
         if not service_token_written:
             out = {
@@ -2377,8 +2457,10 @@ class SimpleAuthManager:
                             await asyncio.sleep(1)
                             continue
                         raise RuntimeError("认证不可用")
+                    if self._last_manual_login_required_reason:
+                        raise RuntimeError("认证需要人工登录")
                     if attempt < retry:
-                        # 触发后台恢复并等待
+                        # 触发后台恢复并等待；manual gate 不走二次快速重试
                         self._schedule_background_recovery()
                         await asyncio.sleep(2)
                         continue
@@ -2402,8 +2484,10 @@ class SimpleAuthManager:
                         await asyncio.sleep(1)
                         continue
                 elif is_auth_error(exc=e):
-                    # 认证错误，触发恢复
+                    # 认证错误，触发恢复；manual gate 不走二次快速重试
                     self._state = self.STATE_DEGRADED
+                    if self._last_manual_login_required_reason:
+                        raise
                     if attempt < retry:
                         self._schedule_background_recovery()
                         await asyncio.sleep(2)
@@ -2762,12 +2846,14 @@ class SimpleAuthManager:
         ):
             failure_info = {
                 **failure_info,
+                "auth_class": rebuild_out.get("auth_class") or failure_info.get("auth_class", ""),
                 "long_term_expired": bool(rebuild_out.get("long_term_expired")),
                 "need_qr_scan": bool(rebuild_out.get("need_qr_scan")),
                 "user_action_required": bool(rebuild_out.get("user_action_required")),
             }
         self._last_login_trace = {
             **self._last_login_trace,
+            "auth_class": failure_info.get("auth_class", ""),
             "need_qr_scan": bool(failure_info["need_qr_scan"]),
             "user_action_required": bool(failure_info["user_action_required"]),
             "long_term_expired": bool(failure_info["long_term_expired"]),
@@ -2928,6 +3014,10 @@ class SimpleAuthManager:
             "state": self._state,
             "last_error": self._last_error,
             "error_type": self._last_recovery_error_code,
+            "auth_class": self._last_login_trace.get("auth_class", ""),
+            "scheduled_refresh_suspended": self._scheduled_refresh_suspended,
+            "scheduled_refresh_suspend_reason": self._scheduled_refresh_suspend_reason,
+            "scheduled_refresh_suspend_code": self._scheduled_refresh_suspend_code,
             "need_qr_scan": bool(self._last_login_trace.get("need_qr_scan")),
             "user_action_required": bool(
                 self._last_login_trace.get("user_action_required")
@@ -3209,6 +3299,9 @@ class SimpleAuthManager:
             if self._last_refresh_attempt_ts > 0
             else 0,
             "last_refresh_trigger": self._last_refresh_trigger,
+            "scheduled_refresh_suspended": self._scheduled_refresh_suspended,
+            "scheduled_refresh_suspend_reason": self._scheduled_refresh_suspend_reason,
+            "scheduled_refresh_suspend_code": self._scheduled_refresh_suspend_code,
             "cooldown_until_ts": int(self._cooldown_until * 1000)
             if self._cooldown_until > 0
             else 0,
@@ -3221,6 +3314,7 @@ class SimpleAuthManager:
             "probe_failure_count": self._probe_failure_count,
             "recovery_failure_count": self._recovery_failure_count,
             "error_type": self._last_recovery_error_code,
+            "auth_class": self._last_login_trace.get("auth_class", ""),
             "need_qr_scan": bool(self._last_login_trace.get("need_qr_scan")),
             "user_action_required": bool(
                 self._last_login_trace.get("user_action_required")
@@ -3240,12 +3334,16 @@ class SimpleAuthManager:
         """
         auth_data = self._get_auth_data()
         return {
+            "state": self._state,
             "auth_mode": self._state,
             "last_auth_mode_transition": self._last_auth_mode_transition or {},
             "login_at": self._login_at,
             "expires_at": self._expires_at,
             "ttl_remaining_seconds": self._ttl_remaining_seconds,
             "last_refresh_trigger": self._last_refresh_trigger,
+            "scheduled_refresh_suspended": self._scheduled_refresh_suspended,
+            "scheduled_refresh_suspend_reason": self._scheduled_refresh_suspend_reason,
+            "scheduled_refresh_suspend_code": self._scheduled_refresh_suspend_code,
             "last_auth_error": self._last_error,
             "persistent_auth_available": self._has_persistent_auth_fields(auth_data),
             "short_session_available": bool(

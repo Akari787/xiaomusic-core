@@ -10,11 +10,13 @@
 
 ### 1.1 Persistent auth：长期认证材料
 
-典型字段：
+最小换票能力：
 
 ```text
-passToken, psecurity, ssecurity, userId, cUserId, deviceId
+userId, passToken, deviceId
 ```
+
+`psecurity`、`ssecurity`、`cUserId` 可作为完整诊断字段，但不是 serviceLogin 的硬前提。
 
 - 由 `TokenStore` 管理，磁盘事实来源通常是 `conf/auth.json`。
 - 用于重建 short session 和构造候选 runtime。
@@ -106,8 +108,10 @@ verify、commit 或 candidate 构造失败时，旧 token、旧 runtime 和旧 g
 2. 若有完整 persistent auth，优先 atomic short-session rebuild。
 3. 即使旧 `serviceToken` 仍存在，也不得跳过 rebuild。
 4. atomic rebuild 失败不得进入无口令 `MiAccount.login`。
-5. `70016`、`87001` 等明确长期认证失效首次即进入持久
-   `manual_login_required`，后续非 force ensure 短路。
+5. Reactive/manual reload 的 `70016`（credential/session rejected）或 `87001`/`captchaUrl`
+   （interactive captcha challenge）首次即进入持久 `manual_login_required`，但
+   `long_term_expired=false`；后续非 force ensure 短路。Scheduled 保持 healthy 并挂起后续
+   刷新，直到 verified recovery。
 
 ### 4.2 Scheduled refresh
 
@@ -116,7 +120,9 @@ scheduled refresh 只调用 atomic persistent-auth rebuild：
 - env override：直接 skip。
 - 无 persistent auth capability：记录 capability skip。
 - 失败不降级仍健康的 runtime。
-- 失败/skip 都推进独立 refresh attempt cooldown。
+- 70016/87001 失败设置 `scheduled_refresh_suspended` 及原因，后续周期零网络；verified
+  recovery 清除挂起。
+- 网络/5xx/未知错误只推进独立 refresh attempt cooldown。
 - 有效 `expires_in` 时，TTL 为 `saveTime + expires_in`，按
   `auth_refresh_threshold` 的 `ttl_ratio` 模式触发；阈值安全夹在 `0.01..0.99`。
 - 无有效 `expires_in` 时，不伪造 TTL，按 `auth_refresh_interval_hours` 的
@@ -182,5 +188,4 @@ lock 后若 generation 已变化且当前 runtime `HEALTHY`、对象就绪，则
 
 - 云端风控、网络和 DNS 仍可能导致认证失败。
 - legacy atomic=False 仅为兼容性保留，后续可继续收敛删除。
-- 历史 update+flush 调用点仍可继续迁移到 `TokenStore.commit()`，但不代表 atomic
-  主路径使用 update+flush。
+- 认证数据写回统一使用 `TokenStore.commit()`；候选失败不得触发任何 auth.json 写回。

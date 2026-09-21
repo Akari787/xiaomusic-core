@@ -344,7 +344,9 @@ class MiJiaAPI:
         This method only refreshes short-lived service cookies/tokens and writes
         back auth data. It does not rebind runtime services.
         """
-        required = ["passToken", "psecurity", "ssecurity", "userId", "cUserId", "deviceId"]
+        # serviceLogin needs only the durable exchange capability; the remaining
+        # fields are optional diagnostics rather than hard prerequisites.
+        required = ["passToken", "userId", "deviceId"]
         missing = [k for k in required if not str(self.auth_data.get(k) or "").strip()]
         if missing:
             return {
@@ -476,10 +478,24 @@ class MiJiaAPI:
         has_ssecurity = bool(service_data.get("ssecurity"))
 
         if service_login_code != 0 or not location:
+            is_captcha = service_login_code == 87001 or bool(
+                service_data.get("captchaUrl") or service_data.get("captchaurl")
+            )
+            auth_class = (
+                "interactive_captcha_challenge"
+                if is_captcha
+                else "credential_session_rejected"
+                if service_login_code == 70016
+                else ""
+            )
             is_cloud_auth_rejection = service_login_code in (70016, -1, 1)
             return {
                 "ok": False,
                 "error_code": "service_login_not_authorized",
+                "auth_class": auth_class,
+                "long_term_expired": False,
+                "need_qr_scan": bool(auth_class),
+                "user_action_required": bool(auth_class),
                 "failed_reason": "service_login_code_not_zero_or_no_location",
                 "error_message": service_login_desc[:200] or f"code={service_login_code}, has_location={has_location}",
                 "http_stage": "serviceLogin",

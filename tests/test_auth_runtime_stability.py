@@ -429,8 +429,7 @@ async def test_probe_auth_failure_enters_recovery(auth_manager):
 async def test_scheduled_refresh_skips_without_persistent_login_capability(auth_manager):
     manager, token_store = auth_manager
     now = 40_000.0
-    token_store._data.pop("psecurity")
-    token_store._data.pop("ssecurity")
+    token_store._data.pop("deviceId")
     token_store._data["saveTime"] = int((now - 3500) * 1000)
     manager.config.auth_refresh_min_interval_minutes = 30
     manager.ensure_auth = AsyncMock(return_value=False)
@@ -555,6 +554,7 @@ async def test_manual_reload_long_term_failure_maps_to_manual_login_required(aut
     assert out["state_after"] == manager.STATE_LOCKED
     assert out["runtime_auth_ready"] is False
     assert out["need_qr_scan"] is True
+    assert out["long_term_expired"] is False
     public = manager.map_auth_public_status(runtime_auth_ready=False)
     assert public["status_reason"] == "manual_login_required"
 
@@ -575,9 +575,12 @@ async def test_service_login_codes_propagate_manual_auth_classification(
         )
 
     assert out["error_code"] == "service_login_failed"
-    assert out["long_term_expired"] is True
+    assert out["long_term_expired"] is False
     assert out["need_qr_scan"] is True
     assert out["user_action_required"] is True
+    assert out["auth_class"] in {
+        "credential_session_rejected", "interactive_captcha_challenge"
+    }
 
 
 @pytest.mark.asyncio
@@ -924,108 +927,37 @@ async def test_preserved_candidate_with_expired_long_term_auth_locks_for_manual_
 
 
 @pytest.mark.asyncio
-async def test_try_login_uses_fresh_login_session(auth_manager):
+async def test_try_login_without_minimal_capability_requires_qr_without_login(auth_manager):
     manager, token_store = auth_manager
     for key in ("psecurity", "ssecurity", "cUserId", "deviceId", "serviceToken", "yetAnotherServiceToken"):
         token_store._data.pop(key, None)
-    old_session = manager.mi_session
-    with (
-        patch("xiaomusic.auth.MiAccount") as mock_account,
-        patch("xiaomusic.auth.MiNAService", return_value=_FailingRuntime()),
-        patch("xiaomusic.auth.MiIOService", return_value=object()),
-    ):
-        mock_account.return_value = MagicMock()
-        mock_account.return_value.token = {}
-
-        def _factory(*args, **kwargs):  # noqa: ARG001
-            if not args and not kwargs:
-                raise TypeError()
-            return mock_account.return_value
-
-        mock_account.side_effect = _factory
-
-        async def _login(*args, **kwargs):  # noqa: ARG001
-            mock_account.return_value.token["micoapi"] = ("ssecurity", "service-token")
-            mock_account.return_value.token["serviceToken"] = "service-token"
-            mock_account.return_value.token["yetAnotherServiceToken"] = "service-token"
-            return True
-
-        mock_account.return_value.login = AsyncMock(side_effect=_login)
-        out = await manager._try_login(
-            reason="ut-fresh-session", preserve_healthy_runtime=False
-        )
-
-    assert out is False
-    assert manager.mi_session is old_session
-    assert manager._last_login_trace["login_result"] is True
-    assert manager._last_login_trace["verify_attempted"] is True
-    assert manager._last_login_trace["runtime_swap_attempted"] is True
-    assert manager._last_login_trace["runtime_swap_applied"] is False
-    assert mock_account.call_args is not None
-    assert mock_account.call_args.args[0] is not old_session
+    with patch("xiaomusic.auth.MiAccount") as mock_account:
+        assert await manager._try_login(reason="ut-missing-capability") is False
+    mock_account.assert_not_called()
+    assert manager._last_login_trace.get("need_qr_scan") is True
 
 
 @pytest.mark.asyncio
-async def test_try_login_verify_failure_keeps_existing_runtime(auth_manager):
+async def test_try_login_without_minimal_capability_preserves_runtime(auth_manager):
     manager, token_store = auth_manager
     for key in ("psecurity", "ssecurity", "cUserId", "deviceId", "serviceToken", "yetAnotherServiceToken"):
         token_store._data.pop(key, None)
     old_runtime = manager.mina_service
-    with (
-        patch("xiaomusic.auth.MiAccount") as mock_account,
-        patch("xiaomusic.auth.MiNAService", return_value=_FailingRuntime()),
-        patch("xiaomusic.auth.MiIOService", return_value=object()),
-    ):
-        mock_account.return_value = MagicMock()
-        mock_account.return_value.token = {}
-
-        async def _login(*args, **kwargs):  # noqa: ARG001
-            mock_account.return_value.token["micoapi"] = ("ssecurity", "service-token")
-            mock_account.return_value.token["serviceToken"] = "service-token"
-            mock_account.return_value.token["yetAnotherServiceToken"] = "service-token"
-            return True
-
-        mock_account.return_value.login = AsyncMock(side_effect=_login)
-        out = await manager._try_login(
-            reason="ut-try-login", preserve_healthy_runtime=False
-        )
-
-    assert out is False
+    with patch("xiaomusic.auth.MiAccount") as mock_account:
+        assert await manager._try_login(reason="ut-try-login") is False
     assert manager.mina_service is old_runtime
-    assert manager._state in {manager.STATE_DEGRADED, manager.STATE_LOCKED}
-    assert manager._last_login_trace["login_result"] is True
-    assert manager._last_login_trace["runtime_swap_attempted"] is True
-    assert manager._last_login_trace["runtime_swap_applied"] is False
-    assert manager._last_login_trace["verify_attempted"] is True
-    assert manager._last_login_trace["verify_method"] == "device_list"
-    assert manager._last_login_trace["candidate_runtime_account_ready"] is True
+    mock_account.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_try_login_login_failure_stops_before_verify(auth_manager):
+async def test_try_login_without_minimal_capability_does_not_construct_candidate(auth_manager):
     manager, token_store = auth_manager
     for key in ("psecurity", "ssecurity", "cUserId", "deviceId", "serviceToken", "yetAnotherServiceToken"):
         token_store._data.pop(key, None)
-    with (
-        patch("xiaomusic.auth.MiAccount") as mock_account,
-        patch("xiaomusic.auth.MiNAService") as mock_mina,
-        patch("xiaomusic.auth.MiIOService") as mock_miio,
-    ):
-        mock_account.return_value = MagicMock()
-        mock_account.return_value.token = {}
-        mock_account.return_value.login = AsyncMock(return_value=False)
-
-        out = await manager._try_login(reason="ut-login-failed", preserve_healthy_runtime=False)
-
-    assert out is False
-    assert manager._last_recovery_stage == "login"
-    assert manager._last_login_trace["login_result"] is False
-    assert manager._last_login_trace["verify_attempted"] is False
-    assert manager._last_login_trace["runtime_swap_attempted"] is False
-    assert manager._last_login_trace["candidate_runtime_account_ready"] is False
-    assert manager._last_login_trace["token_changed_after_login"] is False
-    assert mock_mina.call_count == 0
-    assert mock_miio.call_count == 0
+    with patch("xiaomusic.auth.MiAccount") as mock_account:
+        assert await manager._try_login(reason="ut-login-failed") is False
+    mock_account.assert_not_called()
+    assert manager._last_recovery_error_code == "missing_long_term_auth"
 
 
 @pytest.mark.asyncio
@@ -1289,3 +1221,86 @@ def test_set_token_without_service_token_does_not_fake_micoapi(auth_manager):
     acct = _TokenAccount()
     manager.set_token(acct)
     assert "micoapi" not in acct.token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth_class", "code"),
+    [("credential_session_rejected", 70016), ("interactive_captcha_challenge", 87001)],
+)
+async def test_scheduled_challenge_keeps_healthy_and_suspends_network(
+    auth_manager, auth_class, code
+):
+    manager, token_store = auth_manager
+    now = 100_000.0
+    token_store._data["saveTime"] = int((now - 3500) * 1000)
+    manager.config.auth_refresh_min_interval_minutes = 0
+    manager.rebuild_short_session_from_persistent_auth = AsyncMock(
+        return_value={
+            "ok": False,
+            "error_code": "service_login_failed",
+            "failed_reason": f"service_login_code_{code}",
+            "auth_class": auth_class,
+            "long_term_expired": False,
+            "need_qr_scan": True,
+            "user_action_required": True,
+        }
+    )
+
+    with patch("xiaomusic.auth.time.time", return_value=now):
+        assert await manager._maybe_scheduled_refresh() is False
+        assert manager._state == manager.STATE_HEALTHY
+        assert manager._scheduled_refresh_suspended is True
+        assert await manager._maybe_scheduled_refresh() is False
+
+    manager.rebuild_short_session_from_persistent_auth.assert_awaited_once()
+    public = manager.map_auth_public_status(runtime_auth_ready=True)
+    assert public["status"] == "ok"
+    assert public["auth_mode"] == manager.STATE_HEALTHY
+    manager._mark_verified_runtime_recovered()
+    assert manager._scheduled_refresh_suspended is False
+
+
+@pytest.mark.asyncio
+async def test_minimal_capability_exchange_is_atomic_and_isolated(auth_manager):
+    manager, token_store = auth_manager
+    token_store._data = {
+        "userId": "user",
+        "passToken": "pass",
+        "deviceId": "device",
+        "saveTime": 1,
+    }
+    account = MagicMock()
+    account.token = {}
+    account._serviceLogin = AsyncMock(
+        return_value={
+            "code": 0,
+            "location": "https://account.example/redirect?nonce=n1",
+            "nonce": "n1",
+            "ssecurity": "ssec",
+        }
+    )
+    account._securityTokenService = AsyncMock(return_value="stoken")
+    with patch("xiaomusic.auth.MiAccount", return_value=account) as factory:
+        out = await manager._try_miaccount_persistent_auth_relogin(
+            before=token_store.get(), reason="minimal"
+        )
+
+    assert out["ok"] is True
+    assert factory.call_args.args[-1].__class__.__name__ == "_MemoryTokenStore"
+    assert str(manager.mi_token_home) not in {str(arg) for arg in factory.call_args.args}
+
+
+@pytest.mark.asyncio
+async def test_failed_candidate_does_not_delete_canonical_token_sentinel(auth_manager):
+    manager, token_store = auth_manager
+    sentinel = Path(manager.mi_token_home)
+    sentinel.write_text("sentinel", encoding="utf-8")
+    account = MagicMock()
+    account.token = {}
+    with patch("xiaomusic.auth.MiAccount", return_value=account), patch(
+        "xiaomusic.auth.MiNAService", return_value=_FailingRuntime()
+    ):
+        result = await manager._build_verified_runtime_candidate(token_store.get())
+    assert result["ok"] is False
+    assert sentinel.read_text(encoding="utf-8") == "sentinel"

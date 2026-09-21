@@ -9,7 +9,7 @@
 
 | 层 | 内容 | 事实/用途 |
 |---|---|---|
-| persistent auth | `passToken`、`psecurity`、`ssecurity`、`userId`、`cUserId`、`deviceId` | TokenStore/`conf/auth.json` 的持久事实；用于重建 short session |
+| persistent auth | **最小能力**：`userId`、`passToken`、`deviceId`；其余为诊断/兼容字段 | TokenStore/`conf/auth.json` 的持久事实；用于 serviceLogin 换取 short session |
 | short session | `serviceToken`、`yetAnotherServiceToken` | 短期业务会话；旧 token 存在不代表仍有效 |
 | runtime | account、Mina/MiIO service、session、cookie、signature、device_id | 进程内、必须经过 verify 才能成为当前运行态 |
 
@@ -108,12 +108,13 @@ need_qr_scan = true
 user_action_required = true
 ```
 
-- serviceLogin code `70016`
-- serviceLogin code `87001`
 - 明确的 refresh/passport/service token expired
+- 必要认证字段结构缺失
 - 明确的 need/scan QR、account locked、login required 证据
 
-`service_login_failed`、`service_login_code_*` 可以作为 auth 域错误标签，
+`70016` 分类为 `credential_session_rejected`，`87001` 或 `captchaUrl` 分类为
+`interactive_captcha_challenge`；这两类不得设置 `long_term_expired`，但无头恢复可设置
+`need_qr_scan/user_action_required`。`service_login_failed`、`service_login_code_*` 可以作为 auth 域错误标签，
 但未知非零 code（例如 `10001`、`500`）不得自动变成长期失效或扫码要求。
 
 ### 4.2 Fatal gate
@@ -223,8 +224,11 @@ verify.result = failed
 
 - runtime probe auth failure 后必须进入 atomic rebuild。
 - atomic failure 不得进入无口令 `MiAccount.login`。
-- 70016/87001 第一次失败必须映射 `manual_login_required`，第二次非 force
-  ensure 不得再次调用 `_serviceLogin`。
+- Reactive probe 或 manual reload 首次遇到 70016/87001 必须映射
+  `manual_login_required` 且 `long_term_expired=false`，第二次非 force ensure 不得再次调用
+  `_serviceLogin`。
+- Scheduled 遇到上述两类保持 `healthy`，记录 suspended 及原因，后续周期零网络；verified
+  recovery 清除 suspended。网络/5xx/unknown 只走 attempt cooldown。
 - 10001/500 等未知非零 code 不得误报扫码。
 
 ### 7.4 Manual reload

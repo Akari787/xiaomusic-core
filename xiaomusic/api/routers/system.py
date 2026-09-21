@@ -255,12 +255,7 @@ async def _build_auth_status_payload() -> dict:
             j = {}
         st = j.get("serviceToken") or j.get("yetAnotherServiceToken")
         persistent_auth_available = bool(
-            j.get("userId")
-            and j.get("passToken")
-            and j.get("psecurity")
-            and j.get("ssecurity")
-            and j.get("cUserId")
-            and j.get("deviceId")
+            j.get("userId") and j.get("passToken") and j.get("deviceId")
         )
         short_session_available = bool(st)
         token_valid = bool(j.get("userId") and j.get("passToken") and j.get("ssecurity") and st)

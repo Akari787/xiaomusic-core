@@ -53,7 +53,7 @@
 |------|------|
 | primary path | `_try_miaccount_persistent_auth_relogin`，通过 serviceLogin + redirect 重建 short session |
 | fallback path | `_try_mijia_persistent_auth_relogin`，通过 MiJiaAPI 另一条长期态恢复链重建 short session |
-| persistent auth | 长期态字段：passToken、psecurity、ssecurity、userId、cUserId、deviceId |
+| persistent auth | 换票最小能力：userId、passToken、deviceId；psecurity/ssecurity/cUserId 为可选诊断字段 |
 | short session | serviceToken、yetAnotherServiceToken |
 | rebuild | 从 persistent auth 重建 short session 并写回 auth.json |
 | runtime rebind | 重新初始化 mina_service / miio_service |
@@ -73,6 +73,13 @@
 ---
 
 ## 3. 当前已知链路事实
+
+外部机制说明：官方 OAuth 不提供 `micoapi` scope；当前链路是私有 SSO：
+`passToken → serviceLogin(sid=micoapi) → serviceToken`，没有官方 TTL/SLA。
+因此 unknown-TTL 的默认 12h interval 只是主动换票辅助，不承诺延长 passToken 寿命；
+reactive 401 才是主要恢复触发器。70016 是上下文相关的 credential/session rejection，
+87001 是 CAPTCHA challenge，不应统一归为长期 token 过期。
+
 
 以下为本文档的现实前提，不是推测：
 

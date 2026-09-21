@@ -7,7 +7,7 @@
 
 认证运行时分三层：
 
-1. **persistent auth**：`passToken`、`psecurity`、`ssecurity`、`userId`、`cUserId`、`deviceId`。
+1. **persistent auth**：最小能力为 `userId`、`passToken`、`deviceId`；`psecurity`、`ssecurity`、`cUserId` 仅作诊断/兼容字段。
 2. **short session**：`serviceToken`、`yetAnotherServiceToken`。
 3. **runtime**：`login_account`、`mina_service`、`miio_service`、session、cookie 和签名。
 
@@ -141,7 +141,9 @@ session。
 
 serviceLogin 非零 code 分类：
 
-- `70016`、`87001`：`long_term_expired/need_qr_scan/user_action_required=true`。
+- `70016`：`credential_session_rejected`。
+- `87001` 或 `captchaUrl`：`interactive_captcha_challenge`。
+- 两类均 `long_term_expired=false`；无头恢复可 `need_qr_scan/user_action_required=true`。
 - 未知非零 code，例如 `10001`、`500`：可属于 auth error，但不自动推断需要扫码。
 - `service_login_failed` 和 `service_login_code_*` 是 auth 域错误标签，不等于长期失效。
 
@@ -216,8 +218,11 @@ verify.result = failed
 - fatal auth + manual gate：`manual_login_required`
 - 健康：`healthy` / `status=ok`
 
-70016/87001 第一次失败即为 `manual_login_required`；未知 serviceLogin 非零 code
-不得误报扫码。
+Reactive/manual reload 的 70016/87001 首次失败即为 `manual_login_required`，但
+`long_term_expired=false`；未知 serviceLogin 非零 code 不得误报扫码。
+
+Scheduled 的两类错误保持 public healthy，设置 `scheduled_refresh_suspended` 及原因；
+后续周期零网络，verified recovery 才清除挂起。
 
 ## 9. 代码定位
 

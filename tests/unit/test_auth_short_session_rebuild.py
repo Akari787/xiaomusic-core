@@ -27,6 +27,10 @@ class _TokenStore:
     def flush(self):
         return None
 
+    def commit(self, data: dict, reason: str = ""):
+        self._data = dict(data)
+        self.updates.append((dict(data), reason))
+
 
 class _DeviceManager:
     async def update_device_info(self, auth):  # noqa: ARG002
