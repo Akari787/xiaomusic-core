@@ -9,6 +9,15 @@
 - reactive/manual 永久 gate 与 verified 恢复收敛；QR 保存后使用现有 short session 做 verified atomic rebind。verified-only reinit 不执行 exchange/login，失败保留旧 runtime；诊断、计数与 cooldown 统一。
 - startup 从持久化 `saveTime` 同步 `login_at`；env override 支持 unknown，NaN/Inf 安全归零。
 
+### 安全边界、依赖与发布验收
+
+- 插件、OpenAPI、插件源路由改用独立 `strict_verification`，不受 legacy no-auth override 影响；新配置默认 `disable_httpauth=false`、用户名 `admin`。CLI 在 `HTTP_AUTH_HASH` 与 `HTTP_AUTH_PASSWORD` 均缺失时 fail-closed；已有持久化 setting 仍可能保留旧开关，升级后需显式确认关闭，本次测试服已设为 `false`。
+- 插件上传拒绝空名、绝对路径、POSIX/Windows 路径穿越、NUL 与非单一 `.js` basename；`AuthStaticFiles` 不再依赖 `assert`。Compose 同时传递 hash/password，由 CLI 执行二选一契约；`.env.example` 的 bcrypt 示例使用单引号避免 Compose 插值破坏 `$`。
+- 根 Node lockfile 固定 axios `1.20.0`、follow-redirects `1.16.0`、form-data `4.0.6`、qs `6.16.0`、undici `7.29.1`；官方 registry `npm audit --omit=dev` 为 0。新增 follow-redirects/Axios `sensitiveHeaders`、form-data、qs GHSA-4mjr、axios prototype gadget 与 Node runtime 回归门禁。
+- 安全提交链：`30488078`、`159f3873`、`0f1a3c98`、`b35d02ae`、`d58c37f3`、`2e08c2b6`、`d6e5a09c`、`f4b8f6e0`。
+- 本地安全候选：Python 定向实现者测试 29 passed，Node 安全测试 10 passed；Ruff、compileall、diff-check 通过。全量基线（`43c2012c`）为 1166 passed / 106 failed / 1 skipped；当前候选为 1172 passed / 106 failed / 1 skipped，未增加失败。
+- ARMv7 与 AMD64 真实 buildx 均通过 Python import、Node v24.18.1 安全测试 10/10；ARMv7 镜像 manifest digest 为 `sha256:71b8958d09bd2f83aae3f297b859f6faffceec8cd177c579d3502f2e4b2ed048`，AMD64 image ID 为 `sha256:a001f669ba3f18efb048b228352bbe4fa86c0008911a707488c0825ae5920e31`。
+
 ### 兼容性边界
 
 - 不改变公开 API 形状，不改变播放协调器与来源；本版主要改动集中在认证状态机。
