@@ -952,11 +952,14 @@ class SimpleAuthManager:
                     )
                     if key in rebuild_out
                 }
+                if rebuild_classification.get("auth_class") and not rebuild_classification.get(
+                    "error_type"
+                ):
+                    rebuild_classification["error_type"] = "auth_error"
                 structured_failure_classification = (
                     rebuild_classification
                     if (
                         rebuild_classification.get("auth_class")
-                        or rebuild_classification.get("error_type")
                         or any(
                             rebuild_classification.get(key)
                             for key in (

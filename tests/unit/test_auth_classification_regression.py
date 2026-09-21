@@ -152,7 +152,9 @@ async def test_reactive_short_session_rebuild_preserves_structured_classificatio
     assert await auth._try_login(reason="ut-reactive-classification") is False
 
     assert auth._last_manual_login_required_reason == expected_class
+    assert auth._last_recovery_error_code == "auth_error"
     assert auth._last_login_trace["auth_class"] == expected_class
+    assert auth._last_login_trace["error_type"] == "auth_error"
     assert calls["login"] == 0
     assert calls["security"] == 0
     assert store.get() == original_token
