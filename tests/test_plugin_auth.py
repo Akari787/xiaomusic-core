@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import bcrypt
 from fastapi import APIRouter, Depends, FastAPI
+from fastapi.security import HTTPBasicCredentials
 from fastapi.testclient import TestClient
 
 from xiaomusic.api import dependencies
@@ -76,6 +77,23 @@ def test_sensitive_plugin_routes_ignore_legacy_no_auth_override(monkeypatch, tmp
     assert uploaded.status_code == 200
     assert manager.updated == [("safe", "safe.js")]
     assert manager.reload_count == 1
+
+
+def test_strict_auth_keeps_explicit_legacy_username(monkeypatch):
+    password = "legacy-password"
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    monkeypatch.setattr(
+        dependencies,
+        "config",
+        SimpleNamespace(httpauth_username="existing-user"),
+    )
+    monkeypatch.setattr(
+        dependencies,
+        "get_auth_settings",
+        lambda: SimpleNamespace(HTTP_AUTH_HASH=hashed),
+    )
+    credentials = HTTPBasicCredentials(username="existing-user", password=password)
+    assert dependencies.strict_verification(credentials) is True
 
 
 def test_legacy_route_still_accepts_no_auth_override():

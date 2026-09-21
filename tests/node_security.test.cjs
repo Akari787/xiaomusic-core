@@ -20,10 +20,11 @@ test('runtime security packages resolve and can be required', () => {
   assert.ok(process.versions.node.split('.')[0] >= 20);
 });
 
-test('follow-redirects drops custom auth across a cross-origin redirect', async () => {
-  let seen;
+async function requestAcrossRedirect(options) {
+  const seen = {};
   const target = http.createServer((req, res) => {
-    seen = req.headers.authorization;
+    seen.apiKey = req.headers['x-api-key'];
+    seen.authorization = req.headers.authorization;
     res.end('ok');
   });
   const redirect = http.createServer((req, res) => {
@@ -36,15 +37,36 @@ test('follow-redirects drops custom auth across a cross-origin redirect', async 
     await new Promise((resolve, reject) => {
       follow.http.get(
         `http://127.0.0.1:${redirect.address().port}/redirect`,
-        { headers: { authorization: 'Basic should-not-leak' } },
+        options,
         response => { response.resume(); response.on('end', resolve); },
       ).on('error', reject);
     });
-    assert.equal(seen, undefined);
+    return seen;
   } finally {
     await new Promise(resolve => redirect.close(resolve));
     await new Promise(resolve => target.close(resolve));
   }
+}
+
+test('follow-redirects default policy is precise for cross-origin redirects', async () => {
+  const seen = await requestAcrossRedirect({
+    headers: {
+      authorization: 'Basic built-in-sensitive',
+      'x-api-key': 'caller-header',
+    },
+  });
+  // 1.16.0 keeps its built-in sensitive-header policy, but does not guess
+  // that arbitrary caller headers such as X-API-Key are sensitive.
+  assert.equal(seen.authorization, undefined);
+  assert.equal(seen.apiKey, 'caller-header');
+});
+
+test('follow-redirects honors explicit sensitiveHeaders across cross-origin redirects', async () => {
+  const seen = await requestAcrossRedirect({
+    headers: { 'x-api-key': 'caller-header' },
+    sensitiveHeaders: ['X-API-Key'],
+  });
+  assert.equal(seen.apiKey, undefined);
 });
 
 test('form-data percent-encodes CRLF in field names and filenames', () => {
