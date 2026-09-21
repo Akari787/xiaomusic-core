@@ -435,6 +435,21 @@ class SimpleAuthManager:
             return True
         return self._state == self.STATE_LOCKED and time.time() < self._locked_until
 
+    def _enter_manual_login_gate(self, reason: str) -> None:
+        """Enter the persistent manual-login gate without a temporary expiry."""
+        self._state = self.STATE_LOCKED
+        self._locked_until = 0
+        self._last_manual_login_required_reason = str(reason or "manual auth required")
+        self._last_lock_transition_reason = "manual_login_required"
+
+    def _preserve_manual_login_gate(self) -> bool:
+        """Keep manual gate authoritative over ordinary failure finalization."""
+        if not self._last_manual_login_required_reason:
+            return False
+        self._state = self.STATE_LOCKED
+        self._locked_until = 0
+        return True
+
     def _mark_verified_runtime_recovered(self) -> None:
         """Verified runtime success clears manual and scheduled gates."""
         self._state = self.STATE_HEALTHY
@@ -537,10 +552,12 @@ class SimpleAuthManager:
 
         这是核心入口，所有需要认证的操作都应该先调用此方法
         """
+        # Manual gate is persistent and outranks cooldown/temporary lock handling.
+        if self._last_manual_login_required_reason and not force:
+            self._preserve_manual_login_gate()
+            return False
         # 如果在冷却期，检查是否过期
         if not force and time.time() < self._cooldown_until:
-            return False
-        if not force and self._last_manual_login_required_reason:
             return False
 
         if force:
@@ -613,6 +630,10 @@ class SimpleAuthManager:
                 self._state = self.STATE_HEALTHY
                 return True
             else:
+                # Manual gate is authoritative; ordinary threshold/cooldown finalization
+                # must not downgrade it or add a temporary expiry.
+                if self._preserve_manual_login_gate():
+                    return False
                 # 恢复失败，仅在有效恢复失败累计到阈值时才锁定
                 if self._lock_counter >= self._lock_counter_threshold:
                     self._state = self.STATE_LOCKED
@@ -686,10 +707,12 @@ class SimpleAuthManager:
                 self._last_recovery_stage = "read_auth"
                 self._last_recovery_error_code = "missing_auth_data"
                 self._last_recovery_error_message = self._last_error
+                # Route structural absence through the common finalizer so reactive
+                # recovery exposes a durable manual gate without any network call.
                 failure_classification = self._classify_auth_failure(
                     self._last_error, auth_data
                 )
-                return False
+                raise RuntimeError(self._last_error)
 
             user_id = auth_data.get("userId", "")
             if not user_id:
@@ -701,7 +724,7 @@ class SimpleAuthManager:
                 failure_classification = self._classify_auth_failure(
                     self._last_error, auth_data
                 )
-                return False
+                raise RuntimeError(self._last_error)
 
             if os.getenv("AUTH_ACCESS_TOKEN") or os.getenv("AUTH_REFRESH_TOKEN"):
                 env_rebind = await self._atomic_runtime_rebind_current_auth(
@@ -948,13 +971,8 @@ class SimpleAuthManager:
                 )
             )
             if manual_gate and not scheduled_refresh:
-                self._state = self.STATE_LOCKED
-                self._locked_until = 0
-                self._last_manual_login_required_reason = (
+                self._enter_manual_login_gate(
                     auth_class or self._last_recovery_error_code or "manual auth required"
-                )
-                self._last_lock_transition_reason = (
-                    f"{self._last_recovery_stage}:manual_login_required"
                 )
             fatal_auth = bool(
                 failure_classification.get("long_term_expired")
@@ -1001,6 +1019,9 @@ class SimpleAuthManager:
                 return False
 
             if fatal_auth:
+                return False
+
+            if self._preserve_manual_login_gate():
                 return False
 
             self._state = self.STATE_DEGRADED
@@ -2229,9 +2250,10 @@ class SimpleAuthManager:
                         continue
                 elif is_auth_error(exc=e):
                     # 认证错误，触发恢复；manual gate 不走二次快速重试
-                    self._state = self.STATE_DEGRADED
                     if self._last_manual_login_required_reason:
+                        self._preserve_manual_login_gate()
                         raise
+                    self._state = self.STATE_DEGRADED
                     if attempt < retry:
                         self._schedule_background_recovery()
                         await asyncio.sleep(2)
@@ -2287,7 +2309,9 @@ class SimpleAuthManager:
                 else:
                     self._background_recovery_result = "failed"
                     self._background_recovery_error = self._last_error
-                    if self._lock_counter >= self._lock_counter_threshold:
+                    if self._preserve_manual_login_gate():
+                        self.log.warning("后台恢复失败，保持人工登录门禁")
+                    elif self._lock_counter >= self._lock_counter_threshold:
                         self._state = self.STATE_LOCKED
                         self._locked_until = time.time() + 300
                         self._last_lock_transition_reason = (
@@ -2305,7 +2329,9 @@ class SimpleAuthManager:
                 self.log.error(f"后台恢复异常: {e}")
                 self._recovery_failure_count += 1
                 self._last_status_mapping_source = "background_recovery_exception"
-                if self._lock_counter >= self._lock_counter_threshold:
+                if self._preserve_manual_login_gate():
+                    self.log.warning("后台恢复异常，保持人工登录门禁")
+                elif self._lock_counter >= self._lock_counter_threshold:
                     self._state = self.STATE_LOCKED
                     self._locked_until = time.time() + 300
                     self._last_lock_transition_reason = (
@@ -2385,7 +2411,7 @@ class SimpleAuthManager:
         async with self._recovery_lock:
             self._recovery_inflight = False
             self._recovery_leader_ctx = ""
-            if result != "ok":
+            if result != "ok" and not self._last_manual_login_required_reason:
                 self._recovery_backoff_until_ts = time.time() + self._recovery_backoff_sec
             self.log.info(
                 f"auth_recovery_singleflight: role=leader action=finish result={result}"
@@ -3089,6 +3115,7 @@ class SimpleAuthManager:
             "scheduled_refresh_suspend_reason": self._scheduled_refresh_suspend_reason,
             "scheduled_refresh_suspend_code": self._scheduled_refresh_suspend_code,
             "last_auth_error": self._last_error,
+            "long_term_expired": bool(self._last_login_trace.get("long_term_expired")),
             "persistent_auth_available": self._has_persistent_auth_fields(auth_data),
             "short_session_available": bool(
                 auth_data.get("serviceToken") or auth_data.get("yetAnotherServiceToken")

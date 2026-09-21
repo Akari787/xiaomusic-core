@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import sys
+import time
 import types
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1342,3 +1343,124 @@ async def test_failed_candidate_does_not_delete_canonical_token_sentinel(auth_ma
         result = await manager._build_verified_runtime_candidate(token_store.get())
     assert result["ok"] is False
     assert sentinel.read_text(encoding="utf-8") == "sentinel"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [70016, 87001])
+async def test_degraded_service_login_manual_gate_survives_real_atomic_chain(
+    auth_manager, code
+):
+    manager, token_store = auth_manager
+    manager._state = manager.STATE_DEGRADED
+    manager.mina_service = _FailingRuntime()
+    account = MagicMock()
+    account.token = {}
+    account._serviceLogin = AsyncMock(return_value={"code": code})
+    with patch("xiaomusic.auth.MiAccount", return_value=account), patch.object(
+        manager,
+        "_try_mijia_persistent_auth_relogin",
+        AsyncMock(return_value={"ok": False, "error_code": "fallback_skipped"}),
+    ):
+        assert await manager.ensure_auth() is False
+        assert account._serviceLogin.await_count == 1
+        assert manager._state == manager.STATE_LOCKED
+        assert manager.is_auth_locked() is True
+        public = manager.map_auth_public_status(runtime_auth_ready=False)
+        assert public["status_reason"] == "manual_login_required"
+        assert manager.auth_debug_state()["long_term_expired"] is False
+        calls = account._serviceLogin.await_count
+        assert await manager.ensure_auth() is False
+        assert account._serviceLogin.await_count == calls
+
+
+@pytest.mark.asyncio
+async def test_background_manual_gate_does_not_degrade_or_start_cooldown(auth_manager):
+    manager, _ = auth_manager
+    manager._state = manager.STATE_DEGRADED
+    manager._cooldown_until = 0
+    manager._recovery_backoff_until_ts = 0
+    manager._lock_counter = manager._lock_counter_threshold
+
+    async def _failed_recovery():
+        manager._enter_manual_login_gate("credential_session_rejected")
+        return False
+
+    manager._try_login = AsyncMock(side_effect=_failed_recovery)
+
+    manager._schedule_background_recovery(ctx="manual-gate-regression")
+    await manager._recovery_task
+
+    assert manager._state == manager.STATE_LOCKED
+    assert manager._locked_until == 0
+    assert manager._cooldown_until == 0
+
+
+@pytest.mark.asyncio
+async def test_auth_call_manual_gate_does_not_write_degraded_or_schedule_recovery(
+    auth_manager,
+):
+    manager, _ = auth_manager
+    manager._enter_manual_login_gate("interactive_captcha_challenge")
+    schedule = MagicMock()
+
+    async def _auth_error():
+        raise RuntimeError("Error device_list: Login failed")
+
+    with patch.object(manager, "_schedule_background_recovery", schedule):
+        with pytest.raises(RuntimeError):
+            await manager.auth_call(_auth_error, retry=1, ctx="manual-gate")
+
+    assert manager._state == manager.STATE_LOCKED
+    assert manager._locked_until == 0
+    schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_data", [{}, {"passToken": "pass"}])
+async def test_reactive_structural_auth_missing_enters_manual_gate_without_network(
+    auth_manager, auth_data
+):
+    manager, _ = auth_manager
+    manager._state = manager.STATE_DEGRADED
+    manager.mina_service = None
+    manager._get_auth_data = MagicMock(return_value=auth_data)
+    account = MagicMock()
+    with patch("xiaomusic.auth.MiAccount", return_value=account):
+        assert await manager.ensure_auth() is False
+    assert manager._state == manager.STATE_LOCKED
+    assert manager.is_auth_locked() is True
+    account.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [70016, 87001])
+async def test_scheduled_service_login_challenge_keeps_healthy_and_suspends(
+    auth_manager, code
+):
+    manager, token_store = auth_manager
+    token_store._data["saveTime"] = int((time.time() - 100000) * 1000)
+    manager.config.auth_refresh_min_interval_minutes = 0
+    account = MagicMock()
+    account.token = {}
+    account._serviceLogin = AsyncMock(
+        return_value={
+            "code": code,
+            "location": "https://account.example/redirect?nonce=n1",
+            "nonce": "n1",
+            "ssecurity": "ssec",
+        }
+    )
+    account._securityTokenService = AsyncMock(return_value="scheduled-token")
+    with patch("xiaomusic.auth.MiAccount", return_value=account), patch(
+        "xiaomusic.auth.MiNAService", return_value=_HealthyRuntime()
+    ), patch("xiaomusic.auth.MiIOService", return_value=object()):
+        assert await manager._maybe_scheduled_refresh() is False
+        assert manager._state == manager.STATE_HEALTHY
+        assert manager._scheduled_refresh_suspended is True
+        assert manager.auth_debug_state()["long_term_expired"] is False
+        assert manager.map_auth_public_status(runtime_auth_ready=True)["status"] == "ok"
+        first_calls = account._serviceLogin.await_count
+        assert await manager._maybe_scheduled_refresh() is False
+
+    assert account._serviceLogin.await_count == first_calls == 1
+    assert manager._scheduled_refresh_suspended is True

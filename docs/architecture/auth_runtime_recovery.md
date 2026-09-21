@@ -1,6 +1,6 @@
 # Auth 运行时恢复实现与观测参考
 
-> 本文对应 HEAD `66cc131` 的实际实现。它是实现/观测参考，不替代
+> 本文描述当前认证状态机主线的实现与观测，不绑定短期 commit；它不替代
 > [`docs/spec/auth/auth_runtime_recovery.md`](../spec/auth/auth_runtime_recovery.md) 的验收规范。
 
 ## 1. 实现边界

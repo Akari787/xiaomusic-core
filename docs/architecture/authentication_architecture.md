@@ -1,6 +1,6 @@
 # 认证系统架构
 
-> 本文描述 HEAD `66cc131` 的认证架构。认证恢复的实现细节见
+> 本文描述当前认证状态机主线的认证架构，不绑定短期 commit。认证恢复的实现细节见
 > [`auth_runtime_recovery.md`](auth_runtime_recovery.md)，行为验收见
 > [`docs/spec/auth/auth_runtime_recovery.md`](../spec/auth/auth_runtime_recovery.md)。
 

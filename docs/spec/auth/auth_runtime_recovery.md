@@ -1,7 +1,7 @@
 # 认证运行时恢复规范
 
-> 本规范对应 HEAD `66cc131`。它定义 persistent auth、short session、runtime 的边界、
-> atomic 恢复行为、公共状态和验收门禁。
+> 本规范是当前认证状态机主线，定义 persistent auth、short session、runtime 的边界、
+> atomic 恢复行为、公共状态和验收门禁；不绑定短期 commit。
 
 ## 1. 术语与事实来源
 

@@ -258,6 +258,8 @@ async def _build_auth_status_payload() -> dict:
             j.get("userId") and j.get("passToken") and j.get("deviceId")
         )
         short_session_available = bool(st)
+        # token_valid/cloud_available describe the current short session only;
+        # persistent_auth_available separately means the app can exchange a new ticket.
         token_valid = bool(j.get("userId") and j.get("passToken") and j.get("ssecurity") and st)
     except Exception:
         token_valid = False
