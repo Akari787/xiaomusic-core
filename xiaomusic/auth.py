@@ -431,9 +431,11 @@ class SimpleAuthManager:
             return
 
         # 在任何登录/快速重绑定判断前，从持久化认证数据恢复诊断时间轴。
-        # 这里只读 auth data；_sync_auth_ttl 对未知/非法 TTL 保持零值，不发起网络请求。
+        # env 凭据的年龄不可由磁盘 saveTime 代替；保持 unknown，交给 env rebind。
         auth_data = self._get_auth_data()
-        if auth_data:
+        if os.getenv("AUTH_ACCESS_TOKEN") or os.getenv("AUTH_REFRESH_TOKEN"):
+            self._sync_auth_ttl({})
+        elif auth_data:
             self._sync_auth_ttl(auth_data)
 
         # 检查是否需要登录
@@ -1288,7 +1290,7 @@ class SimpleAuthManager:
         self, auth_data: dict[str, Any] | None = None, login_at_ts: float | None = None
     ) -> None:
         """同步 saveTime 锚点和显式 TTL；未知 TTL 不伪造 expires_at。"""
-        data = auth_data or self._get_auth_data()
+        data = self._get_auth_data() if auth_data is None else auth_data
         self._auth_refresh_mode = "unknown"
         self._auth_refresh_elapsed_seconds = 0.0
         self._auth_refresh_threshold = None
@@ -1300,13 +1302,18 @@ class SimpleAuthManager:
             return
 
         if login_at_ts is not None:
-            self._login_at = login_at_ts
+            try:
+                parsed_login_at = float(login_at_ts)
+            except (TypeError, ValueError):
+                parsed_login_at = 0.0
+            self._login_at = parsed_login_at if math.isfinite(parsed_login_at) else 0.0
         else:
             st = data.get("saveTime")
             try:
-                self._login_at = float(st) / 1000.0 if st is not None else 0.0
+                parsed_login_at = float(st) / 1000.0 if st is not None else 0.0
             except (TypeError, ValueError):
-                self._login_at = 0.0
+                parsed_login_at = 0.0
+            self._login_at = parsed_login_at if math.isfinite(parsed_login_at) else 0.0
 
         expires_in = self._positive_finite_float(data.get("expires_in"))
         if expires_in is not None and self._login_at > 0:
