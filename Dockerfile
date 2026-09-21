@@ -27,6 +27,8 @@ RUN if [ -f /etc/alpine-release ]; then \
         build-base \
         nodejs \
         npm \
+        cargo \
+        linux-headers \
         zlib-dev \
         jpeg-dev \
         freetype-dev \
