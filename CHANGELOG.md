@@ -1,3 +1,23 @@
+## v1.1.7 (2026-09-21)
+
+### 认证状态机与持久会话
+
+- 私有 SSO 仅提供受限持久认证能力：官方 OAuth 不替代 `micoapi`；最小持久字段为 `userId`、`passToken`、`deviceId`。无账号密码时不执行 full login；候选 `MiAccount` 使用隔离的 `MemoryTokenStore`。
+- TTL 配置实际参与调度。unknown TTL 以 12h scheduled 辅助轮转，reactive 401 作为主恢复路径；网络错误或未知错误不会被误导为需要扫码。
+- `70016 + captchaUrl=null` 分类为 `credential_session_rejected`；`87001` 或 truthy captcha 分类为 `interactive`。两者均不等同于 `long_term_expired=false`；scheduled 路径保留 healthy 并 suspend，零刺激重试。
+- 对外审计路径为 `used_path=miaccount_persistent_auth_exchange`，不调用 `MiAccount.login`。
+- reactive/manual 永久 gate 与 verified 恢复收敛；QR 保存后使用现有 short session 做 verified atomic rebind。verified-only reinit 不执行 exchange/login，失败保留旧 runtime；诊断、计数与 cooldown 统一。
+- startup 从持久化 `saveTime` 同步 `login_at`；env override 支持 unknown，NaN/Inf 安全归零。
+
+### 兼容性边界
+
+- 不改变公开 API 形状，不改变播放协调器与来源；本版主要改动集中在认证状态机。
+
+### 验证
+
+- 关键认证组合：118 passed；其中 startup 模块独立 13 passed；详见 `docs/release/v1.1.7_checklist.md`。
+- 现场验收范围、未完成项与已知基线问题详见 `docs/release/v1.1.7.md`。
+
 ## v1.1.6 (2026-09-19)
 
 ### 认证恢复（重启免扫码）
