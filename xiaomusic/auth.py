@@ -430,6 +430,12 @@ class SimpleAuthManager:
             self.log.warning("没有认证 Token，无法登录")
             return
 
+        # 在任何登录/快速重绑定判断前，从持久化认证数据恢复诊断时间轴。
+        # 这里只读 auth data；_sync_auth_ttl 对未知/非法 TTL 保持零值，不发起网络请求。
+        auth_data = self._get_auth_data()
+        if auth_data:
+            self._sync_auth_ttl(auth_data)
+
         # 检查是否需要登录
         if await self.need_login():
             self.log.info("需要登录，开始认证...")
