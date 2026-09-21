@@ -4,11 +4,11 @@ ARG PYTHON_VERSION=3.12
 # 根据不同架构选择对应的基础镜像
 FROM python:${PYTHON_VERSION}-alpine AS base-linux-amd64
 FROM python:${PYTHON_VERSION}-alpine AS base-linux-arm64
-FROM python:${PYTHON_VERSION}-bookworm AS base-linux-arm-v7
+FROM python:${PYTHON_VERSION}-alpine AS base-linux-arm-v7
 
 FROM python:${PYTHON_VERSION}-alpine AS run-linux-amd64
 FROM python:${PYTHON_VERSION}-alpine AS run-linux-arm64
-FROM python:${PYTHON_VERSION}-bookworm AS run-linux-arm-v7
+FROM python:${PYTHON_VERSION}-alpine AS run-linux-arm-v7
 
 FROM --platform=$BUILDPLATFORM alpine AS shelf
 # 这里的逻辑是关键：接收标准的 TARGETPLATFORM (如 linux/amd64)
