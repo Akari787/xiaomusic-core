@@ -180,9 +180,7 @@ def classify_auth_challenge(evidence: Any) -> str:
             code = int(code) if code is not None else None
         except (TypeError, ValueError):
             code = None
-        captcha_url = payload.get("captchaUrl")
-        if captcha_url is None:
-            captcha_url = payload.get("captchaurl")
+        captcha_url = payload.get("captchaUrl") or payload.get("captchaurl")
         if code == 87001 or bool(captcha_url):
             return "interactive_captcha_challenge"
         if code == 70016:
@@ -728,6 +726,7 @@ class SimpleAuthManager:
             "need_qr_scan": False,
             "user_action_required": False,
         }
+        structured_failure_classification: dict[str, Any] | None = None
 
         try:
             if not auth_data:
@@ -942,6 +941,35 @@ class SimpleAuthManager:
                     rebuild_out.get("error_code") or "short_session_rebuild_failed"
                 )
                 self._last_recovery_error_message = self._last_error
+                rebuild_classification = {
+                    key: rebuild_out[key]
+                    for key in (
+                        "auth_class",
+                        "error_type",
+                        "long_term_expired",
+                        "need_qr_scan",
+                        "user_action_required",
+                    )
+                    if key in rebuild_out
+                }
+                structured_failure_classification = (
+                    rebuild_classification
+                    if (
+                        rebuild_classification.get("auth_class")
+                        or rebuild_classification.get("error_type")
+                        or any(
+                            rebuild_classification.get(key)
+                            for key in (
+                                "long_term_expired",
+                                "need_qr_scan",
+                                "user_action_required",
+                            )
+                        )
+                    )
+                    else None
+                )
+                if structured_failure_classification:
+                    failure_classification.update(structured_failure_classification)
                 self._last_login_trace = {
                     **self._last_login_trace,
                     "stage": "short_session_rebuild",
@@ -978,9 +1006,15 @@ class SimpleAuthManager:
             self._last_error = str(e)[:200]
             self.log.error(f"认证失败: {e}")
             preserved_stage = self._last_recovery_stage
-            failure_classification = self._classify_auth_failure(
-                self._last_error, auth_data
-            )
+            if structured_failure_classification is None:
+                failure_classification = self._classify_auth_failure(
+                    self._last_error, auth_data
+                )
+            else:
+                failure_classification = {
+                    **failure_classification,
+                    **structured_failure_classification,
+                }
             self._last_recovery_result = "failed"
             self._last_recovery_stage = (
                 preserved_stage
@@ -1425,9 +1459,7 @@ class SimpleAuthManager:
                 response_code = int(response_code) if response_code is not None else None
             except (TypeError, ValueError):
                 response_code = None
-            captcha_url = resp.get("captchaUrl")
-            if captcha_url is None:
-                captcha_url = resp.get("captchaurl")
+            captcha_url = resp.get("captchaUrl") or resp.get("captchaurl")
             if (response_code is not None and response_code != 0) or bool(captcha_url):
                 error_text = f"service_login_code_{resp.get('code')} {response_text[:500]}"
                 classification = self._classify_auth_failure(

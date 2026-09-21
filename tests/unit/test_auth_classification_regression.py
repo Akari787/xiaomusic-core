@@ -98,6 +98,67 @@ async def test_real_miaccount_service_login_classification(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "expected_class"),
+    [
+        (
+            {"code": 70016, "captchaUrl": "https://captcha.test", "captchaurl": None},
+            "interactive_captcha_challenge",
+        ),
+        (
+            {"code": 0, "captchaUrl": "https://captcha.test"},
+            "interactive_captcha_challenge",
+        ),
+        (
+            {"code": 70016, "captchaUrl": "", "captchaurl": "0"},
+            "interactive_captcha_challenge",
+        ),
+        (
+            {"code": 70016, "captchaUrl": None, "captchaurl": None},
+            "credential_session_rejected",
+        ),
+    ],
+)
+async def test_reactive_short_session_rebuild_preserves_structured_classification(
+    manager, monkeypatch, response, expected_class
+):
+    auth, store = manager
+    store.data.update(
+        {
+            "psecurity": "ps",
+            "cUserId": "cu",
+            "deviceId": "d",
+        }
+    )
+    original_token = store.get()
+    calls = {"security": 0, "login": 0}
+
+    class _MiAccount:
+        def __init__(self, *args, **kwargs):  # noqa: ARG001
+            self.token = {}
+
+        async def _serviceLogin(self, path):  # noqa: ARG001
+            return response
+
+        async def _securityTokenService(self, location, nonce, ssecurity):  # noqa: ARG001
+            calls["security"] += 1
+            return "unexpected-service-token"
+
+        async def login(self, *args, **kwargs):  # noqa: ARG001
+            calls["login"] += 1
+            raise AssertionError("reactive recovery must not use MiAccount.login")
+
+    monkeypatch.setattr(auth_module, "MiAccount", _MiAccount)
+    assert await auth._try_login(reason="ut-reactive-classification") is False
+
+    assert auth._last_manual_login_required_reason == expected_class
+    assert auth._last_login_trace["auth_class"] == expected_class
+    assert calls["login"] == 0
+    assert calls["security"] == 0
+    assert store.get() == original_token
+
+
+@pytest.mark.asyncio
 async def test_real_miaccount_code_zero_null_captcha_reaches_security_token(
     manager, monkeypatch
 ):
