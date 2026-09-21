@@ -6,6 +6,16 @@ from pathlib import Path
 from xiaomusic.config import Config
 
 
+def test_env_example_quotes_bcrypt_hash_to_survive_compose_interpolation():
+    env_example = Path(__file__).parents[1] / ".env.example"
+    lines = env_example.read_text(encoding="utf-8").splitlines()
+    hash_lines = [line for line in lines if "HTTP_AUTH_HASH=" in line]
+    assert hash_lines == ["# HTTP_AUTH_HASH='$2b$12$replace_with_bcrypt_hash'"]
+    assert not any(
+        line.strip().startswith("HTTP_AUTH_HASH=") for line in lines
+    )
+
+
 def test_auth_token_file_uses_auth_env(monkeypatch, tmp_path):
     monkeypatch.setenv("XIAOMUSIC_AUTH_TOKEN_FILE", "auth-new.json")
     cfg = Config(conf_path=str(tmp_path))
