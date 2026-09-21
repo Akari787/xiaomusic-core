@@ -402,7 +402,11 @@ class SimpleAuthManager:
         """保持向后兼容的属性"""
         return is_auth_error
 
-    async def init_all_data(self, verified_runtime_only: bool = False):
+    async def init_all_data(
+        self,
+        verified_runtime_only: bool = False,
+        refresh_device_map: bool = True,
+    ):
         """初始化所有数据，检查登录状态。
 
         ``verified_runtime_only`` is used after a QR current-auth rebind.  The
@@ -413,10 +417,11 @@ class SimpleAuthManager:
         self.mi_token_home = os.path.join(self.config.conf_path, ".mi.token")
 
         if verified_runtime_only:
-            try:
-                await self.device_manager.update_device_info(self)
-            except Exception as exc:
-                self.log.warning("verified-only device refresh failed: %s", exc)
+            if refresh_device_map:
+                try:
+                    await self.device_manager.update_device_info(self)
+                except Exception as exc:
+                    self.log.warning("verified-only device refresh failed: %s", exc)
             self._apply_runtime_cookie()
             return
 
@@ -2747,7 +2752,7 @@ class SimpleAuthManager:
         if success:
             try:
                 update_result = await self.device_manager.update_device_info(self)
-                device_map_refreshed = update_result is not False
+                device_map_refreshed = bool(update_result)
             except Exception as exc:
                 self.log.warning("runtime reload device refresh failed: %s", exc)
         trace = {

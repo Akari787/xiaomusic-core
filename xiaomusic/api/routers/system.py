@@ -191,7 +191,10 @@ async def get_logint_status(api: MiJiaAPI, lp: str):
 
         # 认证 runtime 已 verified 后，才刷新设备/媒体数据；verified-only
         # reinit 禁止 can_login/need_login/ensure_logged_in 及 exchange/login。
-        await xiaomusic.reinit(auth_already_verified=True)
+        await xiaomusic.reinit(
+            auth_already_verified=True,
+            refresh_device_map=not bool(refreshed.get("device_map_refreshed")),
+        )
         qrcode_login_error = ""
     except asyncio.CancelledError:
         log.info("qrcode login polling cancelled")

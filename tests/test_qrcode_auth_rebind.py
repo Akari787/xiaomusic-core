@@ -40,16 +40,23 @@ async def test_qrcode_poll_rebinds_before_reinit_and_does_not_clear_lock(monkeyp
             raise AssertionError("QR reinit entered login")
 
         async def init_all_data(self, **kwargs):
-            assert kwargs == {"verified_runtime_only": True}
+            assert kwargs == {
+                "verified_runtime_only": True,
+                "refresh_device_map": False,
+            }
             calls.append(("verified-only-init", kwargs))
 
     auth_manager_stub = _Auth()
 
     async def _reinit(**kwargs):
-        assert kwargs == {"auth_already_verified": True}
+        assert kwargs == {
+            "auth_already_verified": True,
+            "refresh_device_map": False,
+        }
         calls.append(("reinit", kwargs))
         await auth_manager_stub.init_all_data(
-            verified_runtime_only=kwargs["auth_already_verified"]
+            verified_runtime_only=kwargs["auth_already_verified"],
+            refresh_device_map=kwargs["refresh_device_map"],
         )
 
     monkeypatch.setattr(
@@ -67,8 +74,14 @@ async def test_qrcode_poll_rebinds_before_reinit_and_does_not_clear_lock(monkeyp
             "reload",
             {"reason": "qrcode_login_success", "rebind_current_auth": True},
         ),
-        ("reinit", {"auth_already_verified": True}),
-        ("verified-only-init", {"verified_runtime_only": True}),
+        (
+            "reinit",
+            {"auth_already_verified": True, "refresh_device_map": False},
+        ),
+        (
+            "verified-only-init",
+            {"verified_runtime_only": True, "refresh_device_map": False},
+        ),
     ]
     assert system.qrcode_login_error == ""
 
@@ -121,6 +134,7 @@ async def test_manual_reload_qrcode_rebind_uses_persisted_short_session_without_
         "user_action_required": True,
     }
     old_runtime = manager.mina_service
+    manager.device_manager.update_device_info = AsyncMock(return_value=True)
     candidate = {
         "ok": True,
         "account": object(),
@@ -169,6 +183,83 @@ async def test_manual_reload_qrcode_rebind_uses_persisted_short_session_without_
     flow = manager.auth_short_session_rebuild_debug_state()["last_auth_recovery_flow"]
     assert flow["used_path"] == "qrcode_persisted_short_session_rebind"
     assert flow["service_token_written"] is False
+
+
+@pytest.mark.asyncio
+async def test_qrcode_poll_retries_device_refresh_when_manual_refresh_did_not(auth_manager, monkeypatch):
+    calls = []
+
+    class _Auth:
+        def __init__(self):
+            self.device_manager = SimpleNamespace(
+                update_device_info=AsyncMock(return_value=False)
+            )
+
+        async def manual_reload_runtime(self, **kwargs):
+            calls.append(("reload", kwargs))
+            return {
+                "refreshed": True,
+                "runtime_auth_ready": True,
+                "device_map_refreshed": False,
+                "token_saved": False,
+            }
+
+        async def init_all_data(self, **kwargs):
+            calls.append(("init", kwargs))
+            assert kwargs == {
+                "verified_runtime_only": True,
+                "refresh_device_map": True,
+            }
+            await self.device_manager.update_device_info(self)
+
+    async def _reinit(**kwargs):
+        calls.append(("reinit", kwargs))
+        await auth_stub.init_all_data(
+            verified_runtime_only=kwargs["auth_already_verified"],
+            refresh_device_map=kwargs["refresh_device_map"],
+        )
+
+    auth_stub = _Auth()
+    monkeypatch.setattr(
+        system,
+        "xiaomusic",
+        SimpleNamespace(auth_manager=auth_stub, reinit=_reinit),
+    )
+    monkeypatch.setattr(system, "qrcode_login_error", "")
+    monkeypatch.setattr(system, "log", SimpleNamespace(exception=lambda *a, **k: None))
+
+    class _QRAPI:
+        def get_logint_status(self, lp):
+            calls.append(("poll", lp))
+
+    await system.get_logint_status(_QRAPI(), "lp")
+
+    assert [item[0] for item in calls] == ["poll", "reload", "reinit", "init"]
+    auth_stub.device_manager.update_device_info.assert_awaited_once_with(auth_stub)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("update_result", [None, False])
+async def test_manual_reload_device_map_none_or_false_is_not_refreshed(
+    auth_manager, update_result
+):
+    manager, _ = auth_manager
+    manager._build_verified_runtime_candidate = AsyncMock(return_value={
+        "ok": True,
+        "account": object(),
+        "mina_service": object(),
+        "miio_service": object(),
+        "session": None,
+        "device_id": manager.device_id,
+    })
+    manager.device_manager.update_device_info = AsyncMock(return_value=update_result)
+
+    out = await manager.manual_reload_runtime(
+        reason="qrcode_login_success", rebind_current_auth=True
+    )
+
+    assert out["refreshed"] is True
+    assert out["device_map_refreshed"] is False
 
 
 @pytest.mark.asyncio
@@ -225,6 +316,7 @@ async def test_qrcode_rebind_uses_new_disk_auth_and_converges_public_status(auth
         }
 
     manager._build_verified_runtime_candidate = _candidate
+    manager.device_manager.update_device_info = AsyncMock(return_value=True)
     manager._last_short_session_rebuild_state = {
         "result": "failed", "error_code": "old_rebuild"
     }
@@ -312,7 +404,9 @@ async def test_verified_only_init_skips_auth_probe_and_login(auth_manager):
     manager.ensure_logged_in = AsyncMock(side_effect=AssertionError("verified-only login"))
     manager.device_manager.update_device_info = AsyncMock(return_value=True)
 
-    await manager.init_all_data(verified_runtime_only=True)
+    await manager.init_all_data(
+        verified_runtime_only=True, refresh_device_map=True
+    )
 
     manager.need_login.assert_not_awaited()
     manager.ensure_logged_in.assert_not_awaited()

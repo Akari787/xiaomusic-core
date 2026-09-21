@@ -834,12 +834,17 @@ class XiaoMusic:
         self.crontab.reload_config(self)
 
     # 重新初始化
-    async def reinit(self, auth_already_verified: bool = False):
+    async def reinit(
+        self,
+        auth_already_verified: bool = False,
+        refresh_device_map: bool = True,
+    ):
         for handler in self.log.handlers:
             handler.close()
         self.setup_logger()
         await self.auth_manager.init_all_data(
-            verified_runtime_only=auth_already_verified
+            verified_runtime_only=auth_already_verified,
+            refresh_device_map=refresh_device_map,
         )
         self.music_library.gen_all_music_list()
         self.update_all_playlist()
