@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import errno
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -63,6 +65,17 @@ def manager(tmp_path: Path, monkeypatch):
 )
 def test_classifier_structured_priority(evidence, expected):
     assert auth_module.classify_auth_challenge(evidence) == expected
+
+
+def test_network_classifier_follows_dns_exception_chain_and_rejects_70016():
+    dns_error = socket.gaierror(socket.EAI_AGAIN, "temporary failure")
+    wrapped = RuntimeError("Cannot connect to host api2.mina.mi.com:443")
+    wrapped.__cause__ = dns_error
+    assert auth_module.is_network_error(exc=wrapped) is True
+    assert auth_module.is_network_error(
+        exc=OSError(errno.ECONNRESET, "connection reset")
+    ) is True
+    assert auth_module.is_network_error(exc=RuntimeError("service login code 70016")) is False
 
 
 @pytest.mark.asyncio

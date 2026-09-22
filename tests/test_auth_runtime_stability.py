@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -424,6 +423,47 @@ async def test_probe_auth_failure_enters_recovery(auth_manager):
     assert await manager.ensure_auth() is False
     assert manager._state == manager.STATE_DEGRADED
     manager._try_login.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dns_probe_failure_cools_down_without_login_and_recovers_by_reprobe(
+    auth_manager,
+):
+    import socket
+
+    manager, _ = auth_manager
+    manager._scheduled_refresh_suspended = True
+    manager._scheduled_refresh_suspend_reason = "existing_gate"
+    calls = 0
+
+    class _FlakyNetworkRuntime:
+        async def device_list(self):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                wrapped = RuntimeError(
+                    "Cannot connect to host api2.mina.mi.com:443 ssl:default [Try again]"
+                )
+                wrapped.__cause__ = socket.gaierror(socket.EAI_AGAIN, "temporary failure")
+                raise wrapped
+            return [{"deviceID": "old"}]
+
+    manager.mina_service = _FlakyNetworkRuntime()
+    manager._try_login = AsyncMock(side_effect=AssertionError("DNS outage must not login"))
+
+    assert await manager.ensure_auth() is False
+    assert manager._state == manager.STATE_DEGRADED
+    assert manager._last_health_probe_result == "network_error"
+    assert manager._cooldown_until > 0
+    assert manager._last_manual_login_required_reason == ""
+    assert manager._scheduled_refresh_suspended is True
+
+    manager._cooldown_until = 0
+    assert await manager.ensure_auth() is True
+    assert manager._state == manager.STATE_HEALTHY
+    assert manager._try_login.await_count == 0
+    assert calls == 2
+    assert manager._scheduled_refresh_suspended is True
 
 
 @pytest.mark.asyncio

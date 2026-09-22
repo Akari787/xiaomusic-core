@@ -9,11 +9,14 @@
 """
 
 import asyncio
+import errno
 import json
 import math
 import os
+import socket
 import time
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 from urllib.parse import parse_qs, urlsplit
 
 from aiohttp import ClientSession
@@ -62,6 +65,22 @@ LONG_TERM_AUTH_FAILURE_HINTS = (
 )
 
 # 网络错误关键词
+NETWORK_ERROR_ERRNOS = frozenset(
+    value
+    for value in (
+        getattr(socket, "EAI_AGAIN", None),
+        getattr(socket, "EAI_FAIL", None),
+        errno.ECONNRESET,
+        errno.ECONNABORTED,
+        errno.ECONNREFUSED,
+        errno.ENETDOWN,
+        errno.ENETUNREACH,
+        errno.EHOSTUNREACH,
+        errno.ETIMEDOUT,
+    )
+    if value is not None
+)
+
 NETWORK_ERROR_KEYWORDS = (
     "timeout",
     "timed out",
@@ -196,7 +215,11 @@ def classify_auth_challenge(evidence: Any) -> str:
 
 
 def is_network_error(exc=None, resp=None, body=None) -> bool:
-    """判断是否是网络错误"""
+    """Classify transport/DNS failures without treating auth failures as network errors.
+
+    aiohttp wraps DNS and connector failures several layers deep, so inspect the
+    exception chain and errno rather than relying on one aiohttp version's classes.
+    """
     status = None
     if resp is not None:
         status = getattr(resp, "status", None)
@@ -204,14 +227,34 @@ def is_network_error(exc=None, resp=None, body=None) -> bool:
         status = getattr(exc, "status", None)
     if status is None and exc is not None:
         status = getattr(exc, "code", None)
-    if status is not None and int(status) >= 500:
-        return True
+    if status is not None:
+        try:
+            if int(status) >= 500:
+                return True
+        except (TypeError, ValueError):
+            pass
 
+    current = exc
+    seen: set[int] = set()
     text_parts = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        text_parts.append(str(current))
+        if isinstance(current, (ConnectionError, TimeoutError, asyncio.TimeoutError)):
+            return True
+        if isinstance(current, socket.gaierror):
+            return True
+        for candidate in (current, getattr(current, "os_error", None)):
+            if candidate is None:
+                continue
+            for attr in ("errno", "winerror", "code"):
+                value = getattr(candidate, attr, None)
+                if value in NETWORK_ERROR_ERRNOS:
+                    return True
+        current = current.__cause__ or current.__context__
+
     if body is not None:
         text_parts.append(str(body))
-    if exc is not None:
-        text_parts.append(str(exc))
     lowered = " ".join(text_parts).lower()
     return any(word in lowered for word in NETWORK_ERROR_KEYWORDS)
 
@@ -546,7 +589,7 @@ class SimpleAuthManager:
             **self._last_login_trace,
             "playback_capability_verify": {
                 "args_len": len(args),
-                "kwargs_keys": sorted(list(kwargs.keys())),
+                "kwargs_keys": sorted(kwargs.keys()),
                 "ts": int(time.time() * 1000),
             },
         }
@@ -679,6 +722,42 @@ class SimpleAuthManager:
                     reason=reason or "ensure_auth",
                     preserve_healthy_runtime=preserve_healthy_runtime,
                 )
+
+        # 网络冷却结束后，先验证仍在内存中的 runtime。网络恢复不应触发
+        # destructive login，也不能清除独立的 scheduled-refresh suspension 门。
+        if (
+            self._state == self.STATE_DEGRADED
+            and not force
+            and self.mina_service is not None
+            and self._last_degraded_entry_reason == "health_probe_network_error"
+        ):
+            try:
+                self._health_probe_attempted = True
+                await self.mina_service.device_list()
+            except Exception as e:
+                self._last_error = str(e)[:200]
+                self._probe_failure_count += 1
+                self._last_health_probe_error = self._last_error
+                if is_network_error(exc=e):
+                    self._last_health_probe_result = "network_error"
+                    self._start_cooldown()
+                    return False
+                self._last_health_probe_result = "auth_error"
+                self._last_recovery_stage = "probe"
+                self._last_recovery_error_code = "auth_error"
+                self._last_recovery_error_message = self._last_error
+            else:
+                now = time.time()
+                self._state = self.STATE_HEALTHY
+                self._last_ok_ts = now
+                self._last_runtime_verify_ts = now
+                self._last_health_probe_result = "ok"
+                self._last_health_probe_error = ""
+                self._last_error = ""
+                self._probe_failure_count = 0
+                self._retry_count_effective = 0
+                self._cooldown_until = 0.0
+                return True
 
         # 状态不健康，尝试恢复
         if self._state in (self.STATE_DEGRADED, self.STATE_LOCKED):
