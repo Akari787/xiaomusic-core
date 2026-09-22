@@ -1,31 +1,31 @@
-## v1.1.7 (2026-09-21)
+## v1.1.7 (2026-09-22)
 
 ### 认证状态机与持久会话
 
 - 私有 SSO 仅提供受限持久认证能力：官方 OAuth 不替代 `micoapi`；最小持久字段为 `userId`、`passToken`、`deviceId`。无账号密码时不执行 full login；候选 `MiAccount` 使用隔离的 `MemoryTokenStore`。
-- TTL 配置实际参与调度。unknown TTL 以 12h scheduled 辅助轮转，reactive 401 作为主恢复路径；网络错误或未知错误不会被误导为需要扫码。
-- `70016 + captchaUrl=null` 分类为 `credential_session_rejected`；`87001` 或 truthy captcha 分类为 `interactive_captcha_challenge`。两者均为 `long_term_expired=false`，即不代表长期过期；scheduled 路径保留 healthy 并 suspend，零刺激重试。
-- 对外审计路径为 `used_path=miaccount_persistent_auth_exchange`，不调用 `MiAccount.login`。
-- reactive/manual 永久 gate 与 verified 恢复收敛；QR 保存后使用现有 short session 做 verified atomic rebind。verified-only reinit 不执行 exchange/login，失败保留旧 runtime；诊断、计数与 cooldown 统一。
-- startup 从持久化 `saveTime` 同步 `login_at`；env override 支持 unknown，NaN/Inf 安全归零。
+- TTL 配置实际参与调度。unknown TTL 以 12h scheduled 辅助轮转，reactive 401 作为主恢复路径。
+- `70016 + captchaUrl=null` 分类为 `credential_session_rejected`；`87001` 或 truthy captcha 分类为 `interactive_captcha_challenge`。scheduled 刷新遇到这两类拒绝时保留现有 healthy runtime 并挂起后续自动刷新，等待 verified recovery。
+- DNS、connector 与网络 errno 会沿异常链分类。健康探测遇到网络瞬断时只进入 cooldown，恢复后优先重探现有 runtime，不触发持久认证交换、manual gate 或 destructive login。
+- QR 保存后使用现有 short session 做 verified atomic rebind；失败保留旧 runtime，避免半成品候选覆盖可用会话。startup 从持久化 `saveTime` 同步 `login_at`；env override 的 unknown、NaN/Inf 输入安全归零。
 
-### 安全边界、依赖与发布验收
+### 内网部署与媒体兼容
 
-- 插件、OpenAPI、插件源路由改用独立 `strict_verification`，不受 legacy no-auth override 影响；新配置默认 `disable_httpauth=false`、用户名 `admin`。CLI 在 `HTTP_AUTH_HASH` 与 `HTTP_AUTH_PASSWORD` 均缺失时 fail-closed；已有持久化 setting 仍可能保留旧开关，升级后需显式确认关闭，本次测试服已设为 `false`。
-- 插件上传拒绝空名、绝对路径、POSIX/Windows 路径穿越、NUL 与非单一 `.js` basename；`AuthStaticFiles` 不再依赖 `assert`。Compose 同时传递 hash/password，由 CLI 执行二选一契约；`.env.example` 的 password/hash 两类示例均使用单引号，避免 Compose 插值破坏 `$`。
-- 根 Node lockfile 固定 axios `1.20.0`、follow-redirects `1.16.0`、form-data `4.0.6`、qs `6.16.0`、undici `7.29.1`；官方 registry `npm audit --omit=dev` 为 0。新增 follow-redirects/Axios `sensitiveHeaders`、form-data、qs GHSA-4mjr、axios prototype gadget 与 Node runtime 回归门禁。
-- 安全提交链：`30488078`、`159f3873`、`0f1a3c98`、`b35d02ae`、`d58c37f3`、`2e08c2b6`、`d6e5a09c`、`f4b8f6e0`、`a4bd9c38`。
-- 本地安全候选：Python 定向实现者测试 29 passed，Node 安全测试 10 passed；Ruff、compileall、diff-check 通过。全量基线（`43c2012c`）为 1166 passed / 106 failed / 1 skipped；当前候选为 1173 passed / 106 failed / 1 skipped，未增加失败。
-- ARMv7 与 AMD64 真实 buildx 均通过 Python import、Node v24.18.1 安全测试 10/10；ARMv7 镜像 manifest digest 为 `sha256:71b8958d09bd2f83aae3f297b859f6faffceec8cd177c579d3502f2e4b2ed048`，AMD64 image ID 为 `sha256:a001f669ba3f18efb048b228352bbe4fa86c0008911a707488c0825ae5920e31`。
+- 普通内网部署默认 `XIAOMUSIC_DISABLE_HTTPAUTH=true`，无需 `HTTP_AUTH_HASH` 或 `HTTP_AUTH_PASSWORD` 即可启动。只有显式设置为 `false` 时 CLI 才要求凭据并 fail-closed；`docker-compose.hardened.yml` 保留为主动选择的鉴权模板。
+- 插件、OpenAPI 与插件源路由使用可被 no-auth 模式覆盖的普通 `verification`：默认内网模式匿名可用，显式启用 Basic 后仍拒绝无效凭据。
+- 插件上传拒绝空名、绝对路径、POSIX/Windows 路径穿越、NUL 与非单一 `.js` basename；`AuthStaticFiles` 不再依赖 `assert` 执行认证。
+- 设备媒体数据面与管理控制面分离：`/music`、`/picture`、两段占位音频及服务端签发的 proxy token 可供设备直接访问；管理写接口仍跟随部署鉴权模式。媒体路径使用 `Path.resolve()` 与 `relative_to()` 阻断兄弟前缀、目录回溯和符号链接越界。
+- 匿名 `/proxy` 只接受服务端签发的 `t.<token>`；legacy base64 URL 仅在显式启用 Basic 时要求有效凭据，避免把任意匿名出站代理暴露给非内网部署。
 
-### 兼容性边界
+### 依赖与构建
 
-- 不改变公开 API 形状，不改变播放协调器与来源；本版主要改动集中在认证状态机。
+- 根 Node lockfile 固定 axios `1.20.0`、follow-redirects `1.16.0`、form-data `4.0.6`、qs `6.16.0`、undici `7.29.1`；官方 registry `npm audit --omit=dev` 为 0。
+- Node 安全门禁覆盖 redirect 敏感头、form-data CRLF、qs GHSA-4mjr 与 axios prototype gadget。
+- ARMv7 使用 Alpine builder/runner，并补齐 `cargo` 与 `linux-headers`；正式 AMD64、ARM64、ARMv7 镜像由 `v1.1.7` tag CI 构建、测试并发布。
 
-### 验证
+### 兼容性与验证
 
-- 关键认证组合：118 passed；其中 startup 模块独立 13 passed；详见 `docs/release/v1.1.7_checklist.md`。
-- 现场验收范围、未完成项与已知基线问题详见 `docs/release/v1.1.7.md`。
+- 不改变公开 API 形状、播放协调器或来源实现。
+- 本地与测试服务器的最终验证结果、源码校验值和 CI 发布状态详见 `docs/release/v1.1.7.md` 与 `docs/release/v1.1.7_checklist.md`。
 
 ## v1.1.6 (2026-09-19)
 
