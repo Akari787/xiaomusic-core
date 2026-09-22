@@ -1,3 +1,4 @@
+# Opt-in hardened template: requires HTTP Basic credentials.
 services:
   xiaomusic-core:
     build: .

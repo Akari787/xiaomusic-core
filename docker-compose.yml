@@ -11,8 +11,7 @@ services:
     environment:
       TZ: Asia/Shanghai
       XIAOMUSIC_PUBLIC_PORT: 58090
-      XIAOMUSIC_DISABLE_HTTPAUTH: "false"
-      XIAOMUSIC_HTTPAUTH_USERNAME: ${XIAOMUSIC_HTTPAUTH_USERNAME:-admin}
+      # Basic auth is opt-in via .env; use docker-compose.hardened.yml to require it.
       API_SECRET: ${API_SECRET:-}
       HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:-}
       HTTP_AUTH_PASSWORD: ${HTTP_AUTH_PASSWORD:-}
@@ -33,8 +32,7 @@ services:
     environment:
       TZ: Asia/Shanghai
       XIAOMUSIC_PUBLIC_PORT: 58091
-      XIAOMUSIC_DISABLE_HTTPAUTH: "false"
-      XIAOMUSIC_HTTPAUTH_USERNAME: ${XIAOMUSIC_HTTPAUTH_USERNAME:-admin}
+      # Basic auth is opt-in via .env; use docker-compose.hardened.yml to require it.
       API_SECRET: ${API_SECRET:-}
       HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:-}
       HTTP_AUTH_PASSWORD: ${HTTP_AUTH_PASSWORD:-}

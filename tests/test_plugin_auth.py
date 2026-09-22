@@ -36,7 +36,7 @@ def _basic(username: str, password: str) -> dict[str, str]:
     return {"Authorization": f"Basic {value}"}
 
 
-def test_sensitive_plugin_routes_ignore_legacy_no_auth_override(monkeypatch, tmp_path):
+def test_plugin_routes_require_basic_when_explicitly_enabled(monkeypatch, tmp_path):
     password = "plugin-test-password"
     hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
     manager = _PluginManager(tmp_path / "plugins")
@@ -44,7 +44,7 @@ def test_sensitive_plugin_routes_ignore_legacy_no_auth_override(monkeypatch, tmp
     monkeypatch.setattr(
         dependencies,
         "config",
-        SimpleNamespace(httpauth_username="admin"),
+        SimpleNamespace(disable_httpauth=False, httpauth_username="admin"),
     )
     monkeypatch.setattr(
         dependencies,
@@ -54,8 +54,6 @@ def test_sensitive_plugin_routes_ignore_legacy_no_auth_override(monkeypatch, tmp
 
     app = FastAPI()
     app.include_router(plugin.router)
-    # This is the production legacy override and must not affect plugin.router.
-    app.dependency_overrides[dependencies.verification] = dependencies.no_verification
     client = TestClient(app)
 
     assert client.get("/api/js-plugins").status_code == 401
@@ -90,14 +88,29 @@ def test_sensitive_plugin_routes_ignore_legacy_no_auth_override(monkeypatch, tmp
     assert sorted(path.name for path in (tmp_path / "plugins").iterdir()) == ["safe.js"]
 
 
-def test_production_assembly_keeps_plugin_auth_strict(monkeypatch):
+def test_plugin_routes_follow_legacy_no_auth_override(monkeypatch, tmp_path):
+    manager = _PluginManager(tmp_path / "plugins")
+    monkeypatch.setattr(plugin, "xiaomusic", SimpleNamespace(js_plugin_manager=manager))
+    monkeypatch.setattr(
+        dependencies,
+        "config",
+        SimpleNamespace(disable_httpauth=True, httpauth_username=""),
+    )
+    app = FastAPI()
+    app.include_router(plugin.router)
+    app.dependency_overrides[dependencies.verification] = dependencies.no_verification
+    response = TestClient(app).get("/api/js-plugins")
+    assert response.status_code == 200
+
+
+def test_production_assembly_allows_plugin_anonymous_in_noauth_mode():
     from xiaomusic.api.dependencies import no_verification, verification
     from xiaomusic.api.routers import register_routers
 
     app = FastAPI()
     register_routers(app)
     app.dependency_overrides[verification] = no_verification
-    assert TestClient(app).get("/api/js-plugins").status_code == 401
+    assert TestClient(app).get("/api/js-plugins").status_code != 401
 
 
 def test_auth_static_files_calls_verification_without_assert(monkeypatch, tmp_path):
@@ -155,7 +168,7 @@ def test_legacy_route_still_accepts_no_auth_override():
     assert TestClient(app).get("/legacy").status_code == 200
 
 
-def test_new_config_defaults_are_auth_enabled_and_admin():
+def test_config_defaults_are_noauth_and_empty_username():
     env = os.environ.copy()
     env.pop("XIAOMUSIC_DISABLE_HTTPAUTH", None)
     env.pop("XIAOMUSIC_HTTPAUTH_USERNAME", None)
@@ -171,4 +184,4 @@ def test_new_config_defaults_are_auth_enabled_and_admin():
         capture_output=True,
         text=True,
     )
-    assert result.stdout.strip().endswith("False admin")
+    assert result.stdout.strip().split() == ["True"]
