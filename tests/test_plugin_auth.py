@@ -98,6 +98,55 @@ def test_plugin_routes_require_basic_when_explicitly_enabled(monkeypatch, tmp_pa
     assert sorted(path.name for path in (tmp_path / "plugins").iterdir()) == ["safe.js"]
 
 
+def test_plugin_upload_accepts_js_content_that_mentions_filename_paths(
+    monkeypatch, tmp_path
+):
+    """正文里出现 filename="a/b" 之类字面量时仍应视为合法上传。"""
+    manager = _PluginManager(tmp_path / "plugins")
+    monkeypatch.setattr(plugin, "xiaomusic", SimpleNamespace(js_plugin_manager=manager))
+    monkeypatch.setattr(
+        dependencies,
+        "config",
+        SimpleNamespace(disable_httpauth=True, httpauth_username=""),
+    )
+    app = FastAPI()
+    app.include_router(plugin.router)
+    app.dependency_overrides[dependencies.verification] = dependencies.no_verification
+    client = TestClient(app)
+
+    content = (
+        b'// parses filename="a/b" and path="c\\d"\n'
+        b"module.exports = { name: 'filename=\"nested/path.js\"' };\n"
+    )
+    uploaded = client.post(
+        "/api/js-plugins/upload",
+        files={"file": ("legit.js", content, "application/javascript")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    assert (tmp_path / "plugins" / "legit.js").read_bytes() == content
+    assert manager.updated == [("legit", "legit.js")]
+
+
+def test_multipart_header_scan_ignores_file_content():
+    from xiaomusic.api.routers.plugin import _multipart_header_filename_is_unsafe
+
+    benign = (
+        b"--X\r\n"
+        b'Content-Disposition: form-data; name="file"; filename="safe.js"\r\n'
+        b"\r\n"
+        b'const marker = \'filename="a/b"\';\r\n'
+        b"--X--\r\n"
+    )
+    assert _multipart_header_filename_is_unsafe(benign) is False
+
+    traversal = (
+        b"--X\r\n"
+        b'Content-Disposition: form-data; name="file"; filename="../evil.js"\r\n'
+        b"\r\nok\r\n--X--\r\n"
+    )
+    assert _multipart_header_filename_is_unsafe(traversal) is True
+
+
 @pytest.mark.asyncio
 async def test_plugin_upload_rejects_nul_filename_before_multipart_normalization():
     class _Request:

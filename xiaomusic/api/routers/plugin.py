@@ -21,6 +21,32 @@ from xiaomusic.api.dependencies import (
 
 router = APIRouter(dependencies=[Depends(verification)])
 
+_MULTIPART_HEADER_PREFIX = b"content-disposition"
+_MULTIPART_FILENAME_TOKEN = re.compile(
+    rb'filename\s*=\s*(?:"([^"]*)"|([^;\r\n]*))', re.IGNORECASE
+)
+
+
+def _multipart_header_filename_is_unsafe(raw_body: bytes) -> bool:
+    """只检查 multipart part header 里的 filename，不扫描文件内容。
+
+    文件内容是原样嵌在 body 中的，如果对整段 body 做 filename 正则匹配，
+    合法插件正文里出现 ``filename="a/b"`` 之类字符串就会被误拒。
+    因此这里仅取以 Content-Disposition 开头的 header 行，并判断其中的
+    filename 值是否带路径分隔符或 NUL；最终仍由解析后的 basename 校验兜底。
+    """
+    for line in re.split(rb"\r\n|\n|\r", raw_body):
+        candidate = line.strip()
+        if not candidate.lower().startswith(_MULTIPART_HEADER_PREFIX):
+            continue
+        for match in _MULTIPART_FILENAME_TOKEN.finditer(candidate):
+            value = match.group(1)
+            if value is None:
+                value = match.group(2)
+            if b"/" in value or b"\\" in value or b"\x00" in value:
+                return True
+    return False
+
 
 @router.get("/api/js-plugins")
 def get_js_plugins(
@@ -116,11 +142,7 @@ async def upload_js_plugin(request: Request):
     """上传 JS 插件"""
     try:
         raw_body = await request.body()
-        if (
-            re.search(rb'filename="[^"]*/[^"]*"', raw_body)
-            or re.search(rb'filename="[^"]*\\[^"]*"', raw_body)
-            or re.search(rb'filename="[^"]*\x00[^"]*"', raw_body)
-        ):
+        if _multipart_header_filename_is_unsafe(raw_body):
             return api_response.fail(
                 "E_BAD_REQUEST",
                 "插件文件名必须是单一 .js 文件名",
