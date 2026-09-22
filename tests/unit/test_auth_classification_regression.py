@@ -76,6 +76,10 @@ def test_network_classifier_follows_dns_exception_chain_and_rejects_70016():
         exc=OSError(errno.ECONNRESET, "connection reset")
     ) is True
     assert auth_module.is_network_error(exc=RuntimeError("service login code 70016")) is False
+    coded_error = RuntimeError("service login code 70016")
+    coded_error.code = 70016
+    assert auth_module.is_network_error(exc=coded_error) is False
+    assert auth_module.is_network_error(resp=SimpleNamespace(status=70016)) is False
 
 
 @pytest.mark.asyncio

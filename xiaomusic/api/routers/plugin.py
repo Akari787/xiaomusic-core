@@ -2,16 +2,15 @@
 
 import ntpath
 import os
+import re
 
 import aiofiles
 from fastapi import (
     APIRouter,
     Depends,
-    File,
     HTTPException,
     Query,
     Request,
-    UploadFile,
 )
 
 from xiaomusic.api import response as api_response
@@ -113,10 +112,24 @@ def uninstall_js_plugin(plugin_name: str):
 
 
 @router.post("/api/js-plugins/upload")
-async def upload_js_plugin(file: UploadFile = File(...)):
+async def upload_js_plugin(request: Request):
     """上传 JS 插件"""
     try:
-        filename = file.filename or ""
+        raw_body = await request.body()
+        if (
+            re.search(rb'filename="[^"]*/[^"]*"', raw_body)
+            or re.search(rb'filename="[^"]*\\[^"]*"', raw_body)
+            or re.search(rb'filename="[^"]*\x00[^"]*"', raw_body)
+        ):
+            return api_response.fail(
+                "E_BAD_REQUEST",
+                "插件文件名必须是单一 .js 文件名",
+                http_status=400,
+                contract="success_error",
+            )
+        form = await request.form()
+        file = form.get("file")
+        filename = getattr(file, "filename", "") or ""
         # 只允许单一 .js basename，拒绝 POSIX/Windows 路径和目录穿越。
         safe_basename = (
             bool(filename)

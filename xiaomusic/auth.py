@@ -225,11 +225,9 @@ def is_network_error(exc=None, resp=None, body=None) -> bool:
         status = getattr(resp, "status", None)
     if status is None and exc is not None:
         status = getattr(exc, "status", None)
-    if status is None and exc is not None:
-        status = getattr(exc, "code", None)
     if status is not None:
         try:
-            if int(status) >= 500:
+            if 500 <= int(status) <= 599:
                 return True
         except (TypeError, ValueError):
             pass
@@ -251,7 +249,9 @@ def is_network_error(exc=None, resp=None, body=None) -> bool:
                 value = getattr(candidate, attr, None)
                 if value in NETWORK_ERROR_ERRNOS:
                     return True
-        current = current.__cause__ or current.__context__
+        current = getattr(current, "__cause__", None) or getattr(
+            current, "__context__", None
+        )
 
     if body is not None:
         text_parts.append(str(body))
@@ -709,6 +709,9 @@ class SimpleAuthManager:
                 if is_network_error(exc=e):
                     self._state = self.STATE_DEGRADED
                     self._last_health_probe_result = "network_error"
+                    self._last_recovery_stage = "probe"
+                    self._last_recovery_error_code = "network_error"
+                    self._last_recovery_error_message = self._last_error
                     self._last_degraded_entry_reason = "health_probe_network_error"
                     self._start_cooldown()
                     return False
@@ -740,6 +743,9 @@ class SimpleAuthManager:
                 self._last_health_probe_error = self._last_error
                 if is_network_error(exc=e):
                     self._last_health_probe_result = "network_error"
+                    self._last_recovery_stage = "probe"
+                    self._last_recovery_error_code = "network_error"
+                    self._last_recovery_error_message = self._last_error
                     self._start_cooldown()
                     return False
                 self._last_health_probe_result = "auth_error"
@@ -754,6 +760,9 @@ class SimpleAuthManager:
                 self._last_health_probe_result = "ok"
                 self._last_health_probe_error = ""
                 self._last_error = ""
+                self._last_recovery_stage = ""
+                self._last_recovery_error_code = ""
+                self._last_recovery_error_message = ""
                 self._probe_failure_count = 0
                 self._retry_count_effective = 0
                 self._cooldown_until = 0.0

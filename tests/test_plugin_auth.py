@@ -7,6 +7,7 @@ import sys
 from types import SimpleNamespace
 
 import bcrypt
+import pytest
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.security import HTTPBasicCredentials
 from fastapi.testclient import TestClient
@@ -76,16 +77,38 @@ def test_plugin_routes_require_basic_when_explicitly_enabled(monkeypatch, tmp_pa
     assert manager.updated == [("safe", "safe.js")]
     assert manager.reload_count == 1
 
-    for filename in ("../evil.js", "..\\\\evil.js"):
+    for filename in (
+        "",
+        ".js",
+        "/absolute.js",
+        "C:\\absolute.js",
+        "dir/foo.js",
+        "dir\\foo.js",
+        "../evil.js",
+        "..\\evil.js",
+    ):
         rejected = client.post(
             "/api/js-plugins/upload",
             headers=headers,
             files={"file": (filename, b"module.exports = {};", "application/javascript")},
         )
-        assert rejected.status_code == 400
+        assert rejected.status_code == 400, filename
         assert rejected.json()["success"] is False
     assert not (tmp_path / "evil.js").exists()
     assert sorted(path.name for path in (tmp_path / "plugins").iterdir()) == ["safe.js"]
+
+
+@pytest.mark.asyncio
+async def test_plugin_upload_rejects_nul_filename_before_multipart_normalization():
+    class _Request:
+        async def body(self):
+            return b'Content-Disposition: form-data; name="file"; filename="bad\x00.js"'
+
+        async def form(self):
+            raise AssertionError("multipart parsing must not normalize a NUL filename")
+
+    response = await plugin.upload_js_plugin(_Request())
+    assert response.status_code == 400
 
 
 def test_plugin_routes_follow_legacy_no_auth_override(monkeypatch, tmp_path):
@@ -103,18 +126,46 @@ def test_plugin_routes_follow_legacy_no_auth_override(monkeypatch, tmp_path):
     assert response.status_code == 200
 
 
-def test_production_assembly_allows_plugin_anonymous_in_noauth_mode(
+def test_production_assembly_uses_real_auth_reset_for_plugin_routes(
     monkeypatch, tmp_path
 ):
-    from xiaomusic.api.dependencies import no_verification, verification
+    import importlib
+
+    current_dependencies = importlib.import_module("xiaomusic.api.dependencies")
+    current_plugin = importlib.import_module("xiaomusic.api.routers.plugin")
     from xiaomusic.api.routers import register_routers
 
+    reset_http_server = current_dependencies.reset_http_server
+
+    password = "production-plugin-password"
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
     manager = _PluginManager(tmp_path / "plugins")
-    monkeypatch.setattr(plugin, "xiaomusic", SimpleNamespace(js_plugin_manager=manager))
+    monkeypatch.setattr(
+        current_plugin, "xiaomusic", SimpleNamespace(js_plugin_manager=manager)
+    )
+    config = SimpleNamespace(disable_httpauth=True, httpauth_username="admin")
+    monkeypatch.setattr(current_dependencies._state, "_config", config)
+    monkeypatch.setattr(
+        current_dependencies._state, "_log", SimpleNamespace(info=lambda *args: None)
+    )
+    monkeypatch.setattr(
+        current_dependencies,
+        "get_auth_settings",
+        lambda: SimpleNamespace(HTTP_AUTH_HASH=hashed),
+    )
+
     app = FastAPI()
     register_routers(app)
-    app.dependency_overrides[verification] = no_verification
-    assert TestClient(app).get("/api/js-plugins").status_code == 200
+    reset_http_server(app)
+    client = TestClient(app)
+    assert client.get("/api/js-plugins").status_code == 200
+
+    config.disable_httpauth = False
+    reset_http_server(app)
+    assert client.get("/api/js-plugins").status_code == 401
+    assert client.get(
+        "/api/js-plugins", headers=_basic("admin", password)
+    ).status_code == 200
 
 
 def test_auth_static_files_calls_verification_without_assert(monkeypatch, tmp_path):

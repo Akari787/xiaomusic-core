@@ -434,6 +434,10 @@ async def test_dns_probe_failure_cools_down_without_login_and_recovers_by_reprob
     manager, _ = auth_manager
     manager._scheduled_refresh_suspended = True
     manager._scheduled_refresh_suspend_reason = "existing_gate"
+    manager._scheduled_refresh_suspend_code = "existing_code"
+    manager._last_recovery_stage = "stale"
+    manager._last_recovery_error_code = "stale_network"
+    manager._last_recovery_error_message = "stale message"
     calls = 0
 
     class _FlakyNetworkRuntime:
@@ -454,6 +458,9 @@ async def test_dns_probe_failure_cools_down_without_login_and_recovers_by_reprob
     assert await manager.ensure_auth() is False
     assert manager._state == manager.STATE_DEGRADED
     assert manager._last_health_probe_result == "network_error"
+    assert manager._last_recovery_stage == "probe"
+    assert manager._last_recovery_error_code == "network_error"
+    assert "Cannot connect to host" in manager._last_recovery_error_message
     assert manager._cooldown_until > 0
     assert manager._last_manual_login_required_reason == ""
     assert manager._scheduled_refresh_suspended is True
@@ -463,7 +470,49 @@ async def test_dns_probe_failure_cools_down_without_login_and_recovers_by_reprob
     assert manager._state == manager.STATE_HEALTHY
     assert manager._try_login.await_count == 0
     assert calls == 2
+    assert manager._last_recovery_stage == ""
+    assert manager._last_recovery_error_code == ""
+    assert manager._last_recovery_error_message == ""
     assert manager._scheduled_refresh_suspended is True
+    assert manager._scheduled_refresh_suspend_reason == "existing_gate"
+    assert manager._scheduled_refresh_suspend_code == "existing_code"
+
+
+@pytest.mark.asyncio
+async def test_auth_call_dns_probe_blocks_all_recovery_paths(auth_manager):
+    import socket
+
+    manager, _ = auth_manager
+
+    class _DnsFailingRuntime:
+        async def device_list(self):
+            wrapped = RuntimeError(
+                "Cannot connect to host api2.mina.mi.com:443 ssl:default [Try again]"
+            )
+            wrapped.__cause__ = socket.gaierror(socket.EAI_AGAIN, "temporary failure")
+            raise wrapped
+
+    manager.mina_service = _DnsFailingRuntime()
+    manager._schedule_background_recovery = MagicMock()
+    manager._try_miaccount_persistent_auth_relogin = AsyncMock(
+        side_effect=AssertionError("DNS probe must not exchange persistent auth")
+    )
+    manager._try_login = AsyncMock(
+        side_effect=AssertionError("DNS probe must not login")
+    )
+
+    async def _operation():
+        raise AssertionError("operation must not run after failed auth probe")
+
+    with pytest.raises(RuntimeError, match="认证不可用"):
+        await manager.auth_call(_operation, retry=0, ctx="dns-probe")
+
+    manager._schedule_background_recovery.assert_not_called()
+    manager._try_miaccount_persistent_auth_relogin.assert_not_awaited()
+    manager._try_login.assert_not_awaited()
+    assert manager._last_recovery_error_code == "network_error"
+    assert manager._last_manual_login_required_reason == ""
+    assert manager._state != manager.STATE_LOCKED
 
 
 @pytest.mark.asyncio

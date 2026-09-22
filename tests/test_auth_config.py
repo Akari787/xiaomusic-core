@@ -39,6 +39,16 @@ def test_compose_auth_defaults_are_opt_in(monkeypatch):
     assert "XIAOMUSIC_DISABLE_HTTPAUTH=true" in env_example
 
 
+@pytest.mark.parametrize("value", ["true", " TRUE ", "TrUe"])
+def test_noauth_values_are_normalized_consistently(monkeypatch, tmp_path, value):
+    monkeypatch.setenv("XIAOMUSIC_DISABLE_HTTPAUTH", value)
+    monkeypatch.delenv("HTTP_AUTH_HASH", raising=False)
+    monkeypatch.delenv("HTTP_AUTH_PASSWORD", raising=False)
+
+    _ensure_http_auth_configured()
+    assert Config(conf_path=str(tmp_path)).disable_httpauth is True
+
+
 def test_noauth_default_allows_missing_http_auth_credentials(monkeypatch):
     monkeypatch.delenv("XIAOMUSIC_DISABLE_HTTPAUTH", raising=False)
     monkeypatch.delenv("HTTP_AUTH_HASH", raising=False)
