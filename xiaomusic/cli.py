@@ -22,13 +22,16 @@ LOGO = r"""
 
 
 def _ensure_http_auth_configured() -> None:
-    """确保 HTTP_AUTH_HASH 已配置，必要时从 HTTP_AUTH_PASSWORD 生成。
+    """Only require HTTP Basic credentials when HTTP auth is explicitly enabled.
 
-    优先级规则：
-    1. HTTP_AUTH_HASH 存在 -> 直接使用，不生成
-    2. HTTP_AUTH_PASSWORD 存在 -> 自动生成 bcrypt 哈希注入环境变量
-    3. 两者都不存在 -> 拒绝启动
+    Internal deployments default to ``disable_httpauth=true`` and may start
+    without either credential. Explicit ``false`` remains fail-closed, with a
+    plaintext password accepted only as input for runtime hash generation.
     """
+    httpauth_disabled = os.getenv("XIAOMUSIC_DISABLE_HTTPAUTH", "true").strip().lower() == "true"
+    if httpauth_disabled:
+        return
+
     existing_hash = os.getenv("HTTP_AUTH_HASH", "").strip()
     if existing_hash:
         # 情况 A：已有 hash，直接使用
@@ -143,7 +146,8 @@ def _warn_if_httpauth_unsafe(config, bind_host: str, logger: logging.Logger) -> 
 
 def main():
     from xiaomusic import __version__
-    from xiaomusic.api.app import HttpInit, app as HttpApp
+    from xiaomusic.api.app import HttpInit
+    from xiaomusic.api.app import app as HttpApp
     from xiaomusic.config import Config
     from xiaomusic.xiaomusic import XiaoMusic
 

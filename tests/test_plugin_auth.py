@@ -103,14 +103,18 @@ def test_plugin_routes_follow_legacy_no_auth_override(monkeypatch, tmp_path):
     assert response.status_code == 200
 
 
-def test_production_assembly_allows_plugin_anonymous_in_noauth_mode():
+def test_production_assembly_allows_plugin_anonymous_in_noauth_mode(
+    monkeypatch, tmp_path
+):
     from xiaomusic.api.dependencies import no_verification, verification
     from xiaomusic.api.routers import register_routers
 
+    manager = _PluginManager(tmp_path / "plugins")
+    monkeypatch.setattr(plugin, "xiaomusic", SimpleNamespace(js_plugin_manager=manager))
     app = FastAPI()
     register_routers(app)
     app.dependency_overrides[verification] = no_verification
-    assert TestClient(app).get("/api/js-plugins").status_code != 401
+    assert TestClient(app).get("/api/js-plugins").status_code == 200
 
 
 def test_auth_static_files_calls_verification_without_assert(monkeypatch, tmp_path):

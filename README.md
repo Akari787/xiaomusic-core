@@ -33,12 +33,12 @@ mkdir -p conf music
 # 2. 拉取镜像
 docker pull akari787/xiaomusic-core:stable
 
-# 3. 启动容器（使用 HTTP_AUTH_PASSWORD 自动生成哈希）
+# 3. 启动普通内网容器（默认无 HTTP Basic）
 docker run -d --name xiaomusic-core \
   -p 58090:8090 \
   -v $(pwd)/conf:/app/conf \
   -v $(pwd)/music:/app/music \
-  -e HTTP_AUTH_PASSWORD='your_password' \
+  -e XIAOMUSIC_DISABLE_HTTPAUTH=true \
   akari787/xiaomusic-core:stable
 
 # 4. 访问
@@ -47,9 +47,10 @@ docker run -d --name xiaomusic-core \
 
 说明：
 
-- 若提供 `HTTP_AUTH_PASSWORD`，容器启动时会自动生成 bcrypt 哈希并用于运行时认证，无需手动生成
-- 若希望使用固定哈希，也可直接提供 `HTTP_AUTH_HASH`（可通过 `python scripts/auth/generate_password_hash.py` 生成）
-- 两者都提供时，优先使用 `HTTP_AUTH_HASH`
+- 普通内网部署默认 `XIAOMUSIC_DISABLE_HTTPAUTH=true`，没有 `HTTP_AUTH_HASH`/`HTTP_AUTH_PASSWORD` 也能启动
+- 如需启用 Basic，显式设置 `XIAOMUSIC_DISABLE_HTTPAUTH=false`，并提供 `HTTP_AUTH_PASSWORD` 或 `HTTP_AUTH_HASH`；缺少凭据时 CLI 会拒绝启动
+- `HTTP_AUTH_PASSWORD` 会在启动时自动生成 bcrypt 哈希；固定哈希可通过 `python scripts/auth/generate_password_hash.py` 生成
+- Docker Compose 的 hardened 模板 `docker-compose.hardened.yml` 是 opt-in，会显式启用 Basic 并要求凭据
 - 启动后在设置页完成扫码登录即可使用
 
 ## 4. 文档导航

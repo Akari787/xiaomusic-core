@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
+import pytest
+
+from xiaomusic.cli import _ensure_http_auth_configured
 from xiaomusic.config import Config
 
 
@@ -22,6 +26,40 @@ def test_env_example_quotes_bcrypt_hash_to_survive_compose_interpolation():
         line.strip().startswith(("HTTP_AUTH_PASSWORD=", "HTTP_AUTH_HASH="))
         for line in lines
     )
+
+
+def test_compose_auth_defaults_are_opt_in(monkeypatch):
+    repo = Path(__file__).parents[1]
+    compose = (repo / "docker-compose.yml").read_text(encoding="utf-8")
+    hardened = (repo / "docker-compose.hardened.yml").read_text(encoding="utf-8")
+    env_example = (repo / ".env.example").read_text(encoding="utf-8")
+    assert 'XIAOMUSIC_DISABLE_HTTPAUTH: "false"' not in compose
+    assert 'HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:-}' in compose
+    assert 'XIAOMUSIC_DISABLE_HTTPAUTH: "false"' in hardened
+    assert "XIAOMUSIC_DISABLE_HTTPAUTH=true" in env_example
+
+
+def test_noauth_default_allows_missing_http_auth_credentials(monkeypatch):
+    monkeypatch.delenv("XIAOMUSIC_DISABLE_HTTPAUTH", raising=False)
+    monkeypatch.delenv("HTTP_AUTH_HASH", raising=False)
+    monkeypatch.delenv("HTTP_AUTH_PASSWORD", raising=False)
+    _ensure_http_auth_configured()
+
+
+def test_explicit_httpauth_without_credentials_fails_closed(monkeypatch):
+    monkeypatch.setenv("XIAOMUSIC_DISABLE_HTTPAUTH", "false")
+    monkeypatch.delenv("HTTP_AUTH_HASH", raising=False)
+    monkeypatch.delenv("HTTP_AUTH_PASSWORD", raising=False)
+    with pytest.raises(RuntimeError, match="HTTP authentication not configured"):
+        _ensure_http_auth_configured()
+
+
+def test_explicit_httpauth_password_generates_hash(monkeypatch):
+    monkeypatch.setenv("XIAOMUSIC_DISABLE_HTTPAUTH", "false")
+    monkeypatch.delenv("HTTP_AUTH_HASH", raising=False)
+    monkeypatch.setenv("HTTP_AUTH_PASSWORD", "test-password")
+    _ensure_http_auth_configured()
+    assert os.getenv("HTTP_AUTH_HASH", "").startswith("$2")
 
 
 def test_auth_token_file_uses_auth_env(monkeypatch, tmp_path):
