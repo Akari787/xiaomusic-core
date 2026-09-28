@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from dataclasses import asdict
@@ -55,6 +56,9 @@ from xiaomusic.constants.api_fields import (
     SOURCE_HINT,
 )
 from xiaomusic.core.models import PlayOptions
+from xiaomusic.core.source.online_plugin_reference_store import (
+    OnlinePluginReferenceStore,
+)
 
 # Keep _get_xiaomusic and _require_device as local module-level functions
 # so tests can monkeypatch them directly on the v1 module.
@@ -895,6 +899,48 @@ async def api_v1_library_music_info(
         )
 
 
+def _get_online_plugin_reference_store(xiaomusic) -> OnlinePluginReferenceStore:
+    store = getattr(xiaomusic, "_online_plugin_reference_store", None)
+    if not isinstance(store, OnlinePluginReferenceStore):
+        store = OnlinePluginReferenceStore()
+        xiaomusic._online_plugin_reference_store = store
+    return store
+
+
+def _build_online_search_item(
+    raw: dict[str, Any],
+    store: OnlinePluginReferenceStore,
+    enabled_js_plugins: set[str],
+) -> dict[str, Any]:
+    item = {
+        "name": str(raw.get("name") or ""),
+        "title": str(raw.get("title") or raw.get("name") or ""),
+        "artist": str(raw.get("artist") or ""),
+    }
+    platform = str(raw.get("platform") or "").strip()
+    raw_media_id = str(
+        raw.get("media_id") or raw.get("id") or raw.get("songmid") or raw.get("songid") or ""
+    ).strip()
+    source = str(raw.get("source") or "").strip().lower()
+    platform_lower = platform.lower()
+    is_known_non_js_source = source in {"openapi", "jellyfin"} or platform_lower.startswith(
+        ("openapi", "jellyfin")
+    )
+    is_enabled_js_plugin = platform in enabled_js_plugins
+    if platform and raw_media_id and not is_known_non_js_source and is_enabled_js_plugin:
+        token = store.put(raw)
+        public_media_id = "opm_" + hashlib.sha256(
+            f"{platform}\0{raw_media_id}".encode()
+        ).hexdigest()[:24]
+        item["play_reference"] = {
+            "query": token,
+            "source_hint": "online_plugin",
+            "media_id": public_media_id,
+            "title": item["title"],
+        }
+    return item
+
+
 @router.get("/api/v1/search/online")
 async def api_v1_search_online(
     keyword: str = Query(""),
@@ -908,7 +954,19 @@ async def api_v1_search_online(
         query = str(keyword or "").strip()
         if not query:
             raise _bad_request(rid, "keyword is required", field="keyword")
-        result = await _get_xiaomusic().get_music_list_online(
+        xiaomusic = _get_xiaomusic()
+        reference_store = _get_online_plugin_reference_store(xiaomusic)
+        js_plugin_manager = getattr(xiaomusic, "js_plugin_manager", None)
+        enabled_js_plugins = set()
+        if js_plugin_manager is not None:
+            get_enabled_plugins = getattr(js_plugin_manager, "get_enabled_plugins", None)
+            if callable(get_enabled_plugins):
+                enabled_js_plugins = {
+                    str(name).strip()
+                    for name in get_enabled_plugins()
+                    if str(name).strip()
+                }
+        result = await xiaomusic.get_music_list_online(
             keyword=query,
             plugin=str(plugin or "all"),
             page=int(page),
@@ -929,13 +987,7 @@ async def api_v1_search_online(
         for raw in list((result or {}).get("data") or []):
             if not isinstance(raw, dict):
                 continue
-            items.append(
-                {
-                    "name": str(raw.get("name") or ""),
-                    "title": str(raw.get("title") or raw.get("name") or ""),
-                    "artist": str(raw.get("artist") or ""),
-                }
-            )
+            items.append(_build_online_search_item(raw, reference_store, enabled_js_plugins))
 
         return _api_ok(
             {

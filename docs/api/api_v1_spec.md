@@ -731,8 +731,20 @@ v1 通过两个接口暴露播放器权威状态：
 - `device_id: string`，必填，非空
 - `query: string`，必填，非空
 - `source_hint: string`，可选，默认 `auto`
-- `options: object`，可选
+- `options: object`，可选；未知字段必须拒绝（`extra="forbid"`）
 - `options.shuffle: boolean`，可选，默认 `false`
+- `options.loop: boolean`，可选，默认 `false`
+- `options.volume: integer | null`，可选，范围 `0..100`
+- `options.timeout: number | null`，可选
+- `options.resolve_timeout_seconds: number | null`，可选
+- `options.no_cache: boolean`，可选，默认 `false`
+- `options.prefer_proxy: boolean`，可选，默认 `false`
+- `options.confirm_start: boolean`，可选，默认 `true`
+- `options.confirm_start_delay_ms: integer`，可选，最小 `0`
+- `options.confirm_start_retries: integer`，可选，最小 `0`
+- `options.confirm_start_interval_ms: integer`，可选，最小 `100`
+- `options.source_payload: object | null`、`context_hint: object | null`、`media_id: string`、`id: string`、`title: string`、`start_position: integer`，按来源语义可选
+- `prefer_codec`、`search_key` 等未声明字段不得发送或接受。
 
 `source_hint` 允许值：
 
@@ -741,6 +753,7 @@ v1 通过两个接口暴露播放器权威状态：
 - `site_media`
 - `jellyfin`
 - `local_library`
+- `online_plugin`（仅接受服务端生成的 `opq_` 内存 TTL 引用）
 
 成功响应最小契约：
 
@@ -1126,6 +1139,14 @@ v1 通过两个接口暴露播放器权威状态：
 - `data.items[].title`
 - `data.items[].artist`
 - `data.total`
+
+可播放引用约束：
+
+- `data.items[].play_reference` 为可选的服务端生成引用，结构为 `query`（高熵 `opq_` opaque token）、`source_hint="online_plugin"`、非敏感 `media_id` 与 `title`。
+- WebUI 不得以 `title`、`name` 或搜索关键词替代缺失引用。
+- 服务端只为含 `platform`、稳定媒体身份且 `platform` 属于当前启用 MusicFree JS plugin 集合的 item 建立引用；`OpenAPI-*`、`Jellyfin` 和未知 platform 即使带 id 也不可播。原始 `IMusicItem` 仅存于进程内有容量上限的 TTL 存储。
+- 搜索响应不得包含原始 item、媒体 URL、cookie、token、`source_payload`、`context_hint` 或原始插件错误。
+- `online_plugin` 只由内置 `OnlinePluginSourcePlugin` 消费；未知或过期 token 必须返回脱敏的 SourceResolveError，TTL 内允许播放链路重试。
 
 参数错误必须返回：
 

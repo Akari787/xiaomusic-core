@@ -20,7 +20,8 @@
 | [runtime_architecture.md](runtime_architecture.md) | Runtime 内部运转与生命周期管理 |
 | [source_architecture.md](source_architecture.md) | Source 边界与插件体系 |
 | [webui_architecture.md](webui_architecture.md) | WebUI 接口依赖边界与状态消费模型 |
-| [authentication_architecture.md](authentication_architecture.md) | 认证系统两层状态模型（长期态/短期态） |
+| [webui_playlist_state.md](webui_playlist_state.md) | WebUI playlist identity 与 selector 状态模型 |
+| [authentication_architecture.md](authentication_architecture.md) | 认证系统三层状态模型（persistent auth / short session / runtime） |
 | [unified_playback_model.md](unified_playback_model.md) | 统一播放模型、来源接入、执行路径 |
 | [playback-control-model.md](playback-control-model.md) | 播放队列、随机 session 与 next/previous 控制不变量 |
 | [contributor_guide.md](contributor_guide.md) | 改动前置规则与文档更新约束 |
@@ -31,12 +32,10 @@
 
 | 文档 | 职责 |
 |---|---|
-| [state-authority.md](state-authority.md) | 状态权威偏差表、每个状态字段的唯一权威归属 |
-| [event-model.md](event-model.md) | 统一事件模型设计、标准事件列表 |
-| [correlation-id.md](correlation-id.md) | Correlation ID 设计（request_id、play_id、session_id） |
-| [observability.md](observability.md) | Snapshot 端点设计与可观测性方案 |
-| [constraints.md](constraints.md) | 系统宪法：禁止清单、必须清单 |
+| [state-authority.md](state-authority.md) | 每类运行时事实的唯一权威与生命周期边界 |
+| [constraints.md](constraints.md) | 当前可由代码和测试执行的系统约束 |
 | [auth_runtime_recovery.md](auth_runtime_recovery.md) | 认证运行时恢复架构 |
+| [webui_playback_contract_incident_and_repair_plan.md](webui_playback_contract_incident_and_repair_plan.md) | WebUI 播放契约故障与方案 A 完整实施、测试服务器及设备实播验收记录 |
 
 ## 相关入口
 

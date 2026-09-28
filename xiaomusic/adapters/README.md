@@ -6,7 +6,7 @@
 
 ## sources/
 
-四类来源插件的具体实现，均实现 `xiaomusic.core.source.SourcePlugin` 接口：
+五类内置来源插件的具体实现，均实现 `xiaomusic.core.source.SourcePlugin` 接口：
 
 | 插件 | 文件 | 来源语义 |
 |---|---|---|
@@ -14,11 +14,12 @@
 | `SiteMediaSourcePlugin` | `site_media_source_plugin.py` | YouTube / Bilibili 等需要站点解析的媒体 |
 | `JellyfinSourcePlugin` | `jellyfin_source_plugin.py` | Jellyfin 媒体资源（URL 或资源 ID） |
 | `LocalLibrarySourcePlugin` | `local_library_source_plugin.py` | 本地媒体库文件 |
+| `OnlinePluginSourcePlugin` | `online_plugin_source_plugin.py` | 服务端 opaque TTL 引用对应的启用 MusicFree JS plugin item |
 
 兼容插件：
 - `LegacyPayloadSourcePlugin`（`legacy_payload_source_plugin.py`）：承接旧格式 payload 的兼容层，禁止新功能依赖，计划于 v1.2 评估移除。
 
-注册入口：`default_registry.py` 中的 `register_default_source_plugins()` 函数，按确定性顺序注册上述四个正式插件。
+注册入口：`default_registry.py` 中的 `register_default_source_plugins()` 函数，按确定性顺序注册上述五个正式插件。`OnlinePluginSourcePlugin` 只消费 v1 搜索生成的进程内 opaque 引用，不接收 WebUI raw item。
 
 ## miio/
 

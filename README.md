@@ -87,7 +87,7 @@ docker run -d --name xiaomusic-core \
 - [x] `/api/v1/*` 已明确为唯一正式对外接口层，接口白名单、错误模型与分级契约已形成文档约束
 - [x] 控制面与状态面已拆分，播放器权威状态通过 `GET /api/v1/player/state` 与 `GET /api/v1/player/stream` 提供
 - [x] 认证运行时恢复链路已建立，长期态 / 短期态分层、auth.json 持久化与 runtime rebind 已落地
-- [x] WebUI 主流程已围绕 v1 正式控制面持续收敛
+- [x] WebUI 主流程已围绕 v1 正式控制面持续收敛（链接/在线搜索契约、测试服务器入口与设备实播均已验收，最终原始设备 `status=2`；见 `docs/architecture/webui_playback_contract_incident_and_repair_plan.md`）
 - [ ] 核心能力与来源扩展边界仍需继续收敛，减少实现层相互渗透
 - [ ] 现有来源能力仍需进一步整理为更清晰的插件范式
 - [ ] 播放稳定性与认证恢复可观测性仍需继续加强

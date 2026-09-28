@@ -36,48 +36,20 @@ curl -s -D - -o /dev/null \
 - evil.com 不应出现 `Access-Control-Allow-Origin`
 - localhost 应允许（返回 `Access-Control-Allow-Origin: http://localhost`
 
-## 3) Exec 默认禁用
+## 3) 旧命令路由已移除
 
-先获取一个 DID（可从设置接口返回的 device_list 中选择）：
-
-```bash
-curl -fsS "http://127.0.0.1:58090/getsetting?need_device_list=true" | head
-```
-
-然后通过 API 触发（把 `<DID>` 替换成实际 did）：
+`/cmd`、`/cmdstatus`、`/device_list` 与 `/getvolume` 已退出 HTTP 装配；设备控制只允许使用结构化 `/api/v1/*` 接口。验证旧入口不会复活：
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" \
   -X POST http://127.0.0.1:58090/cmd \
   -H "Content-Type: application/json" \
-  -d '{"did":"<DID>","cmd":"exec#http_get(\\\"https://example.com\\\")"}'
+  -d '{}'
 ```
 
-期望：HTTP 403（默认禁用危险能力）。
+期望：HTTP 404。`exec#` 不再提供 HTTP 入口；命令解析器内部的 exec allowlist 与出站安全由自动化测试覆盖。
 
-## 4) 开启 exec + allowlist 后验证 http_get
-
-编辑 `conf/setting.json`：
-
-```json
-{
-  "enable_exec_plugin": true,
-  "allowed_exec_commands": ["http_get"],
-  "outbound_allowlist_domains": ["example.com"]
-}
-```
-
-重启：
-
-```bash
-docker compose -f docker-compose.hardened.yml restart
-```
-
-验证：
-- `http_get("https://example.com")` 成功
-- `http_get("http://127.0.0.1")` / `http_get("http://192.168.0.1")` 必须拒绝
-
-## 5) 自更新默认拒绝 + 安全解压验证
+## 4) 自更新默认拒绝 + 安全解压验证
 
 默认 `enable_self_update=false`：调用更新接口应拒绝。
 
@@ -101,7 +73,7 @@ docker compose -f docker-compose.hardened.yml restart
 find /app -maxdepth 2 -name pwn.txt || true
 ```
 
-## 6) 随机歌单与 next/previous 控制链
+## 5) 随机歌单与 next/previous 控制链
 
 先用正式入口建立随机歌单 session：
 
@@ -158,7 +130,7 @@ curl -fsS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:58090/webui/
 
 > 控制命令成功只表示动作进入链路。以 player state 中的新 `play_session_id`、`transport_state=playing` 和实际曲目变化作为完成依据。远端音箱可能受认证刷新或云端限流影响，不要因请求较慢而改用 `/api/v1/play` 重试 next。
 
-## 7) 如何定位 outbound 失败原因（不含敏感信息）
+## 6) 如何定位 outbound 失败原因（不含敏感信息）
 
 ```bash
 docker logs --tail 300 xiaomusic-core | grep -i -E "SECURITY:|outbound|blocked" || true

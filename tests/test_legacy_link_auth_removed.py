@@ -1,8 +1,19 @@
+from types import SimpleNamespace
+
 import pytest
 
 pytest.importorskip("aiofiles")
 
 from xiaomusic.api.routers import file as file_router
+
+
+@pytest.fixture(autouse=True)
+def _initialized_log(monkeypatch):
+    monkeypatch.setattr(
+        file_router,
+        "log",
+        SimpleNamespace(warning=lambda *args, **kwargs: None),
+    )
 
 
 @pytest.mark.asyncio

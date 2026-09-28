@@ -4,11 +4,12 @@
 
 ## 上下文
 
-Source 系统负责"获取音乐"，当前有 4 个内置插件：
+Source 系统负责"获取音乐"，当前有 5 个内置插件：
 - `JellyfinSourcePlugin`：从 Jellyfin 音乐库
 - `DirectUrlSourcePlugin`：直接 URL
 - `LocalLibrarySourcePlugin`：本地音乐库
 - `SiteMediaSourcePlugin`：站点媒体（YouTube/Bilibili）
+- `OnlinePluginSourcePlugin`：消费服务端内存 TTL opaque 引用，通过现有 `OnlineMusicService.get_media_source_url()` 解析启用的 MusicFree JS plugin item
 
 **核心问题**：`SiteMediaSourcePlugin` 通过 `runtime_provider` 间接持有 `RelayRuntime` 引用，调用 `runtime.prepare_link()`。
 
@@ -58,7 +59,7 @@ class SourcePlugin(ABC):
 **禁止**：
 - `SourcePlugin` 的 `__init__` 不得接受 `runtime_provider` 参数
 - `SourcePlugin.resolve()` 不得调用任何 `runtime`、`session_manager`、`stream_server` 相关的方法
-- 插件不得持有 `xiaomusic` 实例引用
+- 插件不得持有 `xiaomusic` 实例引用；`OnlinePluginSourcePlugin` 仅持有窄范围的引用 store 与 `OnlineMusicService` 能力
 
 ### 播放准备的归属
 

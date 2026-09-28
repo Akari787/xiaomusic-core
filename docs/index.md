@@ -56,3 +56,4 @@ features:
 | 播放状态快照 | [spec：player_state_projection_spec](spec/player_state_projection_spec) |
 | SSE 推送协议 | [spec：player_stream_sse_spec](spec/player_stream_sse_spec) |
 | 播放控制模型 | [架构：playback-control-model](architecture/playback-control-model) |
+| 规则 / 路由 / 死代码保留依据 | [2026-09-28 清理台账](maintenance/2026-09-28-cleanup) |

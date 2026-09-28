@@ -6,7 +6,6 @@
  */
 
 const vm = require('vm');
-const fs = require('fs');
 
 function logToStderr(...args) {
     process.stderr.write(`${args.join(' ')}\n`);
@@ -299,9 +298,6 @@ class PluginRunner {
             // console.debug(`[JS_PLUGIN_RUNNER] Calling search with query: ${query}, page: ${page}, type: ${type}`);
             const result = await plugin.search(query, page, type);
 
-            // 将调试信息写入日志文件而不是控制台
-            fs.appendFileSync('00-plugin_debug.log', `===========================${pluginName}插件原始返回结果：===================================\n`);
-            fs.appendFileSync('00-plugin_debug.log', `${JSON.stringify(result, null, 2)}\n`);
             // 严格验证返回结果 - 参考 MusicFreeDesktop 实现
             if (!result || typeof result !== 'object') {
                 console.error(`[JS_PLUGIN_RUNNER] Invalid search result from plugin ${pluginName}:`, typeof result);

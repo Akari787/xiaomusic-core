@@ -7,7 +7,7 @@ def test_router_registration_marks_internal_routers_hidden_from_schema():
     text = Path("xiaomusic/api/routers/__init__.py").read_text(encoding="utf-8")
 
     assert 'app.include_router(system.router, tags=["系统管理"], include_in_schema=False)' in text
-    assert 'app.include_router(device.router, tags=["设备控制"], dependencies=[auth_dep], include_in_schema=False)' in text
+    assert "device.router" not in text
     assert 'app.include_router(music.router, tags=["音乐管理"], dependencies=[auth_dep], include_in_schema=False)' in text
     assert 'app.include_router(file.router, tags=["文件操作"], dependencies=[auth_dep], include_in_schema=False)' in text
     assert 'app.include_router(file.media_router, tags=["媒体访问"], include_in_schema=False)' in text

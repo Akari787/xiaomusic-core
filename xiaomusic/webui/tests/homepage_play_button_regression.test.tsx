@@ -69,10 +69,11 @@ vi.mock("../src/services/apiClient", () => ({
 vi.mock("../src/services/v1Api", () => ({
   isApiOk: (out: { code?: number }) => Number(out.code ?? -1) === 0,
   apiErrorText: (out: { message?: string }) => String(out.message || "request failed"),
-  apiErrorInfo: (out: { message?: string }) => ({
+  apiErrorInfo: (out: { message?: string; data?: { error_code?: string; stage?: string }; request_id?: string }) => ({
     message: String(out.message || "request failed"),
-    errorCode: "",
-    stage: null,
+    errorCode: String(out.data?.error_code || ""),
+    stage: out.data?.stage || null,
+    requestId: String(out.request_id || ""),
   }),
   addFavorite: mockedV1.addFavorite,
   getLibraryMusicInfo: mockedV1.getLibraryMusicInfo,
@@ -529,6 +530,111 @@ describe("HomePage play button regression", () => {
     const afterPollText = container.textContent || "";
     expect(afterPollText).toContain("Song A");
     expect(afterPollText).not.toContain("FakeStale");
+  });
+
+  it("renders search errors and online playback failures inside the search panel", async () => {
+    const searchDockButton = Array.from(container.querySelectorAll(".soundscape-dock-center button")).find(
+      (button) => (button.querySelector(".material-icons")?.textContent || "").trim() === "search",
+    ) as HTMLButtonElement | undefined;
+    await act(async () => {
+      searchDockButton?.click();
+    });
+
+    const searchComponent = container.querySelector("#search-component") as HTMLElement;
+    const input = searchComponent.querySelector("input") as HTMLInputElement;
+    const setInputValue = (value: string) => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    await act(async () => {
+      setInputValue("round-trip");
+      await Promise.resolve();
+    });
+    mockedV1.searchOnline
+      .mockResolvedValueOnce({
+        code: 10000,
+        message: "search failed",
+        data: { error_code: "E_SEARCH_ONLINE_FAILED", stage: "system" },
+        request_id: "rid-search-fail",
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        message: "ok",
+        data: { items: [], total: 0 },
+        request_id: "rid-search-empty",
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        message: "ok",
+        data: {
+          items: [
+            {
+              title: "Online Song",
+              artist: "Artist",
+              play_reference: {
+                query: "opq_ui_test",
+                source_hint: "online_plugin",
+                media_id: "opm_ui_test",
+                title: "Online Song",
+              },
+            },
+          ],
+          total: 1,
+        },
+        request_id: "rid-search-ok",
+      });
+
+    const searchButton = () =>
+      Array.from(searchComponent.querySelectorAll("button")).find((button) => (button.textContent || "").trim() === "搜索") as
+        | HTMLButtonElement
+        | undefined;
+    await act(async () => {
+      searchButton()?.click();
+      await Promise.resolve();
+    });
+    await flushUi(2);
+    expect(searchComponent.textContent || "").toContain("E_SEARCH_ONLINE_FAILED");
+    expect(searchComponent.textContent || "").toContain("stage=system");
+    expect(searchComponent.textContent || "").toContain("rid-search-fail");
+
+    await act(async () => {
+      searchButton()?.click();
+      await Promise.resolve();
+    });
+    await flushUi(2);
+    expect(searchComponent.textContent || "").toContain("搜索无结果");
+    expect(searchComponent.textContent || "").toContain("rid-search-empty");
+
+    await act(async () => {
+      searchButton()?.click();
+      await Promise.resolve();
+    });
+    await flushUi(2);
+    const resultButton = Array.from(searchComponent.querySelectorAll(".search-results button")).find((button) =>
+      (button.textContent || "").includes("Online Song"),
+    ) as HTMLButtonElement | undefined;
+    await act(async () => {
+      resultButton?.click();
+    });
+    mockedV1.play.mockReset();
+    mockedV1.play.mockResolvedValue({
+      code: 20002,
+      message: "source resolve failed",
+      data: { error_code: "E_RESOLVE_NONZERO_EXIT", stage: "resolve" },
+      request_id: "rid-online-play-fail",
+    });
+    const confirmButton = Array.from(searchComponent.querySelectorAll("button")).find((button) => (button.textContent || "").trim() === "确定") as
+      | HTMLButtonElement
+      | undefined;
+    await act(async () => {
+      confirmButton?.click();
+      await Promise.resolve();
+    });
+    await flushUi(2);
+    expect(searchComponent.textContent || "").toContain("E_RESOLVE_NONZERO_EXIT");
+    expect(searchComponent.textContent || "").toContain("stage=resolve");
+    expect(searchComponent.textContent || "").toContain("rid-online-play-fail");
   });
 
   it("ignores fake state from play response — playlist via jellyfin fallback", async () => {

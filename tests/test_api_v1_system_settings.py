@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import xiaomusic.api.dependencies as api_dependencies
 from xiaomusic.api.routers import v1
 
 
@@ -82,7 +82,8 @@ def test_system_settings_save_success(monkeypatch):
             saved.update(data)
 
     monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
-    monkeypatch.setattr(api_dependencies, "reset_http_server", lambda app: None)
+    current_dependencies = importlib.import_module("xiaomusic.api.dependencies")
+    monkeypatch.setattr(current_dependencies, "reset_http_server", lambda app: None)
     client = _v1_client()
     resp = client.post(
         "/api/v1/system/settings",
@@ -90,7 +91,7 @@ def test_system_settings_save_success(monkeypatch):
     )
     body = resp.json()
     assert resp.status_code == 200
-    assert body["code"] == 0
+    assert body["code"] == 0, body
     assert body["data"] == {"status": "ok", "saved": True}
     assert saved["mi_did"] == "did-1"
     assert saved["httpauth_password"] == "secret"

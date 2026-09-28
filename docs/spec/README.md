@@ -43,13 +43,8 @@
 | 文档 | 职责 |
 |---|---|
 | [auth/README.md](auth/README.md) | auth spec 子目录索引 |
-| [auth/auth_runtime_recovery.md](auth/auth_runtime_recovery.md) | 认证恢复行为规范（恢复链路、状态映射、阶段边界） |
-| [auth/auth_runtime_reload_recovery_path.md](auth/auth_runtime_reload_recovery_path.md) | `_try_login()` / runtime reload 的 login、verify、runtime swap 阶段定义 |
-| [auth/auth_recovery_state_machine.md](auth/auth_recovery_state_machine.md) | 恢复流程状态机详细说明 |
-| [auth/auth_recovery_entrypoint_unification.md](auth/auth_recovery_entrypoint_unification.md) | 恢复入口统一方案 |
-| [auth/auth_recovery_singleflight.md](auth/auth_recovery_singleflight.md) | 并发恢复互斥方案 |
-| [auth/auth_recovery_fallback_path.md](auth/auth_recovery_fallback_path.md) | 降级路径方案 |
-| [auth/auth_auto_runtime_reload_acceptance.md](auth/auth_auto_runtime_reload_acceptance.md) | 自动重载验收标准 |
+| [auth/auth_runtime_recovery.md](auth/auth_runtime_recovery.md) | 当前认证恢复行为规范（atomic recovery、状态映射、验收边界） |
+| [auth/auth_recovery_singleflight.md](auth/auth_recovery_singleflight.md) | 当前后台恢复任务的并发互斥约束 |
 
 ### Relay 术语
 

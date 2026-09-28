@@ -12,7 +12,7 @@ from xiaomusic.constants.api_fields import (
     SOURCE_HINT,
 )
 
-SourceHint = Literal["auto", "direct_url", "site_media", "jellyfin", "local_library"]
+SourceHint = Literal["auto", "direct_url", "site_media", "jellyfin", "local_library", "online_plugin"]
 
 
 class PlayOptionsModel(BaseModel):

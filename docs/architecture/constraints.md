@@ -1,239 +1,87 @@
-# 系统宪法 - xiaomusic-core 架构约束
+# 系统约束
 
-> 版本：1.0
-> 发布：2026-05-16
-> 依据：ADR-0001 至 ADR-0005
+> 状态：现行
+> 适用版本：xiaomusic-core 1.1.x
+> 最后核对：2026-09-28
 
-本文档是 xiaomusic-core 的最高约束，所有代码必须遵守。违反即为违规，必须修复或通过 ADR 变更。
+本文档只保留当前实现中可以由代码、测试或运行装配验证的约束。愿景、尚未实施的设计和历史方案不再作为强制规则。
 
----
+## 1. 约束优先级
 
-## 禁止清单（绝对红线）
+发生冲突时按以下顺序裁决：
 
-以下行为**绝对禁止**，任何代码不得违反：
+1. `docs/api/api_v1_spec.md`：Public API 契约
+2. `docs/spec/*`：运行时行为与字段语义
+3. `docs/architecture/system_overview.md` 与本文件：边界和工程约束
+4. 其他 architecture 文档
+5. `ARCHITECTURE.md`：入口摘要
 
-### 1. WebUI 直接访问 runtime 内部状态
+ADR 记录决策历史。只有状态为 Accepted 且未被撤回或取代的 ADR 才能约束当前实现。
 
-```typescript
-// ❌ 禁止：WebUI 直接 import runtime
-import { getRuntime } from "xiaomusic/relay/runtime";
+## 2. Public API 与路由
 
-// ✅ 必须：通过 API
-import { fetchPlayerState } from "../services/player";
-const state = await fetchPlayerState();
-```
+- 正式外部接口只位于 `/api/v1/*`，其 OpenAPI 方法与路径集合必须等于白名单。
+- Admin 与 Internal Diagnostics 使用独立命名空间；`include_in_schema=False` 不能替代命名空间隔离或鉴权。
+- 新增或修改 v1 路由时，必须同步更新 `docs/api/api_v1_spec.md`、严格请求模型和生产装配测试。
+- 命令响应只表达动作受理；权威播放状态从 `/api/v1/player/state` 或 `/api/v1/player/stream` 读取。
+- 已弃用路由只有在存在明确兼容窗口及回归测试时才能保留。没有调用方、没有契约价值且已被正式接口取代的路由应删除。
 
-**依据**：ADR-0001
+**判断依据**：`tests/test_api_boundary_phase1.py`、`tests/test_removed_device_wrappers.py`、`xiaomusic/api/routers/__init__.py`。
 
-### 2. Source 持有 runtime 引用
+## 3. WebUI 边界
 
-```python
-# ❌ 禁止：SourcePlugin 接受 runtime_provider
-class SiteMediaSourcePlugin(SourcePlugin):
-    def __init__(self, runtime_provider=None):  # ❌
-        self._runtime_provider = runtime_provider
+- WebUI 只能通过 `xiaomusic/webui/src/services/` 调用后端，不得依赖 Python runtime、playback 或 device 内部对象。
+- 正式播放、控制、状态与在线搜索使用 v1 service；Internal API 仅承载仍有实际 WebUI 调用方的内部工具能力。
+- 前端不得用标题、旧字段或本地推测替代服务端的 track identity、transport state 或在线搜索 `play_reference`。
 
-# ✅ 正确：Source 只负责 resolve
-class SiteMediaSourcePlugin(SourcePlugin):
-    def resolve(self, request: MediaRequest) -> ResolvedMedia:
-        # 不调用 runtime、session_manager、stream_server
-```
+**判断依据**：`docs/architecture/webui_architecture.md`、`docs/spec/webui_playback_state_machine_spec.md`、WebUI service 与回归测试。
 
-**依据**：ADR-0003
+## 4. Playback 与状态权威
 
-### 3. runtime 特判 source 类型
+- API 播放与控制必须经 `PlaybackFacade` 进入 `PlaybackCoordinator` / transport 链路，router 不直接操纵设备队列。
+- 播放运行态以 `PlaybackRuntimeState`、`LifecycleToken` 和 `PlaybackTaskRegistry` 为准；Facade 只做投影与边界适配。
+- 歌单 membership 由 `MusicLibrary` 管理；设备当前 session 的队列快照和索引由 `XiaoMusicDevice` 管理。
+- state/SSE 查询路径只读，不创建或取消播放任务，不调用 Mina，不隐式修复运行态。
 
-```python
-# ❌ 禁止：runtime 中 if source == "xxx"
-if source == "site_media":
-    prepared = runtime.prepare_link(...)
-    
-# ✅ 正确：通过 SourceRegistry 统一分发
-plugin = source_registry.get_plugin(source_hint, request)
-resolved = await plugin.resolve(request)
-```
+**判断依据**：`docs/architecture/state-authority.md`、`docs/architecture/playback-control-model.md`、`tests/unit/test_t03h_runtime_snapshot.py`、`tests/unit/test_t06_playback_task_registry.py`。
 
-**依据**：ADR-0003
+## 5. Source 边界
 
-### 4. API 返回非结构化错误
+- Source 实现 `SourcePlugin.resolve()`，只负责把请求解析为 `ResolvedMedia`；不得直接下发设备命令或修改播放队列。
+- 内置 source 必须经 `register_default_source_plugins()` 注册，并在 API `source_hint` 契约中声明。
+- Source 不得持有完整 runtime / `XiaoMusic` 实例；允许注入完成本 source 职责所需的窄能力，例如 `LinkPreparer`、引用 store 或 `OnlineMusicService`。
+- MusicFree JS action 属于动态插件协议，不能仅因缺少 Python 静态调用就删除。
 
-```python
-# ❌ 禁止：裸 raise 或非 ApiError 返回
-raise ValueError("invalid request")  # ❌
-return {"error": "invalid"}  # ❌
+**判断依据**：`xiaomusic/core/source/`、`xiaomusic/adapters/sources/default_registry.py`、`xiaomusic/js_plugin_runner.js`、source 测试。
 
-# ✅ 正确：使用 ApiError
-raise ApiError(code=40001, message="invalid request", data={})
-```
+## 6. Auth、配置与敏感数据
 
-**依据**：ADR-0001
+- `TokenStore` / `auth.json` 是持久认证事实来源；候选 runtime verify 成功后才允许 commit 与 swap。
+- 不得把 cookie、token、密码、原始插件 item 或媒体敏感 URL 放进 Public API、日志、测试夹具或版本库。
+- API 和插件错误对外必须结构化并脱敏；内部日志也应通过既有 redaction 边界。
 
-### 5. 绕过 event system 直接修改状态
+**判断依据**：`docs/spec/auth/auth_runtime_recovery.md`、`xiaomusic/security/token_store.py`、`xiaomusic/security/redaction.py` 及安全测试。
 
-```python
-# ❌ 禁止：直接修改其他模块持有的状态
-xiaomusic.device_manager.devices[did].cur_music = "xxx"  # ❌
+## 7. 异步任务与生命周期
 
-# ✅ 正确：通过权威接口 + 事件通知
-device_player.set_current_track(track_id)
-event_bus.publish("PLAYBACK_STARTED", device_id=did, ...)
-```
+- 后台任务必须由创建它的组件保存引用、登记到既有 task registry，或由应用 lifespan 持有，并在对应关闭/失效边界取消。
+- 不使用扫描 `asyncio.all_tasks()` 加自定义 `_owner` 属性的全局清理模式。
+- 播放相关任务名称和所有权必须通过 `PlaybackTaskRegistry` 保持唯一；旧 session 的回调不得覆盖新 session 状态。
 
-**依据**：ADR-0004、ADR-0005
+**判断依据**：`xiaomusic/playback/task_registry.py`、`xiaomusic/api/app.py`、`tests/unit/test_t06_playback_task_registry.py`。
 
-### 6. 无标注的 silent except
+## 8. 异常与临时兼容
 
-```python
-# ❌ 禁止：裸 except: pass
-try:
-    do_something()
-except:  # ❌
-    pass
+- 禁止无日志、无返回语义的 `except: pass`。
+- 临时兼容必须写清原因、退出条件和保护测试；无需使用固定人名或虚构版本日期充当 owner。
+- 兼容代码不得成为新功能入口。删除前需检查生产注册、动态分派、现行测试和发布兼容窗口。
 
-# ✅ 正确：至少记录日志
-try:
-    do_something()
-except Exception as e:
-    LOG.warning(f"操作失败: {e}")  # 显式处理
-```
+## 9. 已撤销的旧规则
 
-**依据**：通用安全规范
+以下内容曾出现在旧版架构文档中，但与当前实现不符，不再生效：
 
-### 7. 未经 ADR 修改 API contract / event schema
-
-```python
-# ❌ 禁止：直接修改已有 API 响应结构
-@router.get("/api/v1/player/state")
-def get_player_state():
-    return {"state": "playing", "extra": "new_field"}  # 改变了契约
-
-# ✅ 正确：走 ADR 流程，添加新字段通过版本化
-```
-
-**依据**：ADR-0001、ADR-0005
-
----
-
-## 必须清单（强制遵守）
-
-以下行为**必须执行**：
-
-### 1. 所有状态变化通过 event system 通知
-
-任何模块修改了属于自己的状态后，必须发布对应事件：
-
-```python
-def set_playing(self, is_playing: bool):
-    self._is_playing = is_playing
-    self.event_bus.publish(
-        "PLAYBACK_STATE_CHANGED",
-        device_id=self.did,
-        is_playing=is_playing,
-        request_id=None  # 如果有的话
-    )
-```
-
-### 2. 所有 async task 可取消，且有明确 owner
-
-```python
-# ✅ 每个创建的 task 必须有 owner 标注
-task = asyncio.create_task(self._do_recovery(), name="auth_recovery")
-task._owner = "auth_manager"  # 标注 owner
-
-# 在 shutdown 时取消
-def shutdown(self):
-    for task in asyncio.all_tasks():
-        if getattr(task, "_owner", None) == "auth_manager":
-            task.cancel()
-```
-
-### 3. 每个状态有唯一权威
-
-| 状态 | 权威模块 | 访问方式 |
-|---|---|---|
-| 播放状态 | device_player | device_player.get_state() |
-| 播放列表 | music_library | music_library.get_playlist_items() |
-| 认证状态 | auth | auth.get_status() |
-| 流会话 | session_manager | session_manager.update_state() |
-
-不得在其他模块中直接持有或修改上述状态。
-
-### 4. 所有生命周期明确 ownership
-
-```python
-# ✅ 每个组件在 __init__ 中明确自己的生命周期责任
-class RelayRuntime:
-    def __init__(self, ...):
-        self._owns_stream_server = True
-        self._owns_audio_streamer = True
-    
-    def shutdown(self):
-        if self._owns_stream_server:
-            self.stream_server.stop()
-        if self._owns_audio_streamer:
-            self.audio_streamer.stop()
-```
-
-### 5. 所有临时方案必须标注 TEMP-HACK
-
-```python
-# ✅ 临时方案必须包含注释
-# TEMP-HACK:
-# reason: Jellyfin API 返回的 URL 在某些情况下缺少协议前缀
-# remove_after: v1.3 / Jellyfin API 修复后
-# related_issue: #456
-# owner: @shinpei
-if not url.startswith("http"):
-    url = "https://" + url
-```
-
----
-
-## TEMP-HACK 治理规范
-
-### 格式要求
-
-每个 TEMP-HACK 必须包含：
-
-```python
-# TEMP-HACK:
-# reason: <为什么这样写>
-# remove_after: <vX.Y / 某个功能完成后 / 某个 bug 修完后>
-# related_issue: <issue 号或链接>
-# owner: <负责人>
-```
-
-### 治理规则
-
-1. **必须登记**：所有 TEMP-HACK 必须有 owner，不得无人认领
-2. **必须有时限**：remove_after 必须有具体条件，不能写"以后"
-3. **定期清理**：每个 sprint 回顾时检查 TEMP-HACK 列表
-4. **禁止嵌套**：不允许 TEMP-HACK 中再套 TEMP-HACK
-5. **不得扩散**：TEMP-HACK 不得作为新代码的参考模板
-
----
-
-## 违规处理
-
-### 违规发现
-
-- **CI 检查**：PR 必须通过架构合规检查（静态分析规则）
-- **Code Review**：Reviewer 有权要求修复违规代码
-- **自我检查**：提交前对照本宪法自检
-
-### 违规处理
-
-1. **立即修复**：违规代码必须修复后才能合并
-2. **回滚优先**：如果合入后才发现严重违规，应优先回滚
-3. **ADR 豁免**：如果业务确实需要临时突破，需要创建 ADR 并经审批
-
----
-
-## 相关文档
-
-- [ADR-0001: API 作为唯一正式边界](../adr/0001-api-boundary.md)
-- [ADR-0002: Runtime 职责边界](../adr/0002-runtime-ownership.md)
-- [ADR-0003: Source 抽象职责边界](../adr/0003-source-abstraction.md)
-- [ADR-0004: 状态权威单一化](../adr/0004-state-authority.md)
-- [ADR-0005: 统一事件模型](../adr/0005-event-model.md)
-- [State Authority 偏差表](./state-authority.md)
+- “所有状态变化必须通过统一事件模型通知”。当前 EventBus 只承载三个既有通知事件，状态权威仍由各所属模块维护。
+- 约二十种标准事件、事件 replay、`play_id` / SSE `session_id` 和 `/api/v1/debug/snapshot`。这些设计未落地。
+- “所有 asyncio task 通过 `_owner` 属性由全局 shutdown 扫描取消”。当前采用 lifespan、模块字段和 `PlaybackTaskRegistry` 的局部 ownership。
+- “某些核心文件绝对不能修改”。高风险区域需要更多证据和测试，但不以文件名建立永久禁改名单。
+- “CI 已有通用架构静态检查”。现行门禁以具体测试和 workflow 为准，不宣称不存在的检查。

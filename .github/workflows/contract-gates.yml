@@ -1,0 +1,54 @@
+name: Contract Gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  contract-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python test dependencies
+        run: python -m pip install -e . pytest pytest-asyncio
+
+      - name: Run playback contract and source plugin tests
+        run: >-
+          python -m pytest -q
+          tests/test_webui_playback_contract.py
+          tests/test_api_v1_search_online.py
+          tests/test_online_plugin_source.py
+          tests/unit/test_core_source_plugins_and_registry.py
+          tests/unit/test_site_media_source_plugin.py
+          tests/unit/test_local_library_source_plugin.py
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: xiaomusic/webui/package-lock.json
+
+      - name: Install WebUI dependencies
+        working-directory: xiaomusic/webui
+        run: npm ci
+
+      - name: Run all WebUI tests
+        working-directory: xiaomusic/webui
+        run: npm test -- --run
+
+      - name: Build WebUI production bundle
+        working-directory: xiaomusic/webui
+        run: npm run build

@@ -40,6 +40,65 @@ def test_search_online_success(monkeypatch):
     }
 
 
+def test_search_online_creates_opaque_reference_for_supported_item(monkeypatch):
+    class _PluginManager:
+        @staticmethod
+        def get_enabled_plugins():
+            return ["qq"]
+
+    class _XM:
+        js_plugin_manager = _PluginManager()
+
+        @staticmethod
+        async def get_music_list_online(keyword: str, plugin: str, page: int, limit: int):
+            return {
+                "success": True,
+                "data": [
+                    {
+                        "name": "Song A",
+                        "title": "Song A",
+                        "artist": "Artist A",
+                        "platform": "qq",
+                        "id": "media-a",
+                        "url": "https://signed.example.invalid/a.mp3",
+                    },
+                    {
+                        "name": "Song B",
+                        "title": "Song B",
+                        "platform": "OpenAPI-xxx",
+                        "id": "media-b",
+                        "url": "https://signed.example.invalid/b.mp3",
+                    },
+                    {
+                        "name": "Song C",
+                        "title": "Song C",
+                        "platform": "jellyfin",
+                        "id": "media-c",
+                        "url": "https://signed.example.invalid/c.mp3",
+                    },
+                    {
+                        "name": "Song D",
+                        "title": "Song D",
+                        "platform": "not-enabled",
+                        "id": "media-d",
+                        "url": "https://signed.example.invalid/d.mp3",
+                    },
+                ],
+                "total": 2,
+            }
+
+    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    items = _v1_client().get("/api/v1/search/online", params={"keyword": "love"}).json()["data"]["items"]
+    assert items[0]["play_reference"]["source_hint"] == "online_plugin"
+    assert items[0]["play_reference"]["media_id"].startswith("opm_")
+    assert "media-a" not in str(items[0]["play_reference"])
+    assert items[0]["play_reference"]["title"] == "Song A"
+    assert items[0]["play_reference"]["query"].startswith("opq_")
+    assert "play_reference" not in items[1]
+    assert "play_reference" not in items[2]
+    assert "play_reference" not in items[3]
+
+
 def test_search_online_missing_keyword_is_structured_request_error():
     client = _v1_client()
     resp = client.get("/api/v1/search/online", params={"keyword": ""})

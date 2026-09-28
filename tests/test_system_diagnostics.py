@@ -6,7 +6,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from xiaomusic.api.dependencies import no_verification, verification
 from xiaomusic.diagnostics import StartupDiagnostics
 
 
@@ -51,9 +50,8 @@ def client(monkeypatch):
     sys.modules.pop("xiaomusic.api.routers.system", None)
     system = importlib.import_module("xiaomusic.api.routers.system")
     app = FastAPI()
-    app.include_router(system.router)
-    app.dependency_overrides[verification] = no_verification
-    return TestClient(app)
+    app.add_api_route("/diagnostics", system.diagnostics, methods=["GET"])
+    return TestClient(app), system
 
 
 class _FakeTokenStore:
@@ -75,15 +73,21 @@ class _Reachability:
 
 
 def test_diagnostics_route_returns_unified_view(monkeypatch, client):
-    from xiaomusic.api.routers import system
     import xiaomusic.diagnostics as diagnostics_module
 
+    test_client, system = client
     startup = StartupDiagnostics(ok=True, checked_at=1710000000.0, notes=["startup ok"])
 
     class _Auth:
         @staticmethod
-        def auth_status_snapshot():
-            return {"mode": "healthy", "locked": False, "lock_reason": ""}
+        def map_auth_public_status(runtime_auth_ready=None):
+            return {
+                "status": "healthy",
+                "status_reason": "healthy",
+                "auth_mode": "healthy",
+                "auth_locked": False,
+                "runtime_auth_ready": runtime_auth_ready,
+            }
 
         @staticmethod
         def auth_debug_state():
@@ -161,7 +165,7 @@ def test_diagnostics_route_returns_unified_view(monkeypatch, client):
         },
     )
 
-    response = client.get("/diagnostics")
+    response = test_client.get("/diagnostics")
     assert response.status_code == 200
     payload = response.json()
 
@@ -202,19 +206,21 @@ def test_diagnostics_route_returns_unified_view(monkeypatch, client):
 
 
 def test_diagnostics_route_marks_overall_failed_when_auth_failed(monkeypatch, client):
-    from xiaomusic.api.routers import system
     import xiaomusic.diagnostics as diagnostics_module
 
+    test_client, system = client
     startup = StartupDiagnostics(ok=True, checked_at=1710000000.0, notes=[])
 
     class _Auth:
         @staticmethod
-        def auth_status_snapshot():
+        def map_auth_public_status(runtime_auth_ready=None):
             return {
-                "mode": "locked",
-                "locked": True,
-                "lock_reason": "qrcode required",
-                "lock_transition_reason": "manual auth required",
+                "status": "failed",
+                "status_reason": "manual_login_required",
+                "status_reason_detail": "qrcode required",
+                "auth_mode": "locked",
+                "auth_locked": True,
+                "runtime_auth_ready": runtime_auth_ready,
                 "need_qr_scan": True,
                 "long_term_expired": True,
                 "user_action_required": True,
@@ -268,7 +274,7 @@ def test_diagnostics_route_marks_overall_failed_when_auth_failed(monkeypatch, cl
     monkeypatch.setattr(system, "qrcode_login_error", "")
     monkeypatch.setattr(diagnostics_module, "_get_device_reachability_cache", lambda: {})
 
-    response = client.get("/diagnostics")
+    response = test_client.get("/diagnostics")
     assert response.status_code == 200
     payload = response.json()
 

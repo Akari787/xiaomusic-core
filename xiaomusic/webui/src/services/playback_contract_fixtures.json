@@ -1,0 +1,29 @@
+{
+  "link": {
+    "device_id": "did-fixture",
+    "query": "https://example.com/audio.mp3",
+    "source_hint": "auto",
+    "options": {
+      "no_cache": false,
+      "prefer_proxy": false
+    }
+  },
+  "proxy_link": {
+    "device_id": "did-fixture",
+    "query": "https://example.com/audio.mp3",
+    "source_hint": "auto",
+    "options": {
+      "no_cache": false,
+      "prefer_proxy": true
+    }
+  },
+  "online_plugin": {
+    "device_id": "did-fixture",
+    "query": "opq_fixture_token",
+    "source_hint": "online_plugin",
+    "options": {
+      "media_id": "media-fixture",
+      "title": "Fixture Song"
+    }
+  }
+}

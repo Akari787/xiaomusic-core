@@ -28,7 +28,7 @@ WebUI 当前使用的 Public API：
 - `POST /api/v1/system/settings/item`
 - `POST /api/v1/play`
 - `POST /api/v1/control/*`（stop、pause、resume、next、previous 等）
-- `GET /api/v1/search/online`
+- `GET /api/v1/search/online`（仅使用服务端生成的 opaque `play_reference` 播放；不得以标题或搜索词回退）
 
 ### 1.2 Internal API（`/api/auth/*`、`/api/file/*`）
 
@@ -133,7 +133,15 @@ render（基于 transport_state / track.id / position_ms 等字段）
 
 ---
 
-## 5. 接口变更时的影响评估
+## 5. WebUI 播放请求约束
+
+- `POST /api/v1/play` 的 `options` 必须使用与后端 `PlayOptionsModel` 对齐的 TypeScript `PlayOptions`，禁止退化为 `Record<string, unknown>`。
+- 主页播放请求必须通过 typed builder 构造；禁止在页面中手写任意 options。
+- 播放失败提示必须保留稳定 `error_code`、`stage` 与 `request_id`；不得展示媒体 URL、cookie、token 或原始 yt-dlp stderr。
+- 在线搜索选中结果没有正式 `play_reference` 时，WebUI 必须拒绝发送播放请求，并在搜索面板标记为不可播放。
+- `play_reference` 只包含 `opq_` query、`source_hint="online_plugin"`、非敏感 `media_id` 和 `title`；不得包含原始 item、媒体 URL、cookie、token、`source_payload` 或 `context_hint`。
+
+## 6. 接口变更时的影响评估
 
 当后端 API 发生以下变更时，WebUI 必须跟随更新：
 
@@ -150,7 +158,7 @@ render（基于 transport_state / track.id / position_ms 等字段）
 
 ---
 
-## 6. 相关文档
+## 7. 相关文档
 
 | 文档 | 职责 |
 |---|---|

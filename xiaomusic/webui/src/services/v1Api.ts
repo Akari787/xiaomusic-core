@@ -2,7 +2,7 @@ import { apiGetJson, apiPostJson } from "./apiClient";
 
 // Public API only: this module only wraps `/api/v1/*` interfaces.
 
-export type SourceHint = "auto" | "direct_url" | "site_media" | "jellyfin" | "local_library";
+export type SourceHint = "auto" | "direct_url" | "site_media" | "jellyfin" | "local_library" | "online_plugin";
 
 export const SOURCE_HINT_OPTIONS: Array<{ value: SourceHint; label: string }> = [
   { value: "auto", label: "自动识别" },
@@ -132,10 +132,38 @@ export interface LibraryMusicInfoData {
   duration_seconds?: number;
 }
 
+export interface PlayOptions {
+  shuffle?: boolean;
+  loop?: boolean;
+  volume?: number | null;
+  timeout?: number | null;
+  resolve_timeout_seconds?: number | null;
+  no_cache?: boolean;
+  prefer_proxy?: boolean;
+  confirm_start?: boolean;
+  confirm_start_delay_ms?: number;
+  confirm_start_retries?: number;
+  confirm_start_interval_ms?: number;
+  source_payload?: Record<string, unknown> | null;
+  context_hint?: Record<string, unknown> | null;
+  media_id?: string;
+  id?: string;
+  title?: string;
+  start_position?: number;
+}
+
+export interface OnlineSearchPlayReference {
+  query: string;
+  source_hint: "online_plugin";
+  media_id: string;
+  title: string;
+}
+
 export interface OnlineSearchItemData {
   name?: string;
   title?: string;
   artist?: string;
+  play_reference?: OnlineSearchPlayReference;
 }
 
 export interface OnlineSearchData {
@@ -189,20 +217,21 @@ export interface ApiErrorInfo {
   message: string;
   errorCode: string;
   stage: string | null;
+  requestId: string;
 }
 
 export interface PlayRequest {
   device_id: string;
   query: string;
   source_hint?: SourceHint;
-  options?: Record<string, unknown>;
+  options?: PlayOptions;
   request_id?: string;
 }
 
 export interface ResolveRequest {
   query: string;
   source_hint?: SourceHint;
-  options?: Record<string, unknown>;
+  options?: PlayOptions;
   request_id?: string;
 }
 
@@ -269,6 +298,7 @@ export function apiErrorInfo<T>(out: ApiEnvelope<T>): ApiErrorInfo {
     message: String(out.message || data.message || "请求失败"),
     errorCode,
     stage: stage || null,
+    requestId: String(out.request_id || ""),
   };
 }
 

@@ -258,16 +258,18 @@ verify.result = failed
 
 ## 8. 观测接口
 
-正式状态：
+管理状态：
 
-- `/api/v1/auth/status`
+- `/api/admin/v1/auth/status`
 
-调试状态：
+调试状态（Internal API，不进入公开 schema）：
 
-- `/api/v1/debug/auth_state`
-- `/api/v1/debug/auth_recovery_state`
-- `/api/v1/debug/auth_runtime_reload_state`
-- `/api/v1/debug/auth_short_session_rebuild_state`
+- `/api/internal/diagnostics/auth_state`
+- `/api/internal/diagnostics/auth_recovery_state`
+- `/api/internal/diagnostics/auth_runtime_reload_state`
+- `/api/internal/diagnostics/auth_short_session_rebuild_state`
+
+v1.1.x 仍注册 `/api/v1/auth/status` 与同名 `/api/v1/debug/*` 弃用兼容入口；新代码和运维脚本不得继续依赖。
 
 调试接口必须能区分：
 

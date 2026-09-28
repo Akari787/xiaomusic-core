@@ -107,7 +107,7 @@ relay
 
 ### 4.2 Auth（认证）
 
-- `AuthManager` 管理小米账号的两层认证状态（长期态 + 短期态）
+- `AuthManager` 管理 persistent auth、short session 与 runtime 三层认证状态
 - `auth.json` 是事实来源，重启后从磁盘恢复
 - 认证恢复流程见 `docs/spec/auth/auth_runtime_recovery.md`
 

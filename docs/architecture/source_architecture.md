@@ -21,7 +21,7 @@ source 提供**事实**，不做**策略决策**：
 
 ---
 
-## 2. 当前四种正式 source 类型
+## 2. 当前五种正式 source 类型
 
 | 来源标识 | 职责 | 代码位置 |
 |---|---|---|
@@ -29,8 +29,9 @@ source 提供**事实**，不做**策略决策**：
 | `site_media` | 解析站点媒体（YouTube、Bilibili 等），通过 yt-dlp 或 MusicFree JS 插件提取流 URL | `adapters/sources/site_media_source_plugin.py` |
 | `jellyfin` | 解析 Jellyfin 资源，通过 Jellyfin API 获取流 URL | `adapters/sources/jellyfin_source_plugin.py` |
 | `local_library` | 解析本地媒体库中的曲目，返回本地文件或内置 HTTP 服务 URL | `adapters/sources/local_library_source_plugin.py` |
+| `online_plugin` | 消费服务端进程内 TTL opaque 引用，调用启用 MusicFree JS plugin 获取真实媒体 URL | `adapters/sources/online_plugin_source_plugin.py` |
 
-这四种类型是当前正式 source 类型的完整集合。新增 source 类型必须：
+这五种类型是当前正式 source 类型的完整集合。新增 source 类型必须：
 
 1. 实现 `SourcePlugin` 接口
 2. 在 `default_registry.py` 中注册
@@ -89,15 +90,15 @@ source 提供的 `stream_url` 必须是 `http://` 或 `https://` 格式。非法
 ### 5.1 Source Plugin（来源插件，正式体系）
 
 - 接口：`xiaomusic/core/source/source_plugin.py` 中的 `SourcePlugin` 抽象类
-- 注册：`SourceRegistry`，通过 `default_registry.py` 注册内置四种
+- 注册：`SourceRegistry`，通过 `default_registry.py` 注册内置五种
 - 职责：实现 `resolve()` 方法，返回 `ResolvedMedia`
 - 这是 source 架构的正式扩展点
 
-### 5.2 MusicFree JS 插件（外部媒体提供方，属于 site_media source 的内部机制）
+### 5.2 MusicFree JS 插件（外部媒体提供方）
 
 - 管理：`xiaomusic/managers/js_plugin_manager.py`
-- 职责：在 `site_media` source 插件内部，调用第三方 MusicFree JS 脚本解析特定站点
-- **这不是 source 体系的扩展点**，是 `site_media` source 的内部实现细节
+- 职责：由 `site_media` 或窄范围 `online_plugin` source 通过现有 `OnlineMusicService` 调用第三方 MusicFree JS 脚本
+- **这不是 source 体系的扩展点**；`online_plugin` 只消费 v1 搜索生成的进程内 opaque 引用，不把 raw item 暴露给 WebUI
 
 ### 5.3 Python exec 插件（命令扩展，不属于 source 体系）
 
@@ -129,7 +130,7 @@ source 提供的 `stream_url` 必须是 `http://` 或 `https://` 格式。非法
 2. `resolve()` 只返回 `ResolvedMedia`，不产生副作用
 3. 在 `default_registry.py` 中以确定性顺序注册
 4. 在 `api_v1_spec.md` 的 `source_hint` 允许值列表中声明
-5. 来源标识（`source` 字段）必须属于四种正式类型之一，或在 API 契约中新增声明
+5. 来源标识（`source` 字段）必须属于五种正式类型之一，或在 API 契约中新增声明
 
 ---
 

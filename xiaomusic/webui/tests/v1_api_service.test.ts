@@ -94,6 +94,7 @@ describe("v1Api service", () => {
       message: "dispatch failed",
       errorCode: "E_XIAOMI_PLAY_FAILED",
       stage: "dispatch",
+      requestId: "rid-1",
     });
   });
 });

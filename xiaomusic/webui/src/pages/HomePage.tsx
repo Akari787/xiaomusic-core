@@ -24,11 +24,16 @@ import {
   tts as v1Tts,
   updateSystemSettingItem,
   type ApiEnvelope,
+  type OnlineSearchItemData,
   type PlayMode,
   type PlayerStateData,
   type PlaylistItem,
   type TransportState,
 } from "../services/v1Api";
+import {
+  buildLinkPlayRequest,
+  buildOnlineSearchPlayRequest,
+} from "../services/playbackRequestBuilder";
 import { fetchAuthStatus, logoutAuth as logoutAuthRequest, reloadAuthRuntime } from "../services/auth";
 import {
   cleanTempDir as cleanTempDirRequest,
@@ -48,11 +53,7 @@ type Device = {
   alias?: string;
 };
 
-type OnlineSearchItem = {
-  name?: string;
-  title?: string;
-  artist?: string;
-};
+type OnlineSearchItem = OnlineSearchItemData;
 
 type AuthStatus = {
   token_valid?: boolean;
@@ -434,39 +435,40 @@ function explainPlaybackError(
   errorCode?: string | null,
   message?: string | null,
   stage?: string | null,
+  requestId?: string | null,
 ): string {
   const code = String(errorCode || "");
+  let detail = message || code || "未知错误";
   if (code === "E_RESOLVE_NONZERO_EXIT") {
-    return "链接解析失败（源站限制/风控/地区限制）。建议换直链或更换来源。";
+    detail = "链接解析失败（源站限制/风控/地区限制）。建议换直链或更换来源。";
+  } else if (code === "E_STREAM_NOT_FOUND") {
+    detail = "未找到可用流会话，请重试或切换播放模式。";
+  } else if (code === "E_XIAOMI_PLAY_FAILED") {
+    detail = "小爱端播放失败，请检查设备在线状态与当前播放权限。";
+  } else if (code === "E_DEVICE_NOT_FOUND") {
+    detail = "目标设备不存在或当前不可用，请重新选择设备后重试。";
+  } else if (code === "E_INVALID_REQUEST" || stage === "request") {
+    detail = `请求契约不匹配：${message || "请求参数不合法，请检查输入后重试。"}`;
+  } else if (stage === "resolve") {
+    detail = `解析阶段失败：${detail}`;
+  } else if (stage === "prepare") {
+    detail = `预处理阶段失败：${detail}`;
+  } else if (stage === "dispatch" || stage === "xiaomi") {
+    detail = `下发播放阶段失败：${detail}`;
+  } else if (stage === "transport") {
+    detail = `传输执行阶段失败：${detail}`;
   }
-  if (code === "E_STREAM_NOT_FOUND") {
-    return "未找到可用流会话，请重试或切换播放模式。";
-  }
-  if (code === "E_XIAOMI_PLAY_FAILED") {
-    return "小爱端播放失败，请检查设备在线状态与当前播放权限。";
-  }
-  if (code === "E_DEVICE_NOT_FOUND") {
-    return "目标设备不存在或当前不可用，请重新选择设备后重试。";
-  }
-  if (code === "E_INVALID_REQUEST") {
-    return message || "请求参数不合法，请检查输入后重试。";
-  }
-  if (stage === "request") {
-    return `请求参数错误：${message || code || "未知错误"}`;
-  }
-  if (stage === "resolve") {
-    return `解析阶段失败：${message || code || "未知错误"}`;
-  }
-  if (stage === "prepare") {
-    return `预处理阶段失败：${message || code || "未知错误"}`;
-  }
-  if (stage === "dispatch" || stage === "xiaomi") {
-    return `下发播放阶段失败：${message || code || "未知错误"}`;
-  }
-  if (stage === "transport") {
-    return `传输执行阶段失败：${message || code || "未知错误"}`;
-  }
-  return message || code || "未知错误";
+  return `${detail}（错误码=${code || "unknown"}，阶段=${stage || "unknown"}，请求=${requestId || "unknown"}）`;
+}
+
+function formatSearchFeedback(
+  prefix: string,
+  errorCode: string,
+  stage: string | null,
+  requestId: string,
+  message: string,
+): string {
+  return `${prefix}：${message}（error_code=${errorCode || "unknown"}，stage=${stage || "unknown"}，request_id=${requestId || "unknown"}）`;
 }
 
 function normalizeBaseUrlInput(raw: unknown): string {
@@ -1006,6 +1008,7 @@ export function HomePage() {
   const [linkUrl, setLinkUrl] = useState<string>("https://www.youtube.com/watch?v=iPnaF8Ngk3Q");
   const [ttsText, setTtsText] = useState<string>("播放文字测试");
   const [searchKeyword, setSearchKeyword] = useState<string>("");
+  const [searchMessage, setSearchMessage] = useState<string>("");
   const [soundscapeFilter, setSoundscapeFilter] = useState<string>("");
   const [searchResults, setSearchResults] = useState<OnlineSearchItem[]>([]);
   const [selectedSearchIndex, setSelectedSearchIndex] = useState<number>(-1);
@@ -1676,7 +1679,7 @@ export function HomePage() {
     }
 
     const err = apiErrorInfo(playResp);
-    setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`);
+    setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage, playResp.request_id)}`);
     return false;
   }
 
@@ -1789,12 +1792,7 @@ export function HomePage() {
         return;
       }
 
-      const out = await v1Play({
-        device_id: activeDid,
-        query: url,
-        source_hint: "auto",
-        options: { no_cache: false, prefer_proxy: proxy, prefer_codec: "auto" },
-      });
+      const out = await v1Play(buildLinkPlayRequest(activeDid, url, proxy));
       const data = (out.data || {}) as Record<string, unknown>;
       const extra = (data.extra || {}) as Record<string, unknown>;
       const outcome = (extra.playback_outcome || {}) as Record<string, unknown>;
@@ -1810,7 +1808,7 @@ export function HomePage() {
         );
       } else {
         const err = apiErrorInfo(out);
-        setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`);
+        setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage, out.request_id)}`);
       }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err || "未知错误");
@@ -1865,19 +1863,24 @@ export function HomePage() {
   async function searchOnline() {
     const kw = searchKeyword.trim();
     if (!kw) {
-      setMessage("请输入搜索关键词");
+      setSearchMessage("搜索失败：请输入搜索关键词（error_code=E_INVALID_REQUEST，stage=request，request_id=unknown）");
       return;
     }
     const out = await v1SearchOnline(kw);
     if (!isApiOk(out)) {
       const err = apiErrorInfo(out);
-      setMessage(err.message || "搜索失败");
+      setSearchMessage(formatSearchFeedback("搜索失败", err.errorCode, err.stage, out.request_id, err.message));
       setSearchResults([]);
       return;
     }
-    setSearchResults((out.data.items || []) as OnlineSearchItem[]);
+    const items = (out.data.items || []) as OnlineSearchItem[];
+    setSearchResults(items);
     setSelectedSearchIndex(-1);
-    setMessage(`搜索到 ${out.data.items?.length || 0} 条结果`);
+    setSearchMessage(
+      items.length > 0
+        ? `搜索到 ${items.length} 条结果（request_id=${out.request_id || "unknown"}）`
+        : `搜索无结果（request_id=${out.request_id || "unknown"}）`,
+    );
   }
 
   async function confirmSearch() {
@@ -1886,26 +1889,28 @@ export function HomePage() {
     }
     const item = searchResults[selectedSearchIndex];
     if (!item) {
-      setMessage("请先选择搜索结果");
+      setSearchMessage("无法播放：请先选择搜索结果（error_code=E_INVALID_REQUEST，stage=request，request_id=unknown）");
       return;
     }
     const title = String(item.title || item.name || "");
     if (!title) {
-      setMessage("选中结果缺少歌曲名");
+      setSearchMessage("无法播放：选中结果缺少歌曲名（error_code=E_INVALID_REQUEST，stage=request，request_id=unknown）");
       return;
     }
-    const out = await v1Play({
-      device_id: activeDid,
-      query: title,
-      source_hint: "auto",
-      options: { search_key: searchKeyword || "" },
-    });
+    let request;
+    try {
+      request = buildOnlineSearchPlayRequest(activeDid, item);
+    } catch {
+      setSearchMessage("无法播放：该搜索结果没有正式播放引用（error_code=E_NO_PLAY_REFERENCE，stage=search，request_id=unknown）");
+      return;
+    }
+    const out = await v1Play(request);
     if (isApiOk(out)) {
       setMessage("已发送播放");
       setShowSearch(false);
     } else {
       const err = apiErrorInfo(out);
-      setMessage(`播放失败：${explainPlaybackError(err.errorCode, err.message, err.stage)}`);
+      setSearchMessage(formatSearchFeedback("在线播放失败", err.errorCode, err.stage, out.request_id, err.message));
     }
   }
 
@@ -2566,6 +2571,7 @@ export function HomePage() {
         <div className="component-button-group">
           <button onClick={() => void searchOnline()}>搜索</button>
         </div>
+        <div className="search-feedback" role="status">{searchMessage}</div>
         <label>搜索结果:</label>
         <div className="search-results">
           {searchResults.map((it, idx) => {
@@ -2579,12 +2585,19 @@ export function HomePage() {
               >
                 {title}
                 {it.artist ? ` - ${String(it.artist)}` : ""}
+                {!it.play_reference ? "（暂无正式播放引用）" : ""}
               </button>
             );
           })}
         </div>
         <div className="component-button-group">
-          <button onClick={() => void confirmSearch()}>确定</button>
+          <button
+            onClick={() => void confirmSearch()}
+            disabled={selectedSearchIndex < 0 || !searchResults[selectedSearchIndex]?.play_reference}
+            title="只有带正式播放引用的结果可以播放"
+          >
+            确定
+          </button>
           <button onClick={() => setShowSearch(false)} className="close-button">
             关闭
           </button>

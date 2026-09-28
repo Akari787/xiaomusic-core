@@ -2,7 +2,7 @@
 
 版本：v1.0
 状态：正式开发规则
-最后更新：2026-03-28
+最后更新：2026-09-28
 
 本文档是所有开发改动（包括 AI 执行）的前置规则入口。**在改任何代码之前，必须先确认归属边界并阅读对应文档。**
 
@@ -64,7 +64,7 @@ runtime 过渡期内，`XiaoMusic` 类仍承担部分协调职责，改动前需
 
 必须确认：
 
-1. 该改动是否影响两层认证状态的边界（长期态 / 短期态）？见 `authentication_architecture.md`。
+1. 该改动是否影响 persistent auth、short session、runtime 三层边界？见 `authentication_architecture.md`。
 2. `auth.json` 是事实来源，任何认证状态的持久化必须通过 `TokenStore`，不得绕过。
 3. 认证恢复流程有固定步骤，改动前必须阅读 `auth_runtime_recovery.md`。
 
@@ -75,7 +75,7 @@ runtime 过渡期内，`XiaoMusic` 类仍承担部分协调职责，改动前需
 必须确认：
 
 1. 该改动是新增 source 类型，还是修改已有 source 内部实现？新增 source 类型必须在 `source_architecture.md` 确认规范，并更新 `api_v1_spec.md` 的 `source_hint` 允许值。修改已有 source 内部实现时，必须保持 `resolve()` 的返回类型不变。
-2. 新增的是 Source Plugin（正式体系）还是 MusicFree JS 插件（`site_media` 内部机制）？两者归属不同，见 `source_architecture.md` 第 5 节。
+2. 新增的是 Source Plugin（正式体系）还是 MusicFree JS provider？JS provider 不是 source 扩展点，只能由 `site_media` 或窄范围 `online_plugin` source 通过 `OnlineMusicService` 使用，见 `source_architecture.md` 第 5 节。
 3. source 实现中是否出现了对 device、transport 或播放队列的直接调用？这是禁止的，必须移除。
 
 ---
@@ -148,7 +148,7 @@ runtime 过渡期内，`XiaoMusic` 类仍承担部分协调职责，改动前需
 
 - 不得以"实现上更简单"为由跳过归属边界确认
 - 不得假设某字段存在于 API 响应中（必须查 `api_v1_spec.md` 确认）
-- 改动文档时，必须更新文档头部的"最后更新"日期
+- 文档存在“最后更新”字段时，实质修改必须同步日期；没有该字段时不得为格式统一批量补写
 - 改动涉及多个边界时，必须分步执行，每步明确指出影响边界
 
 ---
@@ -164,3 +164,5 @@ runtime 过渡期内，`XiaoMusic` 类仍承担部分协调职责，改动前需
 5. **改完之后需要更新哪些文档？**（对照第 9 节文档更新规则）
 
 五个问题全部能回答，才开始写代码。
+
+清理与删除还需额外确认：生产注册、动态插件分派、现行测试、发布兼容窗口和 Git 历史。静态“无引用”不能单独证明插件 action、框架入口或兼容 API 是死代码。

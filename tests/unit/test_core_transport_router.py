@@ -16,8 +16,13 @@ class _TransportStub(Transport):
         self.name = name
         self.fail_actions = fail_actions or set()
 
-    async def play_url(self, device_id: str, prepared: PreparedStream) -> dict:
-        _ = (device_id, prepared)
+    async def play_url(
+        self,
+        device_id: str,
+        prepared: PreparedStream,
+        request_context: dict | None = None,
+    ) -> dict:
+        _ = (device_id, prepared, request_context)
         if "play" in self.fail_actions:
             raise RuntimeError("play failed")
         return {"ret": "OK"}

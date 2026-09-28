@@ -1,29 +1,28 @@
-import json
 from dataclasses import asdict
-from pathlib import Path
 
 import pytest
 
+from xiaomusic.relay.contracts import (
+    ERROR_CODES,
+    SESSION_STATES,
+    Event,
+    ResolveResult,
+    Session,
+    UrlInfo,
+)
+
 
 @pytest.mark.unit
-def test_contract_examples_match_model_definitions():
-    from xiaomusic.relay.contracts import (  # noqa: PLC0415
-        ERROR_CODES,
-        Event,
-        ResolveResult,
-        Session,
-        UrlInfo,
-    )
+def test_contract_samples_are_self_consistent():
+    url = asdict(UrlInfo.sample())
+    resolved = asdict(ResolveResult.sample())
+    session = asdict(Session.sample())
+    event = asdict(Event.sample())
 
-    examples_path = Path("docs/dev/relay/contracts.examples.json")
-    assert examples_path.exists(), "missing docs/dev/relay/contracts.examples.json"
-
-    payload = json.loads(examples_path.read_text(encoding="utf-8"))
-
-    assert payload["models"]["UrlInfo"].keys() == asdict(UrlInfo.sample()).keys()
-    assert payload["models"]["ResolveResult"].keys() == asdict(ResolveResult.sample()).keys()
-    assert payload["models"]["Session"].keys() == asdict(Session.sample()).keys()
-    assert payload["models"]["Event"].keys() == asdict(Event.sample()).keys()
+    assert url["site"] and url["normalized_url"].startswith("http")
+    assert resolved["ok"] is True and resolved["source_url"].startswith("http")
+    assert session["state"] in SESSION_STATES and session["sid"]
+    assert event["type"] and event["level"] in {"debug", "info", "warning", "error"}
 
     must_have = {
         "E_URL_UNSUPPORTED",
@@ -35,6 +34,4 @@ def test_contract_examples_match_model_definitions():
         "E_XIAOMI_PLAY_FAILED",
         "E_INTERNAL",
     }
-
-    assert must_have.issubset(set(ERROR_CODES.keys()))
-    assert must_have.issubset(set(payload["error_codes"].keys()))
+    assert must_have.issubset(ERROR_CODES)

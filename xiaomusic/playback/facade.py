@@ -187,7 +187,7 @@ class PlaybackFacade:
     @staticmethod
     def _normalize_track_source_value(source: Any) -> str | None:
         value = str(source or "").strip().lower()
-        if value in {"local_library", "jellyfin", "site_media", "direct_url"}:
+        if value in {"local_library", "jellyfin", "site_media", "direct_url", "online_plugin"}:
             return value
         return None
 

@@ -5,13 +5,11 @@
 import asyncio
 import json
 import os
-import tempfile
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # 测试需要先设置好导入路径
 ROOT = Path(__file__).resolve().parents[1]
@@ -306,7 +304,7 @@ class TestSimpleAuthManager:
         assert am._lock_counter == 0
 
     @pytest.mark.asyncio
-    async def test_auth_error_only_locks_after_continuous_effective_failures(
+    async def test_long_term_auth_expiry_enters_manual_login_gate_immediately(
         self, auth_manager, mock_miservice
     ):
         am, _, _ = auth_manager
@@ -321,17 +319,13 @@ class TestSimpleAuthManager:
         mock_miservice["MiNAService"].return_value = mock_mina
         mock_miservice["MiIOService"].return_value = mock_miio
 
-        for _ in range(am._lock_counter_threshold - 1):
-            result = await am.ensure_auth(force=True)
-            assert result is False
-            assert am._state == am.STATE_DEGRADED
-            assert am._lock_counter < am._lock_counter_threshold
-
         result = await am.ensure_auth(force=True)
+
         assert result is False
         assert am._state == am.STATE_LOCKED
-        assert am._lock_counter == am._lock_counter_threshold
         assert am.is_auth_locked() is True
+        assert am._last_manual_login_required_reason
+        assert am._last_lock_transition_reason == "manual_login_required"
 
     def test_auth_status_snapshot(self, auth_manager):
         """测试状态快照"""

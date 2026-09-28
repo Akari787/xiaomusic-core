@@ -2,7 +2,7 @@
 
 版本：v1.1
 状态：正式架构文档
-最后更新：2026-07-23
+最后更新：2026-09-28
 
 本文档是 xiaomusic-core 文档体系的总纲，定义系统一级边界、各模块职责与文档优先级关系。
 
@@ -19,7 +19,7 @@
 | **playback** | 播放编排层，负责策略决策、控制意图路由与状态快照输出；不直接持有设备运行时队列 | `xiaomusic/playback/`、`xiaomusic/core/` |
 | **source** | 媒体来源解析，提供可播放流 URL 与曲目事实 | `xiaomusic/adapters/sources/`、`xiaomusic/core/source/` |
 | **device** | 设备抽象、设备侧命令执行，以及每台设备当前 session 的队列快照与索引权威 | `xiaomusic/device_manager.py`、`xiaomusic/device_player.py`、`xiaomusic/core/device/` |
-| **auth** | 小米账号认证状态管理与会话维护 | `xiaomusic/auth.py`、`xiaomusic/security/token_store.py` |
+| **auth** | 持久认证、短会话与 runtime 恢复 | `xiaomusic/auth.py`、`xiaomusic/security/token_store.py` |
 | **config** | 运行时配置对象管理与持久化 | `xiaomusic/config.py`、`xiaomusic/config_manager.py` |
 | **relay** | 站内流媒体中转，建立 relay session 并输出 `/relay/stream/{sid}` 端点 | `xiaomusic/relay/` |
 | **webui** | 前端展示层，通过 Public API 与 Internal API 消费后端状态 | `xiaomusic/webui/` |
@@ -81,11 +81,11 @@ WebUI / 外部调用方
 |---|---|---|
 | api | 稳定 | v1 白名单接口已形成正式契约，`api_v1_spec.md` 为权威 |
 | playback | 稳定 | 状态快照、revision、SSE 推送已实现；`facade.py` 是唯一入口 |
-| source | 稳定 | 四种来源已形成统一接口，`SourcePlugin.resolve()` 是唯一规范点 |
+| source | 稳定 | 五种内置来源经统一 registry 分派，`SourcePlugin.resolve()` 是唯一规范点 |
 | device | 稳定 | 设备执行层边界清晰，transport（mina/miio）已抽象 |
-| auth | 稳定 | 两层认证状态模型已明确，`auth.json` 是事实来源 |
+| auth | 稳定 | persistent auth / short session / runtime 三层边界已明确，`auth.json` 是持久事实来源 |
 | config | 稳定 | `Config` 对象是运行时单一配置入口 |
-| relay | 稳定 | relay/proxy 语义已收口，`network_audio` 废弃术语已清除 |
+| relay | 稳定 | relay/proxy 是现行术语；`network_audio` 只允许作为仍受兼容测试保护的旧数据字段出现 |
 | runtime | 过渡 | `XiaoMusic` 类仍承担部分协调职责，逐步向 playback/facade 下沉；一级边界定义不变 |
 | webui | 过渡 | 前端已切换至 SSE 主通道 + `serverState` 消费模型；旧推测型逻辑已清除 |
 

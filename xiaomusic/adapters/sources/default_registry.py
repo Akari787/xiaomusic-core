@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from xiaomusic.adapters.sources.direct_url_source_plugin import DirectUrlSourcePlugin
 from xiaomusic.adapters.sources.jellyfin_source_plugin import JellyfinSourcePlugin
-from xiaomusic.adapters.sources.local_library_source_plugin import LocalLibrarySourcePlugin
+from xiaomusic.adapters.sources.local_library_source_plugin import (
+    LocalLibrarySourcePlugin,
+)
+from xiaomusic.adapters.sources.online_plugin_source_plugin import (
+    OnlinePluginSourcePlugin,
+)
 from xiaomusic.adapters.sources.site_media_source_plugin import SiteMediaSourcePlugin
 from xiaomusic.core.source import SourceRegistry
+from xiaomusic.core.source.online_plugin_reference_store import (
+    OnlinePluginReferenceStore,
+)
 from xiaomusic.core.source.source_protocols import LinkPreparer
 from xiaomusic.relay.url_classifier import UrlClassifier
 
@@ -27,6 +35,13 @@ def register_default_source_plugins(
     )
     source_registry.register(DirectUrlSourcePlugin(classifier=jellyfin_classifier))
     source_registry.register(LocalLibrarySourcePlugin(xiaomusic.music_library))
+    reference_store = getattr(xiaomusic, "_online_plugin_reference_store", None)
+    if reference_store is None:
+        reference_store = OnlinePluginReferenceStore()
+        xiaomusic._online_plugin_reference_store = reference_store
+    source_registry.register(
+        OnlinePluginSourcePlugin(reference_store, xiaomusic.online_music_service)
+    )
     source_registry.register(SiteMediaSourcePlugin(link_preparer=link_preparer))
 
 

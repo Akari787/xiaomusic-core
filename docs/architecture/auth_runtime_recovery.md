@@ -239,4 +239,4 @@ Scheduled 的两类错误保持 public healthy，设置 `scheduled_refresh_suspe
 - `xiaomusic/security/token_store.py`
   - `TokenStore.commit()`
   - `TokenStore.reload_from_disk()`
-- 观测端点：`/api/v1/auth/status` 与 `/api/v1/debug/auth_*`
+- 观测端点：`/api/admin/v1/auth/status` 与 `/api/internal/diagnostics/auth_*`（旧 `/api/v1/auth/status`、`/api/v1/debug/*` 仅作 v1.1.x 兼容）

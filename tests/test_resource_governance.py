@@ -6,9 +6,14 @@ from xiaomusic.relay.runtime import RelayRuntime
 
 
 def _fake_xiaomusic():
+    class _Config(SimpleNamespace):
+        @staticmethod
+        def get_public_base_url():
+            return "http://127.0.0.1:58090"
+
     class _X:
         def __init__(self):
-            self.config = SimpleNamespace(
+            self.config = _Config(
                 hostname="http://127.0.0.1", public_port=58090, mi_did=""
             )
             self.music_library = SimpleNamespace()

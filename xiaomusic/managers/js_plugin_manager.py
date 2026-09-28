@@ -1419,33 +1419,3 @@ class JSPluginManager:
 
         except Exception as e:
             self.log.error(f"Failed to update plugin config: {e}")
-
-    def reset_restart_limit(self):
-        """重置重启限制计数器，允许重新开始重启尝试"""
-        self._restart_count = 0
-        self._last_restart_time = 0
-        self.log.info("Node.js process restart limit has been reset")
-
-    def get_restart_status(self) -> dict[str, Any]:
-        """获取重启状态信息"""
-        current_time = time.time()
-        time_since_last_restart = (
-            current_time - self._last_restart_time if self._last_restart_time > 0 else 0
-        )
-        time_until_reset = max(0, self._restart_window - time_since_last_restart)
-
-        return {
-            "restart_count": self._restart_count,
-            "max_restarts_in_window": self._max_restarts_in_window,
-            "restart_window": self._restart_window,
-            "time_since_last_restart": time_since_last_restart,
-            "time_until_reset": time_until_reset,
-            "can_restart": self._restart_count < self._max_restarts_in_window
-            or time_since_last_restart >= self._restart_window,
-        }
-
-    def shutdown(self):
-        """关闭插件管理器"""
-        if self.node_process:
-            self.node_process.terminate()
-            self.node_process.wait()

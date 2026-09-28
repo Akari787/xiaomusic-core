@@ -172,11 +172,13 @@ lock 后若 generation 已变化且当前 runtime `HEALTHY`、对象就绪，则
 
 重点观测：
 
-- `/api/v1/auth/status`
-- `/api/v1/debug/auth_state`
-- `/api/v1/debug/auth_recovery_state`
-- `/api/v1/debug/auth_runtime_reload_state`
-- `/api/v1/debug/auth_short_session_rebuild_state`
+- `/api/admin/v1/auth/status`
+- `/api/internal/diagnostics/auth_state`
+- `/api/internal/diagnostics/auth_recovery_state`
+- `/api/internal/diagnostics/auth_runtime_reload_state`
+- `/api/internal/diagnostics/auth_short_session_rebuild_state`
+
+`/api/v1/auth/status` 与 `/api/v1/debug/*` 仅为 v1.1.x 弃用兼容入口，不作为新调用依据。
 
 应能区分：
 

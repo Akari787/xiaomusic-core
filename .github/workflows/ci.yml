@@ -18,8 +18,14 @@ permissions:
   id-token: write
 
 jobs:
+  contract-gates:
+    uses: ./.github/workflows/contract-gates.yml
+    permissions:
+      contents: read
+
   # 构建多架构 Docker 镜像并在所有平台上运行基本测试
   build:
+    needs: contract-gates
     runs-on: ubuntu-latest
     strategy:
       matrix:

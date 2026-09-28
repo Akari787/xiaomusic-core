@@ -30,7 +30,7 @@ def test_delivery_adapter_prepare_direct_http_stream():
 
 
 @pytest.mark.unit
-def test_delivery_adapter_prepare_plan_direct_then_proxy_for_site_media():
+def test_delivery_adapter_prepare_plan_proxy_first_for_site_media():
     adapter = DeliveryAdapter(expiry_skew_seconds=5, proxy_url_builder=lambda url, name: f"http://127.0.0.1:58090/proxy?u={name}")
     media = ResolvedMedia(
         media_id="m3",
@@ -44,10 +44,11 @@ def test_delivery_adapter_prepare_plan_direct_then_proxy_for_site_media():
 
     plan = adapter.prepare_plan(media, context={"prefer_proxy": False})
 
-    assert plan.strategy == "direct_then_proxy"
-    assert plan.primary.is_proxy is False
+    assert plan.strategy == "proxy_first"
+    assert plan.primary.is_proxy is True
     assert plan.fallback is not None
-    assert plan.fallback.is_proxy is True
+    assert plan.fallback.is_proxy is False
+    assert plan.decision_reason == "source=site_media"
 
 
 @pytest.mark.unit

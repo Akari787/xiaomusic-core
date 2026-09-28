@@ -28,11 +28,6 @@ class DidVolume(BaseModel):
     volume: int = 0
 
 
-class DidCmd(BaseModel):
-    did: str
-    cmd: str
-
-
 class MusicInfoObj(BaseModel):
     musicname: str = ""
     entity_id: str = ""
@@ -90,40 +85,10 @@ class PlayListMusicObj(BaseModel):
     music_list: list[str | dict[str, str]]  # 支持 str 或 {entity_id, display_name, playlist_item_id}
 
 
-class ApiResponseBase(BaseModel):
-    ok: bool
-    error_code: str | None = None
-    message: str | None = None
-    # Backward compatibility for older callers that read `success`.
-    success: bool | None = None
-
-
-class ApiPlaybackResponse(ApiResponseBase):
-    sid: str = ""
-    speaker_id: str = ""
-    state: str = "unknown"
-    title: str | None = None
-    stream_url: str = ""
-    is_live: bool | None = None
-    uptime: int | None = None
-    reconnect_count: int | None = None
-    stage: str | None = None
-    last_transition_at: int | None = None
-    last_error_code: str | None = None
-    cache_hit: bool | None = None
-    resolve_ms: int | None = None
-    source_plugin: str | None = None
-    transport: str | None = None
-    deprecated: bool | None = None
-
-
 __all__ = [
-    "ApiPlaybackResponse",
     "ApiResponse",
-    "ApiResponseBase",
     "ControlRequest",
     "Did",
-    "DidCmd",
     "DidUrl",
     "DidVolume",
     "DownloadOneMusic",

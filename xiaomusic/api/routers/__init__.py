@@ -19,7 +19,6 @@ def register_routers(app):
     from xiaomusic.api import websocket
     from xiaomusic.api.routers import (
         admin,
-        device,
         diagnostics,
         file,
         music,
@@ -45,7 +44,6 @@ def register_routers(app):
     app.include_router(diagnostics.router, tags=["Internal Diagnostics"], dependencies=[auth_dep], include_in_schema=False)
 
     # 非 v1 的业务与辅助路由属于 Internal API，不进入公开 schema。
-    app.include_router(device.router, tags=["设备控制"], dependencies=[auth_dep], include_in_schema=False)
     app.include_router(music.router, tags=["音乐管理"], dependencies=[auth_dep], include_in_schema=False)
     app.include_router(playlist.router, tags=["播放列表"], dependencies=[auth_dep], include_in_schema=False)
     app.include_router(relay.router, tags=["Relay"], dependencies=[auth_dep], include_in_schema=False)

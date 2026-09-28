@@ -1,86 +1,58 @@
-# S2.5: 质量门禁 - 状态权威偏差表
+# 状态权威与生命周期边界
 
-> 审计时间：2026-05-16
-> 任务：s2.5-1（质量门禁）
-> 前提：S2-abc 和 S2-def 都完成
+> 状态：现行
+> 最后核对：2026-09-28
 
-## 1. 状态权威分析
+本文档回答两个问题：每类运行时事实由谁拥有，以及其他模块应如何读取或改变它。它不保留阶段任务编号和已经解决的过程性偏差。
 
-### 1.1 所有状态汇总
+## 1. 权威表
 
-基于系统审计分析，汇总如下：
+| 状态 | 唯一权威 | 合法访问方式 | 保留依据 |
+|---|---|---|---|
+| 播放 phase、attempt、failure、当前 track reference | `XiaoMusicDevice` 的 `PlaybackRuntimeState` | `PlaybackFacade` 构建只读快照；命令经 coordinator / transport | `runtime_state.py`、`device_player.py`、T03/T04/T06 单元测试 |
+| 当前 session 队列快照与索引 | `XiaoMusicDevice` | 由设备导航方法推进；next/previous 不在 WebUI 或 Facade 重建队列 | `playback-control-model.md`、T04 测试 |
+| 歌单定义与 membership | `MusicLibrary` | identity API / library 方法 | identity 回归测试与 `webui_playlist_state.md` |
+| 设备集合与生命周期 | `DeviceManager` | registry / manager 查询 | `device_manager.py`、`core/device/` |
+| 持久认证事实 | `TokenStore` / `auth.json` | `TokenStore.commit()` 原子写入 | auth recovery 规范和 token store 测试 |
+| 认证恢复状态与 runtime candidate | `AuthManager` | `ensure_auth()`、atomic recovery、verify 后 swap | auth recovery 规范与稳定性测试 |
+| 运行时配置 | `Config`，持久化由 `ConfigManager` | settings API 与配置管理器 | `config.py`、`config_manager.py` |
+| Source 注册集合 | `SourcePluginManager` 管理、`SourceRegistry` 分派 | default registration、reload 后按 registry version 重建 coordinator | source manager / registry 测试 |
+| Relay session 状态 | relay session manager | manager API；其他模块不得直接改 session 字段 | relay component / unit tests |
+| Public API 契约 | `api_v1_spec.md` + 生产路由装配 | router/model/schema gate | `test_api_boundary_phase1.py` |
 
-| 状态 | 文件 | 应有权威 | 当前实际权威 | 偏差说明 | 严重程度 |
-|---|---|---|---|---|---|
-| 播放状态（is_playing） | `device_player.py` | `device_player.py` | `device_player.py` + `xiaomusic.xiaomusic`（通过 xiaomusic 实例访问） | 当前权威正确，但 device_player 直接持有 xiaomusic 引用，访问路径不干净 | 低 |
-| 歌单事实与设备运行时队列 | `music_library.py` / `device_player.py` | `music_library` 拥有 membership；`device_player` 拥有当前 session 快照与索引 | 职责已分离 | `_play_list_items` 是从歌单事实建立的 session 快照，不得写回或在 next/previous 时重建 | 无 |
-| 认证状态（auth_state） | `auth.py` | `auth.py` | `auth.py`（正确） | 无偏差 | 无 |
-| Auth token（_mina_token） | `auth.py` | `auth.py` | `auth.py`（正确） | 无偏差 | 无 |
-| runtime_auth_ready | `auth.py` | `auth.py` | `auth.py`（正确） | 无偏差 | 无 |
-| 设备列表（devices） | `device_manager.py` | `device_manager.py` | `device_manager.py`（正确） | 无偏差 | 无 |
-| 设备播放状态（cur_music, entity_id） | `device.model` | `device_player.py`（播放控制者） | `device_player.py` 更新 + `device.model` 持有 | device model 作为数据容器被直接修改，缺少通过 player 的封装 | 低 |
-| Source 插件注册（_plugins） | `source_registry.py` | `source_registry.py` | `default_registry.py`（注册时）+ `source_plugin_manager.py`（管理） | 注册逻辑分散在 default_registry，source_registry 只负责查找，职责分离不清 | 低 |
-| 流会话状态（session.state） | `stream_session_manager.py` | `stream_session_manager.py` | `stream_session_manager.py` + `relay_runtime.py`（多处直接修改） | RelayRuntime._stop_oldest_active_session 和 sweep_idle_sessions 直接操作 session 状态，越过 manager 接口 | 中 |
-| 配置状态（config.*） | `config.py` | `config.py`（或专用的 settings manager） | `config.py` + `xiaomusic.xiaomusic`（直接持有） | xiaomusic 直接持有 config 实例，多处代码通过 xiaomusic.config 访问，缺少统一的配置读取封装 | 低 |
-| 事件订阅（_subscribers） | `events.py` | `events.py`（EventBus 单例） | `events.py`（正确） | 无偏差 | 无 |
-| 异步任务（running_task） | `xiaomusic.py` | `xiaomusic.py`（统一管理） | `xiaomusic.py` + 分散在各模块（_recovery_task, _next_timer, _duration_probe_task 等） | 各模块自行创建 asyncio.Task，但 xiaomusic.running_task 只追踪主任务，子任务的 owner 不清晰 | 中 |
-| 播放进度（_start_time, _duration） | `device_player.py` | `device_player.py` | `device_player.py`（正确） | 无偏差，但计算依赖轮询（get_if_xiaoai_is_playing()），不是事件驱动 | 低 |
-| relay 流 URL（stream_url） | `relay/runtime.py` | `relay/runtime.py` | `relay/runtime.py`（正确） | 无偏差 | 无 |
-| LinkPlaybackStrategy | `link_strategy.py` | `link_strategy.py` | `relay/runtime.py`（持有）+ `xiaomusic.xiaomusic`（可选持有） | LinkPlaybackStrategy 可以从 xiaomusic 获取也可以独立创建，生命周期不明确 | 低 |
+## 2. 播放状态约束
 
-### 1.2 高度可疑状态（已解决）
+- `PlaybackRuntimeState.phase`、`LifecycleToken` 与 `PlaybackTaskRegistry` 决定播放生命周期。
+- `_last_cmd` 只允许作为 legacy diagnostic，不决定状态、失败、重试或完成合法性。
+- `_play_session_id` 只用于异步媒体 session 失效，不替代 lifecycle token。
+- `GET /api/v1/player/state` 与 SSE 只投影事实，不创建/取消任务、不调用 Mina、不写 runtime state。
+- `accepted=true` 只表示命令被接收；设备是否真正进入 playing 仍由后续快照确认。
 
-| 状态 | 问题 | 状态 |
-|---|---|---|
-| 播放列表双写 | `device_player._play_list_items` 和 `music_library.music_list` 内容可能不一致 | ✅ 已解决：删除 `_play_list`，统一通过 `_get_playlist_names()` 派生 |
-| 异步任务 owner 缺失 | `_recovery_task`、`_next_timer`、`_duration_probe_task` 创建者不明确 | ✅ 已标注：所有 task 创建处有 `# owner: xxx` 注释 |
-| session 状态越界修改 | `relay_runtime` 绕过 `session_manager` 直接修改 session 状态 | ✅ 已解决：通过 `session_manager.stop_session()` API |
-| source 注册逻辑分散 | 注册逻辑在 default_registry + source_registry + manager 三处 | ✅ 已解决：SiteMediaSourcePlugin 通过 LinkPreparer Protocol 解耦 |
+## 3. 队列与歌单约束
 
-## 2. 质量门禁判断
+- `MusicLibrary` 管长期歌单事实；`XiaoMusicDevice` 管一次播放 session 的稳定快照。
+- 随机播放只在新 session 建立时洗牌一次。
+- 手动和自动 next/previous 消费同一快照，WebUI 不点名下一首重新调用 play。
+- 设备快照不得反向写回歌单 membership。
 
-### 2.1 严重偏差汇总
+## 4. 事件系统的实际定位
 
-| 偏差类型 | 数量 | 说明 |
-|---|---|---|
-| 高严重程度 | 0 | 无架构级别矛盾 |
-| 中严重程度 | 0 | 全部 4 个已解决（播放列表双写、session越界、task owner、source注册分散） |
-| 低严重程度 | 6 | 访问路径不干净、设备 model 直接修改、配置访问分散、轮询驱动、非单例访问等 |
+`EventBus` 当前只承载 `CONFIG_CHANGED`、`DEVICE_CONFIG_CHANGED`、`PLAYER_STATE_CHANGED` 三种通知。事件用于唤醒保存或状态推送，不是业务状态权威，也不承担 event sourcing / replay。
 
-**结论**：全部中严重偏差已解决。系统进入"低风险技术债"状态，剩余问题均为可管理的细节。
+旧文档曾要求所有状态变化进入约二十种标准事件，并引入 `play_id` 与事件 schema 版本。该设计没有落地，ADR-0005 已撤回，不能据此要求当前代码。
 
-### 2.2 核心架构矛盾（无）
+## 5. 异步任务 ownership
 
-经过 S2 全面审计，未发现架构级别的根本性矛盾：
-- Source 插件化设计合理，`SiteMediaSourcePlugin` 的 runtime_provider 依赖是已知问题，但不影响整体可运行性
-- API 边界清晰，WebUI 不直接访问 runtime
-- 状态权威大部分正确，只有"数据双写"问题需要关注
+- 应用主循环由 FastAPI lifespan 保存和取消。
+- 播放任务由 `PlaybackTaskRegistry` 管理，名称和设备 scope 受测试约束。
+- auth、library 等模块级后台任务由对应对象字段持有并在本模块边界取消或替换。
+- 禁止依赖扫描全部 asyncio task 再读取自定义 `_owner` 属性的全局清理方式。
 
-## 3. 下一步建议
+## 6. 修改前验证
 
-### 3.1 已落地的低风险约束
+涉及本页任一权威时，至少完成：
 
-1. **歌单事实与运行时队列分离**：`music_library` 提供 membership，`device_player` 只为当前 session 保存稳定队列快照与索引。
-2. **控制意图单入口**：WebUI next/previous 不点名曲目，统一经 Public API、Coordinator、Transport 进入设备导航。
-3. **随机 session 稳定**：新 session 只洗牌一次；手动和自动 next/previous 均消费同一快照。
-4. **异步任务 owner 明确**：延迟任务受 session ID 约束，旧回调不得覆盖新播放状态。
-5. **session 状态通过 manager 接口修改**：relay session 不得被其他模块越界写入。
-
-### 3.2 中期重构（需要 ADR）
-
-1. **Source 插件解耦**：`SiteMediaSourcePlugin` 通过 `runtime_provider` 调用 runtime 的问题，需要通过 ADR 确定"播放准备"职责归属
-2. **RelayRuntime 拆分**：将策略选择（relay/direct/proxy）和播放编排（play+cast）分离
-3. **AuthManager 拆分**：认证状态管理和 runtime 管理应分离为不同模块
-
-### 3.3 长期架构演进
-
-1. **xiaomusic.xiaomusic 减肥**：作为应用入口，不承担具体业务逻辑
-2. **引入状态权威注册表**：将每个状态的权威显式注册，所有状态变化必须经过权威对应的接口
-
-当前播放控制模型见 [`playback-control-model.md`](playback-control-model.md)。
-
-## 4. T07 校正（2026-07-28）
-
-T03-T06 已落地后，播放 runtime 的实际权威为 `PlaybackRuntimeState.phase`、`LifecycleToken` 与 `PlaybackTaskRegistry`：Facade snapshot 只读投影 phase；Device arbiter 串行化命令；completion/failure policy 决定 timer completion 与 retry 行为。`_last_cmd` 仅保留为 legacy diagnostic，不能决定 Facade/state authority、failure/retry 或 completion 合法性。`_play_session_id` 只作 async media session invalidation id。
-
-查询约束：`get_offset_duration`、Facade snapshot 与 `player_state` 不创建/取消 task，不调用 Mina，不写 runtime state，不隐式修复；异常只返回安全投影并记录日志。`POST /api/v1/play` 可返回 deferred `accepted=true, started=null`；stop accepted 不等于物理 STOPPED，需通过状态快照确认。
+1. 确认写入仍发生在权威模块；
+2. 确认查询路径没有新增副作用；
+3. 运行对应模块的定点测试；
+4. 若改变 Public API 字段或语义，同步 API/spec 并运行生产装配门禁。

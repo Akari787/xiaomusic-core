@@ -1,20 +1,11 @@
-import pytest
-from pydantic import ValidationError
-
-from xiaomusic.core.settings import (
-    AnalyticsSettings,
-    AuthSettings,
-    get_analytics_settings,
-    get_auth_settings,
-)
+from xiaomusic.core.settings import get_analytics_settings, get_auth_settings
 
 
-def test_auth_settings_require_http_auth_hash(monkeypatch):
+def test_auth_settings_allow_missing_hash_when_basic_auth_is_opt_in(monkeypatch):
     monkeypatch.delenv("API_SECRET", raising=False)
     monkeypatch.delenv("HTTP_AUTH_HASH", raising=False)
     get_auth_settings.cache_clear()
-    with pytest.raises(ValidationError):
-        get_auth_settings()
+    assert get_auth_settings().HTTP_AUTH_HASH == ""
 
 
 def test_auth_settings_load_from_env(monkeypatch):

@@ -3,15 +3,13 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from xiaomusic.api.dependencies import verification
-from xiaomusic.api.routers import device, v1
+from xiaomusic.api.routers import register_routers, v1
 
 
-def _device_client() -> TestClient:
+def _registered_paths() -> set[str]:
     app = FastAPI()
-    app.include_router(device.router)
-    app.dependency_overrides[verification] = lambda: True
-    return TestClient(app)
+    register_routers(app)
+    return {route.path for route in app.routes}
 
 
 def _v1_client() -> TestClient:
@@ -20,12 +18,19 @@ def _v1_client() -> TestClient:
     return TestClient(app)
 
 
-def test_removed_device_wrappers_return_404() -> None:
-    client = _device_client()
-    assert client.get("/getplayerstatus").status_code == 404
-    assert client.post("/setvolume", json={"did": "did-1", "volume": 30}).status_code == 404
-    assert client.get("/playtts", params={"did": "did-1", "text": "hello"}).status_code == 404
-    assert client.post("/device/stop", json={"did": "did-1"}).status_code == 404
+def test_removed_device_wrappers_are_not_registered() -> None:
+    paths = _registered_paths()
+    removed = {
+        "/cmd",
+        "/cmdstatus",
+        "/device_list",
+        "/getvolume",
+        "/getplayerstatus",
+        "/setvolume",
+        "/playtts",
+        "/device/stop",
+    }
+    assert paths.isdisjoint(removed)
 
 
 def test_v1_routes_still_available_after_wrapper_removal(monkeypatch) -> None:
