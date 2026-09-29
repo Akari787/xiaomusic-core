@@ -200,12 +200,29 @@ async def test_api_v1_library_refresh_internal_failure_is_structured(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_api_v1_devices_and_system_status_internal_failure_are_structured(monkeypatch):
+async def test_api_v1_devices_and_system_status_ignore_cloud_query_failure(monkeypatch):
     class _XM:
         async def getalldevices(self):
-            raise RuntimeError("query failed")
+            raise AssertionError("pure-read endpoint must not call getalldevices")
 
     monkeypatch.setattr(v1, "_get_xiaomusic", lambda: _XM())
+    devices_out = await v1.api_v1_devices()
+    status_out = await v1.api_v1_system_status()
+
+    assert devices_out["code"] == 0
+    assert devices_out["data"]["devices"] == []
+    assert status_out["code"] == 0
+    assert status_out["data"]["devices_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_api_v1_devices_and_system_status_projector_failure_is_structured(monkeypatch):
+    def _broken_projector(_xm):
+        raise RuntimeError("projector failed")
+
+    monkeypatch.setattr(v1, "configured_device_snapshot", _broken_projector)
+    monkeypatch.setattr(v1, "_get_xiaomusic", lambda: object())
+
     devices_out = await v1.api_v1_devices()
     status_out = await v1.api_v1_system_status()
 
@@ -213,11 +230,13 @@ async def test_api_v1_devices_and_system_status_internal_failure_are_structured(
     assert devices_out["message"] == "devices query failed"
     assert devices_out["data"]["error_code"] == "E_DEVICES_QUERY_FAILED"
     assert devices_out["data"]["stage"] == "system"
+    assert devices_out["request_id"]
 
     assert status_out["code"] == 10000
     assert status_out["message"] == "system status query failed"
     assert status_out["data"]["error_code"] == "E_SYSTEM_STATUS_FAILED"
     assert status_out["data"]["stage"] == "system"
+    assert status_out["request_id"]
 
 
 @pytest.mark.asyncio

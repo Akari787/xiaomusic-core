@@ -223,14 +223,89 @@ def _map_public_endpoint_exception(
     )
 
 
-async def _runtime_auth_ready_v1() -> bool:
+def cached_runtime_auth_ready(xm=None) -> bool:
+    """Return cached auth readiness without probing or mutating runtime state."""
     try:
-        am = getattr(_get_xiaomusic(), "auth_manager", None)
+        target = xm if xm is not None else _get_xiaomusic()
+        am = getattr(target, "auth_manager", None)
         if am is None:
             return False
-        return not await am.need_login()
+        if hasattr(am, "auth_public_status_snapshot"):
+            snapshot = am.auth_public_status_snapshot()
+            if bool(snapshot.get("auth_locked", False)):
+                return False
+            return bool(snapshot.get("runtime_auth_ready", False))
+        return False
     except Exception:
         return False
+
+
+def _device_value(device, *names, default=""):
+    for name in names:
+        if isinstance(device, dict):
+            value = device.get(name)
+        else:
+            value = getattr(device, name, None)
+        if value is not None and value != "":
+            return value
+    return default
+
+
+def configured_device_snapshot(xm=None) -> list[dict[str, Any]]:
+    """Project configured-known devices from in-memory config/runtime state only."""
+    target = xm if xm is not None else _get_xiaomusic()
+    config = getattr(target, "config", None)
+    if config is None and hasattr(target, "getconfig"):
+        config = target.getconfig()
+    if isinstance(config, dict):
+        configured = config.get("devices", {}) or {}
+    else:
+        configured = getattr(config, "devices", {}) or {}
+    manager = getattr(target, "device_manager", None)
+    runtime = getattr(manager, "devices", {}) or {}
+    auth_ready = cached_runtime_auth_ready(target)
+    rows: list[dict[str, Any]] = []
+    for raw_did, configured_device in configured.items():
+        did = str(raw_did or _device_value(configured_device, "did", default=""))
+        if not did:
+            continue
+        runtime_device = runtime.get(raw_did) or runtime.get(did)
+        runtime_ready = runtime_device is not None
+        rows.append(
+            {
+                "did": did,
+                # Historical control target: this is the configured DID, not the
+                # cloud device UUID stored in Device.device_id.
+                "device_id": did,
+                "cloud_device_id": str(
+                    _device_value(configured_device, "device_id", "deviceID", "cloud_device_id", default="")
+                ),
+                "name": str(
+                    _device_value(runtime_device, "name", "alias", default="")
+                    or _device_value(configured_device, "name", "alias", default="")
+                ),
+                "model": str(
+                    _device_value(runtime_device, "hardware", "model", default="")
+                    or _device_value(configured_device, "hardware", "model", default="")
+                ),
+                # online is compatibility-only and must come from explicit cache data.
+                "online": bool(
+                    _device_value(runtime_device, "online", "is_online", "isOnline", default=False)
+                    or _device_value(configured_device, "online", "is_online", "isOnline", default=False)
+                ),
+                "known": True,
+                "runtime_ready": runtime_ready,
+                "auth_ready": auth_ready,
+                "controllable": runtime_ready and auth_ready,
+                "stream_ready": runtime_ready,
+                "reachable": None,
+            }
+        )
+    return rows
+
+
+async def _runtime_auth_ready_v1() -> bool:
+    return cached_runtime_auth_ready()
 
 
 # ── Shared service functions (used by old AND new routes) ──────────────

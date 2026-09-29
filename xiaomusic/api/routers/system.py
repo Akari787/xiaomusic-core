@@ -9,7 +9,7 @@ import shutil
 import tempfile
 import time
 from dataclasses import asdict
-from qrcode.main import QRCode
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -27,28 +27,31 @@ from fastapi.responses import (
     FileResponse,
     RedirectResponse,
 )
+from qrcode.main import QRCode
 from starlette.background import (
     BackgroundTask,
 )
 
+from xiaomusic import __version__
 from xiaomusic.api import response as api_response
-from xiaomusic import (
-    __version__,
-)
-from xiaomusic.diagnostics import build_runtime_diagnostics_view
 from xiaomusic.api.dependencies import (
     config,
     log,
     verification,
     xiaomusic,
 )
+from xiaomusic.api.routers.v1_shared import (
+    cached_runtime_auth_ready,
+    configured_device_snapshot,
+)
+from xiaomusic.diagnostics import build_runtime_diagnostics_view
+from xiaomusic.qrcode_login import MiJiaAPI
 from xiaomusic.utils.system_utils import (
     deepcopy_data_no_sensitive_info,
     get_latest_version,
     restart_xiaomusic,
     update_version,
 )
-from xiaomusic.qrcode_login import MiJiaAPI
 
 router = APIRouter(dependencies=[Depends(verification)])
 
@@ -82,14 +85,8 @@ qrcode_login_error = ""
 
 
 async def _runtime_auth_ready() -> bool:
-    """Best-effort runtime auth readiness without forcing network relogin."""
-    try:
-        am = getattr(xiaomusic, "auth_manager", None)
-        if am is None:
-            return False
-        return not await am.need_login()
-    except Exception:
-        return False
+    """Read cached runtime auth readiness without probing the cloud."""
+    return cached_runtime_auth_ready(xiaomusic)
 
 @router.get("/")
 async def read_index():
@@ -243,9 +240,7 @@ async def getsetting(need_device_list: bool = False):
     data["auth_token_available"] = token_available
     data["auth_runtime_ready"] = runtime_ready
     if need_device_list:
-        device_list = await xiaomusic.getalldevices()
-        log.info(f"getsetting device_list: {device_list}")
-        data["device_list"] = device_list
+        data["device_list"] = configured_device_snapshot(xiaomusic)
     return api_response.ok(data, contract="raw")
 
 
@@ -404,7 +399,7 @@ async def auth_logout():
             removed, removed_paths = ts.clear_and_remove()
     except Exception:
         log.exception("remove auth token file failed")
-        raise HTTPException(status_code=500, detail="remove token failed")
+        raise HTTPException(status_code=500, detail="remove token failed") from None
 
     # Clear in-memory auth/session state so it stops being treated as logged-in.
     try:
@@ -436,7 +431,7 @@ async def auth_logout():
         await xiaomusic.reinit()
     except Exception as e:
         log.exception("cleanup after auth logout failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"logout cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail=f"logout cleanup failed: {e}") from e
 
     return api_response.ok(
         {

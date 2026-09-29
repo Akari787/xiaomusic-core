@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from xiaomusic.api.routers import v1
+from xiaomusic.config import Device
 
 
 def _v1_client() -> TestClient:
@@ -24,6 +25,9 @@ class _Config:
     enable_pull_ask: bool = False
     httpauth_password: str = "secret"
     jellyfin_api_key: str = "jf-secret"
+    devices: dict = field(default_factory=lambda: {
+        "did-1": Device(did="did-1", device_id="did-1", hardware="OH2P", name="XiaoAI")
+    })
 
     @staticmethod
     def is_http_server_config(key: str) -> bool:
@@ -42,8 +46,8 @@ def test_system_settings_query_success(monkeypatch):
 
     class _Auth:
         @staticmethod
-        async def need_login():
-            return False
+        def auth_public_status_snapshot():
+            return {"runtime_auth_ready": False, "auth_locked": False}
 
     class _XM:
         token_store = _TokenStore()

@@ -1042,15 +1042,25 @@ v1 通过两个接口暴露播放器权威状态：
 
 ### 12.18 `GET /api/v1/devices`
 
-用途：获取设备列表。
+用途：读取 configured-known 设备快照；读取不会触发设备刷新、认证探测或 runtime 重建。
 
 成功响应关键字段：
 
 - `data.devices[]`
-- `data.devices[].device_id`
+- `data.devices[].did`
+- `data.devices[].device_id`（历史控制目标 DID/miotDID，不是云端 UUID）
+- `data.devices[].cloud_device_id`（可选，仅展示/诊断）
 - `data.devices[].name`
 - `data.devices[].model`
-- `data.devices[].online`
+- `data.devices[].online`（仅明确缓存值，缺失为 `false`；不会用 runtime 存在或 host 推断）
+- `data.devices[].known`
+- `data.devices[].runtime_ready`
+- `data.devices[].auth_ready`
+- `data.devices[].controllable`（`known && runtime_ready && auth_ready`）
+- `data.devices[].stream_ready`
+- `data.devices[].reachable`（无 probe 证据时为 JSON `null`）
+
+设备列表只包含 `config.devices` 中的 DID；账号下未配置设备不会出现在列表中。
 
 ### 12.19 `GET /api/v1/system/status`
 
@@ -1060,7 +1070,8 @@ v1 通过两个接口暴露播放器权威状态：
 
 - `data.status`
 - `data.version`
-- `data.devices_count`
+- `data.devices_count`（configured-known 数量）
+- `data.runtime_devices_count`（当前 runtime mapping 数量）
 
 ### 12.20 `GET /api/v1/system/settings`
 

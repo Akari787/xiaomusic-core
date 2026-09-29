@@ -106,10 +106,18 @@ export interface PlayerStateData {
 export type PlayMode = "one" | "all" | "random" | "single" | "sequence";
 
 export interface DeviceRow {
+  did?: string;
   device_id: string;
   name?: string;
   model?: string;
   online?: boolean;
+  known: boolean;
+  runtime_ready: boolean;
+  auth_ready: boolean;
+  controllable: boolean;
+  stream_ready: boolean;
+  reachable: boolean | null;
+  cloud_device_id?: string;
 }
 
 export interface DevicesData {
@@ -175,14 +183,10 @@ export interface SystemStatusData {
   status?: string;
   version?: string;
   devices_count?: number;
+  runtime_devices_count?: number;
 }
 
-export interface SystemSettingsDeviceRow {
-  device_id: string;
-  name?: string;
-  model?: string;
-  online?: boolean;
-}
+export interface SystemSettingsDeviceRow extends DeviceRow {}
 
 export interface SystemSettingsData {
   settings: Record<string, unknown>;

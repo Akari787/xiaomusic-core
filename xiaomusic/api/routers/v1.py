@@ -37,6 +37,7 @@ from xiaomusic.api.routers.v1_shared import (
     _next_request_id,
     _runtime_auth_ready_v1,
     auth_status_v1_svc,
+    configured_device_snapshot,
     diag_query_svc,
     sources_delete_svc,
     sources_disable_svc,
@@ -135,12 +136,7 @@ async def _settings_snapshot(include_devices: bool) -> dict[str, Any]:
     ]
     devices: list[dict[str, Any]] = []
     if include_devices:
-        raw_devices = await xm.getalldevices()
-        devices = [
-            _normalize_device(item)
-            for item in (raw_devices or [])
-            if isinstance(item, dict)
-        ]
+        devices = configured_device_snapshot(xm)
 
     return {
         "settings": config_data,
@@ -350,12 +346,7 @@ async def api_v1_control_probe(data: ControlRequest):
 async def api_v1_devices():
     request_id = _next_request_id(None)
     try:
-        devices = await _get_xiaomusic().getalldevices()
-        rows = [
-            _normalize_device(item)
-            for item in (devices or [])
-            if isinstance(item, dict)
-        ]
+        rows = configured_device_snapshot(_get_xiaomusic())
         return _api_ok({"devices": rows}, request_id=request_id)
     except Exception as exc:
         return _map_structured_endpoint_exception(
@@ -452,12 +443,16 @@ async def api_v1_sources_disable(name: str, request_id: str | None = None):
 async def api_v1_system_status():
     request_id = _next_request_id(None)
     try:
-        devices = await _get_xiaomusic().getalldevices()
+        xm = _get_xiaomusic()
+        rows = configured_device_snapshot(xm)
         return _api_ok(
             {
                 "status": "ok",
                 "version": __version__,
-                "devices_count": len(devices or []),
+                "devices_count": len(rows),
+                "runtime_devices_count": len(
+                    getattr(getattr(xm, "device_manager", None), "devices", {}) or {}
+                ),
             },
             request_id=request_id,
         )

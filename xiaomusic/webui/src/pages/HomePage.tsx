@@ -46,6 +46,8 @@ import "../styles/home.css";
 
 type Device = {
   did?: string;
+  device_id?: string;
+  cloud_device_id?: string;
   deviceID?: string;
   miotDID?: string;
   hardware?: string;
@@ -408,12 +410,12 @@ function resolveDisplayName(d: Device): string {
 }
 
 function deviceCandidates(d: Device): string[] {
-  const vals = [d.miotDID, d.did, d.deviceID].filter((v): v is string => Boolean(v));
+  const vals = [d.did, d.device_id, d.miotDID, d.deviceID].filter((v): v is string => Boolean(v));
   return Array.from(new Set(vals));
 }
 
 function preferredDidFromDevice(d: Device): string {
-  return String(d.miotDID || d.did || d.deviceID || "").trim();
+  return String(d.did ?? d.device_id ?? d.miotDID ?? d.deviceID ?? "").trim();
 }
 
 function formatTime(sec: number): string {
@@ -1420,7 +1422,13 @@ export function HomePage() {
     setSettingJsonText(JSON.stringify(hydrated, null, 2));
     setSelectedSettingDids(dids);
     const rows = Array.isArray(out.data.devices)
-      ? out.data.devices.map((d) => ({ miotDID: d.device_id, name: d.name || d.model || d.device_id }))
+      ? out.data.devices.map((d) => ({
+          did: d.did ?? d.device_id,
+          miotDID: d.did ?? d.device_id,
+          device_id: d.device_id,
+          cloud_device_id: d.cloud_device_id,
+          name: d.name || d.model || d.device_id,
+        }))
       : [];
     setSettingDeviceList(rows);
     if (rows.length) {
@@ -1469,7 +1477,13 @@ export function HomePage() {
   async function loadDevices() {
     const v1Out = await v1GetDevices();
     const rows: Device[] = isApiOk(v1Out)
-      ? (v1Out.data.devices || []).map((d) => ({ miotDID: d.device_id, name: d.name || d.model || d.device_id }))
+      ? (v1Out.data.devices || []).map((d) => ({
+          did: d.did ?? d.device_id,
+          miotDID: d.did ?? d.device_id,
+          device_id: d.device_id,
+          cloud_device_id: d.cloud_device_id,
+          name: d.name || d.model || d.device_id,
+        }))
       : [];
     setDevices(rows);
     if (!rows.length) {
