@@ -11,6 +11,12 @@ function buildUrl(path: string): string {
   return `${API_BASE_URL.replace(/\/$/, "")}${path}`;
 }
 
+export type ApiJsonWithStatus<T> = {
+  status: number;
+  ok: boolean;
+  data: T;
+};
+
 async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(buildUrl(path), {
     credentials: "include",
@@ -19,8 +25,35 @@ async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function requestJsonWithStatus<T>(path: string, init: RequestInit, timeoutMs?: number): Promise<ApiJsonWithStatus<T>> {
+  const controller = timeoutMs && timeoutMs > 0 && typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timeoutId = controller ? globalThis.setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const response = await fetch(buildUrl(path), {
+      credentials: "include",
+      ...init,
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+    let data = {} as T;
+    try {
+      data = (await response.json()) as T;
+    } catch {
+      // Preserve the HTTP status even when the error body is empty/non-JSON.
+    }
+    return { status: response.status, ok: response.ok, data };
+  } catch {
+    return { status: 0, ok: false, data: {} as T };
+  } finally {
+    if (timeoutId !== null) globalThis.clearTimeout(timeoutId);
+  }
+}
+
 export async function apiGetJson<T>(path: string): Promise<T> {
   return await requestJson<T>(path, { method: "GET" });
+}
+
+export async function apiGetJsonWithStatus<T>(path: string, options?: { timeoutMs?: number }): Promise<ApiJsonWithStatus<T>> {
+  return await requestJsonWithStatus<T>(path, { method: "GET" }, options?.timeoutMs);
 }
 
 export async function apiPostJson<T>(path: string, payload: unknown): Promise<T> {

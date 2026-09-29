@@ -15,6 +15,7 @@ import {
 function makeState(overrides: Partial<PlayerStateData> = {}): PlayerStateData {
   return {
     device_id: "did-1",
+    server_instance_id: "epoch-1",
     revision: 10,
     play_session_id: "session-10",
     transport_state: "playing",

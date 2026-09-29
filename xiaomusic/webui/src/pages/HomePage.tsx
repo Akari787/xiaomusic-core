@@ -10,6 +10,7 @@ import {
   getSystemSettings,
   getSystemStatus,
   getPlayerState,
+  getPlayerStateWithStatus,
   getPlayerStreamUrl,
   isApiOk,
   libraryRefresh as v1LibraryRefresh,
@@ -41,6 +42,15 @@ import {
   fetchQrcode,
 } from "../services/homeApi";
 
+import { shouldApplyPlayerSnapshot, type AppliedSnapshotMeta } from "../services/playerStateOrdering";
+import { classifyPlayerStateFailure, type PlayerStateFailure } from "../services/failureClassification";
+import {
+  interpolatePosition,
+  PROGRESS_BASELINE_TTL_MS,
+  selectProgressAnchor,
+  trackIdentity,
+  type ProgressBaseline,
+} from "../services/progress";
 import { useTheme } from "../theme/ThemeProvider";
 import "../styles/home.css";
 
@@ -262,6 +272,7 @@ const ADVANCED_TABS: Array<{ key: string; label: string; fields: SettingField[] 
 
 const EMPTY_SERVER_STATE: PlayerStateData = {
   device_id: "",
+  server_instance_id: "",
   revision: -1,
   play_session_id: "",
   transport_state: "idle" as TransportState,
@@ -623,12 +634,7 @@ function clearXmCache(): void {
   });
 }
 
-type ProgressBaselineCache = {
-  play_session_id: string;
-  revision: number;
-  position_ms: number;
-  captured_at_ms: number;
-};
+type ProgressBaselineCache = ProgressBaseline;
 
 function progressBaselineStorageKey(did: string): string {
   return `xm_progress_baseline_${did}`;
@@ -644,17 +650,17 @@ function loadProgressBaseline(did: string): ProgressBaselineCache | null {
       return null;
     }
     const parsed = JSON.parse(raw) as ProgressBaselineCache;
-    if (
-      !parsed ||
-      typeof parsed.play_session_id !== "string" ||
-      typeof parsed.revision !== "number" ||
-      typeof parsed.position_ms !== "number" ||
-      typeof parsed.captured_at_ms !== "number"
-    ) {
+    if (!parsed || typeof parsed.device_id !== "string" || typeof parsed.server_instance_id !== "string" ||
+      typeof parsed.play_session_id !== "string" || typeof parsed.track_identity !== "string" ||
+      typeof parsed.revision !== "number" || typeof parsed.position_ms !== "number" ||
+      typeof parsed.snapshot_at_ms !== "number" || typeof parsed.saved_at_ms !== "number" ||
+      typeof parsed.ttl_ms !== "number") {
+      removeLocal(progressBaselineStorageKey(did));
       return null;
     }
     return parsed;
   } catch {
+    removeLocal(progressBaselineStorageKey(did));
     return null;
   }
 }
@@ -689,21 +695,17 @@ function useProgressInterpolation(
   const timerRef = useRef<number | null>(null);
   const lastRevisionRef = useRef<number>(-1);
   const lastSessionRef = useRef<string>('');
+  const lastEpochRef = useRef<string>("");
+  const lastTrackRef = useRef<string>("");
   const lastSnapshotAtRef = useRef<number>(0);
   const lastPositionRef = useRef<number>(0);
 
-  const clampPosition = (positionMs: number, durationMs: number): number => {
-    if (durationMs > 0) {
-      return Math.min(positionMs, durationMs);
-    }
-    return positionMs;
-  };
-
-  const resolveInterpolatedPosition = (basePosition: number, snapshotAtMs: number, durationMs: number): number => {
-    const effectiveSnapshotAt = snapshotAtMs > 0 ? snapshotAtMs : Date.now();
-    const elapsed = Math.max(0, Date.now() - effectiveSnapshotAt);
-    return clampPosition(basePosition + elapsed, durationMs);
-  };
+  const resolveInterpolatedPosition = (basePosition: number, snapshotAtMs: number, durationMs: number): number =>
+    interpolatePosition(basePosition, snapshotAtMs, Date.now(), durationMs);
+  const serverTrackIdentity = useMemo(
+    () => trackIdentity(serverState.track),
+    [serverState.track?.id, serverState.track?.entity_id, serverState.track?.title],
+  );
 
   useEffect(() => {
     if (timerRef.current !== null) {
@@ -715,8 +717,15 @@ function useProgressInterpolation(
     const revisionChanged = serverState.revision !== lastRevisionRef.current;
     const snapshotChanged = serverState.snapshot_at_ms !== lastSnapshotAtRef.current;
     const positionChanged = serverState.position_ms !== lastPositionRef.current;
+    const epochChanged = serverState.server_instance_id !== lastEpochRef.current;
+    const trackChanged = trackIdentity(serverState.track) !== lastTrackRef.current;
 
+    if (epochChanged || sessionChanged || trackChanged) {
+      clearProgressBaseline(serverState.device_id);
+    }
     lastSessionRef.current = serverState.play_session_id;
+    lastEpochRef.current = serverState.server_instance_id;
+    lastTrackRef.current = trackIdentity(serverState.track);
     lastRevisionRef.current = serverState.revision;
     lastSnapshotAtRef.current = serverState.snapshot_at_ms;
     lastPositionRef.current = serverState.position_ms;
@@ -730,44 +739,31 @@ function useProgressInterpolation(
     }
 
     const durationMs = serverState.duration_ms;
-    const serverDisplayedPosition = resolveInterpolatedPosition(
-      serverState.position_ms,
-      serverState.snapshot_at_ms,
-      durationMs,
-    );
-
-    let effectiveBasePosition = serverState.position_ms;
-    let effectiveSnapshotAtMs = serverState.snapshot_at_ms;
-
     const cachedBaseline = loadProgressBaseline(serverState.device_id);
-    if (
-      cachedBaseline &&
-      cachedBaseline.play_session_id === serverState.play_session_id &&
-      cachedBaseline.revision === serverState.revision
-    ) {
-      const cachedDisplayedPosition = clampPosition(
-        cachedBaseline.position_ms + Math.max(0, Date.now() - cachedBaseline.captured_at_ms),
-        durationMs,
-      );
-      if (cachedDisplayedPosition > serverDisplayedPosition + 750) {
-        effectiveBasePosition = cachedDisplayedPosition;
-        effectiveSnapshotAtMs = Date.now();
-      }
-    }
+    const selectedAnchor = selectProgressAnchor(serverState, cachedBaseline, Date.now());
+    const effectiveBasePosition = selectedAnchor.position_ms;
+    const effectiveSnapshotAtMs = selectedAnchor.snapshot_at_ms;
 
     if (sessionChanged || revisionChanged || snapshotChanged || positionChanged) {
       setCurrentPositionMs(resolveInterpolatedPosition(effectiveBasePosition, effectiveSnapshotAtMs, durationMs));
     }
 
-    timerRef.current = window.setInterval(() => {
-      const nextPosition = resolveInterpolatedPosition(effectiveBasePosition, effectiveSnapshotAtMs, durationMs);
-      setCurrentPositionMs(nextPosition);
+    if (serverState.server_instance_id && (sessionChanged || revisionChanged || snapshotChanged || positionChanged || epochChanged || trackChanged)) {
       saveProgressBaseline(serverState.device_id, {
+        device_id: serverState.device_id,
+        server_instance_id: serverState.server_instance_id,
         play_session_id: serverState.play_session_id,
+        track_identity: serverTrackIdentity,
         revision: serverState.revision,
-        position_ms: nextPosition,
-        captured_at_ms: Date.now(),
+        position_ms: serverState.position_ms,
+        snapshot_at_ms: serverState.snapshot_at_ms,
+        saved_at_ms: Date.now(),
+        ttl_ms: PROGRESS_BASELINE_TTL_MS,
       });
+    }
+
+    timerRef.current = window.setInterval(() => {
+      setCurrentPositionMs(resolveInterpolatedPosition(effectiveBasePosition, effectiveSnapshotAtMs, durationMs));
     }, 250);
 
     return () => {
@@ -783,7 +779,9 @@ function useProgressInterpolation(
     serverState.snapshot_at_ms,
     serverState.play_session_id,
     serverState.revision,
+    serverState.server_instance_id,
     serverState.duration_ms,
+    serverTrackIdentity,
     suspendUpdates,
   ]);
 
@@ -797,194 +795,222 @@ function useProgressInterpolation(
   return { currentPositionMs, progress };
 }
 
+type StateRequestResult =
+  | { kind: "success"; applied: boolean }
+  | { kind: "busy" }
+  | { kind: "failure"; failure: PlayerStateFailure }
+  | { kind: "stale" };
+
 function usePlayerStream(
   deviceId: string,
   applySnapshot: (snapshot: PlayerStateData, currentDeviceId: string) => boolean,
   onConnectionStatusChange: (status: UiState["connectionStatus"]) => void,
-  lastAppliedRevisionRef: React.MutableRefObject<number>,
 ) {
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
-  const pollingTimerRef = useRef<number | null>(null);
-  const currentDeviceIdRef = useRef<string>("");
-  const isPollingRef = useRef<boolean>(false);
-  const mountedRef = useRef<boolean>(true);
+  const fallbackTimerRef = useRef<number | null>(null);
+  const reconciliationTimerRef = useRef<number | null>(null);
+  const currentDeviceIdRef = useRef("");
+  const generationRef = useRef(0);
+  const mountedRef = useRef(true);
+  const requestIdRef = useRef(0);
+  const latestRequestIdRef = useRef(0);
+  const requestInFlightRef = useRef(false);
+  const failureRef = useRef<{ generation: number; did: string; kind: PlayerStateFailure | null }>({ generation: 0, did: "", kind: null });
 
-  function disconnectStream(): void {
-    if (reconnectTimerRef.current !== null) {
-      window.clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-    if (eventSourceRef.current !== null) {
-      eventSourceRef.current.close();
+  const isCurrent = (generation: number, did: string, es?: EventSource) =>
+    mountedRef.current && generationRef.current === generation && currentDeviceIdRef.current === did &&
+    (es === undefined || eventSourceRef.current === es);
+
+  const clearTimers = () => {
+    if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
+    if (fallbackTimerRef.current !== null) window.clearInterval(fallbackTimerRef.current);
+    if (reconciliationTimerRef.current !== null) window.clearInterval(reconciliationTimerRef.current);
+    reconnectTimerRef.current = null;
+    fallbackTimerRef.current = null;
+    reconciliationTimerRef.current = null;
+  };
+
+  const closeSource = (es?: EventSource) => {
+    const current = eventSourceRef.current;
+    if (current && (!es || current === es)) {
+      current.close();
       eventSourceRef.current = null;
     }
-  }
+  };
 
-  function stopPolling(): void {
-    if (pollingTimerRef.current !== null) {
-      window.clearInterval(pollingTimerRef.current);
-      pollingTimerRef.current = null;
-    }
-    isPollingRef.current = false;
-  }
+  const stopFallback = () => {
+    if (fallbackTimerRef.current !== null) window.clearInterval(fallbackTimerRef.current);
+    fallbackTimerRef.current = null;
+  };
 
-  function startFallbackPolling(): void {
-    if (!mountedRef.current || !currentDeviceIdRef.current) {
-      return;
-    }
-    stopPolling();
-    onConnectionStatusChange("fallback_polling");
+  const cancelReconnect = (generation: number) => {
+    if (generationRef.current !== generation) return;
+    if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+  };
 
-    pollingTimerRef.current = window.setInterval(async () => {
-      if (!mountedRef.current) {
-        stopPolling();
-        return;
-      }
-      const did = currentDeviceIdRef.current;
-      if (!did) {
-        stopPolling();
-        return;
-      }
-      if (isPollingRef.current) {
-        return;
-      }
-
-      isPollingRef.current = true;
-      try {
-        const out = await getPlayerState(did);
-        if (!mountedRef.current || did !== currentDeviceIdRef.current) {
-          isPollingRef.current = false;
-          return;
-        }
-        if (isApiOk(out)) {
-          const snapshot = out.data || EMPTY_SERVER_STATE;
-          const applied = applySnapshot(snapshot, did);
-          if (applied && eventSourceRef.current !== null) {
-            stopPolling();
-            onConnectionStatusChange("connected");
+  const requestState = async (generation: number, did: string, reason: "initial" | "fallback" | "reconcile" | "probe"): Promise<StateRequestResult> => {
+    if (!isCurrent(generation, did)) return { kind: "stale" };
+    if (requestInFlightRef.current) return { kind: "busy" };
+    const requestId = ++requestIdRef.current;
+    latestRequestIdRef.current = requestId;
+    requestInFlightRef.current = true;
+    try {
+      const out = await getPlayerStateWithStatus(did);
+      if (!isCurrent(generation, did) || requestId !== latestRequestIdRef.current) return { kind: "stale" };
+      if (out.ok && isApiOk(out.data)) {
+        failureRef.current = { generation, did, kind: null };
+        const applied = applySnapshot(out.data.data || EMPTY_SERVER_STATE, did);
+        if (reason === "fallback" && applied) {
+          stopFallback();
+          cancelReconnect(generation);
+          if (eventSourceRef.current === null) {
+            connectStream(did, generation);
           }
         }
-      } catch {
-        // ignore polling errors
-      } finally {
-        isPollingRef.current = false;
+        return { kind: "success", applied };
       }
-    }, 3000);
-  }
-
-  function scheduleReconnect(): void {
-    if (!mountedRef.current || !currentDeviceIdRef.current) {
-      return;
+      const kind = classifyPlayerStateFailure(out.status, out.data);
+      failureRef.current = { generation, did, kind };
+      return { kind: "failure", failure: kind };
+    } catch {
+      const kind: PlayerStateFailure = "transient";
+      if (isCurrent(generation, did) && requestId === latestRequestIdRef.current) {
+        failureRef.current = { generation, did, kind };
+      }
+      return { kind: "failure", failure: kind };
+    } finally {
+      if (isCurrent(generation, did) && requestId === latestRequestIdRef.current) requestInFlightRef.current = false;
     }
-    disconnectStream();
+  };
+
+  const startFallback = (generation: number, did: string, intervalMs: number, runImmediately = true) => {
+    if (!isCurrent(generation, did)) return;
+    stopFallback();
+    onConnectionStatusChange("fallback_polling");
+    const tick = () => void requestState(generation, did, "fallback");
+    if (runImmediately) tick();
+    fallbackTimerRef.current = window.setInterval(tick, intervalMs);
+  };
+
+  const scheduleReconnect = (generation: number, did: string) => {
+    if (!isCurrent(generation, did) || failureRef.current.kind === "device_missing" || failureRef.current.kind === "auth_required") return;
+    if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
     onConnectionStatusChange("reconnecting");
-
     reconnectTimerRef.current = window.setTimeout(() => {
-      if (!mountedRef.current) {
-        return;
+      reconnectTimerRef.current = null;
+      if (isCurrent(generation, did)) {
+        if (requestInFlightRef.current || fallbackTimerRef.current !== null) {
+          scheduleReconnect(generation, did);
+          return;
+        }
+        failureRef.current = { generation, did, kind: null };
+        connectStream(did, generation);
       }
-      const did = currentDeviceIdRef.current;
-      if (!did) {
-        return;
-      }
-      startFallbackPolling();
-      connectStream(did);
     }, 3000);
-  }
+  };
 
-  function connectStream(did: string): void {
-    disconnectStream();
-    if (!mountedRef.current) {
-      return;
-    }
-
-    const url = getPlayerStreamUrl(did);
-    const es = new EventSource(url);
-    eventSourceRef.current = es;
-
-    es.onopen = () => {
-      if (!mountedRef.current) {
-        es.close();
-        return;
+  const handleFailure = (generation: number, did: string, es: EventSource) => {
+    if (!isCurrent(generation, did, es)) return;
+    closeSource(es);
+    onConnectionStatusChange("fallback_polling");
+    void requestState(generation, did, "probe").then((result) => {
+      if (!isCurrent(generation, did) || result.kind === "stale") return;
+      if (result.kind === "busy") {
+        // The initial request owns recovery; polling starts only after it resolves.
+        startFallback(generation, did, 3000, false);
+      } else if (result.kind === "failure" && (result.failure === "device_missing" || result.failure === "auth_required")) {
+        startFallback(generation, did, 7000, false);
+      } else if (result.kind === "failure" && result.failure === "transient") {
+        startFallback(generation, did, 3000, false);
+        scheduleReconnect(generation, did);
+      } else if (result.kind === "success") {
+        stopFallback();
+        cancelReconnect(generation);
+        connectStream(did, generation);
       }
-      stopPolling();
+    });
+  };
+
+  const connectStream = (did: string, generation: number) => {
+    if (!isCurrent(generation, did)) return;
+    cancelReconnect(generation);
+    closeSource();
+    const es = new EventSource(getPlayerStreamUrl(did));
+    eventSourceRef.current = es;
+    es.onopen = () => {
+      if (!isCurrent(generation, did, es)) return;
+      const failure = failureRef.current;
+      if (failure.generation === generation && failure.did === did && failure.kind !== null) return;
+      stopFallback();
       onConnectionStatusChange("connected");
     };
-
-    es.onerror = () => {
-      if (!mountedRef.current) {
-        return;
-      }
-      scheduleReconnect();
-    };
-
+    es.onerror = () => handleFailure(generation, did, es);
     es.addEventListener("player_state", (event: MessageEvent) => {
-      if (!mountedRef.current) {
-        return;
-      }
-      const did = currentDeviceIdRef.current;
-      try {
-        const snapshot = JSON.parse(event.data) as PlayerStateData;
-        applySnapshot(snapshot, did);
-      } catch {
-        // ignore parse errors
-      }
+      if (!isCurrent(generation, did, es)) return;
+      try { applySnapshot(JSON.parse(event.data) as PlayerStateData, did); } catch { /* ignore malformed event */ }
     });
-
-    es.addEventListener("stream_error", (event: MessageEvent) => {
-      if (!mountedRef.current) {
-        return;
-      }
-      try {
-        const errorData = JSON.parse(event.data) as { error_code?: string };
-        if (errorData.error_code === "E_AUTH_EXPIRED") {
-          // handle auth refresh if needed
-        }
-      } catch {
-        // ignore parse errors
-      }
+    es.addEventListener("stream_error", () => {
+      if (isCurrent(generation, did, es)) handleFailure(generation, did, es);
     });
-  }
+  };
 
   useEffect(() => {
     mountedRef.current = true;
+    const generation = ++generationRef.current;
     currentDeviceIdRef.current = deviceId;
-    lastAppliedRevisionRef.current = -1;
-
+    clearTimers();
+    closeSource();
+    failureRef.current = { generation, did: deviceId, kind: null };
+    requestInFlightRef.current = false;
     if (!deviceId) {
-      disconnectStream();
-      stopPolling();
       onConnectionStatusChange("reconnecting");
-      return;
+      return () => undefined;
     }
-
-    (async () => {
-      const out = await getPlayerState(deviceId);
-      if (!mountedRef.current || deviceId !== currentDeviceIdRef.current) {
-        return;
+    void requestState(generation, deviceId, "initial").then((result) => {
+      if (!isCurrent(generation, deviceId) || result.kind === "busy" || result.kind === "stale") return;
+      if (result.kind === "failure") {
+        startFallback(generation, deviceId, result.failure === "device_missing" || result.failure === "auth_required" ? 7000 : 3000, false);
+        if (result.failure === "transient") scheduleReconnect(generation, deviceId);
+      } else if (result.kind === "success" && eventSourceRef.current === null) {
+        stopFallback();
+        cancelReconnect(generation);
+        connectStream(deviceId, generation);
       }
-      if (isApiOk(out)) {
-        applySnapshot(out.data || EMPTY_SERVER_STATE, deviceId);
-      }
-    })();
-
-    startFallbackPolling();
-    connectStream(deviceId);
-
+    });
+    connectStream(deviceId, generation);
+    reconciliationTimerRef.current = window.setInterval(() => {
+      if (!isCurrent(generation, deviceId) || eventSourceRef.current === null) return;
+      void requestState(generation, deviceId, "reconcile").then((result) => {
+        if (!isCurrent(generation, deviceId) || result.kind === "busy" || result.kind === "stale") return;
+        if (result.kind === "success") {
+          onConnectionStatusChange("connected");
+          return;
+        }
+        closeSource();
+        if (result.failure === "device_missing" || result.failure === "auth_required") {
+          startFallback(generation, deviceId, 7000, false);
+        } else {
+          startFallback(generation, deviceId, 3000, false);
+          scheduleReconnect(generation, deviceId);
+        }
+      });
+    }, 5000);
     return () => {
       mountedRef.current = false;
-      disconnectStream();
-      stopPolling();
+      ++generationRef.current;
+      clearTimers();
+      closeSource();
+      requestInFlightRef.current = false;
     };
   }, [deviceId]);
 
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-      disconnectStream();
-      stopPolling();
-    };
+  useEffect(() => () => {
+    mountedRef.current = false;
+    ++generationRef.current;
+    clearTimers();
+    closeSource();
   }, []);
 }
 
@@ -1038,11 +1064,16 @@ export function HomePage() {
   const prevPlaySessionRef = useRef<string>("");
   const lastStableTrackTitleRef = useRef<string>(loadRememberedPlayingSong(activeDid));
   const activeDidRef = useRef<string>(activeDid);
+  const homeMountedRef = useRef(true);
+  const devicesLoadGenerationRef = useRef(0);
+  const settingsLoadGenerationRef = useRef(0);
   const publicBaseMigratedRef = useRef<boolean>(false);
   const themeFileInputRef = useRef<HTMLInputElement | null>(null);
   const lastAppliedRevisionRef = useRef<number>(-1);
   const lastAppliedSnapshotAtRef = useRef<number>(-1);
   const lastAppliedPositionRef = useRef<number>(-1);
+  const lastAppliedServerInstanceIdRef = useRef<string>("");
+  const retiredServerInstanceIdsRef = useRef<string[]>([]);
 
   const { currentPositionMs, progress } = useProgressInterpolation(
     serverState,
@@ -1084,26 +1115,33 @@ export function HomePage() {
   const applySnapshotFn = useMemo(
     () =>
       (snapshot: PlayerStateData, currentDeviceId: string): boolean => {
-        if (snapshot.device_id !== currentDeviceId) {
+        if (snapshot.device_id !== currentDeviceId || !snapshot.server_instance_id) {
           return false;
         }
-        const isOlderRevision = snapshot.revision < lastAppliedRevisionRef.current;
-        const sameRevision = snapshot.revision === lastAppliedRevisionRef.current;
-        const hasNewTimingBaseline =
-          snapshot.snapshot_at_ms > lastAppliedSnapshotAtRef.current ||
-          snapshot.position_ms !== lastAppliedPositionRef.current;
-
-        if (isOlderRevision) {
-          if (lastAppliedRevisionRef.current > 0 && snapshot.revision < lastAppliedRevisionRef.current * 0.1) {
-            lastAppliedRevisionRef.current = -1;
-            lastAppliedSnapshotAtRef.current = -1;
-            lastAppliedPositionRef.current = -1;
-          } else {
-            return false;
-          }
-        } else if (sameRevision && !hasNewTimingBaseline) {
+        if (retiredServerInstanceIdsRef.current.includes(snapshot.server_instance_id)) {
           return false;
         }
+        const previousMeta: AppliedSnapshotMeta | null = lastAppliedServerInstanceIdRef.current
+          ? {
+              serverInstanceId: lastAppliedServerInstanceIdRef.current,
+              revision: lastAppliedRevisionRef.current,
+              snapshotAtMs: lastAppliedSnapshotAtRef.current,
+            }
+          : null;
+        if (!shouldApplyPlayerSnapshot(previousMeta, snapshot)) {
+          return false;
+        }
+        const epochChanged = previousMeta !== null && previousMeta.serverInstanceId !== snapshot.server_instance_id;
+        if (epochChanged) {
+          retiredServerInstanceIdsRef.current = [
+            ...retiredServerInstanceIdsRef.current.filter((id) => id !== previousMeta.serverInstanceId),
+            previousMeta.serverInstanceId,
+          ].slice(-8);
+          lastAppliedRevisionRef.current = -1;
+          lastAppliedSnapshotAtRef.current = -1;
+          lastAppliedPositionRef.current = -1;
+        }
+        lastAppliedServerInstanceIdRef.current = snapshot.server_instance_id;
         lastAppliedRevisionRef.current = snapshot.revision;
         lastAppliedSnapshotAtRef.current = snapshot.snapshot_at_ms;
         lastAppliedPositionRef.current = snapshot.position_ms;
@@ -1134,7 +1172,7 @@ export function HomePage() {
     setUiState((prev) => ({ ...prev, connectionStatus: status }));
   };
 
-  usePlayerStream(activeDid, applySnapshotFn, handleConnectionStatusChange, lastAppliedRevisionRef);
+  usePlayerStream(activeDid, applySnapshotFn, handleConnectionStatusChange);
 
   useEffect(() => {
     if (activeDid) {
@@ -1144,9 +1182,13 @@ export function HomePage() {
 
   useEffect(() => {
     activeDidRef.current = activeDid;
+    dispatchServerState({ type: "RESET" });
+    serverStateRef.current = EMPTY_SERVER_STATE;
     lastAppliedRevisionRef.current = -1;
     lastAppliedSnapshotAtRef.current = -1;
     lastAppliedPositionRef.current = -1;
+    lastAppliedServerInstanceIdRef.current = "";
+    retiredServerInstanceIdsRef.current = [];
     previousPendingCheckStateRef.current = EMPTY_SERVER_STATE;
   }, [activeDid]);
 
@@ -1396,7 +1438,9 @@ export function HomePage() {
   }
 
   async function loadSettingData() {
+    const generation = ++settingsLoadGenerationRef.current;
     const out = await getSystemSettings();
+    if (!homeMountedRef.current || generation !== settingsLoadGenerationRef.current) return;
     if (!isApiOk(out)) {
       setMessage("获取设置失败");
       return;
@@ -1418,6 +1462,7 @@ export function HomePage() {
       }
     }
 
+    if (!homeMountedRef.current || generation !== settingsLoadGenerationRef.current) return;
     setSettingData(hydrated);
     setSettingJsonText(JSON.stringify(hydrated, null, 2));
     setSelectedSettingDids(dids);
@@ -1431,18 +1476,9 @@ export function HomePage() {
         }))
       : [];
     setSettingDeviceList(rows);
-    if (rows.length) {
-      setDevices(rows);
-      const fallbackDid = deviceCandidates(rows[0])[0] || "";
-      const preferredRaw = dids[0] || fallbackDid;
-      const owner = rows.find((d) => deviceCandidates(d).includes(preferredRaw));
-      const preferredDid = owner ? preferredDidFromDevice(owner) : preferredRaw;
-      if (preferredDid) {
-        setActiveDid((prev) => prev || preferredDid);
-      }
-    }
     setPullAskEnabled(Boolean(settings.enable_pull_ask));
 
+    if (!homeMountedRef.current || generation !== settingsLoadGenerationRef.current) return;
     if (!publicBaseMigratedRef.current && !manual) {
       const shouldUseLegacy = Boolean(legacy) && !legacyLooksUnconfigured(settings.hostname, settings.public_port);
       const target = shouldUseLegacy ? legacy : auto;
@@ -1475,7 +1511,9 @@ export function HomePage() {
   }
 
   async function loadDevices() {
+    const generation = ++devicesLoadGenerationRef.current;
     const v1Out = await v1GetDevices();
+    if (!homeMountedRef.current || generation !== devicesLoadGenerationRef.current) return;
     const rows: Device[] = isApiOk(v1Out)
       ? (v1Out.data.devices || []).map((d) => ({
           did: d.did ?? d.device_id,
@@ -1485,36 +1523,52 @@ export function HomePage() {
           name: d.name || d.model || d.device_id,
         }))
       : [];
+    if (!homeMountedRef.current || generation !== devicesLoadGenerationRef.current) return;
     setDevices(rows);
     if (!rows.length) {
+      if (homeMountedRef.current && generation === devicesLoadGenerationRef.current) {
+        removeLocal("xm_ui_active_did");
+        setActiveDid("");
+      }
       setMessage("未获取到设备，请在设置页完成认证登录。");
       return;
     }
     const fallbackDid = deviceCandidates(rows[0])[0] || "";
-    const currentDid = String(activeDid || "").trim();
+    const currentDid = String(activeDidRef.current || "").trim();
+    let keepCurrentDid = false;
     if (currentDid) {
       const owner = rows.find((d) => deviceCandidates(d).includes(currentDid));
       if (!owner) {
-        removeLocal("xm_ui_active_did");
-        setActiveDid("");
+        if (homeMountedRef.current && generation === devicesLoadGenerationRef.current) {
+          removeLocal("xm_ui_active_did");
+          setActiveDid("");
+        }
       } else {
+        keepCurrentDid = true;
         const preferred = preferredDidFromDevice(owner);
-        if (preferred && preferred !== currentDid) {
+        if (preferred && preferred !== currentDid && homeMountedRef.current && generation === devicesLoadGenerationRef.current) {
           setActiveDid(preferred);
           saveLocal("xm_ui_active_did", preferred);
         }
       }
     }
+    if (keepCurrentDid) {
+      return;
+    }
     if (fallbackDid) {
-      setActiveDid((prev) => prev || fallbackDid);
+      if (homeMountedRef.current && generation === devicesLoadGenerationRef.current && !keepCurrentDid) {
+        setActiveDid(fallbackDid);
+        saveLocal("xm_ui_active_did", fallbackDid);
+      }
       void (async () => {
         const probe = await getPlayerState(fallbackDid);
-        if (isApiOk(probe)) {
-          return;
-        }
+        if (!homeMountedRef.current || generation !== devicesLoadGenerationRef.current) return;
+        if (isApiOk(probe)) return;
         const resolved = await tryResolveDid(rows[0]);
-        if (resolved) {
+        if (!homeMountedRef.current || generation !== devicesLoadGenerationRef.current) return;
+        if (resolved && homeMountedRef.current && generation === devicesLoadGenerationRef.current) {
           setActiveDid(resolved);
+          saveLocal("xm_ui_active_did", resolved);
           return;
         }
         setMessage("未匹配到可用设备 DID，请在设置页刷新设备列表。");
@@ -1523,8 +1577,10 @@ export function HomePage() {
     }
 
     const did = await tryResolveDid(rows[0]);
-    if (did) {
+    if (!homeMountedRef.current || generation !== devicesLoadGenerationRef.current) return;
+    if (did && homeMountedRef.current && generation === devicesLoadGenerationRef.current) {
       setActiveDid(did);
+      saveLocal("xm_ui_active_did", did);
       return;
     }
     setMessage("未匹配到可用设备 DID，请在设置页刷新设备列表。");
@@ -1543,10 +1599,16 @@ export function HomePage() {
   }
 
   useEffect(() => {
+    homeMountedRef.current = true;
     void (async () => {
       await Promise.allSettled([loadVersion(), loadAuthStatus(), loadSettingData(), loadPlaylists()]);
       void loadDevices();
     })();
+    return () => {
+      homeMountedRef.current = false;
+      ++devicesLoadGenerationRef.current;
+      ++settingsLoadGenerationRef.current;
+    };
   }, []);
 
   useEffect(() => {

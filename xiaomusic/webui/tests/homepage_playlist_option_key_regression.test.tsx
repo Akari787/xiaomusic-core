@@ -32,7 +32,8 @@ const mockedEventSource = vi.hoisted(() => {
       this.listeners.get(type)?.delete(listener);
     }
 
-    close() {}
+    closed = false;
+    close() { this.closed = true; }
   }
 
   return { MockEventSource };
@@ -58,6 +59,7 @@ vi.mock("../src/services/v1Api", () => ({
   getSystemSettings: vi.fn(),
   getSystemStatus: vi.fn(),
   getPlayerState: vi.fn(),
+  getPlayerStateWithStatus: vi.fn(),
   libraryRefresh: vi.fn(),
   saveSystemSettings: vi.fn(),
   setPlayMode: vi.fn(),
@@ -85,6 +87,7 @@ import { HomePage } from "../src/pages/HomePage";
 import { apiGet, apiPost } from "../src/services/apiClient";
 import {
   getPlayerState,
+  getPlayerStateWithStatus,
   getDevices,
   getSystemStatus,
   getSystemSettings,
@@ -184,6 +187,10 @@ describe("HomePage song selector key regression", () => {
     );
     (setVolume as ReturnType<typeof vi.fn>).mockResolvedValue(ok({}));
     (getPlayerState as ReturnType<typeof vi.fn>).mockResolvedValue(state());
+    (getPlayerStateWithStatus as ReturnType<typeof vi.fn>).mockImplementation(async (did: string) => {
+      const data = await (getPlayerState as ReturnType<typeof vi.fn>)(did);
+      return { status: 200, ok: true, data: { ...data, data: { ...data.data, server_instance_id: "test-epoch" } } };
+    });
   });
 
   afterEach(async () => {

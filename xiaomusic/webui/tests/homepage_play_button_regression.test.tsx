@@ -21,6 +21,7 @@ const mockedV1 = vi.hoisted(() => ({
   getSystemSettings: vi.fn(),
   getSystemStatus: vi.fn(),
   getPlayerState: vi.fn(),
+  getPlayerStateWithStatus: vi.fn(),
   libraryRefresh: vi.fn(),
   saveSystemSettings: vi.fn(),
   setPlayMode: vi.fn(),
@@ -55,7 +56,8 @@ const mockedEventSource = vi.hoisted(() => {
       this.listeners.get(type)?.delete(listener);
     }
 
-    close() {}
+    closed = false;
+    close() { this.closed = true; }
   }
 
   return { MockEventSource };
@@ -87,6 +89,7 @@ vi.mock("../src/services/v1Api", () => ({
   getSystemSettings: mockedV1.getSystemSettings,
   getSystemStatus: mockedV1.getSystemStatus,
   getPlayerState: mockedV1.getPlayerState,
+  getPlayerStateWithStatus: mockedV1.getPlayerStateWithStatus,
   libraryRefresh: mockedV1.libraryRefresh,
   saveSystemSettings: mockedV1.saveSystemSettings,
   setPlayMode: mockedV1.setPlayMode,
@@ -234,6 +237,10 @@ describe("HomePage play button regression", () => {
         },
         request_id: `rid-state-${currentSong}`,
       };
+    });
+    mockedV1.getPlayerStateWithStatus.mockImplementation(async (did: string) => {
+      const data = await mockedV1.getPlayerState(did);
+      return { status: 200, ok: true, data: { ...data, data: { ...data.data, server_instance_id: "test-epoch" } } };
     });
     mockedV1.getDevices.mockResolvedValue({
       code: 0,

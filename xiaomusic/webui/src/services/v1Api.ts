@@ -1,4 +1,4 @@
-import { apiGetJson, apiPostJson } from "./apiClient";
+import { apiGetJson, apiGetJsonWithStatus, apiPostJson } from "./apiClient";
 
 // Public API only: this module only wraps `/api/v1/*` interfaces.
 
@@ -72,7 +72,7 @@ export type TransportState = "idle" | "starting" | "switching" | "playing" | "pa
 export interface PlayerStateData {
   // 新规范字段
   device_id: string;
-  server_instance_id?: string;
+  server_instance_id: string;
   revision: number;
   play_session_id: string;
   transport_state: TransportState;
@@ -444,6 +444,24 @@ export async function updateSystemSettingItem(
 
 export async function getPlayerState(deviceId: string): Promise<ApiEnvelope<PlayerStateData>> {
   return await safeGet<PlayerStateData>(`/api/v1/player/state?device_id=${encodeURIComponent(deviceId)}`);
+}
+
+export type PlayerStateStatusResponse = {
+  status: number;
+  ok: boolean;
+  data: ApiEnvelope<PlayerStateData>;
+};
+
+export async function getPlayerStateWithStatus(deviceId: string): Promise<PlayerStateStatusResponse> {
+  const result = await apiGetJsonWithStatus<ApiEnvelope<PlayerStateData>>(
+    `/api/v1/player/state?device_id=${encodeURIComponent(deviceId)}`,
+    { timeoutMs: 8000 },
+  );
+  return {
+    status: result.status,
+    ok: result.ok,
+    data: result.data,
+  };
 }
 
 export function getPlayerStreamUrl(deviceId: string): string {
