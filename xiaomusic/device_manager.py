@@ -38,42 +38,59 @@ class DeviceManager:
         self.device_id_did = {}  # device_id 到 did 的映射
         self.groups = {}  # 设备分组，key 为组名，value 为 device_id 列表
 
-    def _update_devices(self):
-        """更新设备列表
-
-        根据配置中的设备信息和分组信息，更新设备列表和分组映射。
-        这个方法需要在设备信息已经从小米服务器获取后调用。
-        """
+    def _update_devices(self, devices=None):
+        """根据稳定配置原子构建并提交 runtime 设备映射。"""
         old_devices = self.devices
-        self.device_id_did = {}
-        self.groups = {}
-        self.devices = {}
+        source_devices = self.config.devices if devices is None else devices
+        candidate_devices = {}
+        candidate_device_id_did = {}
+        candidate_groups = {}
+        reused = []
+        replaced = []
 
-        # 遍历配置中的设备，构建基本映射
-        did2group = parse_str_to_dict(self.config.group_list, d1=",", d2=":")
-        for did, device in self.config.devices.items():
-            # 构建 device_id 到 did 的映射
-            self.device_id_did[device.device_id] = did
-            group_name = did2group.get(did)
-            if not group_name or group_name is None:
-                group_name = device.name
-            self.groups.setdefault(group_name, []).append(device.device_id)
+        try:
+            did2group = parse_str_to_dict(self.config.group_list, d1=",", d2=":")
+            for did, device in source_devices.items():
+                device_id = device.device_id
+                if not did or not device_id:
+                    raise ValueError(f"invalid device configuration for {did!r}")
+                group_name = did2group.get(did) or device.name
+                if device_id in candidate_device_id_did:
+                    raise ValueError(f"duplicate device_id: {device_id}")
+                candidate_device_id_did[device_id] = did
+                candidate_groups.setdefault(group_name, []).append(device_id)
 
-            prev = old_devices.pop(did, None)
-            if prev is not None and prev.device.device_id == device.device_id:
-                prev.device = device
-                prev.group_name = group_name
-                prev.config = self.config
-                prev.update_playlist()
-                self.devices[did] = prev
-            else:
-                if prev is not None:
-                    prev.cancel_all_timer()
-                self.devices[did] = XiaoMusicDevice(self.xiaomusic, device, group_name)
+                prev = old_devices.get(did)
+                if prev is not None and getattr(prev.device, "device_id", None) == device_id:
+                    candidate_devices[did] = prev
+                    reused.append((prev, device, group_name))
+                else:
+                    if prev is not None:
+                        replaced.append(prev)
+                    candidate_devices[did] = XiaoMusicDevice(self.xiaomusic, device, group_name)
+        except Exception as exc:
+            logger = getattr(self.log, "exception", self.log.warning)
+            logger(f"设备列表候选构建失败，保留旧 runtime: {exc}")
+            raise
 
-        # Removed devices are no longer tracked: cancel their timers.
-        for stale in old_devices.values():
-            stale.cancel_all_timer()
+        # All constructors and candidate validation succeeded: update reusable players
+        # without rebuilding playlists or touching playback/task state.
+        for player, device, group_name in reused:
+            player.device = device
+            player.group_name = group_name
+            player.config = self.config
+
+        self.devices = candidate_devices
+        self.device_id_did = candidate_device_id_did
+        self.groups = candidate_groups
+
+        removed = set(old_devices) - set(candidate_devices)
+        stale_players = [old_devices[did] for did in removed] + replaced
+        for player in stale_players:
+            try:
+                player.cancel_all_timer()
+            except Exception as exc:
+                self.log.warning(f"清理旧设备 timer 失败，继续清理后续设备: {exc}")
 
         self.log.info(f"设备列表已更新: device_id_did={self.device_id_did}")
         self.log.info(f"设备分组已更新: groups={self.groups}")
@@ -156,11 +173,23 @@ class DeviceManager:
         Returns:
             bool: 是否成功完成设备信息刷新。
         """
-        result = await auth_manager.try_update_device_id()
-        if result is None:
+        old_config_devices = self.config.devices
+        old_cur_did = getattr(auth_manager, "_cur_did", None)
+        try:
+            result = await auth_manager.try_update_device_id()
+            if result is None:
+                if hasattr(auth_manager, "_cur_did"):
+                    auth_manager._cur_did = old_cur_did
+                return False
+            self._update_devices(result)
+            self.config.devices = result
+            return True
+        except Exception as exc:
+            self.config.devices = old_config_devices
+            if hasattr(auth_manager, "_cur_did"):
+                auth_manager._cur_did = old_cur_did
+            self.log.warning(f"更新设备信息失败，已回滚 config/runtime 事务: {exc}")
             return False
-        self._update_devices()
-        return True
 
     def set_devices(self, devices: dict[str, XiaoMusicDevice]):
         """设置设备实例字典

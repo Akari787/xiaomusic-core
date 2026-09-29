@@ -2376,29 +2376,76 @@ class SimpleAuthManager:
     # ==================== 设备操作 ====================
 
     async def try_update_device_id(self):
-        """更新设备ID"""
+        """更新设备快照；云端结果只补全，不以缺失结果删除目标设备。"""
         try:
-            mi_dids = self.config.mi_did.split(",")
-            hardware_data = await self.mina_service.device_list()
-            devices = {}
-            for h in hardware_data:
-                device_id = h.get("deviceID", "")
-                hardware = h.get("hardware", "")
-                did = h.get("miotDID", "")
-                name = h.get("alias", "") or h.get("name", "未知名字")
-                if device_id and hardware and did and (did in mi_dids):
-                    from xiaomusic.config import Device
+            from copy import deepcopy
 
-                    device = self.config.devices.get(did, Device())
-                    device.did = did
-                    self._cur_did = did
+            from xiaomusic.config import Device
+
+            # Keep the configured order; an empty value explicitly means no targets.
+            mi_dids = []
+            seen_dids = set()
+            for raw_did in str(self.config.mi_did or "").split(","):
+                did = raw_did.strip()
+                if did and did not in seen_dids:
+                    seen_dids.add(did)
+                    mi_dids.append(did)
+            stable = getattr(self.config, "devices", {}) or {}
+            hardware_data = await self.mina_service.device_list()
+            if not isinstance(hardware_data, list):
+                raise ValueError("device_list returned a non-list payload")
+
+            live_by_did = {}
+            seen_live_dids = set()
+            target_dids = set(mi_dids)
+            for item in hardware_data:
+                if not isinstance(item, dict):
+                    self.log.warning("跳过无效设备条目：不是对象")
+                    continue
+                did = str(item.get("miotDID", "") or "")
+                if not did or did not in target_dids:
+                    continue
+                if did in seen_live_dids:
+                    self.log.warning(f"跳过重复设备条目：{did}")
+                    continue
+                device_id = str(item.get("deviceID", "") or "")
+                hardware = str(item.get("hardware", "") or "")
+                if not device_id or not hardware:
+                    self.log.warning(f"跳过不完整设备条目：{did}")
+                    continue
+                seen_live_dids.add(did)
+                live_by_did[did] = (
+                    device_id,
+                    hardware,
+                    item.get("alias") or item.get("name") or "未知名字",
+                )
+
+            candidate = {}
+            for did in mi_dids:
+                existing = stable.get(did)
+                # A configured-but-never-seen did must not create an empty runtime device.
+                if existing is None and did not in live_by_did:
+                    continue
+                device = deepcopy(existing) if existing is not None else Device(did=did)
+                device.did = did
+                live = live_by_did.get(did)
+                if live is not None:
+                    device_id, hardware, name = live
                     device.device_id = device_id
                     device.hardware = hardware
-                    device.name = name
-                    devices[did] = device
-            self.config.devices = devices
-            self.log.info(f"选中的设备: {devices}")
-            return devices
+                    device.name = str(name)
+                candidate[did] = device
+
+            old_cur_did = getattr(self, "_cur_did", None)
+            if old_cur_did in candidate:
+                selected_did = old_cur_did
+            else:
+                selected_did = next((did for did in mi_dids if did in live_by_did), None)
+                if selected_did is None:
+                    selected_did = next((did for did in mi_dids if did in candidate), None)
+            self._cur_did = selected_did
+            self.log.info(f"选中的设备候选: {candidate}")
+            return candidate
         except Exception as e:
             self.log.warning(f"更新设备ID失败: {e}")
             return None
