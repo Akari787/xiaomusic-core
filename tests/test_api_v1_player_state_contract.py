@@ -52,6 +52,7 @@ def test_player_state_success_shape(monkeypatch):
     assert set(body.keys()) == {"code", "message", "data", "request_id"}
     assert body["data"] == {
         "device_id": "did-1",
+        "server_instance_id": v1.SERVER_INSTANCE_ID,
         "revision": 1,
         "play_session_id": "sess-1",
         "transport_state": "idle",
@@ -106,6 +107,7 @@ def test_player_state_returns_contract_extended_fields(monkeypatch):
     body = resp.json()
     assert body["data"] == {
         "device_id": "did-1",
+        "server_instance_id": v1.SERVER_INSTANCE_ID,
         "revision": 3,
         "play_session_id": "sess-3",
         "transport_state": "playing",

@@ -78,6 +78,7 @@ async def test_api_v1_play_success(monkeypatch, source_hint: str):
     assert out["data"]["device_id"] == "did-1"
     assert out["data"]["source_plugin"] == source_hint
     assert out["data"]["state"]["play_session_id"] == "sess-3"
+    assert out["data"]["state"]["server_instance_id"] == v1.SERVER_INSTANCE_ID
     assert out["data"]["state"]["track"]["id"] == "track-1"
     assert calls and calls[0]["source_hint"] == source_hint
     assert pushed == []
@@ -164,4 +165,5 @@ async def test_api_v1_play_does_not_push_player_state_event(monkeypatch):
     assert out["code"] == 0
     assert out["data"]["status"] == "playing"
     assert out["data"]["state"]["play_session_id"] == "sess-2"
+    assert out["data"]["state"]["server_instance_id"] == v1.SERVER_INSTANCE_ID
     assert pushed == []

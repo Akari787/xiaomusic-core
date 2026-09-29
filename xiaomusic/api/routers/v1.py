@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -84,6 +84,7 @@ def _require_device(device_id: str, request_id: str):
 
 router = APIRouter()
 LOG = logging.getLogger("xiaomusic.api.v1")
+SERVER_INSTANCE_ID = uuid4().hex
 _PLAY_MODE_HANDLERS = {
     "one": "set_play_type_one",
     "all": "set_play_type_all",
@@ -92,6 +93,10 @@ _PLAY_MODE_HANDLERS = {
     "sequence": "set_play_type_seq",
 }
 
+
+def _public_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Attach the process epoch without changing facade/runtime state."""
+    return {**snapshot, "server_instance_id": SERVER_INSTANCE_ID}
 
 
 def _normalize_device(device: dict[str, Any]) -> dict[str, Any]:
@@ -161,8 +166,10 @@ async def api_v1_play(data: PlayRequest):
         )
         snapshot: dict[str, Any] | None = None
         try:
-            snapshot = await facade.build_player_state_snapshot(
-                device_id=out.get(DEVICE_ID, getattr(data, DEVICE_ID))
+            snapshot = _public_snapshot(
+                await facade.build_player_state_snapshot(
+                    device_id=out.get(DEVICE_ID, getattr(data, DEVICE_ID))
+                )
             )
         except Exception:
             LOG.warning(
@@ -1018,9 +1025,12 @@ async def api_v1_player_state(
 ):
     rid = _next_request_id(request_id)
     try:
-        snapshot = await _get_facade().build_player_state_snapshot(device_id=device_id)
+        snapshot = _public_snapshot(
+            await _get_facade().build_player_state_snapshot(device_id=device_id)
+        )
         data = {
             DEVICE_ID: str(snapshot.get("device_id", device_id)),
+            "server_instance_id": SERVER_INSTANCE_ID,
             "revision": int(snapshot.get("revision", 0)),
             "play_session_id": str(snapshot.get("play_session_id") or ""),
             "transport_state": str(snapshot.get("transport_state") or "idle"),
@@ -1053,31 +1063,286 @@ async def api_v1_player_state(
         )
 
 
-_player_stream_subscribers: dict[str, set[asyncio.Queue[bytes]]] = {}
+@dataclass(eq=False)
+class _PlayerStreamSubscriber:
+    queue: asyncio.Queue[dict[str, Any]] = field(
+        default_factory=lambda: asyncio.Queue(maxsize=1)
+    )
+    initializing: bool = True
+    initial_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    initial_snapshot: dict[str, Any] | None = None
+    initial_error: Exception | None = None
+
+
+@dataclass
+class _PlayerStreamChannel:
+    device_id: str
+    event_bus: Any
+    subscribers: set[_PlayerStreamSubscriber] = field(default_factory=set)
+    initial_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    initial_snapshot: dict[str, Any] | None = None
+    initial_error: Exception | None = None
+    latest_snapshot: dict[str, Any] | None = None
+    build_task: asyncio.Task | None = None
+    dirty: bool = False
+    refresh_waiters: set[_PlayerStreamSubscriber] = field(default_factory=set)
+    closed: bool = False
+    cleanup_started: bool = False
+    listener: Any = None
+
+    def start(self) -> None:
+        if self.closed or self.build_task is not None:
+            return
+        self.build_task = asyncio.create_task(self._build_loop())
+        self.build_task.add_done_callback(self._consume_build_task)
+
+    @staticmethod
+    def _consume_build_task(task: asyncio.Task) -> None:
+        try:
+            task.exception()
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    def mark_dirty(self) -> None:
+        if self.closed:
+            return
+        self.dirty = True
+        self.start()
+
+    def _set_initial_error(self, error: Exception) -> None:
+        self.initial_error = error
+        self.initial_ready.set()
+        for subscriber in tuple(self.subscribers):
+            if subscriber.initializing:
+                subscriber.initial_error = error
+                subscriber.initial_ready.set()
+
+    def _set_initial_snapshot(self, snapshot: dict[str, Any]) -> None:
+        self.initial_snapshot = snapshot
+        self.latest_snapshot = snapshot
+        self.initial_ready.set()
+        for subscriber in tuple(self.subscribers):
+            if subscriber.initializing:
+                subscriber.initial_snapshot = snapshot
+                subscriber.initial_ready.set()
+
+    async def _build_loop(self) -> None:
+        try:
+            while self.subscribers and not self.closed:
+                self.dirty = False
+                refresh_waiters = set(self.refresh_waiters)
+                try:
+                    snapshot = _public_snapshot(
+                        await _get_facade().build_player_state_snapshot(self.device_id)
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    if self.dirty:
+                        # An event arrived while the failed build was running;
+                        # consume that one retry, but never self-trigger retries.
+                        continue
+                    if self.initial_snapshot is None:
+                        self._set_initial_error(exc)
+                    else:
+                        for subscriber in refresh_waiters:
+                            if subscriber in self.subscribers and subscriber.initializing:
+                                subscriber.initial_error = exc
+                                subscriber.initial_ready.set()
+                        self.refresh_waiters.difference_update(refresh_waiters)
+                    break
+
+                if self.initial_snapshot is None:
+                    self._set_initial_snapshot(snapshot)
+                    self.refresh_waiters.difference_update(refresh_waiters)
+                    if self.dirty:
+                        continue
+                    break
+
+                snapshot_is_newer = _snapshot_is_newer(snapshot, self.latest_snapshot)
+                if snapshot_is_newer:
+                    self.latest_snapshot = snapshot
+                for subscriber in refresh_waiters:
+                    if subscriber in self.subscribers and subscriber.initializing:
+                        subscriber.initial_snapshot = snapshot
+                        subscriber.initial_ready.set()
+                self.refresh_waiters.difference_update(refresh_waiters)
+
+                # Refreshes with a new revision are real state events too.
+                # Same-revision refreshes remain filtered by this comparison.
+                if snapshot_is_newer:
+                    self._fanout(snapshot)
+                if self.dirty:
+                    continue
+                break
+            await self._before_task_exit()
+        finally:
+            if self.build_task is asyncio.current_task():
+                self.build_task = None
+            if self.dirty and self.subscribers and not self.closed:
+                self.start()
+            if self.initial_snapshot is not None:
+                self.initial_ready.set()
+
+    def _fanout(self, snapshot: dict[str, Any]) -> None:
+        for subscriber in tuple(self.subscribers):
+            _queue_latest(subscriber.queue, snapshot)
+
+    async def _before_task_exit(self) -> None:
+        """Test seam for the final dirty/task-clear handoff."""
+
+    async def initial_for(self, subscriber: _PlayerStreamSubscriber) -> dict[str, Any]:
+        await subscriber.initial_ready.wait()
+        if subscriber.initial_error is not None:
+            raise subscriber.initial_error
+        selected = subscriber.initial_snapshot or self.initial_snapshot
+        if self.latest_snapshot is not None and (
+            selected is None or _snapshot_is_newer(self.latest_snapshot, selected)
+        ):
+            selected = self.latest_snapshot
+        while True:
+            try:
+                queued = subscriber.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if _snapshot_is_newer(queued, selected):
+                selected = queued
+        subscriber.initializing = False
+        return selected or _public_snapshot({"device_id": self.device_id, "revision": 0})
+
+    def add(self, subscriber: _PlayerStreamSubscriber) -> None:
+        self.subscribers.add(subscriber)
+        if self.initial_snapshot is None:
+            self.start()
+            return
+        self.refresh_waiters.add(subscriber)
+        self.dirty = True
+        self.start()
+
+    def remove(self, subscriber: _PlayerStreamSubscriber) -> None:
+        self.subscribers.discard(subscriber)
+        self.refresh_waiters.discard(subscriber)
+
+    async def close(self) -> None:
+        if self.cleanup_started:
+            return
+        self.cleanup_started = True
+        self.closed = True
+        if self.listener is not None:
+            try:
+                self.event_bus.unsubscribe("player_state_changed", self.listener)
+            except Exception:
+                pass
+            self.listener = None
+        if self.build_task is not None:
+            self.build_task.cancel()
+            try:
+                await self.build_task
+            except asyncio.CancelledError:
+                pass
+            self.build_task = None
+
+
+_player_stream_channels: dict[str, _PlayerStreamChannel] = {}
 _player_stream_sub_lock = asyncio.Lock()
 
 
-async def _push_player_state_event(device_id: str) -> None:
-    """Push current player state to all subscribers of this device."""
+def _snapshot_revision(snapshot: dict[str, Any] | None) -> tuple[str, int]:
+    if not snapshot:
+        return "", -1
+    return (str(snapshot.get("server_instance_id", "")), int(snapshot.get("revision", 0)))
 
-    facade = _get_facade()
+
+def _snapshot_is_newer(
+    snapshot: dict[str, Any], previous: dict[str, Any] | None
+) -> bool:
+    current_epoch, current_revision = _snapshot_revision(snapshot)
+    previous_epoch, previous_revision = _snapshot_revision(previous)
+    return current_epoch != previous_epoch or current_revision > previous_revision
+
+
+def _queue_latest(queue: asyncio.Queue[dict[str, Any]], snapshot: dict[str, Any]) -> None:
     try:
-        snapshot = await facade.build_player_state_snapshot(device_id)
-    except Exception:
-        return
+        queue.put_nowait(snapshot)
+    except asyncio.QueueFull:
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        try:
+            queue.put_nowait(snapshot)
+        except asyncio.QueueFull:
+            pass
+
+
+SSE_HEARTBEAT = b": heartbeat\n\n"
+
+
+def _encode_player_state_event(snapshot: dict[str, Any]) -> bytes:
     payload = json.dumps(snapshot, ensure_ascii=False)
-    event = (
-        f"event: player_state\nid: {snapshot.get('revision', 0)}\ndata: {payload}\n\n"
-    )
-    event_bytes = event.encode("utf-8")
+    event_id = f"{snapshot.get('server_instance_id', SERVER_INSTANCE_ID)}:{snapshot.get('revision', 0)}"
+    return f"event: player_state\nid: {event_id}\ndata: {payload}\n\n".encode()
+
+
+async def _push_player_state_event(device_id: str) -> None:
+    """Compatibility hook; normal delivery is owned by the per-device listener."""
+    channel = _player_stream_channels.get(device_id)
+    if channel is not None:
+        channel.mark_dirty()
+
+
+def _create_player_stream_channel(
+    device_id: str, event_bus: Any
+) -> _PlayerStreamChannel:
+    channel = _PlayerStreamChannel(device_id=device_id, event_bus=event_bus)
+    _player_stream_channels[device_id] = channel
+    if event_bus is not None:
+        from xiaomusic.events import PLAYER_STATE_CHANGED
+
+        def listener(**kwargs: Any) -> None:
+            if kwargs.get("device_id") == device_id:
+                channel.mark_dirty()
+
+        channel.listener = listener
+        try:
+            event_bus.subscribe(PLAYER_STATE_CHANGED, listener)
+        except Exception:
+            channel.listener = None
+    return channel
+
+
+async def _get_player_stream_channel(device_id: str, event_bus: Any) -> _PlayerStreamChannel:
     async with _player_stream_sub_lock:
-        subscribers = _player_stream_subscribers.get(device_id)
-        if subscribers:
-            for queue in list(subscribers):
-                try:
-                    queue.put_nowait(event_bytes)
-                except Exception:
-                    pass
+        channel = _player_stream_channels.get(device_id)
+        return channel or _create_player_stream_channel(device_id, event_bus)
+
+
+async def _register_player_stream_subscriber(
+    device_id: str, event_bus: Any
+) -> tuple[_PlayerStreamChannel, _PlayerStreamSubscriber]:
+    """Atomically select/create a channel and attach one HTTP subscriber."""
+    async with _player_stream_sub_lock:
+        channel = _player_stream_channels.get(device_id)
+        if channel is None or channel.closed:
+            channel = _create_player_stream_channel(device_id, event_bus)
+        subscriber = _PlayerStreamSubscriber()
+        channel.add(subscriber)
+        return channel, subscriber
+
+
+async def _release_player_stream_subscriber(
+    device_id: str, channel: _PlayerStreamChannel, subscriber: _PlayerStreamSubscriber
+) -> None:
+    should_close = False
+    async with _player_stream_sub_lock:
+        channel.remove(subscriber)
+        if not channel.subscribers:
+            channel.closed = True
+            if _player_stream_channels.get(device_id) is channel:
+                _player_stream_channels.pop(device_id, None)
+            should_close = True
+    if should_close:
+        await channel.close()
 
 
 @router.get("/api/v1/player/stream")
@@ -1098,65 +1363,23 @@ async def api_v1_player_stream(
             ),
         )
 
-    xiaomusic_obj = _get_xiaomusic()
-    event_bus = getattr(xiaomusic_obj, "event_bus", None)
-
-    q: asyncio.Queue[bytes] = asyncio.Queue()
-
-    async with _player_stream_sub_lock:
-        if device_id not in _player_stream_subscribers:
-            _player_stream_subscribers[device_id] = set()
-        _player_stream_subscribers[device_id].add(q)
-
-    async def _remove_sub(did: str, queue: asyncio.Queue[bytes]):
-        async with _player_stream_sub_lock:
-            subs = _player_stream_subscribers.get(did)
-            if subs and queue in subs:
-                subs.discard(queue)
-            if not subs:
-                _player_stream_subscribers.pop(did, None)
-
-    async def on_state_changed(**kwargs):
-        event_device_id = kwargs.get("device_id")
-        if event_device_id != device_id:
-            return
-        await _push_player_state_event(device_id)
-
-    if event_bus is not None:
-        from xiaomusic.events import PLAYER_STATE_CHANGED
-
-        try:
-            event_bus.subscribe(PLAYER_STATE_CHANGED, on_state_changed)
-        except Exception:
-            pass
-
-    async def stream_closed():
-        if event_bus is not None:
-            from xiaomusic.events import PLAYER_STATE_CHANGED
-
-            try:
-                event_bus.unsubscribe(PLAYER_STATE_CHANGED, on_state_changed)
-            except Exception:
-                pass
-        await _remove_sub(device_id, q)
+    event_bus = getattr(xm, "event_bus", None)
 
     async def event_generator():
+        channel: _PlayerStreamChannel | None = None
+        subscriber: _PlayerStreamSubscriber | None = None
         try:
-            facade = _get_facade()
-            snapshot = await facade.build_player_state_snapshot(device_id)
-            revision = snapshot.get("revision", 0)
-            payload = json.dumps(snapshot, ensure_ascii=False)
-            initial = (
-                f"retry: 5000\n\n"
-                f"event: player_state\n"
-                f"id: {revision}\n"
-                f"data: {payload}\n\n"
+            channel, subscriber = await _register_player_stream_subscriber(
+                device_id, event_bus
             )
-            yield initial.encode("utf-8")
-
+            initial = await channel.initial_for(subscriber)
+            yield (
+                b"retry: 5000\n\n"
+                + _encode_player_state_event(initial)
+            )
             last_heartbeat_ts = asyncio.get_event_loop().time()
             heartbeat_interval = 15.0
-
+            last_snapshot = initial
             while True:
                 try:
                     timeout = max(
@@ -1164,20 +1387,26 @@ async def api_v1_player_stream(
                         heartbeat_interval
                         - (asyncio.get_event_loop().time() - last_heartbeat_ts),
                     )
-                    raw_bytes = await asyncio.wait_for(q.get(), timeout=timeout)
+                    snapshot = await asyncio.wait_for(subscriber.queue.get(), timeout)
+                    if not _snapshot_is_newer(snapshot, last_snapshot):
+                        continue
+                    last_snapshot = snapshot
                     last_heartbeat_ts = asyncio.get_event_loop().time()
-                    yield raw_bytes
+                    yield _encode_player_state_event(snapshot)
                 except asyncio.TimeoutError:
                     now = asyncio.get_event_loop().time()
                     if now - last_heartbeat_ts >= heartbeat_interval:
-                        yield b": heartbeat\n\n"
+                        yield SSE_HEARTBEAT
                         last_heartbeat_ts = now
                 except asyncio.CancelledError:
                     break
                 except Exception:
                     break
         finally:
-            await stream_closed()
+            if channel is not None and subscriber is not None:
+                await _release_player_stream_subscriber(
+                    device_id, channel, subscriber
+                )
 
     return StreamingResponse(
         event_generator(),

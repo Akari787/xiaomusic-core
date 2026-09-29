@@ -72,6 +72,7 @@ export type TransportState = "idle" | "starting" | "switching" | "playing" | "pa
 export interface PlayerStateData {
   // 新规范字段
   device_id: string;
+  server_instance_id?: string;
   revision: number;
   play_session_id: string;
   transport_state: TransportState;
