@@ -1,11 +1,11 @@
-"""T04-C3b1: check_replay RESUME arbiter integration tests.
+"""T04-C3b1: check_replay REPLAY arbiter integration tests.
 
-Tests A-J validate the new check_replay → RESUME submit → executor flow:
+Tests A-J validate the new check_replay → REPLAY submit → executor flow:
 - Condition semantic: no-replay → False + zero writes
 - continue_play=True → False + zero writes
-- Need replay → submit RESUME (C3a pattern), return True, c+1
+- Need replay → submit REPLAY (C3a pattern), return True, c+1
 - Executor guards sid+accepted token strict current before _play
-- RESUME is normal latest intent; STOP/PAUSE barrier ordering
+- REPLAY is normal latest intent; STOP/PAUSE barrier ordering
 - Stale rejection after STOP / closed arbiter / executor exception
 
 Deterministic coordination via asyncio.Event + wait_for.
@@ -226,6 +226,13 @@ async def test_a_need_replay_blocked_physical_quick_true_c_plus_one():
 
     _stage_runtime(d, PlaybackPhase.PLAYING, "song_a")
     initial_c = d.get_runtime_state().command_generation
+    submitted_kinds = []
+    arbiter = d._get_or_create_arbiter()
+    original_submit = arbiter.submit
+    def _record_submit(kind, payload=None):
+        submitted_kinds.append(kind)
+        return original_submit(kind, payload)
+    arbiter.submit = _record_submit
 
     t0 = time.monotonic()
     result = await d.check_replay()
@@ -234,6 +241,7 @@ async def test_a_need_replay_blocked_physical_quick_true_c_plus_one():
     assert result is True
     assert elapsed_ms < 500
     assert d.get_runtime_state().command_generation == initial_c + 1
+    assert submitted_kinds == [IntentKind.REPLAY]
 
     await asyncio.wait_for(started.wait(), timeout=5.0)
     assert len(play_calls) == 1
@@ -313,14 +321,14 @@ async def test_c_downloading_true_zero_write_no_arbiter():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Test D: rapid RESUME / legacy PLAY latest only
+# Test D: rapid REPLAY / legacy PLAY latest only
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
-async def test_d_rapid_resume_play_latest_only():
-    """Rapid RESUME then PLAY: PLAY is latest, RESUME discarded (normal
-    latest-pending, RESUME is not a barrier). Only PLAY physical runs."""
+async def test_d_rapid_replay_play_latest_only():
+    """Rapid REPLAY then PLAY: PLAY is latest, REPLAY discarded (normal
+    latest-pending, REPLAY is not a barrier). Only PLAY physical runs."""
     d = _make_device()
     play_calls: list = []
     block = asyncio.Event()
@@ -336,10 +344,10 @@ async def test_d_rapid_resume_play_latest_only():
     _stage_runtime(d, PlaybackPhase.PLAYING, "song_d")
     arbiter = d._get_or_create_arbiter()
 
-    # Submit RESUME
+    # Submit REPLAY
     d._accept_command(updated_at=time.time())
 
-    # Submit PLAY — replaces RESUME in pending (latest-wins)
+    # Submit PLAY — replaces REPLAY in pending (latest-wins)
     d._accept_command(updated_at=time.time())
     arbiter.submit(IntentKind.PLAY, payload={
         "mode": "play",
@@ -395,15 +403,15 @@ async def test_e_stop_pending_is_playing_false_rejects():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Test F: RESUME pending → public STOP覆盖 → RESUME未physical, 最终STOPPED
+# Test F: REPLAY pending → public STOP覆盖 → REPLAY未physical, 最终STOPPED
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
-async def test_f_resume_pending_stop_overrides_no_play():
-    """Occupied worker → check_replay submits RESUME into pending →
+async def test_f_replay_pending_stop_overrides_no_play():
+    """Occupied worker → check_replay submits REPLAY into pending →
     public d.stop() replaces it (barrier over regular) → release →
-    STOP executes → RESUME never physically plays."""
+    STOP executes → REPLAY never physically plays."""
     d = _make_device()
 
     play_called = False
@@ -437,19 +445,19 @@ async def test_f_resume_pending_stop_overrides_no_play():
     arbiter.submit(IntentKind.PLAY, payload={"mode": "play", "name": "x", "search": ""})
     await asyncio.wait_for(active_started.wait(), timeout=5.0)
 
-    # check_replay submits RESUME → pending (active is PLAY, not barrier)
+    # check_replay submits REPLAY → pending (active is PLAY, not barrier)
     result = await d.check_replay()
     assert result is True
     assert arbiter.pending_sequence is not None
 
-    # public STOP → replaces pending RESUME (STOP is barrier)
+    # public STOP → replaces pending REPLAY (STOP is barrier)
     await d.stop(arg1="notts")
 
     # Release active blocker → PLAY finishes → worker picks STOP
     block_active.set()
     await asyncio.wait_for(stop_physical_done.wait(), timeout=5.0)
 
-    # RESUME never physically played
+    # REPLAY never physically played
     assert not play_called
     assert d.is_playing is False
 
@@ -457,25 +465,25 @@ async def test_f_resume_pending_stop_overrides_no_play():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Test G: RESUME active不可撤销时 STOP等待，max executor并发1
+# Test G: REPLAY active不可撤销时 STOP等待，max executor并发1
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
-async def test_g_resume_active_stop_waits_max_concurrency_one():
-    """When RESUME physical is blocked, STOP is queued as pending barrier.
-    RESUME finishes, THEN STOP executes. Max concurrency = 1."""
+async def test_g_replay_active_stop_waits_max_concurrency_one():
+    """When REPLAY physical is blocked, STOP is queued as pending barrier.
+    REPLAY finishes, THEN STOP executes. Max concurrency = 1."""
     d = _make_device()
 
-    resume_started = asyncio.Event()
-    block_resume = asyncio.Event()
+    replay_started = asyncio.Event()
+    block_replay = asyncio.Event()
     stop_done = asyncio.Event()
     exec_order: list = []
 
     async def _patched_play(name="", **kwargs):
-        exec_order.append("resume_physical")
-        resume_started.set()
-        await asyncio.wait_for(block_resume.wait(), timeout=5.0)
+        exec_order.append("replay_physical")
+        replay_started.set()
+        await asyncio.wait_for(block_replay.wait(), timeout=5.0)
 
     d._play = _patched_play
 
@@ -487,10 +495,10 @@ async def test_g_resume_active_stop_waits_max_concurrency_one():
 
     _stage_runtime(d, PlaybackPhase.PLAYING, "song_g")
 
-    # Submit RESUME — starts physical (blocked)
+    # Submit REPLAY — starts physical (blocked)
     await d.check_replay()
-    await asyncio.wait_for(resume_started.wait(), timeout=5.0)
-    assert exec_order == ["resume_physical"]
+    await asyncio.wait_for(replay_started.wait(), timeout=5.0)
+    assert exec_order == ["replay_physical"]
 
     # Submit STOP — must wait (barrier→pending slot)
     d._accept_command(updated_at=time.time())
@@ -503,12 +511,12 @@ async def test_g_resume_active_stop_waits_max_concurrency_one():
 
     assert arbiter.pending_sequence is not None
 
-    # Release RESUME
-    block_resume.set()
+    # Release REPLAY
+    block_replay.set()
 
-    # STOP should execute after RESUME
+    # STOP should execute after REPLAY
     await asyncio.wait_for(stop_done.wait(), timeout=5.0)
-    assert exec_order == ["resume_physical", "stop_physical"]
+    assert exec_order == ["replay_physical", "stop_physical"]
 
     await d.close_command_arbiter()
 
@@ -546,7 +554,7 @@ async def test_h_closed_arbiter_zero_write():
 
 @pytest.mark.asyncio
 async def test_i_executor_exception_last_error_worker_continues():
-    """After RESUME executor raises, last_error is set and worker processes
+    """After REPLAY executor raises, last_error is set and worker processes
     subsequent intents normally.  Uses executor wrapper finally for sync."""
     d = _make_device()
 
@@ -558,13 +566,13 @@ async def test_i_executor_exception_last_error_worker_continues():
 
     async def _failing_play(name="", **kwargs):
         error_raised.set()
-        raise RuntimeError("resume_boom")
+        raise RuntimeError("replay_boom")
 
     d._play = _failing_play
 
     _stage_runtime(d, PlaybackPhase.PLAYING, "song_i")
 
-    # Submit RESUME — will fail in executor
+    # Submit REPLAY — will fail in executor
     await d.check_replay()
     await asyncio.wait_for(error_raised.wait(), timeout=5.0)
 
@@ -649,13 +657,13 @@ async def test_j_public_xiaomusic_check_replay_delegates():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Additional: RESUME executor token_mismatch after concurrent command
+# Additional: REPLAY executor token_mismatch after concurrent command
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
-async def test_resume_executor_stale_token_after_concurrent_command():
-    """After check_replay submits RESUME (c+1), if another command bumps c
+async def test_replay_executor_stale_token_after_concurrent_command():
+    """After check_replay submits REPLAY (c+1), if another command bumps c
     before executor runs, the accepted_token is stale → no physical play."""
     d = _make_device()
 
@@ -675,14 +683,14 @@ async def test_resume_executor_stale_token_after_concurrent_command():
 
     result = await d.check_replay()
     assert result is True
-    c_after_resume = d.get_runtime_state().command_generation
+    c_after_replay = d.get_runtime_state().command_generation
 
     # Simulate another command accepting (bumps c again)
     d._accept_command(updated_at=time.time())
     c_after_other = d.get_runtime_state().command_generation
-    assert c_after_other == c_after_resume + 1
+    assert c_after_other == c_after_replay + 1
 
-    # Wait for RESUME executor to run and skip (token mismatch)
+    # Wait for REPLAY executor to run and skip (token mismatch)
     await asyncio.wait_for(executor_done.wait(), timeout=5.0)
     assert not play_called
 
@@ -690,14 +698,16 @@ async def test_resume_executor_stale_token_after_concurrent_command():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Additional: RESUME as normal latest pending replaces previous pending
+# Additional: legacy REPLAY as normal latest pending replaces previous pending
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
-async def test_resume_normal_latest_replaces_pending_regular():
-    """RESUME is a normal intent: it replaces pending regular intents
-    (latest-wins)."""
+async def test_replay_normal_latest_replaces_pending_regular():
+    """CHECK_REPLAY replay replaces pending regular intents (latest-wins).
+
+    User REPLAY is deliberately separate and only replays a PAUSED session.
+    """
     d = _make_device()
     play_calls: list = []
     block = asyncio.Event()
@@ -711,7 +721,7 @@ async def test_resume_normal_latest_replaces_pending_regular():
     arbiter.submit(IntentKind.PLAY, payload={"mode": "play", "name": "song1", "search": ""})
 
     d._accept_command(updated_at=time.time())
-    arbiter.submit(IntentKind.RESUME, payload={
+    arbiter.submit(IntentKind.REPLAY, payload={
         "sid": d._play_session_id,
         "accepted_token": LifecycleToken(
             queue_session_id=d.get_runtime_state().queue_session_id,
@@ -728,14 +738,14 @@ async def test_resume_normal_latest_replaces_pending_regular():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Additional: RESUME pushed to after-barrier by active STOP
+# Additional: REPLAY pushed to after-barrier by active STOP
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
-async def test_resume_after_barrier_when_stop_active():
-    """When STOP is active (barrier), RESUME goes to after_barrier slot.
-    After STOP releases, RESUME runs but token is stale → no physical.
+async def test_replay_after_barrier_when_stop_active():
+    """When STOP is active (barrier), REPLAY goes to after_barrier slot.
+    After STOP releases, REPLAY runs but token is stale → no physical.
     Uses counting executor wrapper (target=2) for sync."""
     d = _make_device()
 
@@ -773,9 +783,9 @@ async def test_resume_after_barrier_when_stop_active():
     assert arbiter.pending_sequence is None
     assert arbiter.after_barrier_sequence is None
 
-    # RESUME → after_barrier
+    # REPLAY → after_barrier
     d._accept_command(updated_at=time.time())
-    arbiter.submit(IntentKind.RESUME, payload={
+    arbiter.submit(IntentKind.REPLAY, payload={
         "sid": sid,
         "accepted_token": LifecycleToken(
             queue_session_id=d.get_runtime_state().queue_session_id,
@@ -787,7 +797,7 @@ async def test_resume_after_barrier_when_stop_active():
     assert arbiter.after_barrier_sequence is not None
     assert arbiter.pending_sequence is None
 
-    # Release STOP → STOP finishes → RESUME from after_barrier runs → token stale → skip
+    # Release STOP → STOP finishes → REPLAY from after_barrier runs → token stale → skip
     block_stop.set()
     await asyncio.wait_for(both_done.wait(), timeout=5.0)
 

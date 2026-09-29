@@ -25,12 +25,12 @@ async def test_api_v1_all_controls_call_facade(monkeypatch):
         async def pause(self, device_id: str, request_id: str | None = None):
             _ = request_id
             called["pause"] = True
-            return {"status": "paused", "device_id": device_id, "transport": "miio", "request_id": "r0", "extra": {}}
+            return {"status": "accepted", "action": "pause", "device_id": device_id, "transport": "miio", "request_id": "r0", "extra": {}}
 
         async def resume(self, device_id: str, request_id: str | None = None):
             _ = request_id
             called["resume"] = True
-            return {"status": "resumed", "device_id": device_id, "transport": "miio", "request_id": "r00", "extra": {}}
+            return {"status": "accepted", "action": "resume", "device_id": device_id, "transport": "miio", "request_id": "r00", "extra": {}}
 
         async def tts(self, device_id: str, text: str, request_id: str | None = None):
             _ = request_id
@@ -44,7 +44,8 @@ async def test_api_v1_all_controls_call_facade(monkeypatch):
             assert device_id == "did-1"
             called["stop"] = True
             return {
-                "status": "stopped",
+                "status": "accepted",
+                "action": "stop",
                 "device_id": device_id,
                 "transport": "miio",
                 "request_id": "r2",
@@ -80,9 +81,24 @@ async def test_api_v1_all_controls_call_facade(monkeypatch):
     probe_out = await v1.api_v1_control_probe(ControlRequest(device_id="did-1"))
 
     assert pause_out["code"] == 0
+    assert pause_out["data"]["status"] == "accepted"
+    assert pause_out["data"]["action"] == "pause"
+    assert pause_out["data"]["device_id"] == "did-1"
+    assert pause_out["data"]["transport"] == "miio"
+    assert pause_out["request_id"]
     assert resume_out["code"] == 0
+    assert resume_out["data"]["status"] == "accepted"
+    assert resume_out["data"]["action"] == "resume"
+    assert resume_out["data"]["device_id"] == "did-1"
+    assert resume_out["data"]["transport"] == "miio"
+    assert resume_out["request_id"]
     assert tts_out["code"] == 0
     assert stop_out["code"] == 0
+    assert stop_out["data"]["status"] == "accepted"
+    assert stop_out["data"]["action"] == "stop"
+    assert stop_out["data"]["device_id"] == "did-1"
+    assert stop_out["data"]["transport"] == "miio"
+    assert stop_out["request_id"]
     assert volume_out["code"] == 0
     assert probe_out["code"] == 0
     assert all(called.values())

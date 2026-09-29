@@ -150,11 +150,7 @@ class PlaybackCoordinator:
         return await self._dispatch_action("pause", device_id)
 
     async def resume(self, device_id: str) -> dict:
-        # compatibility_layer: current transports expose pause only.
-        # Xiaomi device pause command behaves as pause/resume toggle on supported models.
-        return await self._dispatch_action(
-            "resume", device_id, transport_action="pause"
-        )
+        return await self._dispatch_action("resume", device_id)
 
     async def tts(self, device_id: str, text: str) -> dict:
         return await self._dispatch_action("tts", device_id, text=text)

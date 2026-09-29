@@ -37,6 +37,10 @@ async def _noop_return_false(*args, **kwargs):
     return False
 
 
+async def _noop_return_true_list():
+    return [True]
+
+
 async def _noop_return_zero():
     return 0.0
 
@@ -114,7 +118,7 @@ def _make_device() -> XiaoMusicDevice:
     d._manual_nav_target = None
     d._command_arbiter = None  # T04-B
     d.do_tts = _noop
-    d.group_force_stop_xiaoai = _noop
+    d.group_force_stop_xiaoai = lambda: _noop_return_true_list()
     d.cancel_group_next_timer = _noop
     d._invalidate_manual_navigation = lambda reason: None
     d.auto_add_song = lambda cur, sec: _noop()
@@ -574,15 +578,25 @@ async def test_G_failed_stop_preserves_failure():
     d._degraded = False
     d._degraded_notified = False
 
+    stopping = asyncio.Event()
     stopped = asyncio.Event()
+    published_phases = []
 
     class _Bus:
         def publish(self, event, **kwargs):
-            stopped.set()
+            published_phases.append(d.get_runtime_state().phase)
+            if d.get_runtime_state().phase == PlaybackPhase.STOPPING:
+                stopping.set()
+            elif d.get_runtime_state().phase == PlaybackPhase.STOPPED:
+                stopped.set()
 
     d.event_bus = _Bus()
     try:
         assert await d.stop(arg1="notts") is True
+        await asyncio.wait_for(stopping.wait(), timeout=5.0)
+        assert d.get_runtime_state().phase == PlaybackPhase.STOPPING
+
+        # Await the physical executor's completion event, not merely acceptance.
         await asyncio.wait_for(stopped.wait(), timeout=5.0)
 
         s = d.get_runtime_state()
@@ -591,6 +605,7 @@ async def test_G_failed_stop_preserves_failure():
         assert s.failure.count == 2
         assert s.failure.reason == "some_err"
         assert s.expected_end_at is None
+        assert published_phases == [PlaybackPhase.STOPPING, PlaybackPhase.STOPPED]
     finally:
         await d.close_command_arbiter()
 

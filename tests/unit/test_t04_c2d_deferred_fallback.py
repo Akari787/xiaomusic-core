@@ -125,7 +125,7 @@ async def _noop_coro():
 
 
 async def _noop_list(*args, **kwargs):
-    return [None]
+    return [True]
 
 
 async def _noop_return_false(*args, **kwargs):

@@ -87,9 +87,9 @@ describe("ApiV1DebugPage interaction", () => {
     mocked.play.mockResolvedValue(
       ok({ status: "playing", device_id: "did-1", source_plugin: "site_media", transport: "mina" }),
     );
-    mocked.stop.mockResolvedValue(ok({ status: "stopped", device_id: "did-1", transport: "miio" }));
-    mocked.pause.mockResolvedValue(ok({ status: "paused", device_id: "did-1", transport: "miio" }));
-    mocked.resume.mockResolvedValue(ok({ status: "resumed", device_id: "did-1", transport: "miio" }));
+    mocked.stop.mockResolvedValue(ok({ status: "accepted", action: "stop", device_id: "did-1", transport: "miio" }));
+    mocked.pause.mockResolvedValue(ok({ status: "accepted", action: "pause", device_id: "did-1", transport: "miio" }));
+    mocked.resume.mockResolvedValue(ok({ status: "accepted", action: "resume", device_id: "did-1", transport: "miio" }));
     mocked.tts.mockResolvedValue(ok({ status: "ok", device_id: "did-1", transport: "miio" }));
     mocked.setVolume.mockResolvedValue(ok({ status: "ok", device_id: "did-1", transport: "miio" }));
     mocked.probe.mockResolvedValue(ok({ status: "ok", device_id: "did-1", transport: "miio", reachable: true }));

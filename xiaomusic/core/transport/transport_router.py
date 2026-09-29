@@ -6,10 +6,12 @@ from typing import Any
 from xiaomusic.core.errors.transport_errors import TransportError
 from xiaomusic.core.models.device import DeviceProfile
 from xiaomusic.core.models.media import PreparedStream
-from xiaomusic.core.models.transport import TransportCapabilityMatrix, TransportDispatchResult
+from xiaomusic.core.models.transport import (
+    TransportCapabilityMatrix,
+    TransportDispatchResult,
+)
 from xiaomusic.core.transport.transport import Transport
 from xiaomusic.core.transport.transport_policy import TransportPolicy
-
 
 LOG = logging.getLogger("xiaomusic.core.transport_router")
 
@@ -136,6 +138,8 @@ class TransportRouter:
             return await transport.next(device_id)
         if action == "pause":
             return await transport.pause(device_id)
+        if action == "resume":
+            return await transport.resume(device_id)
         if action == "tts":
             if text is None:
                 raise TransportError("text is required for tts")

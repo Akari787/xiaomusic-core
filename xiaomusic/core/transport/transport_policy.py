@@ -13,6 +13,7 @@ class TransportPolicy:
             "volume": ["miio", "mina"],
             "stop": ["miio", "mina"],
             "pause": ["miio", "mina"],
+            "resume": ["miio", "mina"],
             "probe": ["miio", "mina"],
         }
 

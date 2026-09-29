@@ -88,6 +88,7 @@ class DeviceRegistry:
             volume=["miio", "mina"],
             stop=["miio", "mina"],
             pause=["miio", "mina"],
+            resume=["miio", "mina"],
             probe=["miio", "mina"],
         )
         self.register_device(profile, reachability, capability)

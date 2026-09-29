@@ -35,7 +35,7 @@ Coordinator 不接收完整 `XiaoMusic` runtime。
 
 ### 控制方法
 
-`stop`、`previous`、`next`、`pause`、`resume`、`tts`、`set_volume`、`probe` 统一经 `TransportRouter`。`resume` 当前通过 transport 的 pause toggle 兼容实现。
+`stop`、`previous`、`next`、`pause`、`resume`、`tts`、`set_volume`、`probe` 统一经 `TransportRouter`。`resume` 是独立的控制动作；底层 Mina transport 可以继续使用 `player_pause` 作为 toggle 实现，但不得与 API/Facade 的 pause 语义混淆。
 
 ## 4. 状态投影边界
 

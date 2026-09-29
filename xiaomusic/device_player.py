@@ -111,6 +111,7 @@ class XiaoMusicDevice:
         self._start_time = 0
         self._duration = 0
         self._paused_time = 0
+        self._paused_position = 0.0
         self._play_failed_cnt = 0
         self._play_fail_first_ts = 0.0
         self._play_fail_last_reason = ""
@@ -273,16 +274,39 @@ class XiaoMusicDevice:
         """Return the current immutable runtime state snapshot."""
         return self._runtime_state
 
-    def _set_runtime_state(self, new_state: PlaybackRuntimeState) -> PlaybackRuntimeState:
-        """Replace runtime state with a new instance (internal use only).
+    @staticmethod
+    def _public_runtime_key(state: PlaybackRuntimeState) -> tuple:
+        """Return the externally visible runtime identity used for events.
 
-        Raises TypeError if new_state is not a PlaybackRuntimeState.
+        DISPATCHING and CONFIRMING both project to ``starting``. Lifecycle
+        counters and timestamps are deliberately excluded.
         """
+        starting = {
+            PlaybackPhase.RESOLVING,
+            PlaybackPhase.DISPATCHING,
+            PlaybackPhase.CONFIRMING,
+        }
+        phase = "starting" if state.phase in starting else state.phase.value
+        return (phase, state.desired_track, state.confirmed_track, state.failure)
+
+    def _publish_state_changed(self) -> None:
+        event_bus = getattr(self, "event_bus", None)
+        if event_bus:
+            event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.did)
+
+    def _set_runtime_state(self, new_state: PlaybackRuntimeState) -> PlaybackRuntimeState:
+        """Replace runtime state and publish one semantic public transition."""
         if not isinstance(new_state, PlaybackRuntimeState):
             raise TypeError(
                 f"_set_runtime_state requires PlaybackRuntimeState, got {type(new_state).__name__}"
             )
+        old_state = getattr(self, "_runtime_state", None)
         self._runtime_state = new_state
+        if (
+            isinstance(old_state, PlaybackRuntimeState)
+            and self._public_runtime_key(old_state) != self._public_runtime_key(new_state)
+        ):
+            self._publish_state_changed()
         return new_state
 
     # ── lifecycle counter wrappers (delegate to pure runtime_state) ───
@@ -428,6 +452,14 @@ class XiaoMusicDevice:
         return False
 
     # ── pause / stop runtime wrappers ──────────────────────────────────
+
+    def _resume_runtime(self, updated_at: float) -> PlaybackRuntimeState:
+        """Wrapper for runtime_state.resume: PAUSED → PLAYING."""
+        from xiaomusic.playback.runtime_state import resume as _resume_transition
+
+        return self._set_runtime_state(
+            _resume_transition(self.get_runtime_state(), updated_at=updated_at)
+        )
 
     def _pause_runtime(self, updated_at: float) -> PlaybackRuntimeState:
         """Wrapper for runtime_state.pause: PLAYING → PAUSED.
@@ -658,7 +690,10 @@ class XiaoMusicDevice:
         自动结束判定仅由 set_next_music_timeout 的 expiry gate 负责。
         """
         duration = self._duration
-        if not self.is_playing:
+        phase = self.get_runtime_state().phase
+        if phase == PlaybackPhase.PAUSED:
+            return self._paused_position, duration
+        if phase != PlaybackPhase.PLAYING:
             return 0, duration
         # Defense: if _start_time was never set (self-cancellation race),
         # return 0 offset instead of epoch-based value.
@@ -709,18 +744,30 @@ class XiaoMusicDevice:
         return volume
 
     def _remember_volume_from_status(self, info: dict | None) -> int:
+        """Read a status volume without committing runtime cache."""
         if not isinstance(info, dict):
             return self._last_volume
-        return self._remember_volume(info.get("volume"), self._last_volume)
+        return self._normalize_volume_value(info.get("volume"), self._last_volume)
 
     async def _refresh_runtime_volume(self, *, context: str = "") -> int:
+        old = self._last_volume
         try:
             volume = await self.get_volume()
         except Exception as exc:
             self.log.warning("refresh_runtime_volume failed ctx=%s err=%s", context, exc)
             return self._last_volume
         self.log.info("refresh_runtime_volume ctx=%s volume=%d", context or "-", volume)
-        return self._remember_volume(volume)
+        value = self._remember_volume(volume)
+        if value != old:
+            self._publish_state_changed()
+        return value
+
+    def _set_duration(self, value: float) -> float:
+        old = float(getattr(self, "_duration", 0) or 0)
+        self._duration = max(float(value or 0), 0.0)
+        if self._duration != old:
+            self._publish_state_changed()
+        return self._duration
 
     def _log_measure(self, step_name: str, *, reset: bool = False):
         now = time.time()
@@ -770,7 +817,7 @@ class XiaoMusicDevice:
                         return
                     d = self._extract_duration_seconds(info)
                     if d > 0.1:
-                        self._duration = d
+                        self._set_duration(d)
                         # If original duration probe failed at play start, timer was not set.
                         # Rebuild a next-track timer once duration becomes known.
                         cur_offset, _ = self.get_offset_duration()
@@ -1175,6 +1222,8 @@ class XiaoMusicDevice:
         - STOP  → _execute_stop_intent
         - PAUSE → _execute_pause_intent
         - PLAY  → _execute_play_intent
+        - RESUME → paused-session toggle/resume
+        - REPLAY → legacy check_replay replay
         - NEXT / PREVIOUS → manual navigation dispatch
 
         Exceptions propagate to arbiter.last_error; no fake completion.
@@ -1198,6 +1247,9 @@ class XiaoMusicDevice:
             return
         if intent.kind == IntentKind.RESUME:
             await self._execute_resume_intent(intent)
+            return
+        if intent.kind == IntentKind.REPLAY:
+            await self._execute_replay_intent(intent)
             return
         if intent.kind not in (IntentKind.NEXT, IntentKind.PREVIOUS):
             return
@@ -1241,6 +1293,48 @@ class XiaoMusicDevice:
             command_already_accepted=True,
         )
 
+    @staticmethod
+    def _physical_result_succeeded(result) -> bool:
+        if isinstance(result, bool):
+            return result
+        if result is None:
+            return False
+        if isinstance(result, list):
+            return bool(result) and all(
+                XiaoMusicDevice._physical_result_succeeded(item) for item in result
+            )
+        if isinstance(result, dict):
+            accepted = result.get("accepted")
+            if isinstance(accepted, bool):
+                return accepted
+            if "ret" in result:
+                ret = result["ret"]
+                if isinstance(ret, bool):
+                    return ret
+                if isinstance(ret, (int, float)):
+                    return ret == 0
+                return False
+            if "code" in result:
+                if result["code"] != 0:
+                    return False
+                data = result.get("data")
+                if isinstance(data, dict) and "code" in data:
+                    return data["code"] == 0
+                return True
+        return False
+
+    def _report_executor_failure(
+        self, *, reason: str, sid: int, token: LifecycleToken, barrier: bool = False
+    ) -> None:
+        if sid != self._play_session_id:
+            return
+        if self._is_barrier_stale(sid, token) if barrier else self._is_lifecycle_token_stale(token):
+            return
+        try:
+            self._report_runtime_failure(reason=reason, updated_at=time.time())
+        except TransitionError:
+            self.log.info("executor_failure_ignored phase=%s reason=%s", self.get_runtime_state().phase.value, reason)
+
     async def _execute_stop_intent(self, payload: dict) -> None:
         """Physical stop work. Only called by arbiter executor.
 
@@ -1271,15 +1365,24 @@ class XiaoMusicDevice:
             return
 
         # 强制停止组内所有设备
-        await self.group_force_stop_xiaoai()
+        try:
+            results = await self.group_force_stop_xiaoai()
+            if not self._physical_result_succeeded(results):
+                self._report_executor_failure(
+                    reason="stop_not_confirmed", sid=sid, token=token, barrier=True
+                )
+                return
+        except Exception:
+            self._report_executor_failure(
+                reason="stop_not_confirmed", sid=sid, token=token, barrier=True
+            )
+            raise
         if self._is_barrier_stale(sid, token):
             return
 
-        # Only current: complete stop → STOPPED, then event
+        # Only current: complete stop → STOPPED; the runtime boundary emits it.
         self._complete_runtime_stop(updated_at=time.time())
         self.log.info("stop now")
-        if self.event_bus:
-            self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.did)
 
     async def _execute_pause_intent(self, payload: dict) -> None:
         """Physical pause work. Only called by arbiter executor.
@@ -1300,13 +1403,22 @@ class XiaoMusicDevice:
         if self._is_barrier_stale(sid, token):
             return
 
-        await self.group_force_stop_xiaoai()
+        try:
+            results = await self.group_pause_xiaoai()
+            if not self._physical_result_succeeded(results):
+                self._report_executor_failure(
+                    reason="pause_not_confirmed", sid=sid, token=token, barrier=True
+                )
+                return
+        except Exception:
+            self._report_executor_failure(
+                reason="pause_not_confirmed", sid=sid, token=token, barrier=True
+            )
+            raise
         if self._is_barrier_stale(sid, token):
             return
 
         self.log.info("pause now")
-        if self.event_bus:
-            self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.did)
 
     async def _execute_play_intent(self, payload: dict) -> None:
         """Physical play work. Only called by arbiter executor.
@@ -1621,12 +1733,28 @@ class XiaoMusicDevice:
             )
             await self._play_next(command_already_accepted=True)
 
+    async def _execute_replay_intent(self, intent) -> None:
+        """Execute legacy check_replay by replaying the current track."""
+        payload = intent.payload or {}
+        sid = payload.get("sid")
+        accepted_token = payload.get("accepted_token")
+        if sid != self._play_session_id or accepted_token is None:
+            return
+        current = self.get_runtime_state()
+        if (
+            current.queue_session_id != accepted_token.queue_session_id
+            or current.command_generation != accepted_token.command_generation
+            or current.track_attempt_id != accepted_token.track_attempt_id
+        ):
+            return
+        await self._play(command_already_accepted=True)
+
     async def _execute_resume_intent(self, intent) -> None:
-        """Execute RESUME: guard accepted_token strict current, then _play.
+        """Execute RESUME through the device pause toggle, never by replaying.
 
         Only physical work happens here — single concurrency per arbiter.
-        sid + accepted token must be strict current before calling
-        ``_play(command_already_accepted=True)``.
+        sid + accepted token must be strict current before calling the
+        physical resume toggle; this path does not replay through ``_play``.
 
         RESUME is a normal latest intent: it can replace pending regular
         intents and can be replaced by PLAY/NEXT/external.  STOP/PAUSE
@@ -1674,11 +1802,48 @@ class XiaoMusicDevice:
             )
             return
 
-        self.log.info(
-            "resume_executor_dispatch seq=%d",
-            intent.sequence,
+        if current.phase != PlaybackPhase.PAUSED:
+            return
+
+        self.log.info("resume_executor_dispatch seq=%d", intent.sequence)
+        try:
+            results = await self.group_resume_xiaoai()
+            if not self._physical_result_succeeded(results):
+                self._report_executor_failure(
+                    reason="resume_not_confirmed", sid=sid, token=accepted_token
+                )
+                return
+        except Exception:
+            self._report_executor_failure(
+                reason="resume_not_confirmed", sid=sid, token=accepted_token
+            )
+            raise
+
+        # A STOP/PLAY or a winning PAUSE may have arrived during device I/O.
+        # Never commit legacy progress, PLAYING, or a timer for a stale resume.
+        current = self.get_runtime_state()
+        if (
+            sid != self._play_session_id
+            or self._is_lifecycle_token_stale(accepted_token)
+            or current.phase != PlaybackPhase.PAUSED
+        ):
+            return
+
+        paused_for = max(
+            0.0, time.time() - getattr(self, "_pause_started_at", time.time())
         )
-        await self._play(command_already_accepted=True)
+        self._paused_time += paused_for
+        self.is_playing = True
+        self._resume_runtime(updated_at=time.time())
+        offset, duration = self.get_offset_duration()
+        remaining = duration - offset + float(getattr(self.config, "delay_sec", 0) or 0)
+        if remaining > 0.1:
+            await self.set_next_music_timeout(remaining, token=accepted_token)
+            if (
+                sid != self._play_session_id
+                or self._is_lifecycle_token_stale(accepted_token)
+            ):
+                await self.cancel_next_timer()
 
     async def close_command_arbiter(self) -> None:
         """Close all Device playback tasks, then the independent arbiter worker."""
@@ -2172,14 +2337,28 @@ class XiaoMusicDevice:
             )
             return False
         self._log_measure("before_group_force_stop_xiaoai")
-        if navigation_generation is None:
-            stop_task = await self._execute_group_stop(fast_stop=fast_stop, sid=sid)
-        else:
-            stop_task = await self._execute_group_stop(
-                fast_stop=fast_stop,
-                sid=sid,
-                force_sync=True,
-            )
+        try:
+            if navigation_generation is None:
+                stop_task = await self._execute_group_stop(fast_stop=fast_stop, sid=sid)
+            else:
+                stop_task = await self._execute_group_stop(
+                    fast_stop=fast_stop,
+                    sid=sid,
+                    force_sync=True,
+                )
+        except Exception:
+            try:
+                self._report_runtime_failure(
+                    reason="preplay_stop_failed", updated_at=time.time()
+                )
+            except TransitionError:
+                self.log.info(
+                    "preplay_stop_failed phase already advanced name=%s phase=%s",
+                    name,
+                    self.get_runtime_state().phase.value,
+                )
+            self.log.exception("preplay_stop_failed name=%s", name)
+            return False
         self._log_measure("after_group_force_stop_xiaoai")
         if not self._manual_navigation_is_current(navigation_generation):
             self.log.info(
@@ -2583,14 +2762,11 @@ class XiaoMusicDevice:
         if not _is_current():
             return
 
-        if self.event_bus:
-            self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.did)
-
         sec = await self.xiaomusic.music_library.get_music_duration(name)
         if not _is_current():
             return
         # 存储真实歌曲时长
-        self._duration = sec
+        self._set_duration(sec)
         await self.xiaomusic.analytics.send_play_event(name, sec, self.hardware)
         if not _is_current():
             return
@@ -2861,7 +3037,14 @@ class XiaoMusicDevice:
                     return
                 if self._is_lifecycle_token_stale(token):
                     return
-            # Fallback failed or not jellyfin: stay NOT_STARTED, no next/retry.
+            # Two explicit negative probes are authoritative for this attempt.
+            # Preserve lifecycle counters and the completion timer, but expose the
+            # failed start through the same runtime commit boundary.
+            if self.get_runtime_state().phase == PlaybackPhase.CONFIRMING:
+                self._report_runtime_failure(
+                    reason="play_start_not_confirmed",
+                    updated_at=_now(),
+                )
             return
 
     async def _background_confirm_playback_started(
@@ -3132,26 +3315,49 @@ class XiaoMusicDevice:
         self.log.info(f"do_tts ok. cur_music:{self.get_cur_music()}")
         await self.check_replay()
 
+    async def pause_xiaoai(self, device_id):
+        if not await self.get_if_xiaoai_is_playing(device_id):
+            return True
+        ret = await self.auth_manager.mina_call(
+            "player_pause", device_id, retry=1, ctx="pause_xiaoai"
+        )
+        return self._physical_result_succeeded(ret)
+
+    async def resume_xiaoai(self, device_id):
+        if await self.get_if_xiaoai_is_playing(device_id):
+            return True
+        ret = await self.auth_manager.mina_call(
+            "player_pause", device_id, retry=1, ctx="resume_xiaoai"
+        )
+        return self._physical_result_succeeded(ret)
+
+    async def group_pause_xiaoai(self):
+        devices = self.xiaomusic.device_manager.get_group_device_id_list(self.group_name)
+        return await asyncio.gather(*(self.pause_xiaoai(did) for did in devices))
+
+    async def group_resume_xiaoai(self):
+        devices = self.xiaomusic.device_manager.get_group_device_id_list(self.group_name)
+        return await asyncio.gather(*(self.resume_xiaoai(did) for did in devices))
+
     async def force_stop_xiaoai(self, device_id, *, fast: bool = False):
-        """强制停止小爱播放"""
-        try:
-            if fast:
-                ret = await self.auth_manager.mina_call(
-                    "player_stop", device_id, retry=1, ctx="force_stop_xiaoai_fast"
-                )
-                self.log.info(
-                    f"force_stop_xiaoai_fast player_stop device_id:{device_id} ret:{ret}"
-                )
-                return ret
+        """Stop one device and return an explicit physical success boolean."""
+        if fast:
             ret = await self.auth_manager.mina_call(
-                "player_pause", device_id, retry=1, ctx="force_stop_xiaoai"
+                "player_stop", device_id, retry=1, ctx="force_stop_xiaoai_fast"
             )
             self.log.info(
-                f"force_stop_xiaoai player_pause device_id:{device_id} ret:{ret}"
+                f"force_stop_xiaoai_fast player_stop device_id:{device_id} ret:{ret}"
             )
-            await self.stop_if_xiaoai_is_playing(device_id)
-        except Exception as e:
-            self.log.warning(f"Execption {e}")
+            return self._physical_result_succeeded(ret)
+        ret = await self.auth_manager.mina_call(
+            "player_pause", device_id, retry=1, ctx="force_stop_xiaoai"
+        )
+        self.log.info(
+            f"force_stop_xiaoai player_pause device_id:{device_id} ret:{ret}"
+        )
+        if not self._physical_result_succeeded(ret):
+            return False
+        return await self.stop_if_xiaoai_is_playing(device_id)
 
     async def get_if_xiaoai_is_playing(self, device_id=None):
         """检查小爱是否正在播放"""
@@ -3179,16 +3385,18 @@ class XiaoMusicDevice:
             self.log.info(
                 f"stop_if_xiaoai_is_playing player_stop device_id:{device_id} enable_force_stop:{self.config.enable_force_stop} ret:{ret}"
             )
-            return
+            return self._physical_result_succeeded(ret)
         is_playing = await self.get_if_xiaoai_is_playing(device_id)
-        if is_playing:
-            # stop it
-            ret = await self.auth_manager.mina_call(
-                "player_stop", device_id, retry=1, ctx="stop_if_xiaoai_is_playing"
-            )
-            self.log.info(
-                f"stop_if_xiaoai_is_playing player_stop device_id:{device_id} enable_force_stop:{self.config.enable_force_stop} ret:{ret}"
-            )
+        if not is_playing:
+            return True
+        # stop it
+        ret = await self.auth_manager.mina_call(
+            "player_stop", device_id, retry=1, ctx="stop_if_xiaoai_is_playing"
+        )
+        self.log.info(
+            f"stop_if_xiaoai_is_playing player_stop device_id:{device_id} enable_force_stop:{self.config.enable_force_stop} ret:{ret}"
+        )
+        return self._physical_result_succeeded(ret)
 
     def isdownloading(self):
         """检查是否正在下载"""
@@ -3289,12 +3497,12 @@ class XiaoMusicDevice:
         self.xiaomusic.last_download_result = asdict(res)
 
     async def check_replay(self):
-        """Check and resume interrupted playback via DeviceCommandArbiter RESUME.
+        """Check and replay interrupted playback via DeviceCommandArbiter REPLAY.
 
         Condition semantic:
         - is_playing=False or isdownloading()→ return False, zero arbiter/lifecycle write
         - continue_play=True → return False, zero write (caller maintains legacy compat)
-        - Need replay: submit RESUME (C3a pattern: expected accepted token, sid in payload),
+        - Need replay: submit REPLAY (C3a pattern: expected accepted token, sid in payload),
           then accept command synchronously (c+1), return True.
 
         Does NOT await physical.  Executor resolves sid+token strict current
@@ -3327,7 +3535,7 @@ class XiaoMusicDevice:
 
         arbiter = self._get_or_create_arbiter()
         try:
-            arbiter.submit(IntentKind.RESUME, payload={
+            arbiter.submit(IntentKind.REPLAY, payload={
                 "sid": self._play_session_id,
                 "accepted_token": expected_accepted_token,
             })
@@ -3338,7 +3546,7 @@ class XiaoMusicDevice:
         # ── Only on successful submit: accept command (bump c by +1) ──
         self._accept_command(updated_at=time.time())
 
-        self.log.info("check_replay_resume_submitted")
+        self.log.info("check_replay_replay_submitted")
         return True
 
     async def add_download_music(self, name):
@@ -3939,9 +4147,7 @@ class XiaoMusicDevice:
         if not _is_current():
             return False
 
-        self._duration = max(float(sec or 0.0), 0.0)
-        if self.event_bus:
-            self.event_bus.publish(PLAYER_STATE_CHANGED, device_id=self.did)
+        self._set_duration(sec)
 
         if self._duration <= 0.1:
             self._start_duration_probe(title, sid, token=token)
@@ -4405,11 +4611,11 @@ class XiaoMusicDevice:
             task.add_done_callback(_consume_retry_done)
 
     async def set_volume(self, volume: int):
-        """设置音量"""
-        volume = self._remember_volume(volume)
+        """设置音量 and publish only after the physical command succeeds."""
+        volume = self._normalize_volume_value(volume, self._last_volume)
         self.log.info(f"set_volume.  did: {self.did} volume: {volume}")
         try:
-            await self.auth_manager.mina_call(
+            ret = await self.auth_manager.mina_call(
                 "player_set_volume",
                 self.device_id,
                 volume,
@@ -4418,10 +4624,18 @@ class XiaoMusicDevice:
             )
         except Exception as e:
             self.log.exception(f"Execption {e}")
+            return False
+        if ret is None or ret is False:
+            return False
+        old = self._last_volume
+        self._last_volume = volume
+        if volume != old:
+            self._publish_state_changed()
+        return True
 
     async def get_volume(self):
-        """获取音量"""
-        volume = 0
+        """Read volume without committing the runtime cache."""
+        fallback = self._last_volume
         try:
             playing_info = await self.auth_manager.mina_call(
                 "player_get_status",
@@ -4431,11 +4645,12 @@ class XiaoMusicDevice:
             )
             self.log.info(f"get_volume. playing_info:{playing_info}")
             volume = json.loads(playing_info.get("data", {}).get("info", "{}")).get(
-                "volume", 0
+                "volume", fallback
             )
         except Exception as e:
             self.log.warning(f"Execption {e}")
-        volume = self._remember_volume(volume)
+            return fallback
+        volume = self._normalize_volume_value(volume, fallback)
         self.log.info("get_volume. volume:%d", volume)
         return volume
 
@@ -4450,7 +4665,6 @@ class XiaoMusicDevice:
             )
             self.log.info(f"get_player_status. playing_info:{playing_info}")
             info = json.loads(playing_info.get("data", {}).get("info", "{}"))
-            self._remember_volume_from_status(info)
             return info
         except Exception as e:
             self.log.warning(f"Execption {e}")
@@ -4528,17 +4742,41 @@ class XiaoMusicDevice:
         state = self.get_runtime_state()
 
         if state.phase == PlaybackPhase.PLAYING:
-            self._pause_runtime(updated_at=time.time())
-        elif state.phase != PlaybackPhase.PAUSED:
+            self._paused_position, _ = self.get_offset_duration()
+            self._pause_started_at = time.time()
+            self._pause_runtime(updated_at=self._pause_started_at)
+        elif state.phase == PlaybackPhase.PAUSED:
+            # A PAUSED pause is normally a strict no-op. If RESUME is queued,
+            # cancel it synchronously; if it is already in device I/O, accept a
+            # PAUSE barrier after it and invalidate the resume token.
+            arbiter = getattr(self, "_command_arbiter", None)
+            from xiaomusic.playback.command_arbiter import IntentKind
+            if arbiter is not None:
+                if getattr(arbiter, "active_kind", None) == IntentKind.RESUME:
+                    self._accept_command(updated_at=time.time())
+                    token = self._capture_lifecycle_token()
+                    arbiter.submit(
+                        IntentKind.PAUSE,
+                        payload={"sid": self._play_session_id, "token": token},
+                    )
+                    return True
+                if (
+                    getattr(arbiter, "pending_kind", None) == IntentKind.RESUME
+                    or getattr(arbiter, "after_barrier_kind", None) == IntentKind.RESUME
+                ):
+                    cancel_pending = getattr(arbiter, "cancel_pending", None)
+                    if callable(cancel_pending):
+                        cancel_pending(IntentKind.RESUME)
+            return True
+        else:
             # STOPPING, IDLE, STOPPED, FAILED, etc.: reject, zero lifecycle writes
             return False
-        # PAUSED: idempotent — accept and submit
 
         self._accept_command(updated_at=time.time())
         self._invalidate_manual_navigation(reason="pause")
         self._last_cmd = "pause"
         self.is_playing = False
-        sid = self._bump_play_session(reason="pause")
+        sid = self._play_session_id
         token = self._capture_lifecycle_token()
 
         # Submit to arbiter — return immediately (no await of physical work)
@@ -4549,6 +4787,35 @@ class XiaoMusicDevice:
             "sid": sid,
             "token": token,
         })
+        return True
+
+    async def resume(self):
+        """Resume only a paused session through the dedicated toggle path."""
+        state = self.get_runtime_state()
+        if state.phase == PlaybackPhase.PLAYING:
+            return True
+        if state.phase != PlaybackPhase.PAUSED:
+            return False
+        from xiaomusic.playback.command_arbiter import IntentKind
+
+        arbiter = self._command_arbiter
+        if arbiter is not None and any(
+            kind == IntentKind.RESUME
+            for kind in (
+                getattr(arbiter, "active_kind", None),
+                getattr(arbiter, "pending_kind", None),
+                getattr(arbiter, "after_barrier_kind", None),
+            )
+        ):
+            return True
+
+        self._accept_command(updated_at=time.time())
+        self._last_cmd = "resume"
+        token = self._capture_lifecycle_token()
+        self._get_or_create_arbiter().submit(
+            IntentKind.RESUME,
+            payload={"sid": self._play_session_id, "accepted_token": token},
+        )
         return True
 
     async def group_force_stop_xiaoai(self, *, fast: bool = False):

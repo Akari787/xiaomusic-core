@@ -8,6 +8,31 @@ from xiaomusic.core.models.media import DeliveryPlan, PlayOptions, PreparedStrea
 from xiaomusic.playback.facade import PlaybackFacade, build_track_id
 
 
+@pytest.mark.asyncio
+async def test_control_facade_returns_accepted_action_contract():
+    class _Core:
+        async def stop(self, did):
+            return {"transport": "miio", "dispatch": type("D", (), {"data": {}})()}
+        async def pause(self, did):
+            return {"transport": "mina", "dispatch": type("D", (), {"data": {}})()}
+        async def resume(self, did):
+            return {"transport": "mina", "dispatch": type("D", (), {"data": {}})()}
+
+    facade = PlaybackFacade(object())
+    facade._core = lambda: _Core()
+    for method, action, transport in (
+        (facade.stop, "stop", "miio"),
+        (facade.pause, "pause", "mina"),
+        (facade.resume, "resume", "mina"),
+    ):
+        out = await method("did-1", request_id="rid-1")
+        assert out["status"] == "accepted"
+        assert out["action"] == action
+        assert out["device_id"] == "did-1"
+        assert out["transport"] == transport
+        assert out["request_id"] == "rid-1"
+
+
 def test_playback_facade_serialize_dataclass() -> None:
     plan = DeliveryPlan(
         primary=PreparedStream(

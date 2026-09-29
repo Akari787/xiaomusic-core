@@ -8,7 +8,7 @@ supported.  All internal state transitions happen on the submitting thread /
 event loop; no locks are needed.
 
 **Barrier semantics**: STOP and PAUSE are barrier kinds. When a barrier is
-pending or active, new regular intents (PLAY/NEXT/PREVIOUS/AUTO_NEXT/RESUME/
+pending or active, new regular intents (PLAY/NEXT/PREVIOUS/AUTO_NEXT/RESUME/REPLAY/
 RETRY) cannot replace it; they are buffered in an ``_after_barrier`` slot
 (latest-wins).  A new barrier always replaces any prior pending barrier and
 clears the after-barrier slot.  After a barrier completes, the worker
@@ -34,6 +34,7 @@ class IntentKind(str, Enum):
     STOP = "stop"
     PAUSE = "pause"
     RESUME = "resume"
+    REPLAY = "replay"
     RETRY = "retry"
 
 
@@ -102,6 +103,7 @@ class DeviceCommandArbiter:
         self._pending: PlaybackIntent | None = None
         self._after_barrier: PlaybackIntent | None = None
         self._active_seq: int | None = None
+        self._active_kind: IntentKind | None = None
         self._active_is_barrier: bool = False
         self._last_error: BaseException | None = None
 
@@ -116,6 +118,34 @@ class DeviceCommandArbiter:
     def active_sequence(self) -> int | None:
         """Sequence number of the currently executing intent, or None."""
         return self._active_seq
+
+    @property
+    def active_kind(self) -> IntentKind | None:
+        """Kind of the currently executing intent, if any."""
+        return self._active_kind
+
+    @property
+    def pending_kind(self) -> IntentKind | None:
+        """Kind of the pending intent, if any."""
+        return self._pending.kind if self._pending is not None else None
+
+    @property
+    def after_barrier_kind(self) -> IntentKind | None:
+        """Kind of the buffered after-barrier intent, if any."""
+        return self._after_barrier.kind if self._after_barrier is not None else None
+
+    def cancel_pending(self, kind: IntentKind) -> bool:
+        """Cancel queued (not active) intents of ``kind`` synchronously."""
+        cancelled = False
+        if self._pending is not None and self._pending.kind == kind:
+            self._pending = None
+            cancelled = True
+        if self._after_barrier is not None and self._after_barrier.kind == kind:
+            self._after_barrier = None
+            cancelled = True
+        if cancelled and self._pending is None and self._after_barrier is None:
+            self._wake.clear()
+        return cancelled
 
     @property
     def pending_sequence(self) -> int | None:
@@ -222,6 +252,7 @@ class DeviceCommandArbiter:
         self._pending = None
         self._after_barrier = None
         self._active_seq = None
+        self._active_kind = None
         self._active_is_barrier = False
         self._wake.set()  # unblock worker if it's waiting
         task = self._worker_task
@@ -257,6 +288,7 @@ class DeviceCommandArbiter:
                 continue
 
             self._active_seq = intent.sequence
+            self._active_kind = intent.kind
             self._active_is_barrier = self._is_barrier(intent.kind)
             try:
                 await self._executor(intent)
@@ -264,6 +296,7 @@ class DeviceCommandArbiter:
                 self._last_error = exc
             finally:
                 self._active_seq = None
+                self._active_kind = None
                 self._active_is_barrier = False
 
             # ── if work remains, ensure wake is set so the loop ─────

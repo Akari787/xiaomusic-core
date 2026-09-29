@@ -49,7 +49,8 @@ def test_v1_routes_still_available_after_wrapper_removal(monkeypatch) -> None:
         async def stop(self, device_id: str, request_id: str | None = None):
             _ = request_id
             return {
-                "status": "stopped",
+                "status": "accepted",
+                "action": "stop",
                 "device_id": device_id,
                 "transport": "mina",
                 "request_id": "rid-stop",

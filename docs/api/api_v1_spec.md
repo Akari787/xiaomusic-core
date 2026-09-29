@@ -821,7 +821,7 @@ v1 通过两个接口暴露播放器权威状态：
 { "device_id": "<device_id>" }
 ```
 
-成功响应必须包含 `data.transport`。成功响应只承诺 stop accepted，不承诺播放器已完成物理停止；调用方须通过状态通道确认 runtime phase/`transport_state == "stopped"`。
+成功响应必须包含 `data.status=accepted`、`data.action=stop` 和 `data.transport`。这只承诺 stop 已被接受，不承诺播放器已完成物理停止；调用方须通过状态通道确认 runtime phase/`transport_state == "stopped"`。
 
 ### 12.4 `POST /api/v1/control/pause`
 
@@ -833,7 +833,7 @@ v1 通过两个接口暴露播放器权威状态：
 { "device_id": "<device_id>" }
 ```
 
-成功响应必须包含 `data.transport`。成功响应不承诺播放器已达到 `paused` 状态，调用方须通过状态通道确认。
+成功响应必须包含 `data.status=accepted`、`data.action=pause` 和 `data.transport`。成功响应不承诺播放器已达到 `paused` 状态，调用方须通过状态通道确认。
 
 ### 12.5 `POST /api/v1/control/resume`
 
@@ -845,7 +845,7 @@ v1 通过两个接口暴露播放器权威状态：
 { "device_id": "<device_id>" }
 ```
 
-成功响应必须包含 `data.transport`。成功响应不承诺播放器已达到 `playing` 状态，调用方须通过状态通道确认。
+成功响应必须包含 `data.status=accepted`、`data.action=resume` 和 `data.transport`。成功响应不承诺播放器已达到 `playing` 状态，调用方须通过状态通道确认。
 
 ### 12.6 `POST /api/v1/control/tts`
 

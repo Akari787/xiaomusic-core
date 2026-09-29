@@ -107,7 +107,7 @@ _LEGAL = {
     PlaybackPhase.CONFIRMING: {PlaybackPhase.PLAYING, PlaybackPhase.SWITCHING, PlaybackPhase.STOPPING, PlaybackPhase.FAILED},
     PlaybackPhase.PLAYING: {PlaybackPhase.PAUSED, PlaybackPhase.SWITCHING, PlaybackPhase.STOPPING, PlaybackPhase.FAILED},
     PlaybackPhase.PAUSED: {PlaybackPhase.PLAYING, PlaybackPhase.SWITCHING, PlaybackPhase.STOPPING, PlaybackPhase.FAILED},
-    PlaybackPhase.STOPPING: {PlaybackPhase.STOPPED, PlaybackPhase.STOPPING},
+    PlaybackPhase.STOPPING: {PlaybackPhase.STOPPED, PlaybackPhase.STOPPING, PlaybackPhase.FAILED},
     PlaybackPhase.STOPPED: {PlaybackPhase.IDLE, PlaybackPhase.RESOLVING},
     PlaybackPhase.FAILED: {PlaybackPhase.IDLE, PlaybackPhase.FAILED, PlaybackPhase.STOPPING},
 }
@@ -399,9 +399,12 @@ def report_failure(
 
     FAILED → FAILED accumulates (count increments, repeated report).
     """
-    if state.phase not in _ACTIVE_ATTEMPT and state.phase != PlaybackPhase.FAILED:
+    if (
+        state.phase not in _ACTIVE_ATTEMPT
+        and state.phase not in {PlaybackPhase.STOPPING, PlaybackPhase.FAILED}
+    ):
         raise TransitionError(
-            f"report_failure requires active or failed phase, got {state.phase.value}"
+            f"report_failure requires active, stopping, or failed phase, got {state.phase.value}"
         )
     prev = state.failure
     new_count = (prev.count + 1) if prev else 1

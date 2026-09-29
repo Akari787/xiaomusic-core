@@ -735,8 +735,9 @@ class PlaybackFacade:
         did = self._validate_device_id(device_id)
         result = await self._core().stop(did)
         return {
-            "status": "stopped",
+            "status": "accepted",
             DEVICE_ID: did,
+            "action": "stop",
             "transport": result["transport"],
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
             "extra": {"dispatch": result["dispatch"].data},
@@ -776,7 +777,8 @@ class PlaybackFacade:
         did = self._validate_device_id(device_id)
         result = await self._core().pause(did)
         return {
-            "status": "paused",
+            "status": "accepted",
+            "action": "pause",
             DEVICE_ID: did,
             "transport": result["transport"],
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
@@ -789,7 +791,8 @@ class PlaybackFacade:
         did = self._validate_device_id(device_id)
         result = await self._core().resume(did)
         return {
-            "status": "resumed",
+            "status": "accepted",
+            "action": "resume",
             DEVICE_ID: did,
             "transport": result["transport"],
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
@@ -1490,6 +1493,7 @@ class PlaybackFacade:
             context_id=cur_playlist,
             current_index=current_index,
             duration_ms=duration_ms,
+            volume=current_volume,
         )
 
         revision = self._compute_revision(did, snapshot_key)
@@ -1581,6 +1585,7 @@ class PlaybackFacade:
         context_id: str,
         current_index: int | None,
         duration_ms: int,
+        volume: int = 0,
     ) -> str:
         """Build a deterministic key that captures discrete externally-visible state.
 
@@ -1598,6 +1603,7 @@ class PlaybackFacade:
                 context_id,
                 current_index,
                 duration_ms,
+                volume,
             ]
         )
 

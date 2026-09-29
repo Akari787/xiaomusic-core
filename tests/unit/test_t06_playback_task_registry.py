@@ -351,7 +351,7 @@ def real_device():
     d._current_index = 0
 
     d.do_tts = lambda *a, **kw: _async_none()
-    d.group_force_stop_xiaoai = lambda *a, **kw: _async_return([])
+    d.group_force_stop_xiaoai = lambda *a, **kw: _async_return([True])
 
     return d
 
@@ -476,7 +476,7 @@ async def test_j_stop_during_fast_stop_no_self_cancel_final_stopped(real_device)
         if kw.get("fast"):
             fast_entered.set()
             await _event_wait(fast_release)
-        return []
+        return [True]
 
     d.group_force_stop_xiaoai = _long_fast_stop
 
