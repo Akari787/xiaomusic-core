@@ -238,12 +238,16 @@ class Config:
     # play_by_music_url -> force Mina play_by_music_url
     # play_by_url -> force Mina play_by_url
     play_url_mode: str = os.getenv("XIAOMUSIC_PLAY_URL_MODE", "auto")
-    # Auto-next stop wait strategy for stop/play overlap experiments.
-    # sync -> wait for player_stop to finish before play
-    # overlap -> fire fast stop in background, optionally wait grace_ms, then play
+    # Auto-next stop policy.  The old overlap/async/background values remain
+    # accepted as legacy aliases, but are executed as bounded synchronous stops
+    # so an old stop can never overtake the next play.
     auto_next_stop_wait_mode: str = os.getenv(
-        "XIAOMUSIC_AUTO_NEXT_STOP_WAIT_MODE", "overlap"
+        "XIAOMUSIC_AUTO_NEXT_STOP_WAIT_MODE", "sync"
     )
+    auto_next_stop_timeout_ms: int = int(
+        os.getenv("XIAOMUSIC_AUTO_NEXT_STOP_TIMEOUT_MS", "30000")
+    )
+    # Deprecated compatibility setting; no longer used as a play barrier.
     auto_next_stop_grace_ms: int = int(
         os.getenv("XIAOMUSIC_AUTO_NEXT_STOP_GRACE_MS", "500")
     )

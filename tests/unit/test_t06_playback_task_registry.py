@@ -480,12 +480,12 @@ async def test_j_stop_during_fast_stop_no_self_cancel_final_stopped(real_device)
 
     d.group_force_stop_xiaoai = _long_fast_stop
 
-    # Create fast stop via real _execute_group_stop (overlap mode)
-    fast_task = await d._execute_group_stop(
-        fast_stop=True, sid=d._play_session_id,
+    # The legacy overlap value is now a bounded synchronous barrier.
+    fast_task = asyncio.create_task(
+        d._execute_group_stop(fast_stop=True, sid=d._play_session_id)
     )
-    assert fast_task is not None
     await _event_wait(fast_entered)
+    assert fast_task.done() is False
 
     # Now stub for the public stop path
     async def _stop_signal(**kw):

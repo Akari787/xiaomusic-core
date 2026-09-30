@@ -28,9 +28,9 @@ from xiaomusic.playback.task_registry import TaskKind
     [
         (False, "sync", "sync"),
         (True, "sync", "sync"),
-        (True, "overlap", "overlap"),
-        (True, "async", "overlap"),
-        (True, "background", "overlap"),
+        (True, "overlap", "sync"),
+        (True, "async", "sync"),
+        (True, "background", "sync"),
         (True, "weird", "sync"),
     ],
 )
@@ -46,6 +46,7 @@ async def test_execute_group_stop_sync_waits_for_completion():
     d.log = logging.getLogger("stop-wait-sync")
     d.config = types.SimpleNamespace(auto_next_stop_wait_mode="sync", auto_next_stop_grace_ms=0)
     d._inflight_fast_stop_tasks = set()
+    d._runtime_state = PlaybackRuntimeState()
 
     state = {"completed": False}
 
@@ -64,10 +65,12 @@ async def test_execute_group_stop_sync_waits_for_completion():
 
 
 @pytest.mark.asyncio
-async def test_execute_group_stop_overlap_returns_before_completion():
+async def test_execute_group_stop_legacy_overlap_waits_for_completion():
     d = XiaoMusicDevice.__new__(XiaoMusicDevice)
     d.log = logging.getLogger("stop-wait-overlap")
-    d.config = types.SimpleNamespace(auto_next_stop_wait_mode="overlap", auto_next_stop_grace_ms=0)
+    d.config = types.SimpleNamespace(
+        auto_next_stop_wait_mode="overlap", auto_next_stop_timeout_ms=1000
+    )
     d._runtime_state = PlaybackRuntimeState()
 
     blocker = asyncio.Event()
@@ -80,16 +83,88 @@ async def test_execute_group_stop_overlap_returns_before_completion():
 
     d.group_force_stop_xiaoai = _group_force_stop_xiaoai
 
-    task = await d._execute_group_stop(fast_stop=True, sid=2)
-
-    assert task is not None
-    assert task.done() is False
+    stop_task = asyncio.create_task(
+        d._execute_group_stop(fast_stop=True, sid=2)
+    )
+    await asyncio.sleep(0)
+    assert stop_task.done() is False
     assert state["completed"] is False
-    assert d._playback_tasks.get_task(TaskKind.FAST_GROUP_STOP) is task
-
+    barrier = d.get_group_stop_barrier_status()
+    assert barrier["state"] == "pending"
+    assert barrier["locked"] is True
+    assert barrier["degraded"] is False
     blocker.set()
-    await asyncio.wait_for(task, timeout=5.0)
-
+    assert await asyncio.wait_for(stop_task, timeout=5.0) is None
     assert state["completed"] is True
-    assert d._playback_tasks.get_task(TaskKind.FAST_GROUP_STOP) is None
-    await d._playback_tasks.close()
+    assert d.get_group_stop_barrier_status() == {
+        "state": "clear",
+        "degraded": False,
+        "locked": False,
+        "pending": False,
+        "task_done": False,
+        "requires_physical_confirmation": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_group_stop_timeout_keeps_cooperative_child_and_barrier():
+    d = XiaoMusicDevice.__new__(XiaoMusicDevice)
+    d.log = logging.getLogger("stop-wait-timeout")
+    d.config = types.SimpleNamespace(
+        auto_next_stop_wait_mode="overlap", auto_next_stop_timeout_ms=10
+    )
+    d._runtime_state = PlaybackRuntimeState()
+    release = asyncio.Event()
+    child_started = asyncio.Event()
+
+    async def _cooperative_slow_stop(*, fast=False):
+        child_started.set()
+        await release.wait()
+        return [fast]
+
+    d.group_force_stop_xiaoai = _cooperative_slow_stop
+
+    stop_call = asyncio.create_task(d._execute_group_stop(fast_stop=True, sid=3))
+    await asyncio.wait_for(child_started.wait(), timeout=5.0)
+    with pytest.raises(asyncio.TimeoutError):
+        await stop_call
+
+    unresolved = d._unresolved_group_stop_task
+    assert unresolved is not None
+    assert unresolved.done() is False
+    assert d.get_group_stop_barrier_status()["state"] == "timeout"
+
+    # A later command remains blocked by the unresolved old stop; it cannot
+    # dispatch a new play while that stop may still reach the device.
+    with pytest.raises(asyncio.TimeoutError):
+        await d._execute_group_stop(fast_stop=True, sid=4)
+
+    assert d.confirm_group_stop_resolved(physical_stopped=False) is False
+    assert d.get_group_stop_barrier_status()["locked"] is True
+    assert d.confirm_group_stop_resolved(physical_stopped=True) is True
+    assert d.get_group_stop_barrier_status()["state"] == "clear"
+    release.set()
+    await asyncio.wait_for(unresolved, timeout=5.0)
+    await asyncio.sleep(0)
+    assert getattr(d, "_unresolved_group_stop_task", None) is None
+    assert d.get_group_stop_barrier_status()["state"] == "clear"
+
+
+@pytest.mark.asyncio
+async def test_nonpositive_stop_timeout_uses_safe_default_not_one_millisecond():
+    d = XiaoMusicDevice.__new__(XiaoMusicDevice)
+    d.log = logging.getLogger("stop-timeout-default")
+    d.config = types.SimpleNamespace(
+        auto_next_stop_wait_mode="sync", auto_next_stop_timeout_ms=0
+    )
+    d._runtime_state = PlaybackRuntimeState()
+    completed = asyncio.Event()
+
+    async def _slow_stop(*, fast=False):
+        await asyncio.sleep(0.02)
+        completed.set()
+        return [True]
+
+    d.group_force_stop_xiaoai = _slow_stop
+    assert await d._execute_group_stop(fast_stop=True, sid=5) is None
+    assert completed.is_set()

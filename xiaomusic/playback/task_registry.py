@@ -25,6 +25,7 @@ class TaskKind(str, Enum):
     ADD_SONG_TIMER = "add_song_timer"
     STOP_TIMER = "stop_timer"
     FAST_GROUP_STOP = "fast_group_stop"
+    PREPLAY_GROUP_STOP = "preplay_group_stop"
 
 
 # ── scope classification ──────────────────────────────────────────────

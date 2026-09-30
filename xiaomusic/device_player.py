@@ -1367,7 +1367,7 @@ class XiaoMusicDevice:
         # 强制停止组内所有设备
         try:
             results = await self.group_force_stop_xiaoai()
-            if not self._physical_result_succeeded(results):
+            if not self._group_stop_result_succeeded(results):
                 self._report_executor_failure(
                     reason="stop_not_confirmed", sid=sid, token=token, barrier=True
                 )
@@ -2176,14 +2176,92 @@ class XiaoMusicDevice:
         return self._play_session_id
 
     def _resolve_fast_stop_wait_mode(self, *, fast_stop: bool) -> str:
-        if not fast_stop:
-            return "sync"
-        mode = str(
-            getattr(self.config, "auto_next_stop_wait_mode", "sync") or "sync"
-        ).strip().lower()
-        if mode in {"overlap", "async", "background"}:
-            return "overlap"
+        """Resolve legacy config values to the safe bounded-stop policy.
+
+        ``overlap`` used to dispatch a background stop and was unsafe: a late
+        stop could terminate the next track.  Keep accepting the old values
+        for config compatibility, but execute them as synchronous bounded
+        stops instead of preserving the old overlap behavior.
+        """
         return "sync"
+
+    @staticmethod
+    def _task_cancel_requested(task) -> bool:
+        cancelling = getattr(task, "cancelling", None)
+        return bool(cancelling()) if callable(cancelling) else False
+
+    @staticmethod
+    def _group_stop_result_succeeded(result) -> bool:
+        # An empty device group is a successful no-op. A non-empty group
+        # still requires every physical stop result to succeed.
+        if result == []:
+            return True
+        return XiaoMusicDevice._physical_result_succeeded(result)
+
+    def _group_stop_task_succeeded(self, task) -> bool:
+        if task.cancelled():
+            return False
+        try:
+            error = task.exception()
+            result = task.result()
+        except (asyncio.CancelledError, Exception):
+            return False
+        return error is None and self._group_stop_result_succeeded(result)
+
+    def _on_group_stop_task_done(self, task) -> None:
+        if getattr(self, "_unresolved_group_stop_task", None) is not task:
+            return
+        if self._group_stop_task_succeeded(task):
+            self._unresolved_group_stop_task = None
+            self._group_stop_barrier_state = "resolved"
+            self._group_stop_barrier_degraded = False
+            self.log.info("group_stop_barrier_resolved")
+        else:
+            self._group_stop_barrier_state = "unresolved"
+            self._group_stop_barrier_degraded = True
+            self.log.error("group_stop_barrier_task_finished_without_physical_success")
+
+    def get_group_stop_barrier_status(self) -> dict[str, object]:
+        """Return diagnostics for a stop barrier that blocks subsequent play."""
+        task = getattr(self, "_unresolved_group_stop_task", None)
+        state = (
+            getattr(self, "_group_stop_barrier_state", "clear")
+            if task is not None
+            else "clear"
+        )
+        return {
+            "state": state,
+            "degraded": bool(
+                task is not None
+                and state in {"timeout", "unresolved"}
+                and getattr(self, "_group_stop_barrier_degraded", False)
+            ),
+            "locked": bool(task is not None),
+            "pending": bool(task is not None and not task.done()),
+            "task_done": bool(task is not None and task.done()),
+            "requires_physical_confirmation": bool(task is not None),
+        }
+
+    def confirm_group_stop_resolved(self, *, physical_stopped: bool) -> bool:
+        """Explicitly release a barrier after physical stopped is confirmed.
+
+        This does not cancel the underlying transport task.  It is the
+        recovery escape hatch for a transport that cannot report completion.
+        """
+        if physical_stopped is not True:
+            self.log.warning(
+                "group_stop_barrier_confirmation_rejected physical_stopped=%r",
+                physical_stopped,
+            )
+            return False
+        task = getattr(self, "_unresolved_group_stop_task", None)
+        if task is None:
+            return True
+        self._unresolved_group_stop_task = None
+        self._group_stop_barrier_state = "confirmed"
+        self._group_stop_barrier_degraded = False
+        self.log.warning("group_stop_barrier_released_by_physical_confirmation")
+        return True
 
     async def _execute_group_stop(
         self,
@@ -2197,27 +2275,83 @@ class XiaoMusicDevice:
             if force_sync
             else self._resolve_fast_stop_wait_mode(fast_stop=fast_stop)
         )
-        grace_ms = max(500, int(getattr(self.config, "auto_next_stop_grace_ms", 500) or 0))
+        configured_timeout_ms = int(
+            getattr(self.config, "auto_next_stop_timeout_ms", 30000) or 0
+        )
+        if configured_timeout_ms <= 0:
+            self.log.warning(
+                "invalid auto_next_stop_timeout_ms=%s; using 30000ms",
+                configured_timeout_ms,
+            )
+            timeout_ms = 30000
+        else:
+            timeout_ms = configured_timeout_ms
+        timeout_sec = timeout_ms / 1000.0
         self.log.info(
-            "group_stop_dispatch session_id=%s fast_stop=%s wait_mode=%s grace_ms=%d",
+            "group_stop_dispatch session_id=%s fast_stop=%s wait_mode=%s timeout_ms=%d",
             sid,
             fast_stop,
             wait_mode,
-            grace_ms,
+            timeout_ms,
         )
-        if (not fast_stop) or wait_mode == "sync":
-            await self.group_force_stop_xiaoai(fast=fast_stop)
-            return None
 
-        task = self._ensure_playback_tasks().start(
-            TaskKind.FAST_GROUP_STOP,
+        # A stop is a hard barrier for the following play.  It is registry
+        # owned but not session-scoped: a session bump must not cancel it.
+        self._group_stop_barrier_state = "pending"
+        self._group_stop_barrier_degraded = False
+        previous_stop = getattr(self, "_unresolved_group_stop_task", None)
+        if previous_stop is not None:
+            if not previous_stop.done():
+                done, _ = await asyncio.wait({previous_stop}, timeout=timeout_sec)
+                if not done:
+                    self._group_stop_barrier_state = "timeout"
+                    self._group_stop_barrier_degraded = True
+                    raise asyncio.TimeoutError("previous group stop is unresolved")
+            if getattr(self, "_unresolved_group_stop_task", None) is not None:
+                if not self._group_stop_task_succeeded(previous_stop):
+                    self._group_stop_barrier_state = "unresolved"
+                    self._group_stop_barrier_degraded = True
+                    raise asyncio.TimeoutError("previous group stop is unresolved")
+
+        stop_task = self._ensure_playback_tasks().start(
+            TaskKind.PREPLAY_GROUP_STOP,
             self._task_generation(sid=sid),
-            self.group_force_stop_xiaoai(fast=True),
-            metadata={"sid": sid, "label": "group_force_stop_fast"},
+            self.group_force_stop_xiaoai(fast=fast_stop),
+            metadata={"sid": sid, "label": "preplay_group_stop"},
         )
-        if grace_ms > 0:
-            await asyncio.sleep(grace_ms / 1000.0)
-        return task
+        if stop_task is None:
+            raise RuntimeError("playback task registry is closed")
+        self._unresolved_group_stop_task = stop_task
+
+        stop_task.add_done_callback(self._on_group_stop_task_done)
+        try:
+            done, _ = await asyncio.wait({stop_task}, timeout=timeout_sec)
+            if not done:
+                # Do not cancel: the remote player_stop may already be on the
+                # wire.  Keep the task as a fail-closed barrier until it
+                # naturally resolves or physical stop is explicitly confirmed.
+                self._group_stop_barrier_state = "timeout"
+                self._group_stop_barrier_degraded = True
+                raise asyncio.TimeoutError("group stop timed out")
+            await stop_task
+        except asyncio.CancelledError:
+            # Preserve cancellation of the playback coroutine.  A child
+            # cancellation is handled as a failed stop and remains a barrier.
+            current = asyncio.current_task()
+            if current is not None and self._task_cancel_requested(current):
+                raise
+            self._group_stop_barrier_state = "unresolved"
+            self._group_stop_barrier_degraded = True
+            self.log.warning("group_stop_cancelled session_id=%s", sid)
+            raise
+        except asyncio.TimeoutError:
+            self.log.error(
+                "group_stop_timeout session_id=%s timeout_ms=%d",
+                sid,
+                timeout_ms,
+            )
+            raise
+        return None
 
     async def _playmusic(
         self,
@@ -2346,6 +2480,28 @@ class XiaoMusicDevice:
                     sid=sid,
                     force_sync=True,
                 )
+            # Keep compatibility with custom stop executors that return a
+            # task; the production executor already waits inside this call.
+            if stop_task is not None:
+                await stop_task
+        except asyncio.CancelledError:
+            # A cancelled child stop is a failed play attempt.  Cancellation
+            # of this playback coroutine itself must still propagate.
+            current = asyncio.current_task()
+            if current is not None and self._task_cancel_requested(current):
+                raise
+            try:
+                self._report_runtime_failure(
+                    reason="preplay_stop_cancelled", updated_at=time.time()
+                )
+            except TransitionError:
+                self.log.info(
+                    "preplay_stop_cancelled phase already advanced name=%s phase=%s",
+                    name,
+                    self.get_runtime_state().phase.value,
+                )
+            self.log.warning("preplay_stop_cancelled name=%s", name)
+            return False
         except Exception:
             try:
                 self._report_runtime_failure(

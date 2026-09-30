@@ -35,6 +35,32 @@ from xiaomusic.security.redaction import redact_text
 
 LOG = logging.getLogger("xiaomusic.playback.facade")
 
+
+def _extract_physical_status(value: Any) -> int | None:
+    """Extract numeric player status from Mina/MiIO response envelopes."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    if isinstance(value, dict):
+        for key in ("status", "player_status", "playerStatus"):
+            status = _extract_physical_status(value.get(key))
+            if status is not None:
+                return status
+        for key in ("data", "result", "payload", "response", "body"):
+            status = _extract_physical_status(value.get(key))
+            if status is not None:
+                return status
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            status = _extract_physical_status(item)
+            if status is not None:
+                return status
+    return None
+
+
 if TYPE_CHECKING:
     pass
 
@@ -840,6 +866,27 @@ class PlaybackFacade:
         did = self._validate_device_id(device_id)
         result = await self._core().probe(did)
         reachability = result.get("reachability")
+        dispatch_data = getattr(result.get("dispatch"), "data", None)
+        physical_status = _extract_physical_status(dispatch_data)
+        devices = getattr(getattr(self.xiaomusic, "device_manager", None), "devices", {})
+        player = devices.get(did) if isinstance(devices, dict) else None
+        barrier_before = (
+            player.get_group_stop_barrier_status()
+            if player is not None
+            and callable(getattr(player, "get_group_stop_barrier_status", None))
+            else None
+        )
+        recovery_confirmed = False
+        if physical_status == 2 and player is not None:
+            confirm = getattr(player, "confirm_group_stop_resolved", None)
+            if callable(confirm):
+                recovery_confirmed = bool(confirm(physical_stopped=True))
+        barrier_after = (
+            player.get_group_stop_barrier_status()
+            if player is not None
+            and callable(getattr(player, "get_group_stop_barrier_status", None))
+            else None
+        )
         return {
             "status": "ok",
             DEVICE_ID: did,
@@ -850,7 +897,11 @@ class PlaybackFacade:
                 or getattr(reachability, "cloud_reachable", False)
             ),
             "extra": {
-                "dispatch": result["dispatch"].data,
+                "dispatch": dispatch_data,
+                "physical_status": physical_status,
+                "group_stop_recovery_confirmed": recovery_confirmed,
+                "group_stop_barrier": barrier_after,
+                "group_stop_barrier_before": barrier_before,
                 "reachability": {
                     "ip": getattr(reachability, "ip", ""),
                     "local_reachable": getattr(reachability, "local_reachable", False),

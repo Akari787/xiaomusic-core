@@ -285,7 +285,7 @@ async def test_resume_post_io_stale_does_not_commit_playing_or_timer():
 
 
 @pytest.mark.asyncio
-async def test_stop_empty_group_enters_visible_failed():
+async def test_stop_empty_group_is_a_successful_noop():
     d = _device()
     d._runtime_state = PlaybackRuntimeState(phase=PlaybackPhase.STOPPING)
     d.cancel_group_next_timer = _async_noop
@@ -296,8 +296,35 @@ async def test_stop_empty_group_enters_visible_failed():
     d.group_force_stop_xiaoai = _empty_stop_group
     token = d._capture_lifecycle_token()
     await d._execute_stop_intent({"sid": d._play_session_id, "token": token, "arg1": "notts"})
-    assert d.get_runtime_state().phase == PlaybackPhase.FAILED
-    assert d.get_runtime_state().failure.reason == "stop_not_confirmed"
+    assert d.get_runtime_state().phase == PlaybackPhase.STOPPED
+    assert d.get_runtime_state().failure is None
+
+
+@pytest.mark.asyncio
+async def test_successful_stop_command_does_not_release_unconfirmed_group_barrier():
+    d = _device()
+    d._runtime_state = PlaybackRuntimeState(phase=PlaybackPhase.STOPPING)
+    d.cancel_group_next_timer = _async_noop
+
+    async def _successful_stop_group():
+        return [True]
+
+    d.group_force_stop_xiaoai = _successful_stop_group
+    unresolved = asyncio.create_task(asyncio.Event().wait())
+    d._unresolved_group_stop_task = unresolved
+    d._group_stop_barrier_state = "timeout"
+    d._group_stop_barrier_degraded = True
+    token = d._capture_lifecycle_token()
+    try:
+        await d._execute_stop_intent(
+            {"sid": d._play_session_id, "token": token, "arg1": "notts"}
+        )
+        assert d._unresolved_group_stop_task is unresolved
+        assert d.get_group_stop_barrier_status()["locked"] is True
+    finally:
+        unresolved.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await unresolved
 
 
 @pytest.mark.asyncio

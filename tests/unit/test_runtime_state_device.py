@@ -15,6 +15,7 @@ from xiaomusic.config import Device
 from xiaomusic.const import PLAY_TYPE_ALL
 from xiaomusic.device_player import XiaoMusicDevice
 from xiaomusic.events import PLAYER_STATE_CHANGED
+from xiaomusic.playback.command_arbiter import DeviceCommandArbiter, IntentKind
 from xiaomusic.playback.runtime_state import (
     LifecycleToken,
     PlaybackPhase,
@@ -1559,6 +1560,127 @@ async def test_playmusic_success_bumps_attempt():
     assert s.queue_session_id == q_before
     assert s.command_generation == c_before
     assert group_called
+
+
+@pytest.mark.asyncio
+async def test_playmusic_waits_for_delayed_overlap_stop_before_dispatch():
+    """A stop that outlives the overlap grace cannot overtake the next play."""
+    d = _build_playmusic_attempt_device()
+    d.config.auto_next_stop_wait_mode = "overlap"
+    d.config.auto_next_stop_grace_ms = 500
+
+    stop_entered = asyncio.Event()
+    release_stop = asyncio.Event()
+    dispatches: list[str] = []
+
+    async def _delayed_stop(*, fast=False):
+        stop_entered.set()
+        await release_stop.wait()
+        dispatches.append("stop_done")
+        return [fast]
+
+    async def _play(url, name=""):
+        dispatches.append("play")
+        return [{"code": 0}]
+
+    d.group_force_stop_xiaoai = _delayed_stop
+    d.group_player_play = _play
+    d._execute_group_stop = XiaoMusicDevice._execute_group_stop.__get__(d)
+
+    play_task = asyncio.create_task(
+        d._playmusic("song1", confirm_start_in_background=True, fast_stop=True)
+    )
+    await asyncio.wait_for(stop_entered.wait(), timeout=5.0)
+
+    # The stop is still pending after the configured 500ms overlap grace.
+    await asyncio.sleep(0.55)
+    assert dispatches == []
+
+    release_stop.set()
+    await asyncio.wait_for(play_task, timeout=5.0)
+    assert dispatches == ["stop_done", "play"]
+
+
+@pytest.mark.asyncio
+async def test_playmusic_cancellation_propagates_while_waiting_for_stop():
+    d = _build_playmusic_attempt_device()
+    entered = asyncio.Event()
+    child_done = asyncio.Event()
+
+    async def _stop():
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            child_done.set()
+
+    async def _return_stop_task(*, fast_stop, sid):
+        return asyncio.create_task(_stop())
+
+    d._execute_group_stop = _return_stop_task
+    play_task = asyncio.create_task(
+        d._playmusic("song1", confirm_start_in_background=True, fast_stop=True)
+    )
+    await asyncio.wait_for(entered.wait(), timeout=5.0)
+    play_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await play_task
+    await asyncio.wait_for(child_done.wait(), timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_playmusic_stop_child_exception_does_not_dispatch():
+    d = _build_playmusic_attempt_device()
+    dispatched = False
+
+    async def _raise_from_child(*, fast_stop, sid):
+        async def _stop():
+            raise RuntimeError("late stop failure")
+
+        return asyncio.create_task(_stop())
+
+    async def _play(*args, **kwargs):
+        nonlocal dispatched
+        dispatched = True
+        return [{"code": 0}]
+
+    d._execute_group_stop = _raise_from_child
+    d.group_player_play = _play
+
+    assert await d._playmusic("song1", confirm_start_in_background=True, fast_stop=True) is False
+    assert dispatched is False
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stop_child_fails_play_but_arbiter_worker_survives():
+    d = _build_playmusic_attempt_device()
+    results: list[object] = []
+    first_done = asyncio.Event()
+
+    async def _cancelled_stop(*, fast_stop, sid):
+        task = asyncio.create_task(asyncio.sleep(10))
+        task.cancel()
+        return task
+
+    async def _execute(_intent):
+        result = await d._playmusic(
+            "song1", confirm_start_in_background=True, fast_stop=True
+        )
+        results.append(result)
+        first_done.set()
+
+    d._execute_group_stop = _cancelled_stop
+    arbiter = DeviceCommandArbiter(_execute)
+    try:
+        arbiter.submit(IntentKind.PLAY)
+        await asyncio.wait_for(first_done.wait(), timeout=5.0)
+        first_done.clear()
+        arbiter.submit(IntentKind.PLAY)
+        await asyncio.wait_for(first_done.wait(), timeout=5.0)
+        assert results == [False, False]
+        assert arbiter._worker_task.done() is False
+    finally:
+        await arbiter.close()
 
 
 @pytest.mark.asyncio

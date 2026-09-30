@@ -9,6 +9,65 @@ from xiaomusic.playback.facade import PlaybackFacade, build_track_id
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("probe_data", "should_confirm"),
+    [
+        ({"status": 2}, True),
+        ({"data": {"status": 1}}, False),
+        ({"status": "2"}, True),
+    ],
+)
+async def test_probe_confirms_stop_barrier_only_on_physical_status_two(
+    probe_data, should_confirm
+):
+    calls = []
+
+    class _Core:
+        async def probe(self, did):
+            return {
+                "transport": "mina",
+                "dispatch": type("D", (), {"data": probe_data})(),
+                "reachability": SimpleNamespace(
+                    local_reachable=True,
+                    cloud_reachable=True,
+                    ip="1.2.3.4",
+                    last_probe_ts=1,
+                ),
+            }
+
+    class _Player:
+        def __init__(self):
+            self.locked = True
+
+        def get_group_stop_barrier_status(self):
+            return {
+                "locked": self.locked,
+                "state": "timeout" if self.locked else "clear",
+            }
+
+        def confirm_group_stop_resolved(self, *, physical_stopped):
+            calls.append(physical_stopped)
+            if physical_stopped is True:
+                self.locked = False
+                return True
+            return False
+
+    player = _Player()
+
+    class _XM:
+        device_manager = SimpleNamespace(devices={"did-1": player})
+
+    facade = PlaybackFacade(_XM())
+    facade._core = lambda: _Core()
+    out = await facade.probe("did-1")
+
+    assert calls == ([True] if should_confirm else [])
+    assert out["extra"]["physical_status"] == (2 if probe_data.get("status") == 2 or probe_data.get("status") == "2" else 1)
+    assert "group_stop_barrier" in out["extra"]
+    assert out["extra"]["group_stop_barrier"]["locked"] is (not should_confirm)
+
+
+@pytest.mark.asyncio
 async def test_control_facade_returns_accepted_action_contract():
     class _Core:
         async def stop(self, did):
