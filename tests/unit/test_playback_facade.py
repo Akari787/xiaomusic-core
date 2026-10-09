@@ -68,6 +68,57 @@ async def test_probe_confirms_stop_barrier_only_on_physical_status_two(
 
 
 @pytest.mark.asyncio
+async def test_probe_error_keeps_physical_status_unknown_and_barrier_locked():
+    calls = []
+
+    class _Core:
+        async def probe(self, did):
+            return {
+                "transport": "miio",
+                "dispatch": type(
+                    "D",
+                    (),
+                    {
+                        "ok": False,
+                        "data": {
+                            "probe_ok": False,
+                            "status": {"status": None, "volume": None},
+                            "probe_error": "认证不可用",
+                        },
+                    },
+                )(),
+                "reachability": SimpleNamespace(
+                    local_reachable=False,
+                    cloud_reachable=False,
+                    ip="",
+                    last_probe_ts=1,
+                ),
+            }
+
+    class _Player:
+        def get_group_stop_barrier_status(self):
+            return {"locked": True, "state": "unresolved"}
+
+        def confirm_group_stop_resolved(self, *, physical_stopped):
+            calls.append(physical_stopped)
+            return False
+
+    class _XM:
+        device_manager = SimpleNamespace(devices={"did-1": _Player()})
+
+    facade = PlaybackFacade(_XM())
+    facade._core = lambda: _Core()
+    out = await facade.probe("did-1")
+
+    assert out["status"] == "error"
+    assert out["reachable"] is False
+    assert out["extra"]["physical_status"] is None
+    assert out["extra"]["physical_status_state"] == "unknown"
+    assert out["extra"]["group_stop_barrier"]["locked"] is True
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_control_facade_returns_accepted_action_contract():
     class _Core:
         async def stop(self, did):

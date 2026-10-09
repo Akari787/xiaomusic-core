@@ -479,13 +479,16 @@ async def test_dns_probe_failure_cools_down_without_login_and_recovers_by_reprob
 
 
 @pytest.mark.asyncio
-async def test_auth_call_dns_probe_blocks_all_recovery_paths(auth_manager):
+async def test_auth_call_does_not_probe_healthy_runtime_before_business_call(auth_manager):
     import socket
 
     manager, _ = auth_manager
+    device_list_calls = 0
 
     class _DnsFailingRuntime:
         async def device_list(self):
+            nonlocal device_list_calls
+            device_list_calls += 1
             wrapped = RuntimeError(
                 "Cannot connect to host api2.mina.mi.com:443 ssl:default [Try again]"
             )
@@ -494,25 +497,92 @@ async def test_auth_call_dns_probe_blocks_all_recovery_paths(auth_manager):
 
     manager.mina_service = _DnsFailingRuntime()
     manager._schedule_background_recovery = MagicMock()
-    manager._try_miaccount_persistent_auth_relogin = AsyncMock(
-        side_effect=AssertionError("DNS probe must not exchange persistent auth")
-    )
-    manager._try_login = AsyncMock(
-        side_effect=AssertionError("DNS probe must not login")
-    )
+    manager._try_login = AsyncMock(side_effect=AssertionError("must not login"))
 
     async def _operation():
-        raise AssertionError("operation must not run after failed auth probe")
+        return "business-ok"
 
-    with pytest.raises(RuntimeError, match="认证不可用"):
-        await manager.auth_call(_operation, retry=0, ctx="dns-probe")
-
-    manager._schedule_background_recovery.assert_not_called()
-    manager._try_miaccount_persistent_auth_relogin.assert_not_awaited()
+    assert await manager.auth_call(_operation, retry=0, ctx="healthy-runtime") == "business-ok"
+    assert device_list_calls == 0
     manager._try_login.assert_not_awaited()
-    assert manager._last_recovery_error_code == "network_error"
-    assert manager._last_manual_login_required_reason == ""
-    assert manager._state != manager.STATE_LOCKED
+
+
+@pytest.mark.asyncio
+async def test_business_success_normalizes_only_health_probe_network_degradation(auth_manager):
+    manager, _ = auth_manager
+    manager.mina_service = object()
+    manager._state = manager.STATE_DEGRADED
+    manager._last_degraded_entry_reason = "health_probe_network_error"
+    manager._cooldown_until = time.time() + 60
+    manager._last_error = "temporary DNS failure"
+    manager._last_health_probe_result = "network_error"
+    manager._last_health_probe_error = "temporary DNS failure"
+    manager._last_recovery_stage = "probe"
+    manager._last_recovery_error_code = "network_error"
+    manager._last_recovery_error_message = "temporary DNS failure"
+    manager._scheduled_refresh_suspended = True
+    manager._scheduled_refresh_suspend_reason = "manual suspension"
+
+    async def _business_call():
+        return "ok"
+
+    assert await manager.auth_call(_business_call, retry=0, ctx="normalize-network") == "ok"
+    assert manager._state == manager.STATE_HEALTHY
+    assert manager._cooldown_until == 0
+    assert manager._last_error == ""
+    assert manager._last_health_probe_error == ""
+    assert manager._last_recovery_error_code == ""
+    assert manager._last_degraded_entry_reason == ""
+    assert manager._scheduled_refresh_suspended is True
+    assert manager._scheduled_refresh_suspend_reason == "manual suspension"
+
+
+@pytest.mark.asyncio
+async def test_business_success_does_not_normalize_non_network_auth_degradation(auth_manager):
+    manager, _ = auth_manager
+    manager.mina_service = object()
+    manager._state = manager.STATE_DEGRADED
+    manager._last_degraded_entry_reason = "health_probe_auth_error"
+    manager._last_error = "credential rejected"
+    manager._last_recovery_error_code = "auth_error"
+    manager.ensure_auth = AsyncMock(return_value=True)
+
+    async def _business_call():
+        return "ok"
+
+    assert await manager.auth_call(_business_call, retry=0, ctx="preserve-auth-error") == "ok"
+    assert manager._state == manager.STATE_DEGRADED
+    assert manager._last_degraded_entry_reason == "health_probe_auth_error"
+    assert manager._last_error == "credential rejected"
+    assert manager._last_recovery_error_code == "auth_error"
+
+
+@pytest.mark.asyncio
+async def test_keepalive_uses_one_device_probe_per_healthy_round(auth_manager, monkeypatch):
+    manager, _ = auth_manager
+    calls = 0
+
+    class _Runtime:
+        async def device_list(self):
+            nonlocal calls
+            calls += 1
+            return []
+
+    manager.mina_service = _Runtime()
+    manager._state = manager.STATE_HEALTHY
+    manager._maybe_scheduled_refresh = AsyncMock(return_value=False)
+    sleeps = 0
+
+    async def _sleep(_interval):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps > 1:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr("xiaomusic.auth.asyncio.sleep", _sleep)
+    await manager.keepalive_loop(interval_sec=1)
+    assert calls == 1
+    manager._maybe_scheduled_refresh.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -71,6 +71,10 @@ async def _noop_coro():
     pass
 
 
+async def _noop_external_fence(**kwargs):
+    return None
+
+
 # ── device factory ─────────────────────────────────────────────────────────
 
 
@@ -202,6 +206,106 @@ def _make_playing_device() -> XiaoMusicDevice:
     return d
 
 
+@pytest.mark.asyncio
+async def test_external_play_uses_same_preplay_stop_fence():
+    d = _make_device()
+    d._external_context_registry = {}
+    events = []
+
+    async def _fence(**kwargs):
+        events.append("stop")
+
+    async def _play(url):
+        events.append("play")
+        return [{"code": 0}]
+
+    async def _started(*, context=None, resolved=None, token):
+        events.append("started")
+        return True
+
+    d._execute_group_stop = _fence
+    d.group_player_play = _play
+    d.on_external_url_play_started = _started
+    await d._execute_external_play_intent(
+        {"url": "http://example.test/a.mp3", "context": {"title": "A"}}
+    )
+    assert events[:2] == ["stop", "play"]
+
+
+@pytest.mark.asyncio
+async def test_external_play_completed_failed_barrier_blocks_until_explicit_stop():
+    d = _make_device()
+    old_stop = asyncio.create_task(_raise_external_test_error("old stop"))
+    with pytest.raises(RuntimeError, match="old stop"):
+        await old_stop
+    d._unresolved_group_stop_task = old_stop
+    d._group_stop_barrier_state = "unresolved"
+    d._group_stop_barrier_degraded = True
+    d._execute_group_stop = XiaoMusicDevice._execute_group_stop.__get__(d)
+    dispatches = []
+
+    async def _play(url):
+        dispatches.append(url)
+        return [{"code": 0}]
+
+    d.group_player_play = _play
+    with pytest.raises(asyncio.TimeoutError, match="previous group stop is unresolved"):
+        await d._execute_external_play_intent(
+            {"url": "http://example.test/blocked.mp3", "context": {"title": "A"}}
+        )
+    assert dispatches == []
+    assert d.get_group_stop_barrier_status()["locked"] is True
+    assert d.get_runtime_state().phase == PlaybackPhase.FAILED
+
+    async def _successful_stop(*, fast=False):
+        return [True]
+
+    d.group_force_stop_xiaoai = _successful_stop
+    d._begin_runtime_stop(updated_at=time.time())
+    d._accept_command(updated_at=time.time())
+    token = d._capture_lifecycle_token()
+    await d._execute_stop_intent({"sid": d._play_session_id, "token": token, "arg1": "notts"})
+    assert d.get_group_stop_barrier_status()["locked"] is False
+
+    d.on_external_url_play_started = _noop_return_true
+    await d._execute_external_play_intent(
+        {"url": "http://example.test/recovered.mp3", "context": {"title": "A"}}
+    )
+    assert dispatches == ["http://example.test/recovered.mp3"]
+
+
+@pytest.mark.asyncio
+async def test_external_fence_and_dispatch_failures_commit_failed_without_swallowing_cancel():
+    d = _make_device()
+
+    async def _raise_fence(**kwargs):
+        raise RuntimeError("fence failure")
+
+    d._execute_group_stop = _raise_fence
+    with pytest.raises(RuntimeError, match="fence failure"):
+        await d._execute_external_play_intent(
+            {"url": "http://example.test/fence.mp3", "context": {"title": "A"}}
+        )
+    assert d.get_runtime_state().phase == PlaybackPhase.FAILED
+
+    d = _make_device()
+
+    async def _noop_fence(**kwargs):
+        return None
+
+    d._execute_group_stop = _noop_fence
+    d.group_player_play = lambda url: _raise_external_test_error("dispatch failure")
+    with pytest.raises(RuntimeError, match="dispatch failure"):
+        await d._execute_external_play_intent(
+            {"url": "http://example.test/dispatch.mp3", "context": {"title": "A"}}
+        )
+    assert d.get_runtime_state().phase == PlaybackPhase.FAILED
+
+
+async def _raise_external_test_error(message: str):
+    raise RuntimeError(message)
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Test A: blocked group_player_play → submit returns immediately;
 #         release → physical completes in bg
@@ -311,9 +415,8 @@ async def test_B_rapid_external_different_contexts():
 
 @pytest.mark.asyncio
 async def test_B2_same_context_two_attempts():
-    """Same context dict with two XiaoMusic.play_url calls:
-    first dispatch all-None, second dispatch succeeds.
-    q=1, c=1, a=2 — same command, two attempts."""
+    """Same context dict with two successful XiaoMusic.play_url calls.
+    q=1, c=1, a=2 — same lifecycle context, two attempts."""
     from xiaomusic.xiaomusic import XiaoMusic
 
     xm2 = types.SimpleNamespace(
@@ -340,11 +443,13 @@ async def test_B2_same_context_two_attempts():
                       play_type=PLAY_TYPE_ALL, cur_playlist="全部", playlist2music={})
     d = XiaoMusicDevice(xm2, dev_real, group_name="g")
     d.cancel_group_next_timer = _noop_coro
+    d._execute_group_stop = _noop_external_fence
     d._invalidate_manual_navigation = lambda reason: None
     d._bootstrap_playlist_session_for_external_url = lambda context: None
 
     call_count = 0
     first_group_called = asyncio.Event()
+    second_group_called = asyncio.Event()
     started_called = asyncio.Event()
 
     async def _spy_group(url):
@@ -352,7 +457,8 @@ async def test_B2_same_context_two_attempts():
         call_count += 1
         if call_count == 1:
             first_group_called.set()
-            return [None]
+        elif call_count == 2:
+            second_group_called.set()
         return [{"code": 0}]
 
     d.group_player_play = _spy_group
@@ -378,7 +484,7 @@ async def test_B2_same_context_two_attempts():
         r2 = await XiaoMusic.play_url(xm, did="d1", arg1="http://x/fallback.mp3", context=ctx)
         assert r2["accepted"] is True
 
-        await asyncio.wait_for(started_called.wait(), timeout=5.0)
+        await asyncio.wait_for(second_group_called.wait(), timeout=5.0)
     finally:
         await d.close_command_arbiter()
 

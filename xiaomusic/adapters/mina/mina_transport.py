@@ -190,15 +190,21 @@ class MinaTransport(Transport):
         start = time.perf_counter()
         try:
             status = await self._xiaomusic.get_player_status(did=device_id)
+            probe_ok = not (
+                isinstance(status, dict) and status.get("probe_ok") is False
+            )
             LOG.info(
-                "transport_action action=probe success=true latency_ms=%d device_id=%s",
+                "transport_action action=probe success=%s latency_ms=%d device_id=%s",
+                str(probe_ok).lower(),
                 int((time.perf_counter() - start) * 1000),
                 device_id,
             )
             return {
-                "local_reachable": True,
-                "cloud_reachable": True,
+                "local_reachable": probe_ok,
+                "cloud_reachable": probe_ok,
                 "status": status,
+                "probe_ok": probe_ok,
+                "probe_error": status.get("probe_error", "") if isinstance(status, dict) else "",
             }
         except Exception:
             LOG.warning(

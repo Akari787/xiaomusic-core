@@ -235,7 +235,10 @@ def _make_device() -> XiaoMusicDevice:
     d._set_runtime_track_reference = lambda **kw: None
     d._track_background_task = lambda task, label: None
     d._bump_play_session = lambda reason="": _bump_sid(d)
-    d._execute_group_stop = lambda *a, **k: [None]
+    async def _execute_group_stop(*a, **k):
+        return None
+
+    d._execute_group_stop = _execute_group_stop
     d._mark_play_started = _noop_return_false
     d._schedule_playback_confirmation = lambda **kw: None
     d._confirm_playback_started = lambda name, sid: _noop_return_false

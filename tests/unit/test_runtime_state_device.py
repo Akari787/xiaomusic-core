@@ -5567,16 +5567,14 @@ async def test_c_playing_new_external_switching_then_dispatch():
 
 
 @pytest.mark.asyncio
-async def test_d_same_context_direct_fail_fallback_two_attempts():
-    """Same context dict: q=1,c=1, a=2, phase stays DISPATCHING.
-    Second call does NOT repeat request/q/c."""
+async def test_d_external_dispatch_failure_commits_failed_and_blocks_reentry():
+    """A direct dispatch failure is terminal for this external command.
+    A same-context reentry cannot bypass the FAILED state or dispatch again."""
     from xiaomusic.xiaomusic import XiaoMusic
 
-    attempts_seen = []
-    phases_seen = []
-    dispatches = []
     first_group_called = asyncio.Event()
-    second_dispatch_done = asyncio.Event()
+    executor_done = asyncio.Event()
+    dispatches = []
 
     xm2 = _fake_xm()
     dev_real = Device(
@@ -5590,50 +5588,38 @@ async def test_d_same_context_direct_fail_fallback_two_attempts():
 
     async def _spy_group(url):
         dispatches.append(url)
-        attempts_seen.append(d.get_runtime_state().track_attempt_id)
-        phases_seen.append(d.get_runtime_state().phase)
-        if len(dispatches) == 1:
-            first_group_called.set()
-            return [None]  # direct fails
-        second_dispatch_done.set()
-        return [{"code": 0}]  # fallback succeeds
+        first_group_called.set()
+        return [None]
+
     d.group_player_play = _spy_group
+    original_executor = d._execute_external_play_intent
 
-    async def _on_started(context=None, resolved=None, *, token):
-        pass
-    d.on_external_url_play_started = _on_started
+    async def _wrapped_executor(payload):
+        try:
+            await original_executor(payload)
+        finally:
+            executor_done.set()
 
+    d._execute_external_play_intent = _wrapped_executor
     xm = XiaoMusic.__new__(XiaoMusic)
     xm.log = logging.getLogger("test")
     xm.device_manager = types.SimpleNamespace(devices={"d1": d})
-
     ctx = {}
 
     try:
-        # First call -> direct
         r1 = await XiaoMusic.play_url(xm, did="d1", arg1="http://x/direct.mp3", context=ctx)
         assert r1["accepted"] is True
-
-        # Yield to let first executor run before second submit
         await asyncio.wait_for(first_group_called.wait(), timeout=5.0)
+        await asyncio.wait_for(executor_done.wait(), timeout=5.0)
 
-        # Second call -> fallback, same context (reuses q/c)
-        r2 = await XiaoMusic.play_url(xm, did="d1", arg1="http://x/fallback.mp3", context=ctx)
+        r2 = await XiaoMusic.play_url(xm, did="d1", arg1="http://x/reentry.mp3", context=ctx)
         assert r2["accepted"] is True
-
-        await asyncio.wait_for(second_dispatch_done.wait(), timeout=5.0)
+        await asyncio.sleep(0)
     finally:
         await d.close_command_arbiter()
 
-    s = d.get_runtime_state()
-    assert s.queue_session_id == 1
-    assert s.command_generation == 1
-    assert s.track_attempt_id == 2
-    assert s.phase == PlaybackPhase.DISPATCHING
-    assert len(dispatches) == 2
-    assert attempts_seen == [1, 2]
-    # Phase was DISPATCHING for both attempts
-    assert all(p == PlaybackPhase.DISPATCHING for p in phases_seen)
+    assert dispatches == ["http://x/direct.mp3"]
+    assert d.get_runtime_state().phase == PlaybackPhase.FAILED
 
 
 # ── E: cancel await (T04-C2c arbiter-based) ──────────────────────────────
@@ -5921,17 +5907,16 @@ async def test_e2_b_direct_all_none_phase_dispatching_no_callback():
 
     assert not started_called
     s = d.get_runtime_state()
-    assert s.phase == PlaybackPhase.DISPATCHING
+    assert s.phase == PlaybackPhase.FAILED
     assert s.track_attempt_id == 1
     assert s.queue_session_id == 1
     assert s.command_generation == 1
 
 
 @pytest.mark.asyncio
-async def test_e2_c_fallback_success_attempt_two_confirmed_fallback():
-    """Two external submits: first all-None, second succeeds.
-    Each submit bumps c; each physical dispatch bumps q/a.
-    Second dispatch: q=2, c=2, a=2, PLAYING confirmed_track from fallback."""
+async def test_e2_c_external_recovers_after_explicit_stop():
+    """A failed external dispatch stays FAILED until explicit stop; only then
+    can a new external command dispatch and confirm the fallback track."""
     xm2 = _fake_xm()
     dev_real = Device(did="d1", device_id="d1", hardware="OH2P", name="T",
                       play_type=PLAY_TYPE_ALL, cur_playlist="全部", playlist2music={})
@@ -5942,60 +5927,74 @@ async def test_e2_c_fallback_success_attempt_two_confirmed_fallback():
 
     call_count = 0
     group_called = asyncio.Event()
+    executor_done = asyncio.Event()
 
     async def _spy_group(url):
         nonlocal call_count
         call_count += 1
-        if call_count == 1:
-            group_called.set()
-            return [None]
-        return [{"code": 0}]
+        group_called.set()
+        return [None] if call_count == 1 else [{"code": 0}]
     d.group_player_play = _spy_group
 
-    started_calls = []
-    started_done_c = asyncio.Event()
+    async def _successful_stop(*, fast=False):
+        return [True]
 
-    async def _on_started_e2_c(context=None, resolved=None, *, token):
+    d.group_force_stop_xiaoai = _successful_stop
+    started_calls = []
+    started_done = asyncio.Event()
+
+    async def _on_started(context=None, resolved=None, *, token):
         assert isinstance(token, LifecycleToken)
         started_calls.append((context, resolved, token))
         await XiaoMusicDevice.on_external_url_play_started(
             d, context=context, resolved=resolved, token=token,
         )
-        started_done_c.set()
-    d.on_external_url_play_started = _on_started_e2_c
+        started_done.set()
+    d.on_external_url_play_started = _on_started
+
+    original_executor = d._execute_external_play_intent
+
+    async def _wrapped_executor(payload):
+        try:
+            await original_executor(payload)
+        finally:
+            executor_done.set()
+
+    d._execute_external_play_intent = _wrapped_executor
 
     try:
         r1 = await d.submit_external_url_play(
-            url="http://x/a.mp3",
-            resolved={"title": "Direct Fail"},
+            url="http://x/a.mp3", resolved={"title": "Direct Fail"}
         )
         assert r1["accepted"] is True
-        # Wait for first group dispatch
         await asyncio.wait_for(group_called.wait(), timeout=5.0)
-
+        await asyncio.wait_for(executor_done.wait(), timeout=5.0)
+        assert d.get_runtime_state().phase == PlaybackPhase.FAILED
         assert call_count == 1
-        assert len(started_calls) == 0
 
-        s1 = d.get_runtime_state()
-        assert s1.phase == PlaybackPhase.DISPATCHING
-        assert s1.track_attempt_id == 1
+        d._begin_runtime_stop(updated_at=time.time())
+        d._accept_command(updated_at=time.time())
+        token = d._capture_lifecycle_token()
+        await d._execute_stop_intent(
+            {"sid": d._play_session_id, "token": token, "arg1": "notts"}
+        )
+        assert d.get_runtime_state().phase == PlaybackPhase.STOPPED
 
         r2 = await d.submit_external_url_play(
             url="http://x/b.mp3",
             resolved={"title": "Fallback Win", "entity_id": "eid-fb"},
         )
         assert r2["accepted"] is True
-        await asyncio.wait_for(started_done_c.wait(), timeout=5.0)
+        await asyncio.wait_for(started_done.wait(), timeout=5.0)
     finally:
         await d.close_command_arbiter()
 
     assert len(started_calls) == 1
     assert call_count == 2
-
     s2 = d.get_runtime_state()
     assert s2.phase == PlaybackPhase.PLAYING
     assert s2.queue_session_id == 2
-    assert s2.command_generation == 2
+    assert s2.command_generation == 3
     assert s2.track_attempt_id == 2
     assert s2.confirmed_track is not None
     assert s2.confirmed_track.display_name == "Fallback Win"

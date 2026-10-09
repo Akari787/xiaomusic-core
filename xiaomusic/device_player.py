@@ -140,6 +140,10 @@ class XiaoMusicDevice:
         self._manual_nav_generation = 0
         self._manual_nav_target = None
         self._command_arbiter = None  # lazy per-device; created on first manual intent
+        # Evidence recorded when an explicit stop succeeds while an older
+        # preplay stop is still running. It may reconcile only if that exact
+        # older task later terminates unsuccessfully without a lifecycle change.
+        self._explicit_stop_reconcile_candidate = None
 
         # T04-C2c: bounded internal context registry for external URL play
         # Maps private command key → deepcopy of caller context.
@@ -1372,6 +1376,12 @@ class XiaoMusicDevice:
                     reason="stop_not_confirmed", sid=sid, token=token, barrier=True
                 )
                 return
+            # This is a fresh, successful physical group stop. It is safe to
+            # reconcile a completed failed barrier. If the old stop is still
+            # running, remember the post-stop evidence for its later terminal
+            # failure; a new play will invalidate the lifecycle token.
+            self._record_explicit_stop_reconcile_evidence()
+            self.reconcile_group_stop_after_explicit_stop()
         except Exception:
             self._report_executor_failure(
                 reason="stop_not_confirmed", sid=sid, token=token, barrier=True
@@ -1383,6 +1393,35 @@ class XiaoMusicDevice:
         # Only current: complete stop → STOPPED; the runtime boundary emits it.
         self._complete_runtime_stop(updated_at=time.time())
         self.log.info("stop now")
+
+    def _record_explicit_stop_reconcile_evidence(self) -> None:
+        task = getattr(self, "_unresolved_group_stop_task", None)
+        if task is not None:
+            self._explicit_stop_reconcile_candidate = (
+                task,
+                self._capture_lifecycle_token(),
+            )
+        else:
+            self._explicit_stop_reconcile_candidate = None
+
+    def reconcile_group_stop_after_explicit_stop(self) -> bool:
+        """Release only with explicit-stop evidence and a terminal old task."""
+        task = getattr(self, "_unresolved_group_stop_task", None)
+        candidate = getattr(self, "_explicit_stop_reconcile_candidate", None)
+        if candidate is None:
+            return False
+        if task is None or not task.done() or self._group_stop_task_succeeded(task):
+            return False
+        candidate_task, candidate_token = candidate
+        if candidate_task is not task or candidate_token != self._capture_lifecycle_token():
+            self._explicit_stop_reconcile_candidate = None
+            return False
+        self._unresolved_group_stop_task = None
+        self._explicit_stop_reconcile_candidate = None
+        self._group_stop_barrier_state = "reconciled"
+        self._group_stop_barrier_degraded = False
+        self.log.info("group_stop_barrier_reconciled_by_explicit_stop")
+        return True
 
     async def _execute_pause_intent(self, payload: dict) -> None:
         """Physical pause work. Only called by arbiter executor.
@@ -1497,6 +1536,28 @@ class XiaoMusicDevice:
         if request_token is None:
             return
 
+        # External URL playback must use the same hard preplay fence as the
+        # regular playback path. Otherwise a stale/late stop can terminate the
+        # newly dispatched direct URL track.
+        try:
+            await self._execute_group_stop(
+                fast_stop=True,
+                sid=self._play_session_id,
+                force_sync=True,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if not self._is_lifecycle_token_stale(request_token):
+                self._report_executor_failure(
+                    reason="preplay_stop_failed",
+                    sid=self._play_session_id,
+                    token=request_token,
+                )
+            raise
+        if self._is_lifecycle_token_stale(request_token):
+            return
+
         # Step 2: external dispatch phase
         if not self._begin_runtime_external_dispatch_for_token(request_token):
             return
@@ -1506,15 +1567,60 @@ class XiaoMusicDevice:
         if isinstance(fallback_plan, dict):
             fallback_url = str(fallback_plan.get("final_url") or "").strip()
 
-        # Each physical dispatch owns exactly one attempt increment.  Keep
+        # Each physical dispatch owns exactly one attempt increment. Keep
         # direct and fallback in this worker so q/c/sid remain unchanged.
         attempt_token = self._start_track_attempt(updated_at=time.time())
+        failure_token = attempt_token
         try:
-            ret = await self.group_player_play(url)
-        except Exception:
-            if not fallback_url or self._is_lifecycle_token_stale(attempt_token):
+            try:
+                ret = await self.group_player_play(url)
+            except asyncio.CancelledError:
                 raise
+            except Exception:
+                if not fallback_url or self._is_lifecycle_token_stale(attempt_token):
+                    raise
+                fallback_token = self._start_track_attempt(updated_at=time.time())
+                failure_token = fallback_token
+                fallback_ret = await self.group_player_play(fallback_url)
+                if self._is_lifecycle_token_stale(fallback_token):
+                    self.log.info(
+                        "lifecycle_stale external_play_executor did=%s", self.did
+                    )
+                    return
+                if self._external_play_dispatch_succeeded(fallback_ret):
+                    await self.on_external_url_play_started(
+                        context=internal_ctx,
+                        resolved=resolved,
+                        token=fallback_token,
+                    )
+                    return
+                raise RuntimeError(
+                    "direct and fallback external playback failed"
+                ) from None
+
+            # A STOP/PLAY accepted during direct await invalidates the attempt;
+            # do not dispatch fallback and do not publish a stale callback.
+            if self._is_lifecycle_token_stale(attempt_token):
+                self.log.info(
+                    "lifecycle_stale external_play_executor did=%s", self.did
+                )
+                return
+
+            if self._external_play_dispatch_succeeded(ret):
+                await self.on_external_url_play_started(
+                    context=internal_ctx,
+                    resolved=resolved,
+                    token=attempt_token,
+                )
+                return
+
+            if not fallback_url:
+                raise RuntimeError(
+                    "external play dispatch failed, no fallback configured"
+                ) from None
+
             fallback_token = self._start_track_attempt(updated_at=time.time())
+            failure_token = fallback_token
             fallback_ret = await self.group_player_play(fallback_url)
             if self._is_lifecycle_token_stale(fallback_token):
                 self.log.info(
@@ -1531,45 +1637,16 @@ class XiaoMusicDevice:
             raise RuntimeError(
                 "direct and fallback external playback failed"
             ) from None
-
-        # A STOP/PLAY accepted during direct await invalidates the attempt;
-        # do not dispatch fallback and do not publish a stale callback.
-        if self._is_lifecycle_token_stale(attempt_token):
-            self.log.info(
-                "lifecycle_stale external_play_executor did=%s", self.did
-            )
-            return
-
-        if self._external_play_dispatch_succeeded(ret):
-            await self.on_external_url_play_started(
-                context=internal_ctx,
-                resolved=resolved,
-                token=attempt_token,
-            )
-            return
-
-        if not fallback_url:
-            raise RuntimeError(
-                "external play dispatch failed, no fallback configured"
-            ) from None
-
-        fallback_token = self._start_track_attempt(updated_at=time.time())
-        fallback_ret = await self.group_player_play(fallback_url)
-        if self._is_lifecycle_token_stale(fallback_token):
-            self.log.info(
-                "lifecycle_stale external_play_executor did=%s", self.did
-            )
-            return
-        if self._external_play_dispatch_succeeded(fallback_ret):
-            await self.on_external_url_play_started(
-                context=internal_ctx,
-                resolved=resolved,
-                token=fallback_token,
-            )
-            return
-        raise RuntimeError(
-            "direct and fallback external playback failed"
-        ) from None
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if not self._is_lifecycle_token_stale(failure_token):
+                self._report_executor_failure(
+                    reason="external_play_failed",
+                    sid=self._play_session_id,
+                    token=failure_token,
+                )
+            raise
 
     @staticmethod
     def _external_play_dispatch_succeeded(result) -> bool:
@@ -2213,10 +2290,16 @@ class XiaoMusicDevice:
             return
         if self._group_stop_task_succeeded(task):
             self._unresolved_group_stop_task = None
+            self._explicit_stop_reconcile_candidate = None
             self._group_stop_barrier_state = "resolved"
             self._group_stop_barrier_degraded = False
             self.log.info("group_stop_barrier_resolved")
         else:
+            # A later successful explicit stop can reconcile this task only
+            # after it reaches a terminal failure and no play changed the
+            # lifecycle token in the meantime.
+            if self.reconcile_group_stop_after_explicit_stop():
+                return
             self._group_stop_barrier_state = "unresolved"
             self._group_stop_barrier_degraded = True
             self.log.error("group_stop_barrier_task_finished_without_physical_success")
@@ -4824,7 +4907,16 @@ class XiaoMusicDevice:
             return info
         except Exception as e:
             self.log.warning(f"Execption {e}")
-        return {"volume": 0, "status": 0}
+            # A failed observation is not evidence that the player is stopped
+            # or muted. Keep the fact unknown so probes cannot release a stop
+            # barrier from a synthetic status=0 response.
+            return {
+                "status": None,
+                "volume": None,
+                "probe_ok": False,
+                "probe_error": str(e)[:200],
+            }
+        return info
 
     async def set_play_type(self, play_type, dotts=True, refresh_playlist=True):
         """设置播放类型"""

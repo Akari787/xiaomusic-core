@@ -866,7 +866,9 @@ class PlaybackFacade:
         did = self._validate_device_id(device_id)
         result = await self._core().probe(did)
         reachability = result.get("reachability")
-        dispatch_data = getattr(result.get("dispatch"), "data", None)
+        dispatch = result.get("dispatch")
+        dispatch_data = getattr(dispatch, "data", None)
+        probe_ok = bool(getattr(dispatch, "ok", True))
         physical_status = _extract_physical_status(dispatch_data)
         devices = getattr(getattr(self.xiaomusic, "device_manager", None), "devices", {})
         player = devices.get(did) if isinstance(devices, dict) else None
@@ -888,17 +890,22 @@ class PlaybackFacade:
             else None
         )
         return {
-            "status": "ok",
+            "status": "ok" if probe_ok else "error",
             DEVICE_ID: did,
             "transport": result["transport"],
             REQUEST_ID: str(request_id or uuid4().hex[:16]),
             "reachable": bool(
-                getattr(reachability, "local_reachable", False)
-                or getattr(reachability, "cloud_reachable", False)
+                probe_ok
+                and (
+                    getattr(reachability, "local_reachable", False)
+                    or getattr(reachability, "cloud_reachable", False)
+                )
             ),
             "extra": {
                 "dispatch": dispatch_data,
+                "probe_ok": probe_ok,
                 "physical_status": physical_status,
+                "physical_status_state": "known" if physical_status is not None else "unknown",
                 "group_stop_recovery_confirmed": recovery_confirmed,
                 "group_stop_barrier": barrier_after,
                 "group_stop_barrier_before": barrier_before,

@@ -657,6 +657,8 @@ class SimpleAuthManager:
         force: bool = False,
         reason: str = "ensure_auth",
         preserve_healthy_runtime: bool = False,
+        *,
+        probe: bool = True,
     ) -> bool:
         """
         确保认证可用，如果不可用则尝试恢复
@@ -667,6 +669,19 @@ class SimpleAuthManager:
         if self._last_manual_login_required_reason and not force:
             self._preserve_manual_login_gate()
             return False
+        # Ordinary business calls reuse an existing runtime. Keep active
+        # device_list verification for explicit/keepalive probes only; a
+        # transient probe outage must not invalidate an otherwise usable
+        # runtime before the real operation gets a chance to run.
+        if not force and not probe and self.mina_service is not None:
+            if self._state == self.STATE_HEALTHY:
+                return True
+            if (
+                self._state == self.STATE_DEGRADED
+                and self._last_degraded_entry_reason == "health_probe_network_error"
+            ):
+                return True
+
         # 如果在冷却期，检查是否过期
         if not force and time.time() < self._cooldown_until:
             return False
@@ -682,6 +697,8 @@ class SimpleAuthManager:
 
         # 如果状态健康，快速返回
         if self._state == self.STATE_HEALTHY:
+            if not probe:
+                return self.mina_service is not None
             if self.mina_service is None:
                 self._state = self.STATE_DEGRADED
                 self._last_error = "mina service unavailable"
@@ -2467,8 +2484,8 @@ class SimpleAuthManager:
 
         for attempt in range(retry + 1):
             try:
-                # 确保认证可用
-                if not await self.ensure_auth():
+                # 确保认证可用，但不要在每个业务调用前重复 device_list。
+                if not await self.ensure_auth(probe=False):
                     last_recovery_code = self._last_recovery_error_code
                     if last_recovery_code == "network_error" or is_network_error(
                         exc=RuntimeError(self._last_error)
@@ -2491,6 +2508,25 @@ class SimpleAuthManager:
                 now = time.time()
                 self._last_ok_ts = now
                 self._last_runtime_verify_ts = now
+                if (
+                    self._state == self.STATE_DEGRADED
+                    and self._last_degraded_entry_reason == "health_probe_network_error"
+                ):
+                    # The business call itself is fresh evidence that the
+                    # existing runtime works. Normalize only this transient
+                    # network-probe degradation; do not touch manual gates,
+                    # locks, or scheduled-refresh suspension state.
+                    self._state = self.STATE_HEALTHY
+                    self._cooldown_until = 0.0
+                    self._last_error = ""
+                    self._last_health_probe_result = "business_call_ok"
+                    self._last_health_probe_error = ""
+                    self._last_recovery_stage = ""
+                    self._last_recovery_error_code = ""
+                    self._last_recovery_error_message = ""
+                    self._last_degraded_entry_reason = ""
+                    self._probe_failure_count = 0
+                    self._retry_count_effective = 0
                 return result
 
             except Exception as e:
@@ -2723,35 +2759,26 @@ class SimpleAuthManager:
                     self.log.warning("Keepalive: 认证不健康，触发恢复")
                     # 不等待恢复完成，下一轮再检查
                 else:
-                    # 认证健康，尝试调用 device_list 保持连接
-                    try:
-                        self._keepalive_probe_attempted = True
-                        self._last_keepalive_probe_result = "ok"
-                        self._last_keepalive_probe_error = ""
-                        await self.mina_service.device_list()
-                        now = time.time()
-                        self._last_ok_ts = now
-                        self._last_runtime_verify_ts = now
-                        # 恢复 keepalive 退化状态
-                        if self._keepalive_degraded:
-                            self._keepalive_degraded = False
-                            self._keepalive_fail_streak = 0
-                            self._keepalive_recovery_cooldown_ts = 0.0
-                            self.log.info("Keepalive: 从退化状态恢复")
-                        # Scheduled Refresh: 在健康状态时尝试计划内刷新
-                        if self._state == self.STATE_HEALTHY:
+                    # ensure_auth(probe=True) already performed the one
+                    # active device_list probe for this keepalive round.
+                    self._keepalive_probe_attempted = True
+                    self._last_keepalive_probe_result = "ok"
+                    self._last_keepalive_probe_error = ""
+                    now = time.time()
+                    self._last_ok_ts = now
+                    self._last_runtime_verify_ts = now
+                    # 恢复 keepalive 退化状态
+                    if self._keepalive_degraded:
+                        self._keepalive_degraded = False
+                        self._keepalive_fail_streak = 0
+                        self._keepalive_recovery_cooldown_ts = 0.0
+                        self.log.info("Keepalive: 从退化状态恢复")
+                    # Scheduled Refresh: 在健康状态时尝试计划内刷新
+                    if self._state == self.STATE_HEALTHY:
+                        try:
                             await self._maybe_scheduled_refresh()
-                    except Exception as e:
-                        self._last_keepalive_probe_result = "probe_failed"
-                        self._last_keepalive_probe_error = str(e)[:200]
-                        self._probe_failure_count += 1
-                        self._keepalive_fail_streak += 1
-                        if self._keepalive_fail_streak >= 3:
-                            self._keepalive_degraded = True
-                        self._last_degraded_entry_reason = "keepalive_probe_failed"
-                        self.log.warning(f"Keepalive probe failed: {e}")
-                        self._state = self.STATE_DEGRADED
-                        self._start_cooldown()
+                        except Exception as e:
+                            self.log.warning(f"Keepalive scheduled refresh failed: {e}")
 
             except asyncio.CancelledError:
                 break

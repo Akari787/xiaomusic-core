@@ -223,7 +223,7 @@ async def test_auth_call_direct_auth_error_preserves_manual_gate_without_schedul
         preserve_calls.append(True)
         return original_preserve()
 
-    async def ensure_auth():
+    async def ensure_auth(*, probe=True):
         return True
 
     async def schedule(*args, **kwargs):  # noqa: ARG001

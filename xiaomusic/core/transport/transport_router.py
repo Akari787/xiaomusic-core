@@ -87,8 +87,13 @@ class TransportRouter:
                     transport_name,
                     str(bool(errors)).lower(),
                 )
+                dispatch_ok = not (
+                    action == "probe"
+                    and isinstance(result, dict)
+                    and result.get("probe_ok") is False
+                )
                 return TransportDispatchResult(
-                    ok=True,
+                    ok=dispatch_ok,
                     action=action,
                     transport=transport_name,
                     data=result,
