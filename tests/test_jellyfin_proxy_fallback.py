@@ -90,8 +90,11 @@ def test_jellyfin_auto_falls_back_to_proxy_when_not_playing(monkeypatch):
     async def fast_sleep(_sec):
         return
 
+    async def _successful_stop(*args, **kwargs):
+        return [True]
+
     monkeypatch.setattr(d, "cancel_group_next_timer", _noop)
-    monkeypatch.setattr(d, "group_force_stop_xiaoai", _noop)
+    monkeypatch.setattr(d, "group_force_stop_xiaoai", _successful_stop)
     monkeypatch.setattr(d, "group_player_play", fake_group_player_play)
     monkeypatch.setattr(d, "get_if_xiaoai_is_playing", fake_get_if_xiaoai_is_playing)
     monkeypatch.setattr(asyncio, "sleep", fast_sleep)

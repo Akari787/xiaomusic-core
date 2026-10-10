@@ -870,25 +870,6 @@ class PlaybackFacade:
         dispatch_data = getattr(dispatch, "data", None)
         probe_ok = bool(getattr(dispatch, "ok", True))
         physical_status = _extract_physical_status(dispatch_data)
-        devices = getattr(getattr(self.xiaomusic, "device_manager", None), "devices", {})
-        player = devices.get(did) if isinstance(devices, dict) else None
-        barrier_before = (
-            player.get_group_stop_barrier_status()
-            if player is not None
-            and callable(getattr(player, "get_group_stop_barrier_status", None))
-            else None
-        )
-        recovery_confirmed = False
-        if physical_status == 2 and player is not None:
-            confirm = getattr(player, "confirm_group_stop_resolved", None)
-            if callable(confirm):
-                recovery_confirmed = bool(confirm(physical_stopped=True))
-        barrier_after = (
-            player.get_group_stop_barrier_status()
-            if player is not None
-            and callable(getattr(player, "get_group_stop_barrier_status", None))
-            else None
-        )
         return {
             "status": "ok" if probe_ok else "error",
             DEVICE_ID: did,
@@ -906,9 +887,6 @@ class PlaybackFacade:
                 "probe_ok": probe_ok,
                 "physical_status": physical_status,
                 "physical_status_state": "known" if physical_status is not None else "unknown",
-                "group_stop_recovery_confirmed": recovery_confirmed,
-                "group_stop_barrier": barrier_after,
-                "group_stop_barrier_before": barrier_before,
                 "reachability": {
                     "ip": getattr(reachability, "ip", ""),
                     "local_reachable": getattr(reachability, "local_reachable", False),

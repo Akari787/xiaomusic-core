@@ -24,8 +24,6 @@ class TaskKind(str, Enum):
     TTS_TIMER = "tts_timer"
     ADD_SONG_TIMER = "add_song_timer"
     STOP_TIMER = "stop_timer"
-    FAST_GROUP_STOP = "fast_group_stop"
-    PREPLAY_GROUP_STOP = "preplay_group_stop"
 
 
 # ── scope classification ──────────────────────────────────────────────
@@ -41,7 +39,6 @@ ATTEMPT_SCOPED_KINDS: tuple[TaskKind, ...] = (
 SESSION_SCOPED_KINDS: tuple[TaskKind, ...] = (
     TaskKind.TTS_TIMER,
     TaskKind.ADD_SONG_TIMER,
-    TaskKind.FAST_GROUP_STOP,
 )
 
 

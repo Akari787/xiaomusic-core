@@ -691,7 +691,7 @@ async def test_auto_playmusic_schedules_background_confirmation_without_blocking
     async def _set_next_music_timeout(sec, token=None):
         captured["timer"] = sec
 
-    async def _execute_group_stop(*, fast_stop, sid, force_sync=False):
+    async def _execute_group_stop(*, fast_stop, sid):
         captured["fast_stop"] = fast_stop
         return None
 

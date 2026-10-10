@@ -305,7 +305,6 @@ def real_device():
     d.config = SimpleNamespace(
         delay_sec=0, verbose=False, ffmpeg_location="", jellyfin_proxy_mode="off",
         stop_tts_msg="bye", edge_tts_voice="zh-CN-XiaoxiaoNeural", temp_dir=".",
-        auto_next_stop_grace_ms=500, auto_next_stop_wait_mode="overlap",
     )
     d.xiaomusic = SimpleNamespace(
         music_library=SimpleNamespace(
@@ -711,8 +710,8 @@ def test_attempt_kinds_complete():
         assert k in ATTEMPT_SCOPED_KINDS
 
 
-def test_session_kinds_include_tts_addsong_faststop():
-    for k in (TaskKind.TTS_TIMER, TaskKind.ADD_SONG_TIMER, TaskKind.FAST_GROUP_STOP):
+def test_session_kinds_include_tts_addsong():
+    for k in (TaskKind.TTS_TIMER, TaskKind.ADD_SONG_TIMER):
         assert k in SESSION_SCOPED_KINDS
 
 

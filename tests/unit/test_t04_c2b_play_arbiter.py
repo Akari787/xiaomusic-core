@@ -107,8 +107,7 @@ def _make_device() -> XiaoMusicDevice:
     d.config = types.SimpleNamespace(
         delay_sec=0, verbose=False, ffmpeg_location="",
         jellyfin_proxy_mode="off", stop_tts_msg="",
-        enable_force_stop=True, auto_next_stop_wait_mode="sync",
-        auto_next_stop_grace_ms=0,
+        enable_force_stop=True,
     )
     d.event_bus = None
     d.group_name = "test"

@@ -39,18 +39,6 @@ async def test_probe_confirms_stop_barrier_only_on_physical_status_two(
         def __init__(self):
             self.locked = True
 
-        def get_group_stop_barrier_status(self):
-            return {
-                "locked": self.locked,
-                "state": "timeout" if self.locked else "clear",
-            }
-
-        def confirm_group_stop_resolved(self, *, physical_stopped):
-            calls.append(physical_stopped)
-            if physical_stopped is True:
-                self.locked = False
-                return True
-            return False
 
     player = _Player()
 
@@ -61,10 +49,9 @@ async def test_probe_confirms_stop_barrier_only_on_physical_status_two(
     facade._core = lambda: _Core()
     out = await facade.probe("did-1")
 
-    assert calls == ([True] if should_confirm else [])
+    assert calls == []
     assert out["extra"]["physical_status"] == (2 if probe_data.get("status") == 2 or probe_data.get("status") == "2" else 1)
-    assert "group_stop_barrier" in out["extra"]
-    assert out["extra"]["group_stop_barrier"]["locked"] is (not should_confirm)
+    assert "group_stop_barrier" not in out["extra"]
 
 
 @pytest.mark.asyncio
@@ -95,16 +82,8 @@ async def test_probe_error_keeps_physical_status_unknown_and_barrier_locked():
                 ),
             }
 
-    class _Player:
-        def get_group_stop_barrier_status(self):
-            return {"locked": True, "state": "unresolved"}
-
-        def confirm_group_stop_resolved(self, *, physical_stopped):
-            calls.append(physical_stopped)
-            return False
-
     class _XM:
-        device_manager = SimpleNamespace(devices={"did-1": _Player()})
+        device_manager = SimpleNamespace(devices={"did-1": object()})
 
     facade = PlaybackFacade(_XM())
     facade._core = lambda: _Core()
@@ -114,7 +93,7 @@ async def test_probe_error_keeps_physical_status_unknown_and_barrier_locked():
     assert out["reachable"] is False
     assert out["extra"]["physical_status"] is None
     assert out["extra"]["physical_status_state"] == "unknown"
-    assert out["extra"]["group_stop_barrier"]["locked"] is True
+    assert "group_stop_barrier" not in out["extra"]
     assert calls == []
 
 

@@ -1563,127 +1563,6 @@ async def test_playmusic_success_bumps_attempt():
 
 
 @pytest.mark.asyncio
-async def test_playmusic_waits_for_delayed_overlap_stop_before_dispatch():
-    """A stop that outlives the overlap grace cannot overtake the next play."""
-    d = _build_playmusic_attempt_device()
-    d.config.auto_next_stop_wait_mode = "overlap"
-    d.config.auto_next_stop_grace_ms = 500
-
-    stop_entered = asyncio.Event()
-    release_stop = asyncio.Event()
-    dispatches: list[str] = []
-
-    async def _delayed_stop(*, fast=False):
-        stop_entered.set()
-        await release_stop.wait()
-        dispatches.append("stop_done")
-        return [fast]
-
-    async def _play(url, name=""):
-        dispatches.append("play")
-        return [{"code": 0}]
-
-    d.group_force_stop_xiaoai = _delayed_stop
-    d.group_player_play = _play
-    d._execute_group_stop = XiaoMusicDevice._execute_group_stop.__get__(d)
-
-    play_task = asyncio.create_task(
-        d._playmusic("song1", confirm_start_in_background=True, fast_stop=True)
-    )
-    await asyncio.wait_for(stop_entered.wait(), timeout=5.0)
-
-    # The stop is still pending after the configured 500ms overlap grace.
-    await asyncio.sleep(0.55)
-    assert dispatches == []
-
-    release_stop.set()
-    await asyncio.wait_for(play_task, timeout=5.0)
-    assert dispatches == ["stop_done", "play"]
-
-
-@pytest.mark.asyncio
-async def test_playmusic_cancellation_propagates_while_waiting_for_stop():
-    d = _build_playmusic_attempt_device()
-    entered = asyncio.Event()
-    child_done = asyncio.Event()
-
-    async def _stop():
-        entered.set()
-        try:
-            await asyncio.Event().wait()
-        finally:
-            child_done.set()
-
-    async def _return_stop_task(*, fast_stop, sid):
-        return asyncio.create_task(_stop())
-
-    d._execute_group_stop = _return_stop_task
-    play_task = asyncio.create_task(
-        d._playmusic("song1", confirm_start_in_background=True, fast_stop=True)
-    )
-    await asyncio.wait_for(entered.wait(), timeout=5.0)
-    play_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await play_task
-    await asyncio.wait_for(child_done.wait(), timeout=5.0)
-
-
-@pytest.mark.asyncio
-async def test_playmusic_stop_child_exception_does_not_dispatch():
-    d = _build_playmusic_attempt_device()
-    dispatched = False
-
-    async def _raise_from_child(*, fast_stop, sid):
-        async def _stop():
-            raise RuntimeError("late stop failure")
-
-        return asyncio.create_task(_stop())
-
-    async def _play(*args, **kwargs):
-        nonlocal dispatched
-        dispatched = True
-        return [{"code": 0}]
-
-    d._execute_group_stop = _raise_from_child
-    d.group_player_play = _play
-
-    assert await d._playmusic("song1", confirm_start_in_background=True, fast_stop=True) is False
-    assert dispatched is False
-
-
-@pytest.mark.asyncio
-async def test_cancelled_stop_child_fails_play_but_arbiter_worker_survives():
-    d = _build_playmusic_attempt_device()
-    results: list[object] = []
-    first_done = asyncio.Event()
-
-    async def _cancelled_stop(*, fast_stop, sid):
-        task = asyncio.create_task(asyncio.sleep(10))
-        task.cancel()
-        return task
-
-    async def _execute(_intent):
-        result = await d._playmusic(
-            "song1", confirm_start_in_background=True, fast_stop=True
-        )
-        results.append(result)
-        first_done.set()
-
-    d._execute_group_stop = _cancelled_stop
-    arbiter = DeviceCommandArbiter(_execute)
-    try:
-        arbiter.submit(IntentKind.PLAY)
-        await asyncio.wait_for(first_done.wait(), timeout=5.0)
-        first_done.clear()
-        arbiter.submit(IntentKind.PLAY)
-        await asyncio.wait_for(first_done.wait(), timeout=5.0)
-        assert results == [False, False]
-        assert arbiter._worker_task.done() is False
-    finally:
-        await arbiter.close()
-
-
-@pytest.mark.asyncio
 async def test_playmusic_player_play_failed_passes_dispatch_attempt_token():
     """The direct non-Jellyfin failure receives its physical dispatch token."""
     d = _build_playmusic_attempt_device()
@@ -1761,6 +1640,92 @@ async def test_playmusic_consecutive_increments_attempt():
     assert d.get_runtime_state().track_attempt_id == 1
     await d._playmusic("song1", confirm_start_in_background=True, fast_stop=True)
     assert d.get_runtime_state().track_attempt_id == 2
+@pytest.mark.asyncio
+async def test_real_playmusic_slow_stop_stop_then_play_b_dispatches_latest_once():
+    d = _build_playmusic_attempt_device()
+    d._execute_group_stop = XiaoMusicDevice._execute_group_stop.__get__(d)
+    first_stop_entered = asyncio.Event()
+    release_first_stop = asyncio.Event()
+    dispatches: list[str] = []
+    stop_calls = 0
+
+    async def _group_stop(*, fast=False):
+        nonlocal stop_calls
+        stop_calls += 1
+        if stop_calls == 1:
+            first_stop_entered.set()
+            await release_first_stop.wait()
+        return [True]
+
+    async def _group_play(url, name=""):
+        dispatches.append(name)
+        return [{"code": 0}]
+
+    d.group_force_stop_xiaoai = _group_stop
+    d.group_player_play = _group_play
+
+    async def _executor(intent):
+        if intent.kind is IntentKind.PLAY:
+            await d._playmusic(
+                intent.payload["name"],
+                confirm_start_in_background=True,
+                fast_stop=True,
+            )
+        elif intent.kind is IntentKind.STOP:
+            await d._execute_stop_intent(intent.payload or {})
+
+    arbiter = DeviceCommandArbiter(_executor)
+    d._command_arbiter = arbiter
+    try:
+        d._accept_command(updated_at=time.time())
+        first_token = d._capture_lifecycle_token()
+        arbiter.submit(IntentKind.PLAY, {"name": "song1", "token": first_token})
+        await asyncio.wait_for(first_stop_entered.wait(), timeout=1)
+
+        assert await d.stop(arg1="notts") is True
+        d._accept_command(updated_at=time.time())
+        arbiter.submit(
+            IntentKind.PLAY,
+            {"name": "song1", "token": d._capture_lifecycle_token()},
+        )
+        release_first_stop.set()
+
+        for _ in range(100):
+            if dispatches:
+                break
+            await asyncio.sleep(0)
+        assert dispatches == ["song1"]
+        assert stop_calls == 3
+        assert d.get_runtime_state().track_attempt_id == 1
+    finally:
+        release_first_stop.set()
+        await arbiter.close()
+
+
+@pytest.mark.asyncio
+async def test_real_playmusic_terminal_stop_failure_sets_failed_without_attempt():
+    d = _build_playmusic_attempt_device()
+    d._execute_group_stop = XiaoMusicDevice._execute_group_stop.__get__(d)
+    dispatched = []
+
+    async def _failed_stop(*, fast=False):
+        return [False]
+
+    async def _group_play(url, name=""):
+        dispatched.append(name)
+        return [{"code": 0}]
+
+    d.group_force_stop_xiaoai = _failed_stop
+    d.group_player_play = _group_play
+    result = await d._playmusic("song1", confirm_start_in_background=True, fast_stop=True)
+
+    assert result is False
+    assert dispatched == []
+    assert d.get_runtime_state().phase == PlaybackPhase.FAILED
+    assert d.get_runtime_state().failure.reason == "preplay_stop_failed"
+    assert d.get_runtime_state().track_attempt_id == 0
+
+
 # ── on_external_url_play one-time init guard ──────────────────────────
 
 @pytest.mark.asyncio

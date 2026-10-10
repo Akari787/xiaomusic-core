@@ -301,120 +301,26 @@ async def test_stop_empty_group_is_a_successful_noop():
 
 
 @pytest.mark.asyncio
-async def test_successful_stop_command_reconciles_completed_failed_group_barrier():
+async def test_non_success_stop_reports_runtime_failure_once():
     d = _device()
     d._runtime_state = PlaybackRuntimeState(phase=PlaybackPhase.STOPPING)
-    d.config = types.SimpleNamespace(
-        auto_next_stop_wait_mode="sync", auto_next_stop_timeout_ms=1000
-    )
     d.cancel_group_next_timer = _async_noop
 
-    async def _successful_stop_group(*, fast=False):
-        return [True]
+    async def _failed_stop_group():
+        return [False]
 
-    async def _failed_old_stop():
-        raise RuntimeError("stale preplay stop")
-
-    d.group_force_stop_xiaoai = _successful_stop_group
-    unresolved = asyncio.create_task(_failed_old_stop())
-    with pytest.raises(RuntimeError, match="stale preplay stop"):
-        await unresolved
-    d._unresolved_group_stop_task = unresolved
-    d._group_stop_barrier_state = "unresolved"
-    d._group_stop_barrier_degraded = True
+    d.group_force_stop_xiaoai = _failed_stop_group
     token = d._capture_lifecycle_token()
-    await d._execute_stop_intent(
-        {"sid": d._play_session_id, "token": token, "arg1": "notts"}
-    )
-    assert d._unresolved_group_stop_task is None
-    assert d.get_group_stop_barrier_status()["locked"] is False
+    with pytest.raises(RuntimeError, match="group stop returned"):
+        await d._execute_stop_intent(
+            {"sid": d._play_session_id, "token": token, "arg1": "notts"}
+        )
 
-    # If the old stop was still running, the later successful explicit stop
-    # records evidence; terminal failure can reconcile only without a new play.
-    release = asyncio.Event()
-
-    async def _late_failed_stop():
-        await release.wait()
-        raise RuntimeError("late stale stop")
-
-    old_task = asyncio.create_task(_late_failed_stop())
-    d._unresolved_group_stop_task = old_task
-    d._group_stop_barrier_state = "timeout"
-    d._group_stop_barrier_degraded = True
-    d._runtime_state = PlaybackRuntimeState(phase=PlaybackPhase.STOPPING)
-    d.group_force_stop_xiaoai = _successful_stop_group
-    old_task.add_done_callback(d._on_group_stop_task_done)
-    token = d._capture_lifecycle_token()
-    await d._execute_stop_intent(
-        {"sid": d._play_session_id, "token": token, "arg1": "notts"}
-    )
-    assert d.get_group_stop_barrier_status()["locked"] is True
-    release.set()
-    with pytest.raises(RuntimeError, match="late stale stop"):
-        await old_task
-    await asyncio.sleep(0)
-    assert d.get_group_stop_barrier_status()["locked"] is False
-
-    # A subsequent preplay fence (the next/play path) is no longer blocked.
-    assert await d._execute_group_stop(fast_stop=True, sid=d._play_session_id) is None
-    assert d.get_group_stop_barrier_status()["locked"] is False
-
-
-@pytest.mark.asyncio
-async def test_failed_preplay_callback_without_explicit_stop_stays_locked():
-    d = _device()
-
-    async def _failed_stop():
-        raise RuntimeError("ordinary preplay failure")
-
-    task = asyncio.create_task(_failed_stop())
-    with pytest.raises(RuntimeError, match="ordinary preplay failure"):
-        await task
-    d._unresolved_group_stop_task = task
-    d.log.error = lambda *args, **kwargs: None
-    d._group_stop_barrier_state = "unresolved"
-    d._group_stop_barrier_degraded = True
-    d._on_group_stop_task_done(task)
-    assert d.get_group_stop_barrier_status()["locked"] is True
-    assert d.get_group_stop_barrier_status()["state"] == "unresolved"
-
-
-@pytest.mark.asyncio
-async def test_pending_explicit_stop_evidence_is_invalidated_by_lifecycle_change():
-    d = _device()
-    d.config = types.SimpleNamespace(
-        auto_next_stop_wait_mode="sync", auto_next_stop_timeout_ms=1000
-    )
-    d.cancel_group_next_timer = _async_noop
-    release = asyncio.Event()
-
-    async def _late_failed_stop():
-        await release.wait()
-        raise RuntimeError("token changed stale stop")
-
-    async def _successful_stop_group(*, fast=False):
-        return [True]
-
-    old_task = asyncio.create_task(_late_failed_stop())
-    d._unresolved_group_stop_task = old_task
-    d._group_stop_barrier_state = "timeout"
-    d._group_stop_barrier_degraded = True
-    d.group_force_stop_xiaoai = _successful_stop_group
-    old_task.add_done_callback(d._on_group_stop_task_done)
-    d._runtime_state = PlaybackRuntimeState(phase=PlaybackPhase.STOPPING)
-    token = d._capture_lifecycle_token()
-    await d._execute_stop_intent(
-        {"sid": d._play_session_id, "token": token, "arg1": "notts"}
-    )
-    assert d.get_group_stop_barrier_status()["locked"] is True
-
-    d._accept_command(updated_at=2.0)
-    release.set()
-    with pytest.raises(RuntimeError, match="token changed stale stop"):
-        await old_task
-    await asyncio.sleep(0)
-    assert d.get_group_stop_barrier_status()["locked"] is True
-    assert d.get_group_stop_barrier_status()["state"] == "unresolved"
+    failure = d.get_runtime_state().failure
+    assert d.get_runtime_state().phase == PlaybackPhase.FAILED
+    assert failure is not None
+    assert failure.reason == "stop_not_confirmed"
+    assert failure.count == 1
 
 
 @pytest.mark.asyncio

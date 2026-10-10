@@ -168,7 +168,16 @@ xiaomusic-core 与本地播放器的关键差异是：播放设备位于远端�
 
 ---
 
-## 9. 相关文档
+## 9. DeviceCommandArbiter 与 preplay stop 现行规则
+
+- `DeviceCommandArbiter` 的 per-device 单 worker 中，active intent 即事务 owner；物理 stop 不脱离该 executor。
+- preplay group stop 不可取消，必须 await `group_force_stop_xiaoai()` 到 exact-terminal，并显式判定 `_group_stop_result_succeeded`；慢只影响后续命令延迟，不改变正确性。
+- stop 返回失败或 unknown 时，当前 play/AUTO_NEXT 不得 dispatch；普通 `_playmusic` 会捕获 stop 异常并将 runtime 置为 `FAILED` 后返回 `False`，未吞异常的 executor 路径则由 arbiter 记录 executor failure；最新 pending/after-barrier intent 按现有 generation/token 规则继续处理。
+- 若 stop RPC 永久挂死，active owner 保持 fail-closed，后续 intent 不越过它；这是已知运维风险，只能通过 transport/设备侧恢复处理，不以软超时放行。
+- 外部 URL 与本地播放共用同一 exact stop 与 stale-token fence。facade probe 只观测；failure 仍是 unknown，不执行 physical-confirm、stop recovery 或放行逻辑，probe response 也不再提供 group-stop recovery extra 字段。
+- Pause/Resume toggle 暂不重构。当前 owner 仍是 per-device；group fan-out 的 group-scoped owner 是已知后续边界，不宣称已经完成。
+
+## 10. 相关文档
 
 - [`../api/api_v1_spec.md`](../api/api_v1_spec.md)
 - [`../adr/0004-state-authority.md`](../adr/0004-state-authority.md)

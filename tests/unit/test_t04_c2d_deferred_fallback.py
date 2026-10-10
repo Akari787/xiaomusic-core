@@ -187,8 +187,6 @@ def _make_device() -> XiaoMusicDevice:
         jellyfin_proxy_mode="off",
         stop_tts_msg="",
         enable_force_stop=True,
-        auto_next_stop_wait_mode="sync",
-        auto_next_stop_grace_ms=0,
     )
     d.event_bus = None
     d.group_name = "test"

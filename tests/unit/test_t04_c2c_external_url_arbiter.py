@@ -131,8 +131,6 @@ def _make_device() -> XiaoMusicDevice:
         jellyfin_proxy_mode="off",
         stop_tts_msg="",
         enable_force_stop=True,
-        auto_next_stop_wait_mode="sync",
-        auto_next_stop_grace_ms=0,
     )
     d.event_bus = None
     d.group_name = "test"
@@ -233,45 +231,50 @@ async def test_external_play_uses_same_preplay_stop_fence():
 
 
 @pytest.mark.asyncio
-async def test_external_play_completed_failed_barrier_blocks_until_explicit_stop():
+async def test_external_play_failed_exact_stop_never_dispatches():
     d = _make_device()
-    old_stop = asyncio.create_task(_raise_external_test_error("old stop"))
-    with pytest.raises(RuntimeError, match="old stop"):
-        await old_stop
-    d._unresolved_group_stop_task = old_stop
-    d._group_stop_barrier_state = "unresolved"
-    d._group_stop_barrier_degraded = True
+
+    async def _failed_stop(*, fast=False):
+        return [False]
+
     d._execute_group_stop = XiaoMusicDevice._execute_group_stop.__get__(d)
+    d.group_force_stop_xiaoai = _failed_stop
+    d.group_player_play = lambda url: _raise_external_test_error("must not dispatch")
+    with pytest.raises(RuntimeError, match="group stop returned"):
+        await d._execute_external_play_intent(
+            {"url": "http://example.test/blocked.mp3", "context": {"title": "A"}}
+        )
+
+
+@pytest.mark.asyncio
+async def test_external_real_executor_slow_stop_stale_token_never_dispatches():
+    d = _make_device()
+    entered = asyncio.Event()
+    release = asyncio.Event()
     dispatches = []
+
+    async def _slow_stop(*, fast=False):
+        entered.set()
+        await release.wait()
+        return [True]
 
     async def _play(url):
         dispatches.append(url)
         return [{"code": 0}]
 
+    d._execute_group_stop = XiaoMusicDevice._execute_group_stop.__get__(d)
+    d.group_force_stop_xiaoai = _slow_stop
     d.group_player_play = _play
-    with pytest.raises(asyncio.TimeoutError, match="previous group stop is unresolved"):
-        await d._execute_external_play_intent(
-            {"url": "http://example.test/blocked.mp3", "context": {"title": "A"}}
+    task = asyncio.create_task(
+        d._execute_external_play_intent(
+            {"url": "http://example.test/slow.mp3", "context": {"title": "A"}}
         )
-    assert dispatches == []
-    assert d.get_group_stop_barrier_status()["locked"] is True
-    assert d.get_runtime_state().phase == PlaybackPhase.FAILED
-
-    async def _successful_stop(*, fast=False):
-        return [True]
-
-    d.group_force_stop_xiaoai = _successful_stop
-    d._begin_runtime_stop(updated_at=time.time())
-    d._accept_command(updated_at=time.time())
-    token = d._capture_lifecycle_token()
-    await d._execute_stop_intent({"sid": d._play_session_id, "token": token, "arg1": "notts"})
-    assert d.get_group_stop_barrier_status()["locked"] is False
-
-    d.on_external_url_play_started = _noop_return_true
-    await d._execute_external_play_intent(
-        {"url": "http://example.test/recovered.mp3", "context": {"title": "A"}}
     )
-    assert dispatches == ["http://example.test/recovered.mp3"]
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    d._accept_command(updated_at=time.time())
+    release.set()
+    await asyncio.wait_for(task, timeout=1)
+    assert dispatches == []
 
 
 @pytest.mark.asyncio
