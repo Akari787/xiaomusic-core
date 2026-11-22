@@ -90,7 +90,7 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
     assert calls[3][2]["arg1"] == 5
     assert calls[4][2]["arg1"] == "song-a"
     assert calls[5][2]["arg1"] == "song-a"
-    assert calls[2][2]["dotts"] is False
+    assert "dotts" not in calls[2][2]
     assert calls[2][2]["refresh_playlist"] is True
     assert out_prev["data"]["transport"] == "miio"
     assert out_next["data"]["transport"] == "miio"

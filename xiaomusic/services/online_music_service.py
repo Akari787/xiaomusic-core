@@ -12,7 +12,6 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from xiaomusic.const import PLAY_TYPE_ALL
 from xiaomusic.jellyfin_client import JellyfinClient
 from xiaomusic.providers.online_music_keywords import (
     parse_keyword_by_dash as _parse_keyword_by_dash,
@@ -337,40 +336,6 @@ class OnlineMusicService:
             self.log.error(f"搜索音乐时发生错误: {e}")
             return {"success": False, "error": str(e)}
 
-    # 调用在线搜索歌手，添加歌手歌单并播放
-    async def search_singer_play(self, did, search_key, name):
-        try:
-            # 解析歌手名，可能通过AI或直接分割
-            parsed_keyword, parsed_artist = await self._parse_keyword_with_ai(name)
-            list_name = "_online_" + parsed_artist
-            artist_song_list = self.xiaomusic.music_library.get_music_list().get(
-                list_name, []
-            )
-            if len(artist_song_list) > 0:
-                # 如果歌单存在，则直接播放
-                song_name = artist_song_list[0]
-                await self.xiaomusic.do_play_music_list(did, list_name, song_name)
-            else:
-                # 获取歌曲列表
-                result = await self.get_music_list_online(keyword=name, limit=10)
-                self.log.info(f"在线搜索歌手的歌曲列表: {result}")
-
-                if result.get("success") and result.get("total") > 0:
-                    # 打印输出 result.data
-                    self.log.info(f"歌曲列表: {result.get('data')}")
-                    list_name = "_online_" + result.get("artist")
-                    # 调用公共函数,处理歌曲信息 -> 添加歌单 -> 播放歌单
-                    return await self.push_music_list_play(
-                        did=did, song_list=result.get("data"), list_name=list_name
-                    )
-                else:
-                    return {"success": False, "error": "未找到歌曲"}
-
-        except Exception as e:
-            # 记录错误日志
-            self.log.error(f"searchKey {search_key} get media source failed: {e}")
-            return {"success": False, "error": str(e)}
-
     # 调用在线搜索歌手，追加歌手歌曲
     async def add_singer_song(self, list_name, name):
         try:
@@ -464,99 +429,6 @@ class OnlineMusicService:
             self.log.error(f"推送歌单失败: {e}")
             return {"success": False, "error": str(e)}
 
-    # 在线播放：在线搜索、播放
-    async def online_play(self, did="", arg1="", **kwargs):
-        await self._before_play()
-        # 获取搜索关键词
-        parts = arg1.split("|")
-        search_key = parts[0]
-        name = parts[1] if len(parts) > 1 else search_key
-        if not name:
-            name = search_key
-        self.log.info(f"搜索关键字{search_key},提取的歌名{name}")
-        await self.search_top_one_play(did, search_key, name)
-
-    # 播放歌手：在线搜索歌手并存为列表播放
-    async def singer_play(self, did="", arg1="", **kwargs):
-        await self._before_play()
-        # 获取搜索关键词
-        parts = arg1.split("|")
-        search_key = parts[0]
-        name = parts[1] if len(parts) > 1 else search_key
-        if not name:
-            name = search_key
-        self.log.info(f"搜索关键字{search_key},搜索歌手名{name}")
-        await self.search_singer_play(did, search_key, name)
-
-    # 处理推送的歌单并播放
-    async def push_music_list_play(
-        self, did="web_device", song_list=None, list_name="_online_play", **kwargs
-    ):
-        """
-        处理推送的歌单信息 -> 添加歌单 -> 播放歌单
-
-        Args:
-            did: 设备ID
-            song_list: 歌曲列表
-            list_name: 列表名称
-            **kwargs: 其他参数
-        Returns:
-            dict: 操作结果
-        """
-        if song_list is None:
-            song_list = []
-
-        self.log.info(
-            f"推送歌单播放, 歌单名称: {list_name}, 歌曲数量: {len(song_list)}, 设备ID: {did}"
-        )
-        # 验证输入参数
-        if not song_list and len(song_list) > 0:
-            return {"success": False, "error": "歌曲列表不能为空"}
-        try:
-            self._handle_music_list(song_list, list_name)
-            # 如果指定了特定设备，播放歌单
-            if did != "web_device" and self.xiaomusic.did_exist(did):
-                # 歌单推送应该是全部播放，不随机打乱
-                await self.xiaomusic.set_play_type(did, PLAY_TYPE_ALL, False)
-                push_playlist = self.xiaomusic.music_library.get_music_list()[list_name]
-                song_name = push_playlist[0]
-                await self.xiaomusic.do_play_music_list(did, list_name, song_name)
-                return {
-                    "success": True,
-                    "message": f"成功推送歌单 {list_name}",
-                    "list_name": list_name,
-                }
-            else:
-                return {"success": False, "error": "设备不存在！"}
-        except Exception as e:
-            self.log.error(f"推送歌单播放失败: {e}")
-            return {"success": False, "error": str(e)}
-
-    # 在线搜索搜索最符合的一首歌并播放
-    async def search_top_one_play(self, did, search_key, name):
-        try:
-            # 获取歌曲列表
-            result = await self.get_music_list_online(keyword=name, limit=10)
-
-            if result.get("success") and result.get("total") > 0:
-                # 打印输出 result.data
-                self.log.info(f"在线搜索的歌曲列表: {result.get('data')}")
-                # 根据搜素关键字，智能搜索出最符合的一条music_item
-                top_one_list = await self._search_top_one(
-                    result.get("data"), search_key, name
-                )
-                list_name = "_online_play"
-                # 调用公共函数,处理歌曲信息 -> 添加歌单 -> 播放歌单
-                return await self.push_music_list_play(
-                    did=did, song_list=top_one_list, list_name=list_name
-                )
-            else:
-                return {"success": False, "error": "未找到歌曲"}
-        except Exception as e:
-            # 记录错误日志
-            self.log.error(f"searchKey {search_key} get media source failed: {e}")
-            return {"success": False, "error": str(e)}
-
     def default_url(self):
         # 先推送默认【搜索中】音频，搜索到播放url后推送给小爱
         config = self.xiaomusic.config
@@ -566,11 +438,6 @@ class OnlineMusicService:
             proxy_base = "http://192.168.31.241:8090"
         # return proxy_base + "/static/search.mp3"
         return proxy_base + "/static/silence.mp3"
-
-    async def _before_play(self):
-        # 先推送默认【搜索中】音频，搜索到播放url后推送给小爱
-        before_url = self.default_url()
-        await self.xiaomusic.play_url(self.xiaomusic.get_cur_did(), before_url)
 
     def _convert_song_list_to_music_items(self, song_list):
         """
@@ -798,76 +665,6 @@ class OnlineMusicService:
             f"歌单去重完成，原始数量: {len(song_list)}, 去重后数量: {len(unique_songs)}"
         )
         return unique_songs
-
-    async def _search_top_one(self, music_items, search_key, name):
-        """智能搜索出最符合的一条music_item"""
-        try:
-            if not music_items:
-                return []
-
-            self.log.info(f"搜索关键字: {search_key}；歌名：{name}")
-
-            # 使用更高效的算法进行匹配
-            if len(music_items) == 1:
-                return music_items
-
-            # 计算每个项目的匹配分数
-            keyword = search_key.lower().strip()
-            if not keyword:
-                return [music_items[0]]  # 如果没有搜索词，返回第一首
-
-            def calculate_match_score(item):
-                """计算匹配分数"""
-                title = (item.get("title", "") or "").lower()
-                artist = (item.get("artist", "") or "").lower()
-
-                score = 0
-                # 歌曲名匹配权重
-                if keyword in title:
-                    # 完全匹配得最高分
-                    if title == keyword:
-                        score += 90
-                    # 开头匹配
-                    elif title.startswith(keyword):
-                        score += 70
-                    # 结尾匹配
-                    elif title.endswith(keyword):
-                        score += 50
-                    # 包含匹配
-                    else:
-                        score += 30
-                # 部分字符匹配
-                elif any(char in title for char in keyword.split()):
-                    score += 10
-
-                # 艺术家名匹配权重
-                if keyword in artist:
-                    # 完全匹配
-                    if artist == keyword:
-                        score += 9
-                    # 开头匹配
-                    elif artist.startswith(keyword):
-                        score += 7
-                    # 结尾匹配
-                    elif artist.endswith(keyword):
-                        score += 5
-                    # 包含匹配
-                    else:
-                        score += 3
-                # 部分字符匹配
-                elif any(char in artist for char in keyword.split()):
-                    score += 1
-
-                return score
-
-            # 按匹配分数排序，返回分数最高的项目
-            sorted_items = sorted(music_items, key=calculate_match_score, reverse=True)
-            return [sorted_items[0]]
-
-        except Exception as e:
-            self.log.error(f"_search_top_one error: {e}")
-            # 出现异常时返回第一个项目
-            return [music_items[0]] if music_items else []
 
     async def _call_plugin_method(
         self,

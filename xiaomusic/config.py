@@ -12,33 +12,9 @@ from urllib.parse import urlparse
 
 from xiaomusic.config_model import try_validate_config_model
 from xiaomusic.const import (
-    PLAY_TYPE_ALL,
-    PLAY_TYPE_ONE,
     PLAY_TYPE_RND,
-    PLAY_TYPE_SEQ,
-    PLAY_TYPE_SIN,
 )
 from xiaomusic.utils.system_utils import validate_proxy
-
-
-# 默认口令
-def default_key_word_dict():
-    return {
-        "下一首": "play_next",
-        "上一首": "play_prev",
-        "单曲循环": "set_play_type_one",
-        "全部循环": "set_play_type_all",
-        "随机播放": "set_play_type_rnd",
-        "单曲播放": "set_play_type_sin",
-        "顺序播放": "set_play_type_seq",
-        "分钟后关机": "stop_after_minute",
-        "刷新列表": "gen_music_list",
-        "加入收藏": "add_to_favorites",
-        "收藏歌曲": "add_to_favorites",
-        "取消收藏": "del_from_favorites",
-        "播放列表第": "play_music_list_index",
-        "删除歌曲": "cmd_del_music",
-    }
 
 
 def default_auth_token_file() -> str:
@@ -97,39 +73,6 @@ def default_auth_refresh_threshold() -> float:
     )
 
 
-def default_user_key_word_dict():
-    # Unsafe features (exec#) are disabled by default; keep this empty.
-    return {}
-
-
-# 命令参数在前面
-KEY_WORD_ARG_BEFORE_DICT = {
-    "分钟后关机": True,
-}
-
-
-# 口令匹配优先级
-def default_key_match_order():
-    return [
-        "分钟后关机",
-        "下一首",
-        "上一首",
-        "单曲循环",
-        "全部循环",
-        "随机播放",
-        "单曲播放",
-        "顺序播放",
-        "关机",
-        "刷新列表",
-        "播放列表第",
-        "播放列表",
-        "加入收藏",
-        "收藏歌曲",
-        "取消收藏",
-        "删除歌曲",
-    ]
-
-
 @dataclass
 class Device:
     did: str = ""
@@ -163,10 +106,6 @@ class Config:
         "XIAOMUSIC_SEARCH", "bilisearch:"
     )  # "bilisearch:" or "ytsearch:"
     ffmpeg_location: str = os.getenv("XIAOMUSIC_FFMPEG_LOCATION", "./ffmpeg/bin")
-    active_cmd: str = os.getenv(
-        "XIAOMUSIC_ACTIVE_CMD",
-        "play,set_play_type_rnd,playlocal,play_music_list,play_music_list_index,stop_after_minute,stop,play_next,play_prev,set_play_type_one,set_play_type_all,set_play_type_sin,set_play_type_seq,gen_music_list,add_to_favorites,del_from_favorites,cmd_del_music,online_play,singer_play",
-    )
     exclude_dirs: str = os.getenv("XIAOMUSIC_EXCLUDE_DIRS", "@eaDir,tmp")
     disable_httpauth: bool = (
         os.getenv("XIAOMUSIC_DISABLE_HTTPAUTH", "true").strip().lower() == "true"
@@ -178,24 +117,8 @@ class Config:
     disable_download: bool = (
         os.getenv("XIAOMUSIC_DISABLE_DOWNLOAD", "false").lower() == "true"
     )
-    key_word_dict: dict[str, str] = field(default_factory=default_key_word_dict)
-    key_match_order: list[str] = field(default_factory=default_key_match_order)
     log_file: str = os.getenv("XIAOMUSIC_LOG_FILE", "xiaomusic.log.txt")
-    stop_tts_msg: str = os.getenv("XIAOMUSIC_STOP_TTS_MSG", "收到,再见")
 
-    keywords_playlocal: str = os.getenv(
-        "XIAOMUSIC_KEYWORDS_PLAYLOCAL", "播放本地歌曲,本地播放歌曲"
-    )
-    keywords_play: str = os.getenv("XIAOMUSIC_KEYWORDS_PLAY", "播放歌曲,放歌曲")
-    keywords_online_play: str = os.getenv("XIAOMUSIC_KEYWORDS_ONLINE_PLAY", "在线播放")
-    keywords_singer_play: str = os.getenv("XIAOMUSIC_KEYWORDS_SINGER_PLAY", "播放歌手")
-    keywords_stop: str = os.getenv("XIAOMUSIC_KEYWORDS_STOP", "关机,暂停,停止,停止播放")
-    keywords_playlist: str = os.getenv(
-        "XIAOMUSIC_KEYWORDS_PLAYLIST", "播放列表,播放歌单"
-    )
-    user_key_word_dict: dict[str, str] = field(
-        default_factory=default_user_key_word_dict
-    )
     devices: dict[str, Device] = field(default_factory=dict)
     group_list: str = os.getenv(
         "XIAOMUSIC_GROUP_LIST", ""
@@ -204,7 +127,6 @@ class Config:
         os.getenv("XIAOMUSIC_REMOVE_ID3TAG", "false").lower() == "true"
     )
     convert_to_mp3: bool = os.getenv("CONVERT_TO_MP3", "false").lower() == "true"
-    delay_sec: int = int(os.getenv("XIAOMUSIC_DELAY_SEC", 0))  # 下一首歌延迟播放秒数
     auto_next_confirm_delay_ms: int = int(
         os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_DELAY_MS", "1000")
     )
@@ -232,16 +154,6 @@ class Config:
     enable_file_watch: bool = (
         os.getenv("XIAOMUSIC_ENABLE_FILE_WATCH", "false").lower() == "true"
     )
-    # Multi-platform channel cycle/context controls.
-    channel_cycle_interval: int = int(os.getenv("XIAOMUSIC_CHANNEL_CYCLE_INTERVAL", "60"))
-    channel_archive_log_max_entries: int = int(os.getenv("XIAOMUSIC_CHANNEL_ARCHIVE_LOG_MAX_ENTRIES", "500"))
-    channel_archive_log_enabled: bool = (
-        os.getenv("XIAOMUSIC_CHANNEL_ARCHIVE_LOG_ENABLED", "false").lower() == "true"
-    )
-    channel_context_window_size: int = int(os.getenv("XIAOMUSIC_CHANNEL_CONTEXT_WINDOW_SIZE", "20"))
-    enable_pull_ask: bool = (
-        os.getenv("XIAOMUSIC_ENABLE_PULL_ASK", "false").lower() == "true"
-    )
     enable_yt_dlp_cookies: bool = (
         os.getenv("XIAOMUSIC_ENABLE_YT_DLP_COOKIES", "false").lower() == "true"
     )
@@ -257,17 +169,6 @@ class Config:
         os.getenv("XIAOMUSIC_PERSIST_TOKEN", "true").lower() == "true"
     )
 
-    # Exec plugin (exec#...) is dangerous. Default disabled.
-    enable_exec_plugin: bool = (
-        os.getenv("XIAOMUSIC_ENABLE_EXEC_PLUGIN", "false").lower() == "true"
-    )
-    allowed_exec_commands: list[str] = field(
-        default_factory=lambda: [
-            x.strip()
-            for x in os.getenv("XIAOMUSIC_ALLOWED_EXEC_COMMANDS", "").split(",")
-            if x.strip()
-        ]
-    )
     allowlist_domains: list[str] = field(
         default_factory=lambda: [
             x.strip().lower()
@@ -276,7 +177,7 @@ class Config:
         ]
     )
 
-    # Unified outbound allowlist (exec http_get, web playlist fetch, self-update downloads, etc.)
+    # Unified outbound allowlist (downloads, self-update, etc.)
     # Default empty -> deny outbound unless explicitly configured.
     outbound_allowlist_domains: list[str] = field(
         default_factory=lambda: [
@@ -303,32 +204,6 @@ class Config:
         ]
     )
 
-    # Keyword merging behavior: override(default) or append
-    keyword_override_mode: str = os.getenv(
-        "XIAOMUSIC_KEYWORD_OVERRIDE_MODE", "override"
-    )
-    get_ask_by_mina: bool = (
-        os.getenv("XIAOMUSIC_GET_ASK_BY_MINA", "false").lower() == "true"
-    )
-    play_type_one_tts_msg: str = os.getenv(
-        "XIAOMUSIC_PLAY_TYPE_ONE_TTS_MSG", "已经设置为单曲循环"
-    )
-    play_type_all_tts_msg: str = os.getenv(
-        "XIAOMUSIC_PLAY_TYPE_ALL_TTS_MSG", "已经设置为全部循环"
-    )
-    play_type_rnd_tts_msg: str = os.getenv(
-        "XIAOMUSIC_PLAY_TYPE_RND_TTS_MSG", "已经设置为随机播放"
-    )
-    play_type_sin_tts_msg: str = os.getenv(
-        "XIAOMUSIC_PLAY_TYPE_SIN_TTS_MSG", "已经设置为单曲播放"
-    )
-    play_type_seq_tts_msg: str = os.getenv(
-        "XIAOMUSIC_PLAY_TYPE_SEQ_TTS_MSG", "已经设置为顺序播放"
-    )
-    # 开启语音删除歌曲
-    enable_cmd_del_music: bool = (
-        os.getenv("XIAOMUSIC_ENABLE_CMD_DEL_MUSIC", "false").lower() == "true"
-    )
 
 
     # edge-tts 语音角色
@@ -347,49 +222,11 @@ class Config:
         os.getenv("XIAOMUSIC_JELLYFIN_SYNC_INTERVAL_MINUTES", "30")
     )
 
-    # Computed / diagnostic fields (not user-configurable)
-    keyword_conflicts: list[str] = field(default_factory=list, init=False, repr=False)
-    def append_keyword(self, keys, action):
-        for key in keys.split(","):
-            if key:
-                self.key_word_dict[key] = action
-                if key not in self.key_match_order:
-                    self.key_match_order.append(key)
-
-    def append_user_keyword(self):
-        mode = (self.keyword_override_mode or "override").strip().lower()
-        if mode not in ("override", "append"):
-            mode = "override"
-
-        self.keyword_conflicts = []
-        for k, v in (self.user_key_word_dict or {}).items():
-            if k in self.key_word_dict:
-                self.keyword_conflicts.append(k)
-                if mode == "append":
-                    continue
-            self.key_word_dict[k] = v
-            if k not in self.key_match_order:
-                self.key_match_order.append(k)
-
     def init(self):
         if not self.auth_token_file:
             self.auth_token_file = "auth.json"
 
-        self.key_match_order = default_key_match_order()
-        self.key_word_dict = default_key_word_dict()
-        self.append_keyword(self.keywords_playlocal, "playlocal")
-        self.append_keyword(self.keywords_play, "play")
-        self.append_keyword(self.keywords_online_play, "online_play")
-        self.append_keyword(self.keywords_singer_play, "singer_play")
-        self.append_keyword(self.keywords_stop, "stop")
-        self.append_keyword(self.keywords_playlist, "play_music_list")
-        self.append_user_keyword()
-        self.key_match_order = [
-            x for x in self.key_match_order if x in self.key_word_dict
-        ]
-
         # 转换数据
-        self._active_cmd_arr = self.active_cmd.split(",") if self.active_cmd else []
         self._exclude_dirs_set = set(self.exclude_dirs.split(","))
 
         # Normalize and validate security/network fields with typed model.
@@ -397,8 +234,6 @@ class Config:
             warnings.simplefilter("always")
             typed = try_validate_config_model(
                 {
-                    "enable_exec_plugin": self.enable_exec_plugin,
-                    "allowed_exec_commands": self.allowed_exec_commands,
                     "outbound_allowlist_domains": getattr(self, "outbound_allowlist_domains", []) or [],
                     "allowlist_domains": self.allowlist_domains,
                     "enable_self_update": getattr(self, "enable_self_update", False),
@@ -412,8 +247,6 @@ class Config:
             print(f"Config warning: {w.message}")
         if typed is not None:
             self._typed = typed
-            self.enable_exec_plugin = typed.enable_exec_plugin
-            self.allowed_exec_commands = list(typed.allowed_exec_commands)
             self.allowlist_domains = list(typed.allowlist_domains)
             self.outbound_allowlist_domains = list(typed.outbound_allowlist_domains)
             self.enable_self_update = typed.enable_self_update
@@ -421,7 +254,6 @@ class Config:
             self.log_redact = typed.log_redact
             self.jellyfin_base_url = typed.jellyfin_base_url
         else:
-            self.allowed_exec_commands = [x.strip() for x in self.allowed_exec_commands if x.strip()]
             self.allowlist_domains = [x.strip().lower() for x in self.allowlist_domains if x.strip()]
             self.outbound_allowlist_domains = [
                 x.strip().lower()
@@ -432,17 +264,10 @@ class Config:
                 self.outbound_allowlist_domains = list(self.allowlist_domains)
             self.cors_allow_origins = [x.strip() for x in (self.cors_allow_origins or []) if x.strip()]
 
-        mode = (self.keyword_override_mode or "override").strip().lower()
-        if mode not in ("override", "append"):
-            mode = "override"
-        self.keyword_override_mode = mode
-
         if not isinstance(self.log_redact, bool):
             self.log_redact = True
         if not isinstance(self.persist_token, bool):
             self.persist_token = True
-        if not isinstance(self.enable_exec_plugin, bool):
-            self.enable_exec_plugin = False
 
         if not isinstance(getattr(self, "enable_self_update", False), bool):
             self.enable_self_update = False
@@ -519,9 +344,6 @@ class Config:
                 setattr(self, k, converted_value)
         self.init()
 
-    def get_active_cmd_arr(self):
-        return self._active_cmd_arr
-
     def get_exclude_dirs_set(self):
         return self._exclude_dirs_set
 
@@ -571,19 +393,6 @@ class Config:
         if not os.path.exists(self.temp_path):
             os.makedirs(self.temp_path)
         return self.temp_path
-
-    def get_play_type_tts(self, play_type):
-        if play_type == PLAY_TYPE_ONE:
-            return self.play_type_one_tts_msg
-        if play_type == PLAY_TYPE_ALL:
-            return self.play_type_all_tts_msg
-        if play_type == PLAY_TYPE_RND:
-            return self.play_type_rnd_tts_msg
-        if play_type == PLAY_TYPE_SIN:
-            return self.play_type_sin_tts_msg
-        if play_type == PLAY_TYPE_SEQ:
-            return self.play_type_seq_tts_msg
-        return ""
 
     def get_one_device_id(self):
         """获取一个设备ID

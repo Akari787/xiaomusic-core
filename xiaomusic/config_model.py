@@ -9,8 +9,6 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 class ConfigModel(BaseModel):
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
-    enable_exec_plugin: bool
-    allowed_exec_commands: list[str]
     outbound_allowlist_domains: list[str]
     allowlist_domains: list[str] = []
     enable_self_update: bool
@@ -20,7 +18,6 @@ class ConfigModel(BaseModel):
     port: int = 8090
 
     @field_validator(
-        "allowed_exec_commands",
         "outbound_allowlist_domains",
         "allowlist_domains",
         "cors_allow_origins",
@@ -43,7 +40,6 @@ class ConfigModel(BaseModel):
 def validate_config_model(data: dict[str, Any], *, warn: bool = True) -> ConfigModel:
     normalized = dict(data)
     bool_fields = [
-        "enable_exec_plugin",
         "enable_self_update",
         "log_redact",
     ]

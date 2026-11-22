@@ -103,8 +103,6 @@ def test_diagnostics_route_returns_unified_view(monkeypatch, client):
     class _Config:
         auth_token_path = "conf/auth.json"
         qrcode_timeout = 120
-        keyword_override_mode = "override"
-        keyword_conflicts = ["play"]
         music_path = "."
         download_path = "."
         temp_path = "."
@@ -182,7 +180,7 @@ def test_diagnostics_route_returns_unified_view(monkeypatch, client):
     assert startup_area["status"] == "ok"
     assert startup_area["data"]["ok"] is True
     assert startup_area["data"]["checked_at"] == 1710000000.0
-    assert startup_area["data"]["keyword_conflicts"] == ["play"]
+    assert "keyword_conflicts" not in startup_area["data"]
 
     auth_area = payload["areas"]["auth"]
     assert auth_area["status"] == "ok"
@@ -239,8 +237,6 @@ def test_diagnostics_route_marks_overall_failed_when_auth_failed(monkeypatch, cl
     class _Config:
         auth_token_path = "conf/auth.json"
         qrcode_timeout = 120
-        keyword_override_mode = "override"
-        keyword_conflicts = []
         music_path = "."
         download_path = "."
         temp_path = "."

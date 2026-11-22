@@ -64,12 +64,9 @@ app = FastAPI(
 )
 
 
-# Map security-related errors (e.g. exec# governance) to a safe HTTP response.
+# Map security-related errors to a safe HTTP response.
 try:
     from xiaomusic.security.errors import (
-        ExecDisabledError,
-        ExecNotAllowedError,
-        ExecValidationError,
         OutboundBlockedError,
         SecurityError,
         SelfUpdateDisabledError,
@@ -81,13 +78,7 @@ try:
         logging.getLogger("xiaomusic.security").warning(
             "SECURITY: blocked request: %s", exc.__class__.__name__
         )
-        if isinstance(exc, ExecDisabledError):
-            detail = "exec plugin disabled"
-        elif isinstance(exc, ExecNotAllowedError):
-            detail = "exec command not allowed"
-        elif isinstance(exc, ExecValidationError):
-            detail = "invalid exec command"
-        elif isinstance(exc, OutboundBlockedError):
+        if isinstance(exc, OutboundBlockedError):
             detail = "outbound blocked"
         elif isinstance(exc, SelfUpdateDisabledError):
             detail = "self update disabled"

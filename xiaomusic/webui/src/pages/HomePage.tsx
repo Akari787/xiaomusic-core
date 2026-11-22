@@ -23,7 +23,6 @@ import {
   setVolume as v1SetVolume,
   stop as v1Stop,
   tts as v1Tts,
-  updateSystemSettingItem,
   type ApiEnvelope,
   type OnlineSearchItemData,
   type PlayMode,
@@ -150,44 +149,16 @@ const ADVANCED_TABS: Array<{ key: string; label: string; fields: SettingField[] 
     ],
   },
   {
-    key: "tts",
-    label: "语音TTS",
+    key: "device",
+    label: "设备",
     fields: [
+      { key: "group_list", label: "设备分组配置" },
       {
         key: "edge_tts_voice",
         label: "Edge-TTS 语音角色",
         kind: "select",
         options: EDGE_TTS_VOICE_OPTIONS,
       },
-      { key: "stop_tts_msg", label: "停止提示音" },
-      { key: "play_type_one_tts_msg", label: "单曲循环提示音" },
-      { key: "play_type_all_tts_msg", label: "全部循环提示音" },
-      { key: "play_type_rnd_tts_msg", label: "随机播放提示音" },
-      { key: "play_type_sin_tts_msg", label: "单曲播放提示音" },
-      { key: "play_type_seq_tts_msg", label: "顺序播放提示音" },
-    ],
-  },
-  {
-    key: "voicecmd",
-    label: "语音命令",
-    fields: [
-      { key: "keywords_playlocal", label: "播放本地歌曲口令" },
-      { key: "keywords_play", label: "播放歌曲口令" },
-      { key: "keywords_playlist", label: "播放列表口令" },
-      { key: "keywords_stop", label: "停止口令" },
-      { key: "keywords_online_play", label: "在线播放口令" },
-      { key: "keywords_singer_play", label: "播放歌手口令" },
-      { key: "enable_cmd_del_music", label: "启用语音删除歌曲", kind: "bool" },
-      { key: "active_cmd", label: "允许唤醒命令" },
-    ],
-  },
-  {
-    key: "device",
-    label: "设备对话",
-    fields: [
-      { key: "group_list", label: "设备分组配置" },
-      { key: "enable_pull_ask", label: "获取对话记录", kind: "bool" },
-      { key: "get_ask_by_mina", label: "特殊型号对话记录", kind: "bool" },
     ],
   },
   {
@@ -960,7 +931,6 @@ export function HomePage() {
   const [toolsOpen, setToolsOpen] = useState<boolean>(false);
   const [qrcodeExpireAt, setQrcodeExpireAt] = useState<number>(0);
   const [qrcodeRemain, setQrcodeRemain] = useState<number>(0);
-  const [pullAskEnabled, setPullAskEnabled] = useState<boolean>(false);
 
   const [serverState, dispatchServerState] = useReducer(serverStateReducer, EMPTY_SERVER_STATE);
   const [uiState, setUiState] = useState<UiState>(EMPTY_UI_STATE);
@@ -1369,7 +1339,6 @@ export function HomePage() {
         }))
       : [];
     setSettingDeviceList(rows);
-    setPullAskEnabled(Boolean(settings.enable_pull_ask));
 
     if (!homeMountedRef.current || generation !== settingsLoadGenerationRef.current) return;
     if (!publicBaseMigratedRef.current && !manual) {
@@ -2009,18 +1978,7 @@ export function HomePage() {
     await loadPlaylists();
   }
 
-  async function togglePullAsk() {
-    const next = !pullAskEnabled;
-    const out = await updateSystemSettingItem("enable_pull_ask", next);
-    if (isApiOk(out)) {
-      setPullAskEnabled(next);
-      updateSettingField("enable_pull_ask", next);
-      setMessage(next ? "语音口令已开启" : "语音口令已关闭");
-      return;
-    }
-    const err = apiErrorInfo(out);
-    setMessage(err.message || "切换失败，请重试");
-  }
+
 
   function doClearCache() {
     clearXmCache();
@@ -2220,16 +2178,6 @@ export function HomePage() {
                     );
                   })}
                 </select>
-                <div
-                  id="pullAskToggle"
-                  className={`toggle-switch ${pullAskEnabled ? "active" : ""}`}
-                  role="switch"
-                  aria-checked={pullAskEnabled ? "true" : "false"}
-                  aria-label="语音口令开关"
-                  onClick={() => void togglePullAsk()}
-                >
-                  <div className="toggle-slider"></div>
-                </div>
               </div>
             </div>
 
@@ -2327,22 +2275,7 @@ export function HomePage() {
             </a>
           </h1>
 
-          <label htmlFor="did" className="label-with-toggle">
-            选择播放设备:
-            <div className="toggle-switch-container">
-              <label className="toggle-label">语音口令</label>
-              <div
-                id="pullAskToggle"
-                className={`toggle-switch ${pullAskEnabled ? "active" : ""}`}
-                role="switch"
-                aria-checked={pullAskEnabled ? "true" : "false"}
-                aria-label="语音口令开关"
-                onClick={() => void togglePullAsk()}
-              >
-                <div className="toggle-slider"></div>
-              </div>
-            </div>
-          </label>
+          <label htmlFor="did">选择播放设备:</label>
           <select id="did" className="device-selector" value={activeDid} onChange={(e) => setActiveDid(e.target.value)}>
             {devices.map((d) => {
               const did = d.miotDID || d.did || d.deviceID || "";

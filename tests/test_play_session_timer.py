@@ -177,8 +177,8 @@ async def test_duration_probe_sets_next_timer_when_duration_recovered(monkeypatc
         pass
 
     assert d._duration == 10.0
-    # remaining = duration - offset + delay_sec = 10 - 2 - 1 = 7
-    assert captured["sec"] == pytest.approx(7.0, abs=0.01)
+    # remaining = duration - offset - TRACK_END_LEAD_SEC = 10 - 2 - 2 = 6
+    assert captured["sec"] == pytest.approx(6.0, abs=0.01)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -400,13 +400,13 @@ async def test_external_url_play_started_sets_duration_and_next_timer():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_mark_play_started_applies_delay_sec_to_next_timer(monkeypatch):
+async def test_mark_play_started_applies_track_end_lead_to_next_timer(monkeypatch):
     """_mark_play_started requires token arg; mock set_next accepts token.
 
     Migration: _mark_play_started signature is now ``(*, name, sid, cur_playlist, token, ...)``.
     """
     d = _build_device_for_timer_tests()
-    d.config = types.SimpleNamespace(delay_sec=5, verbose=False)
+    d.config = types.SimpleNamespace(verbose=False)
     d.device.hardware = ""
     d.xiaomusic = types.SimpleNamespace(
         music_library=types.SimpleNamespace(get_music_duration=lambda name: asyncio.sleep(0, result=10.0)),
@@ -436,21 +436,21 @@ async def test_mark_play_started_applies_delay_sec_to_next_timer(monkeypatch):
         await asyncio.wait_for(timer_done.wait(), timeout=2.0)
     except asyncio.TimeoutError:
         pass
-    assert captured["sec"] == pytest.approx(15.0, abs=0.01)
+    assert captured["sec"] == pytest.approx(8.0, abs=0.01)  # 10 s - 2 s lead
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T03-T07 migrated: external_url_play_started with delay_sec + token
+# T03-T07 migrated: external_url_play_started with track-end lead + token
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_external_url_play_started_applies_delay_sec_to_next_timer():
-    """external_url_play_started with delay_sec=-3 requires token.
+async def test_external_url_play_started_applies_track_end_lead_to_next_timer():
+    """external_url_play_started sends the next track 2 s early; requires token.
 
     Migration: requires token + mock set_next with token acceptance.
     """
     d = _build_device_for_timer_tests()
-    d.config = types.SimpleNamespace(delay_sec=-3, verbose=False)
+    d.config = types.SimpleNamespace(verbose=False)
     d.device.cur_playlist = "中文"
     d._play_list_items = [
         {"item_id": "item-old", "entity_id": "", "display_name": "old-song", "legacy_name": "old-song"},
@@ -502,7 +502,7 @@ async def test_external_url_play_started_applies_delay_sec_to_next_timer():
     except asyncio.TimeoutError:
         pass
 
-    assert captured["sec"] == pytest.approx(120.0, abs=0.01)
+    assert captured["sec"] == pytest.approx(121.0, abs=0.01)  # 123 s - 2 s lead
     assert d._duration == 123.0
 
 
@@ -760,7 +760,7 @@ async def test_mark_play_started_schedules_status_probe_when_requested(monkeypat
 
     assert captured["sid"] == d._play_session_id
     assert captured["name"] == "song1"
-    assert captured["timer"] == pytest.approx(10.0, abs=0.01)
+    assert captured["timer"] == pytest.approx(8.0, abs=0.01)  # 10 s - 2 s lead
 
 
 # ─────────────────────────────────────────────────────────────────────────────

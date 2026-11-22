@@ -28,6 +28,16 @@
 - 文件路径、日志路径等部署参数从设置页撤下，仍可用环境变量配置。
 - 设置页删除“文件路径”“播放控制”“搜索匹配”“歌单定时”分类，以及三个未实现的工具链接。
 
+### 删除语音控制
+
+> **升级注意**：不再轮询音箱对话记录，音箱上说“播放歌曲 xx”之类的口令不会再被 xiaomusic 响应。请用 WebUI、API 或 Home Assistant 控制。
+
+- 删除对话记录轮询（`enable_pull_ask`、`get_ask_by_mina`、`channel_*`）和口令匹配（`keywords_*`、`active_cmd`、`user_key_word_dict`、`keyword_override_mode`、`enable_cmd_del_music`）。轮询小米云对话记录容易导致掉线，而且最长要等 60 s 才响应。
+- 删除只服务于语音口令的 `exec#` 插件（`enable_exec_plugin`、`allowed_exec_commands`、`plugins/` 目录）和语音专用的在线搜索播放流程（在线播放、播放歌手、推送歌单）。
+- 删除停止和切换播放模式时的语音播报（`stop_tts_msg`、`play_type_*_tts_msg`）：只有语音口令会触发它们，WebUI 和 API 调用从不播报。TTS 接口和 Edge-TTS 角色设置保留。
+- `delay_sec` 删除，改为固定提前 2 s 切歌（`TRACK_END_LEAD_SEC`）：音箱会重放只有一首的队列，提前切歌可以避开“从头播几秒”。改为音箱持有队列（ADR-0007）后这个提前量会一起去掉。
+- 设置页删除“语音命令”分类和首页的“语音口令”开关；“设备对话”改名为“设备”。
+
 ### 测试
 
 - 新增行为测试（`tests/behavior/`）：在唯一的云端接缝放置假音箱，只通过公开入口驱动播放器，覆盖播放模式、手动控制、失败策略与并发竞态。

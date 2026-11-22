@@ -51,7 +51,7 @@ async def test_device_set_play_type_can_skip_playlist_refresh():
     d.do_tts = _do_tts
     d.update_playlist = _update_playlist
 
-    await d.set_play_type(play_type=1, dotts=False, refresh_playlist=False)
+    await d.set_play_type(play_type=1, refresh_playlist=False)
 
     assert d.device.play_type == 1
     assert published["count"] == 1

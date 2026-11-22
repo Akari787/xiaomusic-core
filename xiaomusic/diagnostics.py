@@ -174,8 +174,6 @@ def _startup_area(config, xiaomusic) -> dict[str, Any]:
             "ok": startup_dict.get("ok"),
             "checked_at": startup_dict.get("checked_at"),
             "notes": list(startup_dict.get("notes") or []),
-            "keyword_override_mode": getattr(config, "keyword_override_mode", "override"),
-            "keyword_conflicts": list(getattr(config, "keyword_conflicts", []) or []),
             "last_download_result": getattr(xiaomusic, "last_download_result", None),
         },
     )

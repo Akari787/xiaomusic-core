@@ -70,6 +70,11 @@ from xiaomusic.playback.task_registry import (
 from xiaomusic.utils.file_utils import chmodfile
 from xiaomusic.utils.text_utils import custom_sort_key, list2str
 
+# Send the next track this long before the current one ends. The speaker
+# restarts a finished single-item queue, so a late switch is audible as the
+# old track starting over. Goes away with the speaker-owned queue (ADR-0007).
+TRACK_END_LEAD_SEC = 2.0
+
 
 class XiaoMusicDevice:
     """设备播放控制类
@@ -826,7 +831,7 @@ class XiaoMusicDevice:
                         # Rebuild a next-track timer once duration becomes known.
                         cur_offset, _ = self.get_offset_duration()
                         remaining = (
-                            d - max(cur_offset, 0.0) + float(self.config.delay_sec)
+                            d - max(cur_offset, 0.0) - TRACK_END_LEAD_SEC
                         )
                         if remaining > 0.1:
                             if not _token_is_current("timer_restore"):
@@ -1352,21 +1357,12 @@ class XiaoMusicDevice:
         (so after-barrier regular intents don't kill the barrier).
         Exceptions propagate to arbiter.last_error — no fake completion.
         """
-        arg1 = payload.get("arg1", "")
         sid = payload.get("sid")
         token = payload.get("token")
 
         # Initial guard: barrier stale → no-op
         if self._is_barrier_stale(sid, token):
             return
-
-        if arg1 != "notts":
-            await self.do_tts(self.config.stop_tts_msg)
-            if self._is_barrier_stale(sid, token):
-                return
-            await asyncio.sleep(3)  # 等它说完
-            if self._is_barrier_stale(sid, token):
-                return
 
         # 取消组内所有的下一首歌曲的定时器
         await self.cancel_group_next_timer()
@@ -1879,7 +1875,7 @@ class XiaoMusicDevice:
         self.is_playing = True
         self._resume_runtime(updated_at=time.time())
         offset, duration = self.get_offset_duration()
-        remaining = duration - offset + float(getattr(self.config, "delay_sec", 0) or 0)
+        remaining = duration - offset - TRACK_END_LEAD_SEC
         if remaining > 0.1:
             await self.set_next_music_timeout(remaining, token=accepted_token)
             if (
@@ -2848,7 +2844,7 @@ class XiaoMusicDevice:
         duration_execution_time = time.time() - self._start_time
         self.log.info(f"获取音乐时长耗时: {duration_execution_time:.3f} 秒")
         # 调整定时器时长，减去获取音乐时长的执行时间
-        adjusted_sec = sec + self.config.delay_sec - duration_execution_time
+        adjusted_sec = sec - TRACK_END_LEAD_SEC - duration_execution_time
         # 确保调整后的时长不会过小，最小保留0.1秒
         adjusted_sec = max(adjusted_sec, 0.1)
         self.log.info(
@@ -4196,7 +4192,7 @@ class XiaoMusicDevice:
         # Anchor at dispatch return like the legacy path: subtract the time
         # already spent since then (volume refresh, duration lookup).
         elapsed = max(time.time() - self._start_time, 0.0)
-        adjusted_sec = max(self._duration + self.config.delay_sec - elapsed, 0.1)
+        adjusted_sec = max(self._duration - TRACK_END_LEAD_SEC - elapsed, 0.1)
         self.log.info(
             "external_url_post_start duration=%.3f adjusted_delay=%.3f title=%s",
             self._duration,
@@ -4622,15 +4618,12 @@ class XiaoMusicDevice:
             }
         return info
 
-    async def set_play_type(self, play_type, dotts=True, refresh_playlist=True):
+    async def set_play_type(self, play_type, refresh_playlist=True):
         """设置播放类型"""
         self.device.play_type = play_type
         # 发布设备配置变更事件
         if self.event_bus:
             self.event_bus.publish(DEVICE_CONFIG_CHANGED)
-        if dotts:
-            tts = self.config.get_play_type_tts(play_type)
-            await self.do_tts(tts)
         if refresh_playlist:
             self.update_playlist()
 

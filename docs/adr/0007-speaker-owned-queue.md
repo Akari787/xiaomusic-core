@@ -8,7 +8,7 @@
 
 ### 现状：服务端逐首指挥
 
-服务端每次只向音箱下发**一首**（`play_by_music_url`，一个 audio item），靠“时长 + `delay_sec`”的计时器推测歌曲结束，再下发下一首。音箱自带列表循环（`loop_type: 1`），只有一首的列表会在结尾**从头重放**。
+服务端每次只向音箱下发**一首**（`play_by_music_url`，一个 audio item），靠“时长 + `delay_sec`”（现为固定提前 2 s）的计时器推测歌曲结束，再下发下一首。音箱自带列表循环（`loop_type: 1`），只有一首的列表会在结尾**从头重放**。
 
 在测试服（OH2P）上实测得到以下问题：
 
@@ -154,7 +154,7 @@ SpeakerClient（新增，唯一调用小米云的地方）
 1. **StreamGateway（只读模式）**：新增稳定签名地址和请求合并，先只记录 TrackFetched、不改变播放行为；现有下发改用新地址。验收：各来源都能播，日志里 TrackFetched 与切歌一一对应。
 2. **SpeakerClient**：把 `mina_call` 收进一个类，`device_player` 改为调用它。行为不变。
 3. **SpeakerQueue + 队列下发**：按播放模式生成列表和 `loop_type`，自动切歌交给音箱；保留计时器但只做兜底。验收：各播放模式实机连续播放，不再出现重放开头。
-4. **PlaybackFollower**：当前曲目改由 TrackFetched 驱动；删除逐首计时切歌、开播确认轮询，以及外部链接路径的那一套独立状态；同时删除只为计时器服务的配置 `delay_sec`、`auto_next_confirm_*`、`auto_next_preplay_stop`（2026-11-22 已从设置页撤下，仍可在 `setting.json` / 环境变量中调整）。
+4. **PlaybackFollower**：当前曲目改由 TrackFetched 驱动；删除逐首计时切歌、开播确认轮询，以及外部链接路径的那一套独立状态；同时删除只为计时器服务的配置 `auto_next_confirm_*`、`auto_next_preplay_stop`（2026-11-22 已从设置页撤下），以及固定的切歌提前量 `TRACK_END_LEAD_SEC`（2026-11-22 取代了 `delay_sec`）。
 5. **合并入口**：API（外部链接）和本地歌单都走“生成队列 → 下发 → 跟随”这一条路径；`site_media` 的中转移入 StreamGateway。
 6. **拆分与清理**：`device_player.py` 拆成 DevicePlayer / SpeakerQueue / PlaybackFollower；把 sid / LifecycleToken / 手动切歌代际 / barrier 收敛为每个队列的版本号；删除暂停/恢复（见“不提供暂停 / 恢复”）；用行为测试替换绑定内部实现的单元测试。
 

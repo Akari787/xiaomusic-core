@@ -71,7 +71,6 @@ RUN npm ci --loglevel=verbose
 
 # 复制应用代码
 COPY xiaomusic/ ./xiaomusic/
-COPY plugins/ ./plugins/
 COPY xiaomusic.py .
 COPY sitecustomize.py .
 
@@ -108,7 +107,6 @@ WORKDIR /app
 COPY --from=builder /app/.venv ./.venv
 COPY --from=builder /app/node_modules ./node_modules/
 COPY --from=builder /app/xiaomusic/ ./xiaomusic/
-COPY --from=builder /app/plugins/ ./plugins/
 COPY --from=builder /app/xiaomusic.py .
 COPY --from=builder /app/sitecustomize.py .
 COPY --from=builder /app/xiaomusic/__init__.py /base_version.py

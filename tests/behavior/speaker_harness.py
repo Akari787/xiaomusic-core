@@ -243,7 +243,6 @@ def build_rig(
         temp_path=str(music_dir / "tmp"),
         conf_path=str(tmp_path / "conf"),
         music_list_json=_music_list_json(playlists),
-        delay_sec=0,
         disable_download=True,
         edge_tts_voice="",  # route TTS through the fake speaker, never the network
     )

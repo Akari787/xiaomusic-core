@@ -7,9 +7,11 @@ from fastapi import HTTPException
 
 from xiaomusic.api.models import PlayListObj
 from xiaomusic.api.routers.playlist import playlistadd
-from xiaomusic.channel import ChannelContextFilter, ChannelCycleController, ChannelSettings
 from xiaomusic.js_adapter import JSAdapter
-from xiaomusic.music_library import LEGACY_WRITE_BLOCKED_MESSAGE, LegacyReadOnlyDict, MusicLibrary
+from xiaomusic.music_library import (
+    LegacyReadOnlyDict,
+    MusicLibrary,
+)
 
 
 class _Config(SimpleNamespace):
@@ -90,37 +92,3 @@ def test_js_adapter_uses_identity_registration_instead_of_legacy_write():
     assert ids == ["online_mock_1"]
     assert library.all_music["online_mock_1"] == "https://example.test/1.mp3"
     assert library.get_web_music_api()["online_mock_1"]["title"] == "Song"
-
-
-def test_channel_settings_clamp_cycle_interval_and_filter_noise():
-    config = SimpleNamespace(
-        channel_cycle_interval=5,
-        channel_archive_log_enabled=False,
-        channel_archive_log_max_entries=10,
-        channel_context_window_size=2,
-    )
-    settings = ChannelSettings.from_config(config, logging.getLogger("test"))
-    assert settings.cycle_interval == 15
-    assert settings.archive_log_max_entries == 100
-    assert settings.context_window_size == 5
-
-    context_filter = ChannelContextFilter(settings=settings, debug=True)
-    assert context_filter.accept({"type": "PLAY", "payload": "song"}) is True
-    assert context_filter.accept({"type": "volume_changed", "value": 30}) is False
-    assert list(context_filter.context_window) == [{"type": "PLAY", "payload": "song"}]
-    assert list(context_filter.archive_log) == [{"type": "volume_changed", "value": 30}]
-
-    context_filter.close()
-    assert len(context_filter.context_window) == 0
-    assert len(context_filter.archive_log) == 0
-
-
-def test_channel_cycle_interrupt_wakes_waiter():
-    async def _run():
-        controller = ChannelCycleController(interval=60)
-        task = asyncio.create_task(controller.wait_next_cycle())
-        await asyncio.sleep(0)
-        controller.interrupt()
-        return await asyncio.wait_for(task, timeout=1)
-
-    assert asyncio.run(_run()) is True

@@ -44,11 +44,11 @@ def test_removed_settings_in_old_setting_json_are_ignored(tmp_path):
 
     path = tmp_path / "setting.json"
     path.write_text(
-        json.dumps({"hostname": "http://192.168.1.10", "delay_sec": -2, "crontab_json": "[]"}),
+        json.dumps({"hostname": "http://192.168.1.10", "verbose": True, "crontab_json": "[]"}),
         encoding="utf-8",
     )
     data = Config.read_from_file(str(path))
-    assert data == {"delay_sec": -2}
+    assert data == {"verbose": True}
 
     cfg = Config()
     cfg.update_config({"hostname": "http://x", "music_list_url": "http://y"})

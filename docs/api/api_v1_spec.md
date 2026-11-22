@@ -1116,7 +1116,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 ```json
 {
-  "key": "enable_pull_ask",
+  "key": "enable_file_watch",
   "value": true
 }
 ```

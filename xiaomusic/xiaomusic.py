@@ -2,12 +2,10 @@
 import asyncio
 import logging
 import os
-import re
 from logging.handlers import RotatingFileHandler
 
 from xiaomusic import __version__
 from xiaomusic.auth import AuthManager
-from xiaomusic.command_handler import CommandHandler
 from xiaomusic.config import Config
 from xiaomusic.config_manager import ConfigManager
 from xiaomusic.const import (
@@ -17,7 +15,6 @@ from xiaomusic.const import (
     PLAY_TYPE_SEQ,
     PLAY_TYPE_SIN,
 )
-from xiaomusic.conversation import ConversationPoller
 from xiaomusic.device_manager import DeviceManager
 from xiaomusic.diagnostics import build_startup_diagnostics
 from xiaomusic.events import (
@@ -28,7 +25,6 @@ from xiaomusic.events import (
 from xiaomusic.file_watcher import FileWatcherManager
 from xiaomusic.music_library import MusicLibrary
 from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
-from xiaomusic.plugin import PluginManager
 from xiaomusic.security.token_store import TokenStore
 from xiaomusic.services.online_music_service import OnlineMusicService
 from xiaomusic.utils.file_utils import clean_temp_dir
@@ -57,9 +53,6 @@ class XiaoMusic:
         # 音乐库管理器（延迟初始化，在配置准备好之后）
         self.music_library = None
 
-        # 命令处理器（延迟初始化，在配置准备好之后）
-        self.command_handler = None
-
         # 配置管理器（延迟初始化）
         self.config_manager = None
 
@@ -78,9 +71,6 @@ class XiaoMusic:
 
         # Diagnostics
         self.startup_diagnostics = None
-
-        # 初始化对话轮询器（延迟初始化，在配置和服务准备好之后）
-        self.conversation_poller = None
 
         # 初始化日志
         self.setup_logger()
@@ -152,24 +142,6 @@ class XiaoMusic:
             log=self.log,
             device_manager=self.device_manager,
             token_store=self.token_store,
-        )
-
-        # 初始化插件
-        self.plugin_manager = PluginManager(self)
-
-        # 初始化对话轮询器（在 device_id_did 准备好之后）
-        self.conversation_poller = ConversationPoller(
-            config=self.config,
-            log=self.log,
-            auth_manager=self.auth_manager,
-            device_manager=self.device_manager,
-        )
-
-        # 初始化命令处理器（在所有依赖准备好之后）
-        self.command_handler = CommandHandler(
-            config=self.config,
-            log=self.log,
-            xiaomusic_instance=self,
         )
 
         # 订阅配置变更事件
@@ -329,9 +301,8 @@ class XiaoMusic:
         await self.sync_jellyfin_music_lists_if_needed()
         self.keepalive_task = asyncio.create_task(self.auth_manager.keepalive_loop())
         self.jellyfin_sync_task = asyncio.create_task(self.jellyfin_sync_loop())
-        # 启动对话循环，传递回调函数
         try:
-            await self.conversation_poller.run_conversation_loop(self.do_check_cmd)
+            await asyncio.Event().wait()  # run until cancelled by the app lifespan
         finally:
             if self.temp_clean_task is not None:
                 self.temp_clean_task.cancel()
@@ -345,11 +316,6 @@ class XiaoMusic:
                 self.jellyfin_sync_task.cancel()
                 await asyncio.gather(self.jellyfin_sync_task, return_exceptions=True)
                 self.jellyfin_sync_task = None
-
-    # 匹配命令
-    async def do_check_cmd(self, did="", query="", ctrl_panel=True, **kwargs):
-        """检查并执行命令（委托给 command_handler）"""
-        return await self.command_handler.do_check_cmd(did, query, ctrl_panel, **kwargs)
 
     def append_running_task(self, task):
         self.running_task.append(task)
@@ -371,9 +337,6 @@ class XiaoMusic:
         if task and task.done():
             return True
         return False
-
-    async def check_replay(self, did):
-        return await self.device_manager.devices[did].check_replay()
 
     def did_exist(self, did):
         return did in self.device_manager.devices
@@ -399,48 +362,38 @@ class XiaoMusic:
             url=url, context=context, resolved=resolved
         )
 
-    # 口令:单曲循环
     async def set_play_type_one(self, did="", **kwargs):
         await self.set_play_type(
             did,
             PLAY_TYPE_ONE,
-            dotts=kwargs.get("dotts", True),
             refresh_playlist=kwargs.get("refresh_playlist", True),
         )
 
-    # 口令:全部循环
     async def set_play_type_all(self, did="", **kwargs):
         await self.set_play_type(
             did,
             PLAY_TYPE_ALL,
-            dotts=kwargs.get("dotts", True),
             refresh_playlist=kwargs.get("refresh_playlist", True),
         )
 
-    # 口令:随机播放
     async def set_play_type_rnd(self, did="", **kwargs):
         await self.set_play_type(
             did,
             PLAY_TYPE_RND,
-            dotts=kwargs.get("dotts", True),
             refresh_playlist=kwargs.get("refresh_playlist", True),
         )
 
-    # 口令:单曲播放
     async def set_play_type_sin(self, did="", **kwargs):
         await self.set_play_type(
             did,
             PLAY_TYPE_SIN,
-            dotts=kwargs.get("dotts", True),
             refresh_playlist=kwargs.get("refresh_playlist", True),
         )
 
-    # 口令:顺序播放
     async def set_play_type_seq(self, did="", **kwargs):
         await self.set_play_type(
             did,
             PLAY_TYPE_SEQ,
-            dotts=kwargs.get("dotts", True),
             refresh_playlist=kwargs.get("refresh_playlist", True),
         )
 
@@ -448,12 +401,10 @@ class XiaoMusic:
         self,
         did="",
         play_type=PLAY_TYPE_RND,
-        dotts=True,
         refresh_playlist=True,
     ):
         await self.device_manager.devices[did].set_play_type(
             play_type,
-            dotts,
             refresh_playlist,
         )
 
@@ -462,17 +413,6 @@ class XiaoMusic:
         self.music_library.gen_all_music_list()
         self.update_all_playlist()
         self.log.info("gen_music_list ok")
-
-    # 口令:删除歌曲
-    async def cmd_del_music(self, did="", arg1="", **kwargs):
-        if not self.config.enable_cmd_del_music:
-            await self.do_tts(did, "语音删除歌曲功能未开启")
-            return
-        self.log.info(f"cmd_del_music {arg1}")
-        name = arg1
-        if len(name) == 0:
-            name = self.playingmusic(did)
-        await self.del_music(name)
 
     async def del_music(self, name):
         filename = self.music_library.get_filename(name)
@@ -522,55 +462,16 @@ class XiaoMusic:
         """委托给 online_music_service"""
         return await self.online_music_service.get_media_lyric(music_item)
 
-    # 在线搜索歌手，添加歌手歌单并播放
-    async def search_singer_play(self, did, search_key, name):
-        """委托给 online_music_service"""
-        return await self.online_music_service.search_singer_play(did, search_key, name)
-
     # 追加歌手歌曲
     async def add_singer_song(self, list_name, name):
         """委托给 online_music_service"""
         return await self.online_music_service.add_singer_song(list_name, name)
-
-    # 在线搜索搜索最符合的一首歌并播放
-    async def search_top_one_play(self, did, search_key, name):
-        """委托给 online_music_service"""
-        return await self.online_music_service.search_top_one_play(
-            did, search_key, name
-        )
-
-    # 口令:在线播放：在线搜索、播放
-    async def online_play(self, did="", arg1="", **kwargs):
-        """委托给 online_music_service"""
-        return await self.online_music_service.online_play(did, arg1, **kwargs)
-
-    # 口令:播放歌手：在线搜索歌手并存为列表播放
-    async def singer_play(self, did="", arg1="", **kwargs):
-        """委托给 online_music_service"""
-        return await self.online_music_service.singer_play(did, arg1, **kwargs)
-
-    # 处理推送的歌单并播放
-    async def push_music_list_play(self, did, song_list, list_name):
-        """委托给 online_music_service"""
-        return await self.online_music_service.push_music_list_play(
-            did, song_list, list_name
-        )
 
     # ===========================================================
 
     def _find_real_music_list_name(self, list_name):
         """模糊搜索播放列表名称（委托给 music_library）"""
         return self.music_library.find_real_music_list_name(list_name)
-
-    # 口令:播放歌单
-    async def play_music_list(self, did="", arg1="", **kwargs):
-        parts = arg1.split("|")
-        list_name = parts[0]
-
-        music_name = ""
-        if len(parts) > 1:
-            music_name = parts[1]
-        return await self.do_play_music_list(did, list_name, music_name)
 
     async def do_play_music_list(self, did, list_name, music_name=""):
         # 查找并获取真实的音乐列表名称
@@ -584,48 +485,6 @@ class XiaoMusic:
         return await self.device_manager.devices[did].play_music_list(
             list_name, music_name
         )
-
-    async def play_music_list_by_index(self, did, playlist_name, index):
-        list_name = self._find_real_music_list_name(playlist_name)
-        if list_name not in self.music_library.music_list:
-            await self.do_tts(did, f"播放列表{list_name}不存在")
-            return
-
-        play_list = self.music_library.music_list[list_name]
-        if 0 <= index - 1 < len(play_list):
-            music_name = play_list[index - 1]
-            self.log.info(f"即将播放歌单 {list_name} 里的第 {index} 个: {music_name}")
-            return await self.device_manager.devices[did].play_music_list(
-                list_name, music_name
-            )
-        await self.do_tts(did, f"播放列表{list_name}中找不到第{index}个")
-        return False
-
-    # 口令:播放列表第
-    async def play_music_list_index(self, did="", arg1="", **kwargs):
-        patternarg = r"^([零一二三四五六七八九十百千万亿]+)个(.*)"
-        # 匹配参数
-        matcharg = re.match(patternarg, arg1)
-        if not matcharg:
-            return await self.play_music_list(did, arg1)
-
-        chinese_index = matcharg.groups()[0]
-        list_name = matcharg.groups()[1]
-        list_name = self._find_real_music_list_name(list_name)
-        if list_name not in self.music_library.music_list:
-            await self.do_tts(did, f"播放列表{list_name}不存在")
-            return
-
-        index = chinese_to_number(chinese_index)
-        play_list = self.music_library.music_list[list_name]
-        if 0 <= index - 1 < len(play_list):
-            music_name = play_list[index - 1]
-            self.log.info(f"即将播放 ${arg1} 里的第 ${index} 个: ${music_name}")
-            return await self.device_manager.devices[did].play_music_list(
-                list_name, music_name
-            )
-        await self.do_tts(did, f"播放列表{list_name}中找不到第${index}个")
-        return False
 
     # 口令:播放歌曲
     async def play(self, did="", arg1="", **kwargs):
@@ -808,10 +667,6 @@ class XiaoMusic:
         debug_config = deepcopy_data_no_sensitive_info(self.config)
         self.log.info(f"update_config_from_setting ok. data:{debug_config}")
 
-        joined_keywords = "/".join(self.config.key_match_order)
-        self.log.info(f"语音控制已启动, 用【{joined_keywords}】开头来控制")
-        self.log.debug(f"key_word_dict: {self.config.key_word_dict}")
-
         # 根据新配置控制文件监控
         if self.config.enable_file_watch:
             self.log.info("配置更新：开启目录监控")
@@ -901,31 +756,6 @@ class XiaoMusic:
             retry=1,
             ctx="debug_play_by_music_url",
         )
-
-    async def exec(self, did="", arg1=None, **kwargs):
-        self.auth_manager._cur_did = did
-        from xiaomusic.security.errors import (
-            ExecDisabledError,
-            ExecNotAllowedError,
-            ExecValidationError,
-        )
-
-        code = arg1 if arg1 else ""
-        try:
-            await self.plugin_manager.execute_plugin(code)
-        except ExecDisabledError:
-            # Voice-friendly feedback
-            try:
-                await self.do_tts(did, "出于安全考虑，已禁用 exec 插件")
-            except Exception:
-                pass
-            raise
-        except (ExecNotAllowedError, ExecValidationError):
-            try:
-                await self.do_tts(did, "该 exec 命令未被允许")
-            except Exception:
-                pass
-            raise
 
     # 此接口用于插件中获取当前设备
     def get_cur_did(self):

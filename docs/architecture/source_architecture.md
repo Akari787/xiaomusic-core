@@ -100,12 +100,6 @@ source 提供的 `stream_url` 必须是 `http://` 或 `https://` 格式。非法
 - 职责：由 `site_media` 或窄范围 `online_plugin` source 通过现有 `OnlineMusicService` 调用第三方 MusicFree JS 脚本
 - **这不是 source 体系的扩展点**；`online_plugin` 只消费 v1 搜索生成的进程内 opaque 引用，不把 raw item 暴露给 WebUI
 
-### 5.3 Python exec 插件（命令扩展，不属于 source 体系）
-
-- 管理：`xiaomusic/plugin.py`
-- 职责：扩展自然语言命令处理，不涉及媒体来源解析
-- **不属于 source 体系**
-
 ---
 
 ## 6. Source 不允许承担的职责
