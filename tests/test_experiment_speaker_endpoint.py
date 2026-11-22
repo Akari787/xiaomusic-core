@@ -39,3 +39,8 @@ def test_music_queue_payload_numbers_items_and_selects_start():
 def test_music_queue_payload_clamps_start_index():
     payload = XiaoMusicDevice._build_music_queue_payload([("a", "u")], "5", start_index=9)
     assert payload["startaudioid"] == "5"
+
+
+def test_music_queue_payload_carries_play_behavior():
+    payload = XiaoMusicDevice._build_music_queue_payload([("a", "u")], "5", play_behavior="APPEND")
+    assert json.loads(payload["music"])["play_behavior"] == "APPEND"

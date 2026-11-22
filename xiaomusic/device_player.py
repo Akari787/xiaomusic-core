@@ -4311,7 +4311,10 @@ class XiaoMusicDevice:
 
     @staticmethod
     def _build_music_queue_payload(
-        entries: list[tuple[str, str]], first_audio_id: str, start_index: int = 0
+        entries: list[tuple[str, str]],
+        first_audio_id: str,
+        start_index: int = 0,
+        play_behavior: str = "REPLACE_ALL",
     ) -> dict:
         """player_play_music payload with several audio items (same shape as
         miservice play_by_music_url, which only ever sends one). Item i gets
@@ -4335,7 +4338,7 @@ class XiaoMusicDevice:
                 "audio_items": audio_items,
                 "list_params": {"listId": "-1", "loadmore_offset": 0, "origin": "xiaowei", "type": "MUSIC"},
             },
-            "play_behavior": "REPLACE_ALL",
+            "play_behavior": play_behavior,
         }
         start = min(max(int(start_index), 0), max(len(audio_items) - 1, 0))
         return {"startaudioid": str(base + start), "music": json.dumps(music)}

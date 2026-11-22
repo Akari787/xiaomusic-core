@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -596,6 +597,10 @@ async def experiment_speaker(request: Request):
         count = max(1, min(int(body.get("count", 3)), 500))
         start = int(body.get("start", 0))
         use_proxy = bool(body.get("proxy", False))
+        play_behavior = str(body.get("play_behavior") or "REPLACE_ALL")
+        if not re.fullmatch(r"[A-Z_]{1,32}", play_behavior):
+            raise HTTPException(status_code=400, detail="bad play_behavior")
+        id_base = int(body.get("audio_id_base", _EXPERIMENT_AUDIO_ID_BASE))
         entries = []
         raw_urls = body.get("urls")
         if isinstance(raw_urls, list) and raw_urls:
@@ -611,11 +616,11 @@ async def experiment_speaker(request: Request):
                     url = xiaomusic.music_library.get_proxy_url(url, name=name)
                 entries.append((name, url))
         payload = XiaoMusicDevice._build_music_queue_payload(
-            entries, str(_EXPERIMENT_AUDIO_ID_BASE), start_index=start
+            entries, str(id_base), start_index=start, play_behavior=play_behavior
         )
         log.info(
-            "experiment_queue count=%d start=%d proxy=%s payload_bytes=%d",
-            len(entries), start, use_proxy, len(payload["music"]),
+            "experiment_queue count=%d start=%d proxy=%s behavior=%s payload_bytes=%d",
+            len(entries), start, use_proxy, play_behavior, len(payload["music"]),
         )
         t0 = time.time()
         ret = await ubus("player_play_music", "mediaplayer", payload, "queue")
@@ -623,7 +628,7 @@ async def experiment_speaker(request: Request):
             "ret": ret,
             "call_s": round(time.time() - t0, 3),
             "items": [
-                {"index": i, "audio_id": str(_EXPERIMENT_AUDIO_ID_BASE + i), "name": n}
+                {"index": i, "audio_id": str(id_base + i), "name": n}
                 for i, (n, _u) in enumerate(entries)
             ],
         }
