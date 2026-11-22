@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import subprocess
 import threading
 import time
-import subprocess
+from collections.abc import Callable
 from urllib.request import urlopen
-from typing import Callable
 
 from xiaomusic.relay.local_http_stream_server import LocalHttpStreamServer
 from xiaomusic.relay.reconnect_policy import ReconnectPolicy

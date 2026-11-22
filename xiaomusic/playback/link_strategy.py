@@ -5,7 +5,6 @@ from __future__ import annotations
 import ipaddress
 import socket
 from dataclasses import dataclass, field
-from typing import Optional
 from urllib.parse import urlparse
 
 from xiaomusic.relay.url_classifier import UrlClassifier
@@ -15,9 +14,9 @@ from xiaomusic.relay.url_classifier import UrlClassifier
 class NormalizedLink:
     source_type: str
     direct_url: str
-    proxy_url: Optional[str] = None
+    proxy_url: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
-    ttl_sec: Optional[int] = None
+    ttl_sec: int | None = None
 
 
 class LinkPlaybackStrategy:

@@ -4,7 +4,6 @@
 """
 
 import asyncio
-import base64
 import copy
 import hashlib
 import json
@@ -17,7 +16,6 @@ from collections import OrderedDict
 from dataclasses import asdict
 from urllib.parse import urlparse
 from uuid import uuid4
-
 
 LEGACY_WRITE_BLOCKED_MESSAGE = "Legacy write actions are blocked, use Identity APIs instead"
 

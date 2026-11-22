@@ -1,17 +1,17 @@
 import ast
 from typing import Any
 
-from xiaomusic import __version__
-from xiaomusic.security.errors import OutboundBlockedError
-from xiaomusic.security.outbound import OutboundBlockedError as _OutboundBlocked
-from xiaomusic.security.outbound import OutboundPolicy, fetch_text
 from pydantic import BaseModel, Field, ValidationError
 
+from xiaomusic import __version__
 from xiaomusic.security.errors import (
     ExecDisabledError,
     ExecNotAllowedError,
     ExecValidationError,
+    OutboundBlockedError,
 )
+from xiaomusic.security.outbound import OutboundBlockedError as _OutboundBlocked
+from xiaomusic.security.outbound import OutboundPolicy, fetch_text
 from xiaomusic.security.redaction import redact_text
 
 

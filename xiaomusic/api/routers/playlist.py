@@ -6,8 +6,6 @@ from fastapi import (
     HTTPException,
 )
 
-from xiaomusic.music_library import LEGACY_WRITE_BLOCKED_MESSAGE
-
 from xiaomusic.api import response as api_response
 from xiaomusic.api.dependencies import (
     log,
@@ -19,6 +17,7 @@ from xiaomusic.api.models import (
     PlayListObj,
     PlayListUpdateObj,
 )
+from xiaomusic.music_library import LEGACY_WRITE_BLOCKED_MESSAGE
 
 router = APIRouter(dependencies=[Depends(verification)])
 

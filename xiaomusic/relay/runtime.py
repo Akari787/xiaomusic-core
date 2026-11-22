@@ -8,6 +8,7 @@ from dataclasses import asdict
 from threading import Lock
 from urllib.request import urlopen
 
+from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
 from xiaomusic.relay.audio_streamer import AudioStreamer
 from xiaomusic.relay.contracts import ERROR_CODES
 from xiaomusic.relay.local_http_stream_server import LocalHttpStreamServer
@@ -16,7 +17,6 @@ from xiaomusic.relay.reconnect_policy import ReconnectPolicy
 from xiaomusic.relay.resolver import Resolver
 from xiaomusic.relay.resolver_cache import ResolverCache
 from xiaomusic.relay.session_manager import StreamSessionManager
-from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
 
 
 class RelayRuntime:

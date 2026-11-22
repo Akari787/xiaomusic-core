@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Callable
+from collections.abc import Callable
 from urllib.parse import urlparse
 
-from xiaomusic.core.errors.stream_errors import ExpiredStreamError, UndeliverableStreamError
+from xiaomusic.core.errors.stream_errors import (
+    ExpiredStreamError,
+    UndeliverableStreamError,
+)
 from xiaomusic.core.models.media import DeliveryPlan, PreparedStream, ResolvedMedia
-
 
 LOG = logging.getLogger("xiaomusic.core.delivery_adapter")
 

@@ -9,7 +9,8 @@ from xiaomusic.api.routers import register_routers, v1
 def _registered_paths() -> set[str]:
     app = FastAPI()
     register_routers(app)
-    return {route.path for route in app.routes}
+    # Newer FastAPI adds router entries without a ``path`` attribute.
+    return {path for route in app.routes if (path := getattr(route, "path", None))}
 
 
 def _v1_client() -> TestClient:

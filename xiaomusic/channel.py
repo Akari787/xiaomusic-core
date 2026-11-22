@@ -7,7 +7,6 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-
 CONTROL_MESSAGE_TYPES = {
     "PLAY",
     "PAUSE",
@@ -29,7 +28,7 @@ class ChannelSettings:
     context_window_size: int = 20
 
     @classmethod
-    def from_config(cls, config: Any, log: Any | None = None) -> "ChannelSettings":
+    def from_config(cls, config: Any, log: Any | None = None) -> ChannelSettings:
         interval = int(getattr(config, "channel_cycle_interval", 60) or 60)
         if interval < 15:
             if log is not None:

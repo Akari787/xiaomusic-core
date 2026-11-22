@@ -15,7 +15,6 @@ import aiohttp
 from xiaomusic.const import PLAY_TYPE_ALL
 from xiaomusic.jellyfin_client import JellyfinClient
 from xiaomusic.providers.online_music_keywords import (
-    build_keyword as _build_keyword,
     parse_keyword_by_dash as _parse_keyword_by_dash,
 )
 

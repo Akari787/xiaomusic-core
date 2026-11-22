@@ -3,11 +3,10 @@ from __future__ import annotations
 import ipaddress
 import os
 import socket
-from typing import Optional
 from urllib.parse import urlparse
 
 
-def _normalize_base_url(raw: str) -> Optional[str]:
+def _normalize_base_url(raw: str) -> str | None:
     if not raw:
         return None
     value = str(raw).strip()
@@ -77,7 +76,7 @@ def _is_recommended_private_ipv4(ip: str) -> bool:
     return True
 
 
-def _first_recommended_private_ipv4() -> Optional[str]:
+def _first_recommended_private_ipv4() -> str | None:
     candidates: list[str] = []
     try:
         hostname = socket.gethostname()
@@ -105,7 +104,7 @@ def _first_recommended_private_ipv4() -> Optional[str]:
     return None
 
 
-def detect_base_url(request, config) -> Optional[str]:
+def detect_base_url(request, config) -> str | None:
     # 1) explicit override in config
     explicit = _normalize_base_url(getattr(config, "public_base_url", ""))
     if explicit:

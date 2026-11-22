@@ -593,8 +593,10 @@ async def test_G_failed_stop_preserves_failure():
     d.event_bus = _Bus()
     try:
         assert await d.stop(arg1="notts") is True
+        # The executor may already have reached STOPPED by the time this
+        # resumes; the STOPPING -> STOPPED order is asserted via
+        # published_phases below.
         await asyncio.wait_for(stopping.wait(), timeout=5.0)
-        assert d.get_runtime_state().phase == PlaybackPhase.STOPPING
 
         # Await the physical executor's completion event, not merely acceptance.
         await asyncio.wait_for(stopped.wait(), timeout=5.0)

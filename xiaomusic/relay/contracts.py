@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 ERROR_CODES: dict[str, str] = {
     "E_URL_UNSUPPORTED": "Unsupported URL site or format",
     "E_RESOLVE_TIMEOUT": "Resolver timed out",
@@ -37,7 +36,7 @@ class UrlInfo:
     original_url: str
 
     @staticmethod
-    def sample() -> "UrlInfo":
+    def sample() -> UrlInfo:
         return UrlInfo(
             site="youtube",
             kind_hint="vod",
@@ -58,7 +57,7 @@ class ResolveResult:
     meta: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
-    def sample() -> "ResolveResult":
+    def sample() -> ResolveResult:
         return ResolveResult(
             ok=True,
             source_url="https://media.example.local/audio.m4a",
@@ -91,7 +90,7 @@ class Session:
     meta: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
-    def sample() -> "Session":
+    def sample() -> Session:
         return Session(
             sid="s_0001",
             state="streaming",
@@ -121,7 +120,7 @@ class Event:
     detail: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
-    def sample() -> "Event":
+    def sample() -> Event:
         return Event(
             sid="s_0001",
             ts="2026-02-16T12:00:02Z",

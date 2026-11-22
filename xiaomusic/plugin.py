@@ -8,7 +8,6 @@ to the core Source Plugin architecture.
 """
 
 import importlib
-import inspect
 import pkgutil
 from typing import TYPE_CHECKING
 

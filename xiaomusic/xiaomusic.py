@@ -29,10 +29,10 @@ from xiaomusic.events import (
 )
 from xiaomusic.file_watcher import FileWatcherManager
 from xiaomusic.music_library import MusicLibrary
-from xiaomusic.online_music import OnlineMusicService
 from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
 from xiaomusic.plugin import PluginManager
 from xiaomusic.security.token_store import TokenStore
+from xiaomusic.services.online_music_service import OnlineMusicService
 from xiaomusic.utils.network_utils import downloadfile
 from xiaomusic.utils.system_utils import deepcopy_data_no_sensitive_info
 from xiaomusic.utils.text_utils import chinese_to_number
@@ -94,7 +94,7 @@ class XiaoMusic:
 
         # 初始化 JS 插件管理器
         try:
-            from xiaomusic.js_plugin_manager import JSPluginManager
+            from xiaomusic.managers.js_plugin_manager import JSPluginManager
 
             self.js_plugin_manager = JSPluginManager(self)
             self.log.info("JS Plugin Manager initialized successfully")

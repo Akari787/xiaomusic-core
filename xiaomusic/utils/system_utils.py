@@ -8,7 +8,6 @@ import os
 import platform
 import random
 import string
-import urllib.parse
 from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
@@ -16,7 +15,11 @@ import aiohttp
 from requests.utils import cookiejar_from_dict
 
 from xiaomusic.security.errors import SelfUpdateDisabledError
-from xiaomusic.security.outbound import OutboundBlockedError, OutboundPolicy, fetch_bytes
+from xiaomusic.security.outbound import (
+    OutboundBlockedError,
+    OutboundPolicy,
+    fetch_bytes,
+)
 from xiaomusic.security.tar_safe import safe_extract_tar_gz
 
 log = logging.getLogger(__package__)

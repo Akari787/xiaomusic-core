@@ -4,8 +4,8 @@ import asyncio
 import ipaddress
 import socket
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 from urllib.parse import urljoin, urlparse
 
 import aiohttp

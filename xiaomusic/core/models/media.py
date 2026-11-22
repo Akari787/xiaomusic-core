@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
 from xiaomusic.core.models.payload_keys import (
     OPT_CONFIRM_START,
     OPT_CONFIRM_START_DELAY_MS,
     OPT_CONFIRM_START_INTERVAL_MS,
     OPT_CONFIRM_START_RETRIES,
-    OPT_LOOP,
     OPT_ID,
+    OPT_LOOP,
     OPT_MEDIA_ID,
     OPT_NO_CACHE,
     OPT_PREFER_PROXY,
@@ -82,7 +83,7 @@ class PlayOptions:
     title: str = ""
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any] | None) -> "PlayOptions":
+    def from_payload(cls, payload: Mapping[str, Any] | None) -> PlayOptions:
         if not isinstance(payload, Mapping):
             return cls()
 
@@ -186,7 +187,7 @@ class MediaRequest:
         device_id: str | None,
         options: PlayOptions,
         include_prefer_proxy: bool,
-    ) -> "MediaRequest":
+    ) -> MediaRequest:
         return cls(
             request_id=str(request_id),
             source_hint=source_hint,

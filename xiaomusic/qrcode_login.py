@@ -1,25 +1,21 @@
-import asyncio
+import base64
+import hashlib
 import json
 import locale
 import logging
 import os
+import random
+import time
 from datetime import datetime, timedelta
+from gzip import GzipFile
+from io import BytesIO
 from pathlib import Path
-from typing import Optional, Union
 from urllib import parse
 
 import requests
 import tzlocal
-from qrcode import QRCode
-
-import base64
-import hashlib
-import random
-import time
-from gzip import GzipFile
-from io import BytesIO
-
 from Crypto.Cipher import ARC4
+from qrcode import QRCode
 
 
 def gen_nonce():
@@ -92,7 +88,7 @@ def decrypt(ssecurity, nonce, payload):
 
 
 class MiJiaAPI:
-    def __init__(self, auth_data_path: Optional[str] = None, token_store=None):
+    def __init__(self, auth_data_path: str | None = None, token_store=None):
         self.log = logging.getLogger(__name__)
         self.locale = locale.getlocale()[0] if locale.getlocale()[0] else "zh_CN"
         if "_" not in self.locale:  # #57, make sure locale is in correct format
@@ -136,7 +132,7 @@ class MiJiaAPI:
             if self.auth_data:
                 self._init_session()
         elif self.auth_data_path.exists():
-            with open(self.auth_data_path, "r", encoding="utf-8") as f:
+            with open(self.auth_data_path, encoding="utf-8") as f:
                 self.auth_data = json.load(f)
             self._init_session()
         else:
@@ -424,7 +420,7 @@ class MiJiaAPI:
                 "writeback_target": "none",
                 "diagnostic": {
                     "target_host": service_base_host,
-                    "target_path": f"/pass/serviceLogin",
+                    "target_path": "/pass/serviceLogin",
                     "http_status": None,
                     "service_login_code": None,
                     "service_login_desc": None,

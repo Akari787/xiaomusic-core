@@ -6,8 +6,8 @@
 import json
 import os
 import threading
-from time import sleep
 from dataclasses import asdict
+from time import sleep
 
 
 class ConfigManager:

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from xiaomusic.constants.api_fields import DEVICE_ID, OPTIONS, QUERY, REQUEST_ID, SOURCE_HINT
+from xiaomusic.constants.api_fields import (
+    DEVICE_ID,
+    OPTIONS,
+    QUERY,
+    REQUEST_ID,
+    SOURCE_HINT,
+)
 
 # Shared payload/context key constants for playback boundary parsing.
 
