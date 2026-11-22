@@ -178,6 +178,69 @@ async def test_pause_then_resume_toggles_speaker(rig_factory):
         await rig.close()
 
 
+@pytest.mark.asyncio
+async def test_pause_cancels_track_end_advance(rig_factory):
+    rig = rig_factory()
+    try:
+        await rig.play_playlist("日语", "a")
+        await rig.settle(5)
+        assert await rig.player.pause() is True
+        await rig.settle(2 * SONG)
+
+        assert rig.speaker.played() == ["a"]
+        assert rig.state().phase == PlaybackPhase.PAUSED
+    finally:
+        await rig.close()
+
+
+@pytest.mark.asyncio
+async def test_track_end_switches_without_status_round_trip(rig_factory):
+    """The switch at track end must not wait on a speaker status query:
+    while the server waits, the speaker audibly restarts the finished track."""
+    rig = rig_factory()
+    try:
+        await rig.play_playlist("日语", "a")
+        await rig.settle(5)
+        rig.speaker.latency = {"player_get_status": 5.0}
+        await rig.wait_until(lambda: len(rig.speaker.played()) >= 2, player_seconds=SONG + 5)
+
+        # The next track went out without the 5 s status latency.
+        assert rig.speaker.played() == ["a", "b"]
+    finally:
+        await rig.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_advance_can_skip_preplay_stop(rig_factory):
+    """With auto_next_preplay_stop off, the track-end switch goes straight to
+    the next dispatch (the play command replaces the speaker queue)."""
+    rig = rig_factory(config_overrides={"auto_next_preplay_stop": False})
+    try:
+        await rig.play_playlist("日语", "a")
+        await rig.wait_until(lambda: len(rig.speaker.played()) >= 2, player_seconds=SONG + 10)
+
+        timeline = rig.speaker.timeline()
+        assert rig.speaker.played() == ["a", "b"]
+        assert timeline[timeline.index("play:a") + 1] == "play:b", timeline
+    finally:
+        await rig.close()
+
+
+@pytest.mark.asyncio
+async def test_manual_next_still_stops_when_auto_stop_skipped(rig_factory):
+    rig = rig_factory(config_overrides={"auto_next_preplay_stop": False})
+    try:
+        await rig.play_playlist("日语", "a")
+        await rig.settle(5)
+        await rig.player.play_next()
+        await rig.settle(5)
+
+        assert rig.speaker.played() == ["a", "b"]
+        assert_stop_precedes_every_play(rig.speaker.timeline())
+    finally:
+        await rig.close()
+
+
 # ── failures ───────────────────────────────────────────────────────────
 
 

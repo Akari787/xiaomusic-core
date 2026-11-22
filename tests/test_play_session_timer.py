@@ -126,18 +126,6 @@ async def test_timer_ignored_after_session_bump():
     assert d._next_called == 0
 
 
-@pytest.mark.asyncio
-async def test_pause_prevents_next():
-    d = _build_device_for_timer_tests()
-
-    await d.set_next_music_timeout(0.08)
-    await asyncio.sleep(0.02)
-    await d.pause()
-
-    await asyncio.sleep(0.12)
-    assert d._next_called == 0
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # T03-T07 migrated: duration probe
 # ─────────────────────────────────────────────────────────────────────────────
@@ -998,7 +986,11 @@ async def test_auto_next_confirm_failure_preserves_timer():
 
 @pytest.mark.asyncio
 async def test_autonext_guard_respects_still_playing_check(monkeypatch):
-    """Timer expiry + device still playing → play_next called (grace=0).
+    """Timer expiry advances immediately, without a device status probe.
+
+    2026-11: the expiry status probe was removed. It never changed the
+    decision (a looping speaker always reports playing) and only delayed the
+    switch by a cloud round trip, letting the speaker restart the track.
 
     Migration: get_offset_duration is pure read. The "still playing" check
     now lives in set_next_music_timeout's expiry gate. Under T03-T07,
@@ -1046,7 +1038,5 @@ async def test_autonext_guard_respects_still_playing_check(monkeypatch):
     except asyncio.TimeoutError:
         pass
 
-    # T03-T07: still playing DOES trigger auto-next (grace exhausted immediately).
-    # The old test expected _next_called==0 (legacy guard). Now it's > 0.
     assert d._next_called >= 1
-    assert len(still_playing_calls) > 0
+    assert still_playing_calls == []  # no status round trip before advancing

@@ -1009,6 +1009,7 @@ class XiaoMusicDevice:
         fast_stop=False,
         navigation_generation: int | None = None,
         command_already_accepted: bool = False,
+        auto_advance: bool = False,
     ):
         """播放歌曲的内部统一实现
 
@@ -1057,6 +1058,7 @@ class XiaoMusicDevice:
                 confirm_start_in_background=confirm_start_in_background,
                 fast_stop=fast_stop,
                 navigation_generation=navigation_generation,
+                auto_advance=auto_advance,
             )
 
         name = names[0]
@@ -1074,6 +1076,7 @@ class XiaoMusicDevice:
             confirm_start_in_background=confirm_start_in_background,
             fast_stop=fast_stop,
             navigation_generation=navigation_generation,
+            auto_advance=auto_advance,
         )
 
     async def _play(
@@ -1085,6 +1088,7 @@ class XiaoMusicDevice:
         fast_stop=False,
         navigation_generation: int | None = None,
         command_already_accepted: bool = False,
+        auto_advance: bool = False,
     ):
         """播放歌曲（内部实现）- 支持下载"""
         return await self._play_internal(
@@ -1096,6 +1100,7 @@ class XiaoMusicDevice:
             fast_stop=fast_stop,
             navigation_generation=navigation_generation,
             command_already_accepted=command_already_accepted,
+            auto_advance=auto_advance,
         )
 
     def _ensure_manual_navigation_state(self) -> None:
@@ -2049,6 +2054,7 @@ class XiaoMusicDevice:
             confirm_start_in_background=not manual,
             fast_stop=not manual,
             command_already_accepted=True,
+            auto_advance=not manual,
         )
 
     async def play_prev(self):
@@ -2267,6 +2273,7 @@ class XiaoMusicDevice:
         confirm_start_in_background: bool = False,
         fast_stop: bool = False,
         navigation_generation: int | None = None,
+        auto_advance: bool = False,
     ):
         """播放音乐的核心实现"""
         if not self._manual_navigation_is_current(navigation_generation):
@@ -2378,8 +2385,16 @@ class XiaoMusicDevice:
             )
             return False
         self._log_measure("before_group_force_stop_xiaoai")
+        # Only timer-driven auto-advance may skip the stop; manual commands
+        # and retries always clear the speaker first.
+        skip_preplay_stop = auto_advance and not bool(
+            getattr(self.config, "auto_next_preplay_stop", True)
+        )
         try:
-            await self._execute_group_stop(fast_stop=fast_stop, sid=sid)
+            if skip_preplay_stop:
+                self.log.info("auto_next_skip_preplay_stop name=%s", name)
+            else:
+                await self._execute_group_stop(fast_stop=fast_stop, sid=sid)
         except asyncio.CancelledError:
             # Cancellation during the preplay stop is a failed play attempt.
             # Cancellation of this playback coroutine itself must still propagate.
@@ -4199,7 +4214,10 @@ class XiaoMusicDevice:
             self.log.info(f"【{title or 'external_url'}】不会设置下一首歌的定时器")
             return True
 
-        adjusted_sec = max(self._duration + self.config.delay_sec, 0.1)
+        # Anchor at dispatch return like the legacy path: subtract the time
+        # already spent since then (volume refresh, duration lookup).
+        elapsed = max(time.time() - self._start_time, 0.0)
+        adjusted_sec = max(self._duration + self.config.delay_sec - elapsed, 0.1)
         self.log.info(
             "external_url_post_start duration=%.3f adjusted_delay=%.3f title=%s",
             self._duration,
@@ -4391,98 +4409,23 @@ class XiaoMusicDevice:
                     await self.stop(arg1="notts")
                     return
 
-                # Check device status before advancing.
-                try:
-                    is_playing = await self.get_if_xiaoai_is_playing()
-                except Exception:
-                    if not _token_is_current("status_error"):
-                        return
-                    # Status check failed (unknown): grace-limited extension.
-                    self._timer_expiry_unknown_grace_count += 1
-                    self.log.info(
-                        "timer_expiry_status_check_failed(did=%s, unknown_grace=%d)",
-                        self.did,
-                        self._timer_expiry_unknown_grace_count,
-                    )
-                    if self._timer_expiry_unknown_grace_count > self.MAX_UNKNOWN_GRACE_EXTENSIONS:
-                        # Max 3 unknown extensions reached: treat as complete.
-                        if not _token_is_current("unknown_advance"):
-                            return
-                        self._timer_expiry_unknown_grace_count = 0
-                        self._timer_expiry_playing_grace_count = 0
-                        self._timer_expiry_false_count = 0
-                        from xiaomusic.playback.command_arbiter import IntentKind
-                        self._submit_auto_retry(
-                            IntentKind.AUTO_NEXT,
-                            source_token=token,
-                            sid=sid,
-                            reason="timer_unknown_advance",
-                        )
-                        return
-                    if not _token_is_current("unknown_reschedule"):
-                        return
-                    await self.set_next_music_timeout(3.0, token=token)
-                    return
-
-                if not _token_is_current("status_return"):
-                    return
-                if is_playing:
-                    # Device still playing: grace-limited extension (max 3).
-                    self._timer_expiry_false_count = 0
-                    self._timer_expiry_unknown_grace_count = 0
-                    self._timer_expiry_playing_grace_count += 1
-                    self.log.info(
-                        "timer_expiry_device_still_playing(did=%s, playing_grace=%d)",
-                        self.did,
-                        self._timer_expiry_playing_grace_count,
-                    )
-                    if self._timer_expiry_playing_grace_count > self.MAX_PLAYING_GRACE_EXTENSIONS:
-                        # The duration timer is authoritative; playing may mean device-side replay.
-                        if not _token_is_current("playing_advance"):
-                            return
-                        self._timer_expiry_playing_grace_count = 0
-                        self.log.info(
-                            "timer_expiry_playing_grace_exhausted(did=%s), advancing",
-                            self.did,
-                        )
-                        from xiaomusic.playback.command_arbiter import IntentKind
-                        self._submit_auto_retry(
-                            IntentKind.AUTO_NEXT,
-                            source_token=token,
-                            sid=sid,
-                            reason="timer_playing_advance",
-                        )
-                        return
-                    if not _token_is_current("playing_reschedule"):
-                        return
-                    await self.set_next_music_timeout(3.0, token=token)
-                    return
-
-                # Device not playing: increment false count.
-                self._timer_expiry_false_count += 1
-                self.log.info(
-                    "timer_expiry_false_count(did=%s, count=%d)",
-                    self.did,
-                    self._timer_expiry_false_count,
-                )
-
-                if self._timer_expiry_false_count < 2:
-                    # First False: reschedule with short grace.
-                    if not _token_is_current("false_reschedule"):
-                        return
-                    await self.set_next_music_timeout(3.0, token=token)
-                    return
-
-                # Two consecutive False: advance.
-                if not _token_is_current("false_advance"):
+                # The duration timer is authoritative. A status probe here
+                # never changed the decision (the speaker reports "playing"
+                # while it loops its one-item queue) and only delayed the
+                # switch by one cloud round trip, or 3-9 s more on "not
+                # playing"/probe errors -- long enough for the speaker to
+                # audibly restart the finished track.
+                if not _token_is_current("advance"):
                     return
                 self._timer_expiry_false_count = 0
+                self._timer_expiry_unknown_grace_count = 0
+                self._timer_expiry_playing_grace_count = 0
                 from xiaomusic.playback.command_arbiter import IntentKind
                 self._submit_auto_retry(
                     IntentKind.AUTO_NEXT,
                     source_token=token,
                     sid=sid,
-                    reason="timer_false_advance",
+                    reason="timer_track_end",
                 )
 
             except asyncio.CancelledError:

@@ -544,7 +544,7 @@ async def test_H2_direct_play_empty_name_real_chain_command_count():
 
     async def _spy_playmusic(
         name, confirm_start_in_background=False, fast_stop=False,
-        navigation_generation=None,
+        navigation_generation=None, **_kw,
     ):
         playmusic_names.append(name)
         playmusic_done.set()
@@ -595,7 +595,7 @@ async def test_H3_public_play_empty_name_real_chain_still_plus_one():
 
     async def _spy_playmusic(
         name, confirm_start_in_background=False, fast_stop=False,
-        navigation_generation=None,
+        navigation_generation=None, **_kw,
     ):
         playmusic_names.append(name)
         playmusic_done.set()
@@ -657,7 +657,7 @@ async def test_H4_manual_play_next_real_chain_arbiter_single_command_bump():
 
     async def _spy_playmusic(
         name, confirm_start_in_background=False, fast_stop=False,
-        navigation_generation=None,
+        navigation_generation=None, **_kw,
     ):
         playmusic_names.append(name)
         playmusic_done.set()

@@ -3400,67 +3400,6 @@ async def test_next_timer_current_after_cancel_creates_timer():
         assert d._next_timer is None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mutation_fn", ["command", "queue", "attempt"])
-async def test_next_timer_stale_during_status_query_has_no_post_effects(mutation_fn):
-    """Every lifecycle dimension invalidates a blocked timer status result."""
-    entered = asyncio.Event()
-    release = asyncio.Event()
-    d = _make_device_via_new()
-    d._play_session_id = 1
-    d._start_queue_session(updated_at=1.0)
-    d._accept_command(updated_at=1.0)
-    d._start_track_attempt(updated_at=1.0)
-    play_next_calls = 0
-
-    async def _status():
-        entered.set()
-        await release.wait()
-        return False
-
-    async def _play_next():
-        nonlocal play_next_calls
-        play_next_calls += 1
-
-    d.get_if_xiaoai_is_playing = _status
-    d._play_next = _play_next
-    counters_before = (
-        d._timer_expiry_false_count,
-        d._timer_expiry_playing_grace_count,
-        d._timer_expiry_unknown_grace_count,
-    )
-    await d.set_next_music_timeout(0)
-    old_timer = d._next_timer
-    assert old_timer is not None
-    try:
-        await entered.wait()
-        if mutation_fn == "command":
-            d._accept_command(updated_at=2.0)
-        elif mutation_fn == "queue":
-            d._start_queue_session(updated_at=2.0)
-        else:
-            d._start_track_attempt(updated_at=2.0)
-        newer_timer = object()
-        d._next_timer = newer_timer
-        release.set()
-        await old_timer
-
-        assert play_next_calls == 0
-        assert d._next_timer is newer_timer
-        assert (
-            d._timer_expiry_false_count,
-            d._timer_expiry_playing_grace_count,
-            d._timer_expiry_unknown_grace_count,
-        ) == counters_before
-    finally:
-        if not old_timer.done():
-            release.set()
-            old_timer.cancel()
-            try:
-                await old_timer
-            except asyncio.CancelledError:
-                pass
-
 
 @pytest.mark.asyncio
 async def test_duration_probe_freezes_token_before_runner_starts(monkeypatch):

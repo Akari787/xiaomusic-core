@@ -200,6 +200,7 @@ def build_rig(
     playlists: dict[str, list[str]] | None = None,
     durations: dict[str, float] | None = None,
     play_type: int = PLAY_TYPE_ALL,
+    config_overrides: dict[str, Any] | None = None,
 ) -> Rig:
     import xiaomusic.device_player as dp
     import xiaomusic.playback.command_arbiter as arbiter_mod
@@ -227,6 +228,8 @@ def build_rig(
         edge_tts_voice="",  # route TTS through the fake speaker, never the network
         enable_force_stop=True,
     )
+    for key, value in (config_overrides or {}).items():
+        setattr(config, key, value)
     log = logging.getLogger("behavior")
     library = MusicLibrary(config=config, log=log, event_bus=None)
     library.gen_all_music_list()

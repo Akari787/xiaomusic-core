@@ -247,6 +247,13 @@ class Config:
     auto_next_confirm_interval_ms: int = int(
         os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_INTERVAL_MS", "300")
     )
+    # Send player_stop before dispatching the next track on timer-driven
+    # auto-advance. play_by_music_url already replaces the speaker queue, so
+    # the stop only adds a cloud round trip (1-2 s measured), during which the
+    # speaker audibly restarts the finished track. Manual commands always stop.
+    auto_next_preplay_stop: bool = (
+        os.getenv("XIAOMUSIC_AUTO_NEXT_PREPLAY_STOP", "true").lower() == "true"
+    )
     # 目录监控配置
     enable_file_watch: bool = (
         os.getenv("XIAOMUSIC_ENABLE_FILE_WATCH", "false").lower() == "true"
