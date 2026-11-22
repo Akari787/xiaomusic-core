@@ -56,6 +56,8 @@ class FakeSpeaker:
     playing_url: str = ""
     paused: bool = False
     fail_next: dict[str, list[bool]] = field(default_factory=dict)
+    # Per-command latency in player seconds, e.g. {"play_by_music_url": 3}.
+    latency: dict[str, float] = field(default_factory=dict)
     tts: list[str] = field(default_factory=list)
     # Returns the player's current track title; set by build_rig. URLs are
     # opaque proxy tokens, so the title is how tests tell songs apart.
@@ -70,14 +72,15 @@ class FakeSpeaker:
 
     # -- the seam -------------------------------------------------------
     async def mina_call(self, method_name: str, *args, retry: int = 1, ctx: str = "", **kwargs):
-        await asyncio.sleep(0)
+        # Title of the track the player meant when it issued the command.
+        title_at_call = self.current_title() if self.current_title else ""
+        await asyncio.sleep(self.latency.get(method_name, 0.0) / TIME_SCALE)
         if self._should_fail(method_name):
             self.commands.append(Command(f"{method_name}!timeout"))
             raise SpeakerTimeout(f"{method_name} timed out")
         if method_name in ("play_by_music_url", "play_by_url"):
             url = args[1] if len(args) > 1 else kwargs.get("url", "")
-            title = self.current_title() if self.current_title else ""
-            self.commands.append(Command("play", url, title))
+            self.commands.append(Command("play", url, title_at_call))
             self.playing_url = url
             self.paused = False
             return {"code": 0}
