@@ -2,7 +2,6 @@
 
 Tests A-J validate the new check_replay → REPLAY submit → executor flow:
 - Condition semantic: no-replay → False + zero writes
-- continue_play=True → False + zero writes
 - Need replay → submit REPLAY (C3a pattern), return True, c+1
 - Executor guards sid+accepted token strict current before _play
 - REPLAY is normal latest intent; STOP/PAUSE barrier ordering
@@ -249,30 +248,6 @@ async def test_a_need_replay_blocked_physical_quick_true_c_plus_one():
     assert play_calls[0][2] is True
 
     block.set()
-    await d.close_command_arbiter()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test B: continue_play True → False, zero writes
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_b_continue_play_true_zero_write():
-    """When continue_play=True, check_replay returns False with zero lifecycle
-    writes and zero arbiter creation."""
-    d = _make_device()
-    d.config.continue_play = True
-
-    _stage_runtime(d, PlaybackPhase.PLAYING, "song_b")
-    initial_c = d.get_runtime_state().command_generation
-
-    result = await d.check_replay()
-
-    assert result is False
-    assert d.get_runtime_state().command_generation == initial_c
-    assert d._command_arbiter is None
-
     await d.close_command_arbiter()
 
 

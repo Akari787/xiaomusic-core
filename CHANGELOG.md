@@ -9,6 +9,25 @@
 - 顺序播放放完最后一首时主动停止音箱；此前服务端停在"播放中"，音箱持续循环最后一首。
 - 连续失败进入降级时只播报提示，不再在播报后再试一次当前歌曲。
 
+### 配置精简
+
+> **升级注意**：下列设置已删除，旧 `setting.json` 里的这些键会被忽略。
+> - 播放地址只认 `public_base_url`（环境变量 `XIAOMUSIC_PUBLIC_BASE_URL`）。留空时，打开 WebUI 会按浏览器地址自动填写；`hostname` / `public_port` / `XIAOMUSIC_PUBLIC_PORT` 不再生效。
+> - 歌单 URL 导入（`music_list_url`、`/downloadjson`、`/api/file/fetch_playlist_json`）和定时任务（`crontab_json`）整体删除。Jellyfin 歌单同步不受影响。
+
+- 删除没有代码读取的配置：`pull_ask_sec`、`use_music_id`、`mina_high_freq_min_interval_seconds`、`mina_auth_fail_threshold`、`mina_auth_cooldown_seconds`、`jellyfin_force_proxy`、`enable_config_example`（含 `--enable_config_example`）。
+- 删除谷歌统计（`enable_analytics`、`API_SECRET`、依赖 `ga4mp`）和上报到原作者服务器的 Sentry 错误收集（`XIAOMUSIC_ENABLE_SENTRY`、依赖 `sentry-sdk`）。
+- 显式声明依赖 `tzlocal`：扫码登录直接使用它，此前只是随 `apscheduler` 间接安装。
+- 删除播放兼容开关，改为固定行为：
+  - `play_url_mode` / `use_music_api` / `continue_play`：按音箱型号选择 `play_by_music_url` 或 `play_by_url`；不再为每首歌额外调用一次 `/music/search` 取 audio id。
+  - `use_music_audio_id`：固定使用内置 id。
+  - `enable_force_stop`：停止时直接发 `player_stop`，不再先查询状态（OH2P 暂停时状态仍报 1，查询只多一次云端往返）。
+  - `jellyfin_proxy_mode` / `web_music_proxy`：Jellyfin 先直连，音箱没开播时自动改走代理；其他网络歌曲始终走代理。
+  - `get_duration_type`：先用 ffprobe，失败再用 mutagen。
+- 以下改为内置默认值，不再在页面显示：目录深度（10）、目录监控刷新延迟（10 s）、最近新增数量（50）、模糊匹配（始终开启，阈值 0.6）、不扫描标签目录（删除）。临时目录改为每天自动清空一次（此前的定时清理只在配置了 `crontab_json` 时才会生效）。
+- 文件路径、日志路径等部署参数从设置页撤下，仍可用环境变量配置。
+- 设置页删除“文件路径”“播放控制”“搜索匹配”“歌单定时”分类，以及三个未实现的工具链接。
+
 ### 测试
 
 - 新增行为测试（`tests/behavior/`）：在唯一的云端接缝放置假音箱，只通过公开入口驱动播放器，覆盖播放模式、手动控制、失败策略与并发竞态。

@@ -72,8 +72,6 @@ def test_production_assembly_keeps_media_public_and_management_private(monkeypat
 
     management_requests = [
         ("post", "/api/file/cleantempdir", {}),
-        ("post", "/downloadjson", {}),
-        ("post", "/api/file/fetch_playlist_json", {}),
         ("post", "/downloadplaylist", {}),
         ("post", "/downloadonemusic", {}),
         ("post", "/uploadytdlpcookie", {"files": {"file": ("x.txt", b"x")}}),

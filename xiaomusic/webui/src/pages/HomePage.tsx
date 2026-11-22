@@ -40,7 +40,6 @@ import { credentialAgeText } from "../services/credentialAge";
 import { loginJellyfin, logoutJellyfin } from "../services/jellyfin";
 import {
   cleanTempDir as cleanTempDirRequest,
-  fetchPlaylistJson,
   fetchQrcode,
 } from "../services/homeApi";
 
@@ -128,55 +127,22 @@ const BUILT_IN_THEME_OPTIONS: Array<{ value: "default" | "dark"; label: string }
 
 const ADVANCED_TABS: Array<{ key: string; label: string; fields: SettingField[] }> = [
   {
-    key: "filepath",
-    label: "文件路径",
-    fields: [
-      { key: "music_path", label: "音乐目录" },
-      { key: "download_path", label: "音乐下载目录" },
-      { key: "conf_path", label: "配置文件目录" },
-      { key: "cache_dir", label: "缓存文件目录" },
-      { key: "temp_path", label: "临时文件目录" },
-      { key: "ffmpeg_location", label: "ffmpeg 路径" },
-    ],
-  },
-  {
-    key: "filewatch",
-    label: "文件监控",
+    key: "library",
+    label: "音乐库",
     fields: [
       { key: "enable_file_watch", label: "启用目录监控", kind: "bool" },
-      { key: "file_watch_debounce", label: "刷新延迟(秒)", kind: "number" },
-      { key: "enable_auto_clean_temp", label: "启用定时清理临时文件", kind: "bool" },
       { key: "exclude_dirs", label: "忽略目录" },
-      { key: "ignore_tag_dirs", label: "不扫描标签目录" },
-      { key: "music_path_depth", label: "目录深度", kind: "number" },
-      { key: "recently_added_playlist_len", label: "最近新增歌曲数量", kind: "number" },
-    ],
-  },
-  {
-    key: "playback",
-    label: "播放控制",
-    fields: [
-      { key: "delay_sec", label: "下一首延迟秒数", kind: "number" },
-      { key: "continue_play", label: "启用继续播放", kind: "bool" },
-      { key: "use_music_api", label: "型号兼容模式", kind: "bool" },
-      { key: "use_music_audio_id", label: "触屏版歌曲ID" },
-      { key: "use_music_id", label: "触屏版分段ID" },
-      { key: "active_cmd", label: "允许唤醒命令" },
-    ],
-  },
-  {
-    key: "search",
-    label: "搜索匹配",
-    fields: [
-      { key: "fuzzy_match_cutoff", label: "模糊匹配阈值", kind: "number" },
-      { key: "enable_fuzzy_match", label: "开启模糊搜索", kind: "bool" },
     ],
   },
   {
     key: "audio",
-    label: "音频处理",
+    label: "下载与音频",
     fields: [
-      { key: "get_duration_type", label: "获取时长方式" },
+      { key: "search_prefix", label: "歌曲下载方式前缀" },
+      { key: "proxy", label: "代理地址" },
+      { key: "disable_download", label: "关闭下载功能", kind: "bool" },
+      { key: "enable_yt_dlp_cookies", label: "启用 yt-dlp-cookies", kind: "bool" },
+      { key: "yt_dlp_cookies_path", label: "yt-dlp-cookies 文件路径" },
       { key: "loudnorm", label: "均衡音量参数" },
       { key: "remove_id3tag", label: "去除 MP3 ID3v2", kind: "bool" },
       { key: "convert_to_mp3", label: "转换为 MP3", kind: "bool" },
@@ -212,18 +178,7 @@ const ADVANCED_TABS: Array<{ key: string; label: string; fields: SettingField[] 
       { key: "keywords_online_play", label: "在线播放口令" },
       { key: "keywords_singer_play", label: "播放歌手口令" },
       { key: "enable_cmd_del_music", label: "启用语音删除歌曲", kind: "bool" },
-    ],
-  },
-  {
-    key: "network",
-    label: "网络下载",
-    fields: [
-      { key: "search_prefix", label: "歌曲下载方式前缀" },
-      { key: "proxy", label: "代理地址" },
-      { key: "web_music_proxy", label: "网络歌曲走代理", kind: "bool" },
-      { key: "disable_download", label: "关闭下载功能", kind: "bool" },
-      { key: "enable_yt_dlp_cookies", label: "启用 yt-dlp-cookies", kind: "bool" },
-      { key: "yt_dlp_cookies_path", label: "yt-dlp-cookies 文件路径" },
+      { key: "active_cmd", label: "允许唤醒命令" },
     ],
   },
   {
@@ -232,17 +187,7 @@ const ADVANCED_TABS: Array<{ key: string; label: string; fields: SettingField[] 
     fields: [
       { key: "group_list", label: "设备分组配置" },
       { key: "enable_pull_ask", label: "获取对话记录", kind: "bool" },
-      { key: "pull_ask_sec", label: "对话轮询间隔(秒)", kind: "number" },
       { key: "get_ask_by_mina", label: "特殊型号对话记录", kind: "bool" },
-    ],
-  },
-  {
-    key: "playlist",
-    label: "歌单定时",
-    fields: [
-      { key: "music_list_url", label: "歌单地址" },
-      { key: "music_list_json", label: "歌单内容", kind: "textarea" },
-      { key: "crontab_json", label: "定时任务", kind: "textarea" },
     ],
   },
   {
@@ -257,11 +202,7 @@ const ADVANCED_TABS: Array<{ key: string; label: string; fields: SettingField[] 
   {
     key: "other",
     label: "其他",
-    fields: [
-      { key: "verbose", label: "开启调试日志", kind: "bool" },
-      { key: "log_file", label: "日志路径" },
-      { key: "enable_analytics", label: "开启谷歌数据统计", kind: "bool" },
-    ],
+    fields: [{ key: "verbose", label: "开启调试日志", kind: "bool" }],
   },
 ];
 
@@ -501,41 +442,6 @@ function browserOriginBaseUrl(): string {
     return "";
   }
   return normalizeBaseUrlInput(window.location.origin);
-}
-
-function legacyBaseUrl(hostnameRaw: unknown, portRaw: unknown): string {
-  const host = String(hostnameRaw || "").trim();
-  if (!host) {
-    return "";
-  }
-  const normalizedHost = normalizeBaseUrlInput(host);
-  if (!normalizedHost) {
-    return "";
-  }
-  const u = new URL(normalizedHost);
-  const portNum = Number(portRaw || 0);
-  if (Number.isFinite(portNum) && portNum > 0) {
-    return `${u.protocol}//${u.hostname}:${portNum}`;
-  }
-  return normalizedHost;
-}
-
-function legacyLooksUnconfigured(hostnameRaw: unknown, portRaw: unknown): boolean {
-  const host = String(hostnameRaw || "").trim();
-  const portNum = Number(portRaw || 0);
-  return !host || (host === "http://192.168.2.5" && (!portNum || portNum === 58090));
-}
-
-function baseUrlToLegacyHostPort(baseUrl: string): { hostname: string; public_port: number } | null {
-  const normalized = normalizeBaseUrlInput(baseUrl);
-  if (!normalized) {
-    return null;
-  }
-  const u = new URL(normalized);
-  return {
-    hostname: `${u.protocol}//${u.hostname}`,
-    public_port: Number(u.port || (u.protocol === "https:" ? "443" : "80")),
-  };
 }
 
 function playbackSongStorageKey(did: string): string {
@@ -1359,12 +1265,8 @@ export function HomePage() {
   const autoDetectedBaseUrl = useMemo(() => browserOriginBaseUrl(), []);
   const effectivePublicBaseUrl = useMemo(() => {
     const manual = normalizeBaseUrlInput(settingData.public_base_url);
-    if (manual) {
-      return manual;
-    }
-    const legacy = legacyBaseUrl(settingData.hostname, settingData.public_port);
-    return legacy || autoDetectedBaseUrl;
-  }, [settingData.public_base_url, settingData.hostname, settingData.public_port, autoDetectedBaseUrl]);
+    return manual || autoDetectedBaseUrl;
+  }, [settingData.public_base_url, autoDetectedBaseUrl]);
   const themeSelectOptions = useMemo(
     () => [
       ...BUILT_IN_THEME_OPTIONS,
@@ -1425,21 +1327,12 @@ export function HomePage() {
     setAuthStatus(out);
   }
 
-  function withPublicBaseCompat(data: Record<string, unknown>, baseUrl: string): Record<string, unknown> {
+  function withPublicBase(data: Record<string, unknown>, baseUrl: string): Record<string, unknown> {
     const normalized = normalizeBaseUrlInput(baseUrl);
     if (!normalized) {
       return data;
     }
-    const legacy = baseUrlToLegacyHostPort(normalized);
-    if (!legacy) {
-      return data;
-    }
-    return {
-      ...data,
-      public_base_url: normalized,
-      hostname: legacy.hostname,
-      public_port: legacy.public_port,
-    };
+    return { ...data, public_base_url: normalized };
   }
 
   async function loadSettingData() {
@@ -1456,15 +1349,10 @@ export function HomePage() {
       : [];
 
     const manual = normalizeBaseUrlInput(settings.public_base_url);
-    const legacy = legacyBaseUrl(settings.hostname, settings.public_port);
     const auto = autoDetectedBaseUrl;
     let hydrated = { ...settings };
-    if (!manual) {
-      if (legacy) {
-        hydrated = withPublicBaseCompat(hydrated, legacy);
-      } else if (auto) {
-        hydrated = withPublicBaseCompat(hydrated, auto);
-      }
+    if (!manual && auto) {
+      hydrated = withPublicBase(hydrated, auto);
     }
 
     if (!homeMountedRef.current || generation !== settingsLoadGenerationRef.current) return;
@@ -1485,12 +1373,11 @@ export function HomePage() {
 
     if (!homeMountedRef.current || generation !== settingsLoadGenerationRef.current) return;
     if (!publicBaseMigratedRef.current && !manual) {
-      const shouldUseLegacy = Boolean(legacy) && !legacyLooksUnconfigured(settings.hostname, settings.public_port);
-      const target = shouldUseLegacy ? legacy : auto;
+      const target = auto;
       if (target) {
         publicBaseMigratedRef.current = true;
         const payload = {
-          ...withPublicBaseCompat({ ...settings }, target),
+          ...withPublicBase({ ...settings }, target),
           mi_did: dids.join(",") || String(settings.mi_did || ""),
         };
         await saveSystemSettings(payload, dids);
@@ -2081,10 +1968,8 @@ export function HomePage() {
       setMessage("当前无法自动识别访问地址，请手动填写覆盖地址");
       return;
     }
-    const next = withPublicBaseCompat({ ...settingData, public_base_url: "" }, autoDetectedBaseUrl);
-    updateSettingField("public_base_url", "");
-    updateSettingField("hostname", String(next.hostname || ""));
-    updateSettingField("public_port", Number(next.public_port || 0));
+    const next = withPublicBase({ ...settingData, public_base_url: "" }, autoDetectedBaseUrl);
+    updateSettingField("public_base_url", String(next.public_base_url || ""));
 
     const payload: Record<string, unknown> = {
       ...next,
@@ -2135,19 +2020,6 @@ export function HomePage() {
     }
     const err = apiErrorInfo(out);
     setMessage(err.message || "切换失败，请重试");
-  }
-
-  async function fetchMusicListJson() {
-    const out = (await fetchPlaylistJson<{ ret?: string; content?: string }>(fieldValue("music_list_url"))) as {
-      ret?: string;
-      content?: string;
-    };
-    if (out.ret === "OK") {
-      updateSettingField("music_list_json", out.content || "");
-      setMessage("歌单内容已获取");
-      return;
-    }
-    setMessage(out.ret || "获取歌单失败");
   }
 
   function doClearCache() {
@@ -2997,11 +2869,6 @@ export function HomePage() {
                       {tab.fields.map((field) => (
                         <div key={`${tab.key}-${field.key}`}>{renderSettingField(field)}</div>
                       ))}
-                      {tab.key === "playlist" ? (
-                        <div className="component-button-group">
-                          <button onClick={() => void fetchMusicListJson()}>获取歌单</button>
-                        </div>
-                      ) : null}
                       {tab.key === "security" ? (
                         <div className="setting-card setting-panel" style={{ marginTop: 12 }}>
                           <h3 className="card-title">公共访问地址（高级）</h3>
@@ -3032,23 +2899,6 @@ export function HomePage() {
                                 onChange={(e) => updateSettingField("public_base_url", e.target.value)}
                               />
                               <p className="auth-hint">留空表示使用自动检测地址（当前访问地址）。</p>
-                              <details>
-                                <summary>旧版兼容（host + port）</summary>
-                                <label htmlFor="hostname">旧版 hostname:</label>
-                                <input
-                                  id="hostname"
-                                  type="text"
-                                  value={String(settingData.hostname || "")}
-                                  onChange={(e) => updateSettingField("hostname", e.target.value)}
-                                />
-                                <label htmlFor="public_port">旧版 public_port:</label>
-                                <input
-                                  id="public_port"
-                                  type="number"
-                                  value={String(settingData.public_port ?? 58090)}
-                                  onChange={(e) => updateSettingField("public_port", Number(e.target.value || 0))}
-                                />
-                              </details>
                             </div>
                           </div>
                         </div>
@@ -3097,18 +2947,6 @@ export function HomePage() {
                 <a href="/docs" target="_blank" className="link-card" rel="noreferrer">
                   <div className="link-card-icon"><span className="material-icons">description</span></div>
                   <div className="link-card-content"><div className="link-card-title">接口文档</div><div className="link-card-description">查看 API 接口文档</div></div>
-                </a>
-                <a href="#" className="link-card disabled" onClick={(e) => e.preventDefault()}>
-                  <div className="link-card-icon"><span className="material-icons">swap_horiz</span></div>
-                  <div className="link-card-content"><div className="link-card-title">m3u转换</div><div className="link-card-description">待迁移到 WebUI 工具页</div></div>
-                </a>
-                <a href="#" className="link-card disabled" onClick={(e) => e.preventDefault()}>
-                  <div className="link-card-icon"><span className="material-icons">cloud_download</span></div>
-                  <div className="link-card-content"><div className="link-card-title">歌曲下载工具</div><div className="link-card-description">待迁移到 WebUI 工具页</div></div>
-                </a>
-                <a href="#" className="link-card disabled" onClick={(e) => e.preventDefault()}>
-                  <div className="link-card-icon"><span className="material-icons">merge_type</span></div>
-                  <div className="link-card-content"><div className="link-card-title">歌单合并工具</div><div className="link-card-description">待迁移到 WebUI 工具页</div></div>
                 </a>
               </div>
             </div>

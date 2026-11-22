@@ -42,7 +42,7 @@ class LegacyReadOnlyDict(dict):
 
 from xiaomusic.const import SUPPORT_MUSIC_TYPE
 from xiaomusic.events import CONFIG_CHANGED
-from xiaomusic.utils.file_utils import not_in_dirs, traverse_music_directory
+from xiaomusic.utils.file_utils import traverse_music_directory
 from xiaomusic.utils.music_utils import (
     Metadata,
     extract_audio_metadata,
@@ -54,6 +54,11 @@ from xiaomusic.utils.music_utils import (
 from xiaomusic.utils.network_utils import MusicUrlCache
 from xiaomusic.utils.system_utils import try_add_access_control_param
 from xiaomusic.utils.text_utils import custom_sort_key, find_best_match, fuzzyfinder
+
+# Library defaults that used to be settings.
+MUSIC_PATH_DEPTH = 10
+RECENTLY_ADDED_PLAYLIST_LEN = 50
+FUZZY_MATCH_CUTOFF = 0.6
 
 
 class MusicLibrary:
@@ -514,7 +519,7 @@ class MusicLibrary:
         exclude_dirs_set = self.config.get_exclude_dirs_set()
         local_musics = traverse_music_directory(
             self.config.music_path,
-            depth=self.config.music_path_depth,
+            depth=MUSIC_PATH_DEPTH,
             exclude_dirs=exclude_dirs_set,
             support_extension=SUPPORT_MUSIC_TYPE,
         )
@@ -601,7 +606,7 @@ class MusicLibrary:
             local_entity_records,
             key=lambda item: os.path.getmtime(item["path"]),
             reverse=True,
-        )[: self.config.recently_added_playlist_len]
+        )[:RECENTLY_ADDED_PLAYLIST_LEN]
         for idx, item in enumerate(sorted_recent):
             self._register_membership(
                 "最近新增",
@@ -1376,15 +1381,11 @@ class MusicLibrary:
         Returns:
             list: 匹配的音乐名称列表
         """
-        if not self.config.enable_fuzzy_match:
-            self.log.debug("没开启模糊匹配")
-            return []
-
         all_music_list = list(self.all_music.keys())
         real_names = find_best_match(
             name,
             all_music_list,
-            cutoff=self.config.fuzzy_match_cutoff,
+            cutoff=FUZZY_MATCH_CUTOFF,
             n=n,
             extra_search_index=self._extra_index_search,
         )
@@ -1400,7 +1401,7 @@ class MusicLibrary:
             real_names = find_best_match(
                 name,
                 all_music_list,
-                cutoff=self.config.fuzzy_match_cutoff,
+                cutoff=FUZZY_MATCH_CUTOFF,
                 n=n * 2,
                 extra_search_index=self._extra_index_search,
             )
@@ -1417,15 +1418,11 @@ class MusicLibrary:
         Returns:
             str: 匹配的播放列表名称
         """
-        if not self.config.enable_fuzzy_match:
-            self.log.debug("没开启模糊匹配")
-            return list_name
-
         # 模糊搜一个播放列表（只需要一个，不需要 extra index）
         real_name = find_best_match(
             list_name,
             self.music_list,
-            cutoff=self.config.fuzzy_match_cutoff,
+            cutoff=FUZZY_MATCH_CUTOFF,
             n=1,
         )[0]
 
@@ -1830,8 +1827,6 @@ class MusicLibrary:
         all_music_tags = self.try_load_from_tag_cache()
         all_music_tags.update(self.all_music_tags)  # 保证最新
 
-        ignore_tag_absolute_dirs = self.config.get_ignore_tag_dirs()
-        self.log.info(f"ignore_tag_absolute_dirs: {ignore_tag_absolute_dirs}")
 
         scanned = 0
         refreshed = 0
@@ -1851,9 +1846,7 @@ class MusicLibrary:
                 need_refresh = False
             if need_refresh:
                 try:
-                    if os.path.exists(file_or_url) and not_in_dirs(
-                        file_or_url, ignore_tag_absolute_dirs
-                    ):
+                    if os.path.exists(file_or_url):
                         all_music_tags[name] = extract_audio_metadata(
                             file_or_url, self.config.picture_cache_path
                         )
@@ -2011,32 +2004,13 @@ class MusicLibrary:
             except Exception:
                 return False
 
-        # 是否需要代理
-        jellyfin_mode = (
-            getattr(self.config, "jellyfin_proxy_mode", "auto") or "auto"
-        ).lower()
-
-        # For Jellyfin, we support an internal auto-fallback strategy:
-        # - on: always proxy
-        # - off: never proxy
-        # - auto: try direct first; if playback fails, device layer will retry via proxy
-        jellyfin_is = is_jellyfin_url(url)
-        if jellyfin_is and jellyfin_mode == "on":
-            is_radio = self.is_web_radio_music(name)
-            proxy_url = self._get_proxy_url(url, is_radio=is_radio)
-            return proxy_url, url
-
-        needs_proxy = self.config.web_music_proxy or url.startswith("self://")
-        if needs_proxy:
-            is_radio = self.is_web_radio_music(name)
-            proxy_url = self._get_proxy_url(url, is_radio=is_radio)
-            return proxy_url, url
-
-        # Direct play.
-        if jellyfin_is and jellyfin_mode == "auto":
-            # Return origin URL so device layer can retry via proxy if needed.
+        # Jellyfin: play direct first; if the speaker does not start, the
+        # device layer retries the same track through /proxy (origin URL is
+        # returned for that). Everything else goes through /proxy.
+        if is_jellyfin_url(url):
             return url, url
-        return url, None
+        is_radio = self.is_web_radio_music(name)
+        return self._get_proxy_url(url, is_radio=is_radio), url
 
     def is_jellyfin_url(self, u: str) -> bool:
         """Best-effort check whether a URL belongs to the configured Jellyfin.

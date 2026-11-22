@@ -168,18 +168,9 @@ async def get_local_music_duration(filename: str, config) -> float:
     Returns:
         时长(秒)
     """
-    duration = 0
-    if config.get_duration_type == "ffprobe":
-        duration = get_duration_by_ffprobe(filename, config.ffmpeg_location)
-    else:
-        duration = await get_duration_by_mutagen(filename)
-
-    # 换个方式重试一次
+    duration = get_duration_by_ffprobe(filename, config.ffmpeg_location)
     if duration == 0:
-        if config.get_duration_type != "ffprobe":
-            duration = get_duration_by_ffprobe(filename, config.ffmpeg_location)
-        else:
-            duration = await get_duration_by_mutagen(filename)
+        duration = await get_duration_by_mutagen(filename)
 
     return duration
 

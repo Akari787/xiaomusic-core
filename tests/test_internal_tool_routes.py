@@ -26,50 +26,10 @@ def test_refreshmusictag_removed_from_internal_routes() -> None:
     assert client.post("/refreshmusictag").status_code == 404
 
 
-def test_fetch_playlist_json_requires_non_empty_url() -> None:
+def test_playlist_json_import_routes_removed() -> None:
     client = _internal_client()
-    resp = client.post("/api/file/fetch_playlist_json", json={"url": ""})
-    assert resp.status_code == 200
-    assert resp.json()["ret"] == "URL required"
-
-
-def test_fetch_playlist_json_rejects_non_http_scheme() -> None:
-    client = _internal_client()
-    resp = client.post("/api/file/fetch_playlist_json", json={"url": "file:///tmp/test.json"})
-    assert resp.status_code == 200
-    assert resp.json()["ret"] == "URL must use http or https"
-
-
-def test_fetch_playlist_json_requires_json_payload(monkeypatch) -> None:
-    async def _fake_downloadfile(url, config):  # noqa: ANN001
-        _ = (url, config)
-        return "not-json"
-
-    monkeypatch.setattr(file, "downloadfile", _fake_downloadfile)
-    monkeypatch.setattr(file, "log", type("_Log", (), {"info": staticmethod(lambda *args, **kwargs: None)})())
-
-    client = _internal_client()
-    resp = client.post("/api/file/fetch_playlist_json", json={"url": "https://example.com/list.json"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["ret"] == "Playlist JSON required"
-    assert body["content"] == "not-json"
-
-
-def test_fetch_playlist_json_success_for_valid_json(monkeypatch) -> None:
-    async def _fake_downloadfile(url, config):  # noqa: ANN001
-        _ = (url, config)
-        return '{"items":[1,2,3]}'
-
-    monkeypatch.setattr(file, "downloadfile", _fake_downloadfile)
-    monkeypatch.setattr(file, "log", type("_Log", (), {"info": staticmethod(lambda *args, **kwargs: None)})())
-
-    client = _internal_client()
-    resp = client.post("/api/file/fetch_playlist_json", json={"url": "https://example.com/list.json"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["ret"] == "OK"
-    assert body["content"] == '{"items":[1,2,3]}'
+    assert client.post("/downloadjson", json={"url": "https://example.com"}).status_code == 404
+    assert client.post("/api/file/fetch_playlist_json", json={"url": "https://example.com"}).status_code == 404
 
 
 def test_cleantempdir_and_public_refresh_can_coexist(monkeypatch) -> None:

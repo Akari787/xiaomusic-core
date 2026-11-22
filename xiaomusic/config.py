@@ -6,7 +6,7 @@ import json
 import math
 import os
 import warnings
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import get_args, get_origin, get_type_hints
 from urllib.parse import urlparse
 
@@ -155,32 +155,24 @@ class Config:
     download_path: str = os.getenv("XIAOMUSIC_DOWNLOAD_PATH", "music/download")
     conf_path: str = os.getenv("XIAOMUSIC_CONF_PATH", "conf")
     cache_dir: str = os.getenv("XIAOMUSIC_CACHE_DIR", "music/cache")
-    hostname: str = os.getenv("XIAOMUSIC_HOSTNAME", "http://192.168.2.5")
     public_base_url: str = os.getenv("XIAOMUSIC_PUBLIC_BASE_URL", "")
     port: int = int(os.getenv("XIAOMUSIC_PORT", "8090"))  # 监听端口
-    public_port: int = int(os.getenv("XIAOMUSIC_PUBLIC_PORT", 58090))  # 歌曲访问端口
     proxy: str | None = os.getenv("XIAOMUSIC_PROXY", None)
     loudnorm: str | None = os.getenv("XIAOMUSIC_LOUDNORM", None)  # 均衡音量参数
     search_prefix: str = os.getenv(
         "XIAOMUSIC_SEARCH", "bilisearch:"
     )  # "bilisearch:" or "ytsearch:"
     ffmpeg_location: str = os.getenv("XIAOMUSIC_FFMPEG_LOCATION", "./ffmpeg/bin")
-    get_duration_type: str = os.getenv(
-        "XIAOMUSIC_GET_DURATION_TYPE", "ffprobe"
-    )  # mutagen or ffprobe
     active_cmd: str = os.getenv(
         "XIAOMUSIC_ACTIVE_CMD",
         "play,set_play_type_rnd,playlocal,play_music_list,play_music_list_index,stop_after_minute,stop,play_next,play_prev,set_play_type_one,set_play_type_all,set_play_type_sin,set_play_type_seq,gen_music_list,add_to_favorites,del_from_favorites,cmd_del_music,online_play,singer_play",
     )
     exclude_dirs: str = os.getenv("XIAOMUSIC_EXCLUDE_DIRS", "@eaDir,tmp")
-    ignore_tag_dirs: str = os.getenv("XIAOMUSIC_IGNORE_TAG_DIRS", "")
-    music_path_depth: int = int(os.getenv("XIAOMUSIC_MUSIC_PATH_DEPTH", "10"))
     disable_httpauth: bool = (
         os.getenv("XIAOMUSIC_DISABLE_HTTPAUTH", "true").strip().lower() == "true"
     )
     httpauth_username: str = os.getenv("XIAOMUSIC_HTTPAUTH_USERNAME", "")
     httpauth_password: str = os.getenv("XIAOMUSIC_HTTPAUTH_PASSWORD", "")
-    music_list_url: str = os.getenv("XIAOMUSIC_MUSIC_LIST_URL", "")
     music_list_json: str = os.getenv("XIAOMUSIC_MUSIC_LIST_JSON", "")
     custom_play_list_json: str = os.getenv("XIAOMUSIC_CUSTOM_PLAY_LIST_JSON", "")
     disable_download: bool = (
@@ -188,22 +180,8 @@ class Config:
     )
     key_word_dict: dict[str, str] = field(default_factory=default_key_word_dict)
     key_match_order: list[str] = field(default_factory=default_key_match_order)
-    use_music_api: bool = (
-        os.getenv("XIAOMUSIC_USE_MUSIC_API", "false").lower() == "true"
-    )
-    use_music_audio_id: str = os.getenv(
-        "XIAOMUSIC_USE_MUSIC_AUDIO_ID", "1582971365183456177"
-    )
-    use_music_id: str = os.getenv("XIAOMUSIC_USE_MUSIC_ID", "355454500")
     log_file: str = os.getenv("XIAOMUSIC_LOG_FILE", "xiaomusic.log.txt")
-    # 模糊搜索匹配的最低相似度阈值
-    fuzzy_match_cutoff: float = float(os.getenv("XIAOMUSIC_FUZZY_MATCH_CUTOFF", "0.6"))
-    # 开启模糊搜索
-    enable_fuzzy_match: bool = (
-        os.getenv("XIAOMUSIC_ENABLE_FUZZY_MATCH", "true").lower() == "true"
-    )
     stop_tts_msg: str = os.getenv("XIAOMUSIC_STOP_TTS_MSG", "收到,再见")
-    enable_config_example: bool = False
 
     keywords_playlocal: str = os.getenv(
         "XIAOMUSIC_KEYWORDS_PLAYLOCAL", "播放本地歌曲,本地播放歌曲"
@@ -218,9 +196,6 @@ class Config:
     user_key_word_dict: dict[str, str] = field(
         default_factory=default_user_key_word_dict
     )
-    enable_force_stop: bool = (
-        os.getenv("XIAOMUSIC_ENABLE_FORCE_STOP", "false").lower() == "true"
-    )
     devices: dict[str, Device] = field(default_factory=dict)
     group_list: str = os.getenv(
         "XIAOMUSIC_GROUP_LIST", ""
@@ -230,14 +205,6 @@ class Config:
     )
     convert_to_mp3: bool = os.getenv("CONVERT_TO_MP3", "false").lower() == "true"
     delay_sec: int = int(os.getenv("XIAOMUSIC_DELAY_SEC", 0))  # 下一首歌延迟播放秒数
-    continue_play: bool = (
-        os.getenv("XIAOMUSIC_CONTINUE_PLAY", "false").lower() == "true"
-    )
-    # Playback URL dispatch mode for A/B experiments.
-    # auto -> existing behavior
-    # play_by_music_url -> force Mina play_by_music_url
-    # play_by_url -> force Mina play_by_url
-    play_url_mode: str = os.getenv("XIAOMUSIC_PLAY_URL_MODE", "auto")
     auto_next_confirm_delay_ms: int = int(
         os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_DELAY_MS", "1000")
     )
@@ -265,10 +232,6 @@ class Config:
     enable_file_watch: bool = (
         os.getenv("XIAOMUSIC_ENABLE_FILE_WATCH", "false").lower() == "true"
     )
-    file_watch_debounce: int = int(
-        os.getenv("XIAOMUSIC_FILE_WATCH_DEBOUNCE", 10)
-    )  # 监控刷新延迟时间(秒)
-    pull_ask_sec: int = int(os.getenv("XIAOMUSIC_PULL_ASK_SEC", "1"))
     # Multi-platform channel cycle/context controls.
     channel_cycle_interval: int = int(os.getenv("XIAOMUSIC_CHANNEL_CYCLE_INTERVAL", "60"))
     channel_archive_log_max_entries: int = int(os.getenv("XIAOMUSIC_CHANNEL_ARCHIVE_LOG_MAX_ENTRIES", "500"))
@@ -279,15 +242,11 @@ class Config:
     enable_pull_ask: bool = (
         os.getenv("XIAOMUSIC_ENABLE_PULL_ASK", "false").lower() == "true"
     )
-    crontab_json: str = os.getenv("XIAOMUSIC_CRONTAB_JSON", "")  # 定时任务
     enable_yt_dlp_cookies: bool = (
         os.getenv("XIAOMUSIC_ENABLE_YT_DLP_COOKIES", "false").lower() == "true"
     )
     enable_save_tag: bool = (
         os.getenv("XIAOMUSIC_ENABLE_SAVE_TAG", "false").lower() == "true"
-    )
-    enable_analytics: bool = (
-        os.getenv("XIAOMUSIC_ENABLE_ANALYTICS", "false").lower() == "true"
     )
 
     # ---- Security defaults (safe by default) ----
@@ -366,47 +325,18 @@ class Config:
     play_type_seq_tts_msg: str = os.getenv(
         "XIAOMUSIC_PLAY_TYPE_SEQ_TTS_MSG", "已经设置为顺序播放"
     )
-    recently_added_playlist_len: int = int(
-        os.getenv("XIAOMUSIC_RECENTLY_ADDED_PLAYLIST_LEN", "50")
-    )
     # 开启语音删除歌曲
     enable_cmd_del_music: bool = (
         os.getenv("XIAOMUSIC_ENABLE_CMD_DEL_MUSIC", "false").lower() == "true"
     )
-    # 网络歌曲使用proxy
-    web_music_proxy: bool = (
-        os.getenv("XIAOMUSIC_WEB_MUSIC_PROXY", "true").lower() == "true"
-    )
 
-    # Jellyfin 音频强制走 proxy（用于音箱无法访问 Jellyfin 内网地址的场景）
-    jellyfin_force_proxy: bool = (
-        os.getenv("XIAOMUSIC_JELLYFIN_FORCE_PROXY", "false").lower() == "true"
-    )
 
-    # Jellyfin 代理模式: auto|on|off
-    # - auto: 默认直连；若设备实际播放未开始，则自动降级走 /proxy
-    # - on: Jellyfin 始终走代理
-    # - off: Jellyfin 永不走代理
-    jellyfin_proxy_mode: str = os.getenv("XIAOMUSIC_JELLYFIN_PROXY_MODE", "auto")
     # edge-tts 语音角色
     edge_tts_voice: str = os.getenv("XIAOMUSIC_EDGE_TTS_VOICE", "zh-CN-XiaoyiNeural")
-    # 是否启用定时清理临时文件
-    enable_auto_clean_temp: bool = (
-        os.getenv("XIAOMUSIC_ENABLE_AUTO_CLEAN_TEMP", "true").lower() == "true"
-    )
     qrcode_timeout: int = int(os.getenv("QRCODE_TIMEOUT", "120"))
     auth_refresh_interval_hours: float = field(default_factory=default_auth_refresh_interval_hours)
     auth_refresh_min_interval_minutes: int = field(default_factory=default_auth_refresh_min_interval_minutes)
     auth_refresh_threshold: float = field(default_factory=default_auth_refresh_threshold)
-    mina_high_freq_min_interval_seconds: int = int(
-        os.getenv("XIAOMUSIC_MINA_HIGH_FREQ_MIN_INTERVAL_SECONDS", "8")
-    )
-    mina_auth_fail_threshold: int = int(
-        os.getenv("XIAOMUSIC_MINA_AUTH_FAIL_THRESHOLD", "3")
-    )
-    mina_auth_cooldown_seconds: int = int(
-        os.getenv("XIAOMUSIC_MINA_AUTH_COOLDOWN_SECONDS", "600")
-    )
     jellyfin_enabled: bool = (
         os.getenv("XIAOMUSIC_JELLYFIN_ENABLED", "false").lower() == "true"
     )
@@ -517,27 +447,10 @@ class Config:
         if not isinstance(getattr(self, "enable_self_update", False), bool):
             self.enable_self_update = False
 
-        # Backward compatibility: legacy jellyfin_force_proxy
-        mode = (self.jellyfin_proxy_mode or "auto").strip().lower()
-        if mode not in ("auto", "on", "off"):
-            mode = "auto"
-        if self.jellyfin_force_proxy and mode == "auto":
-            mode = "on"
-        self.jellyfin_proxy_mode = mode
-
     def __post_init__(self) -> None:
         if self.proxy:
             validate_proxy(self.proxy)
-        if self.hostname:
-            if not self.hostname.startswith(("http://", "https://")):
-                self.hostname = f"http://{self.hostname}"  # 默认 http
-
         self.init()
-        # 保存配置到 config-example.json 文件
-        if self.enable_config_example:
-            with open("config-example.json", "w") as f:
-                data = asdict(self)
-                json.dump(data, f, ensure_ascii=False, indent=2)
 
     @classmethod
     def from_options(cls, options: argparse.Namespace) -> Config:
@@ -588,6 +501,8 @@ class Config:
             type_hints = get_type_hints(cls)
 
             for k, v in data.items():
+                if k not in cls.__dataclass_fields__:
+                    continue  # removed setting left in an old setting.json
                 converted_value = cls.convert_value(k, v, type_hints)
                 if converted_value is not None:
                     result[k] = converted_value
@@ -597,6 +512,8 @@ class Config:
         type_hints = get_type_hints(self, globals(), locals())
 
         for k, v in data.items():
+            if k not in self.__dataclass_fields__:
+                continue  # removed setting left in an old setting.json
             converted_value = self.convert_value(k, v, type_hints)
             if converted_value is not None:
                 setattr(self, k, converted_value)
@@ -668,14 +585,6 @@ class Config:
             return self.play_type_seq_tts_msg
         return ""
 
-    def get_ignore_tag_dirs(self):
-        ignore_tag_absolute_dirs = []
-        for ignore_tag_dir in self.ignore_tag_dirs.split(","):
-            if ignore_tag_dir:
-                ignore_tag_absolute_path = os.path.abspath(ignore_tag_dir)
-                ignore_tag_absolute_dirs.append(ignore_tag_absolute_path)
-        return ignore_tag_absolute_dirs
-
     def get_one_device_id(self):
         """获取一个设备ID
 
@@ -699,7 +608,6 @@ class Config:
             "httpauth_username",
             "httpauth_password",
             "port",
-            "hostname",
         }
         return key in http_server_keys
 
@@ -711,9 +619,6 @@ class Config:
     def get_public_base_url(self):
         base = str(self.public_base_url or "").strip()
         if not base:
-            host = str(self.hostname or "").strip()
-            if host:
-                return f"{host.rstrip('/')}:{self.public_port}"
             return ""
         if not base.startswith(("http://", "https://")):
             base = f"http://{base}"

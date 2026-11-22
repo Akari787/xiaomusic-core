@@ -18,6 +18,7 @@ from xiaomusic.config import Device
 if TYPE_CHECKING:
     from xiaomusic.xiaomusic import XiaoMusic
 from xiaomusic.const import (
+    DEFAULT_AUDIO_ID,
     NEED_USE_PLAY_MUSIC_API,
     PLAY_TYPE_ALL,
     PLAY_TYPE_ONE,
@@ -2669,9 +2670,7 @@ class XiaoMusicDevice:
         return True
 
     def _is_jellyfin_auto_candidate(self, *, current_url: str, origin_url: str) -> bool:
-        jellyfin_mode = (
-            getattr(self.config, "jellyfin_proxy_mode", "auto") or "auto"
-        ).lower()
+        jellyfin_mode = "auto"
         strategy = getattr(self.xiaomusic, "link_playback_strategy", None)
         if strategy is not None:
             return strategy.should_jellyfin_auto_fallback(
@@ -2827,7 +2826,6 @@ class XiaoMusicDevice:
             return
         # 存储真实歌曲时长
         self._set_duration(sec)
-        await self.xiaomusic.analytics.send_play_event(name, sec, self.hardware)
         if not _is_current():
             return
 
@@ -3437,24 +3435,13 @@ class XiaoMusicDevice:
         return is_playing
 
     async def stop_if_xiaoai_is_playing(self, device_id):
-        """如果小爱正在播放则停止"""
-        if self.config.enable_force_stop:
-            ret = await self.auth_manager.mina_call(
-                "player_stop", device_id, retry=1, ctx="stop_if_xiaoai_is_playing"
-            )
-            self.log.info(
-                f"stop_if_xiaoai_is_playing player_stop device_id:{device_id} enable_force_stop:{self.config.enable_force_stop} ret:{ret}"
-            )
-            return self._physical_result_succeeded(ret)
-        is_playing = await self.get_if_xiaoai_is_playing(device_id)
-        if not is_playing:
-            return True
-        # stop it
+        """Send player_stop. No status probe first: the OH2P keeps reporting
+        status=1 while paused, so the probe only added a cloud round trip."""
         ret = await self.auth_manager.mina_call(
             "player_stop", device_id, retry=1, ctx="stop_if_xiaoai_is_playing"
         )
         self.log.info(
-            f"stop_if_xiaoai_is_playing player_stop device_id:{device_id} enable_force_stop:{self.config.enable_force_stop} ret:{ret}"
+            f"stop_if_xiaoai_is_playing player_stop device_id:{device_id} ret:{ret}"
         )
         return self._physical_result_succeeded(ret)
 
@@ -3561,7 +3548,6 @@ class XiaoMusicDevice:
 
         Condition semantic:
         - is_playing=False or isdownloading()→ return False, zero arbiter/lifecycle write
-        - continue_play=True → return False, zero write (caller maintains legacy compat)
         - Need replay: submit REPLAY (C3a pattern: expected accepted token, sid in payload),
           then accept command synchronously (c+1), return True.
 
@@ -3573,13 +3559,6 @@ class XiaoMusicDevice:
                 "check_replay_skip isplaying=%s isdownloading=%s",
                 self.is_playing,
                 self.isdownloading(),
-            )
-            return False
-
-        if self.config.continue_play:
-            self.log.info(
-                "check_replay_continue_play continue_play=%s",
-                self.config.continue_play,
             )
             return False
 
@@ -4230,14 +4209,7 @@ class XiaoMusicDevice:
         return True
 
     def _resolve_play_url_dispatch_mode(self) -> str:
-        mode = str(getattr(self.config, "play_url_mode", "auto") or "auto").strip().lower()
-        if mode in {"play_by_url", "url"}:
-            return "play_by_url"
-        if mode in {"play_by_music_url", "music_url"}:
-            return "play_by_music_url"
-        if self.config.continue_play:
-            return "continue_play"
-        if self.config.use_music_api or (self.hardware in NEED_USE_PLAY_MUSIC_API):
+        if self.hardware in NEED_USE_PLAY_MUSIC_API:
             return "play_by_music_url"
         return "play_by_url"
 
@@ -4262,27 +4234,12 @@ class XiaoMusicDevice:
                 return None
             dispatch_mode = self._resolve_play_url_dispatch_mode()
             self.log.info(
-                "play_one_url dispatch_mode=%s hardware=%s use_music_api=%s continue_play=%s device_id=%s",
+                "play_one_url dispatch_mode=%s hardware=%s device_id=%s",
                 dispatch_mode,
                 self.hardware,
-                self.config.use_music_api,
-                self.config.continue_play,
                 device_id,
             )
-            if dispatch_mode == "continue_play":
-                ret = await self.auth_manager.mina_call(
-                    "play_by_music_url",
-                    device_id,
-                    url,
-                    _type=1,
-                    audio_id=audio_id,
-                    retry=1,
-                    ctx="play_one_url_continue",
-                )
-                self.log.info(
-                    f"play_one_url continue_play device_id:{device_id} ret:{ret} url:{url} audio_id:{audio_id}"
-                )
-            elif dispatch_mode == "play_by_music_url":
+            if dispatch_mode == "play_by_music_url":
                 ret = await self.auth_manager.mina_call(
                     "play_by_music_url",
                     device_id,
@@ -4321,7 +4278,7 @@ class XiaoMusicDevice:
         audio_id first_audio_id + i; start_index selects startaudioid.
         Verified on OH2P: the speaker advances through the items locally and
         honours startaudioid (ADR-0007)."""
-        base = int(first_audio_id) if str(first_audio_id).isdigit() else 1582971365183456177
+        base = int(first_audio_id) if str(first_audio_id).isdigit() else int(DEFAULT_AUDIO_ID)
         audio_items = [
             {
                 "item_id": {
@@ -4344,49 +4301,9 @@ class XiaoMusicDevice:
         return {"startaudioid": str(base + start), "music": json.dumps(music)}
 
     async def _get_audio_id(self, name):
-        """获取音频ID"""
-        audio_id = self.config.use_music_audio_id or "1582971365183456177"
-        if not (self.config.use_music_api or self.config.continue_play):
-            return str(audio_id)
-        try:
-            params = {
-                "query": name,
-                "queryType": 1,
-                "offset": 0,
-                "count": 6,
-                "timestamp": int(time.time_ns() / 1000),
-            }
-            response = await self.auth_manager.mina_call(
-                "mina_request",
-                "/music/search",
-                params,
-                retry=1,
-                ctx="get_audio_id",
-            )
-            for song in response["data"]["songList"]:
-                if song["originName"] == "QQ音乐":
-                    audio_id = song["audioID"]
-                    break
-            # 没找到QQ音乐的歌曲，取第一个
-            if audio_id == 1582971365183456177:
-                audio_id = response["data"]["songList"][0]["audioID"]
-            self.log.debug(f"_get_audio_id. name: {name} songId:{audio_id}")
-        except Exception as e:
-            self.log.error(f"_get_audio_id {e}")
-        return str(audio_id)
-
-    async def reset_timer_when_answer(self, answer_length):
-        """重置计时器（当小爱回答时）"""
-        if not (self.is_playing and self.config.continue_play):
-            return
-        pause_time = answer_length / 5 + 1
-        offset, duration = self.get_offset_duration()
-        self._paused_time += pause_time
-        new_time = duration - offset + pause_time
-        await self.set_next_music_timeout(new_time)
-        self.log.info(
-            f"reset_timer 延长定时器. answer_length:{answer_length} pause_time:{pause_time}"
-        )
+        """Audio id sent with play_by_music_url. The speaker only needs a
+        stable id; it plays the stream URL, not the catalogue entry."""
+        return DEFAULT_AUDIO_ID
 
     async def set_next_music_timeout(
         self, sec, token: LifecycleToken | None = None

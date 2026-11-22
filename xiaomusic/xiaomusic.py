@@ -6,7 +6,6 @@ import re
 from logging.handlers import RotatingFileHandler
 
 from xiaomusic import __version__
-from xiaomusic.analytics import Analytics
 from xiaomusic.auth import AuthManager
 from xiaomusic.command_handler import CommandHandler
 from xiaomusic.config import Config
@@ -19,7 +18,6 @@ from xiaomusic.const import (
     PLAY_TYPE_SIN,
 )
 from xiaomusic.conversation import ConversationPoller
-from xiaomusic.crontab import Crontab
 from xiaomusic.device_manager import DeviceManager
 from xiaomusic.diagnostics import build_startup_diagnostics
 from xiaomusic.events import (
@@ -33,7 +31,7 @@ from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
 from xiaomusic.plugin import PluginManager
 from xiaomusic.security.token_store import TokenStore
 from xiaomusic.services.online_music_service import OnlineMusicService
-from xiaomusic.utils.network_utils import downloadfile
+from xiaomusic.utils.file_utils import clean_temp_dir
 from xiaomusic.utils.system_utils import deepcopy_data_no_sensitive_info
 from xiaomusic.utils.text_utils import chinese_to_number
 
@@ -54,6 +52,7 @@ class XiaoMusic:
         self.running_task = []
         self.keepalive_task = None
         self.jellyfin_sync_task = None
+        self.temp_clean_task = None
 
         # 音乐库管理器（延迟初始化，在配置准备好之后）
         self.music_library = None
@@ -88,9 +87,6 @@ class XiaoMusic:
 
         # Token store (env precedence + optional persistence)
         self.token_store = TokenStore(self.config, self.log)
-
-        # 计划任务
-        self.crontab = Crontab(self.log)
 
         # 初始化 JS 插件管理器
         try:
@@ -176,9 +172,6 @@ class XiaoMusic:
             xiaomusic_instance=self,
         )
 
-        # 启动统计
-        self.analytics = Analytics(self.log, self.config)
-
         # 订阅配置变更事件
         self.event_bus.subscribe(CONFIG_CHANGED, self.save_cur_config)
         self.event_bus.subscribe(DEVICE_CONFIG_CHANGED, self.save_cur_config)
@@ -195,8 +188,6 @@ class XiaoMusic:
 
         if not os.path.exists(self.config.download_path):
             os.makedirs(self.config.download_path)
-
-        self.continue_play = self.config.continue_play
 
     def setup_logger(self):
         log_format = f"%(asctime)s [{__version__}] [%(levelname)s] %(filename)s:%(lineno)d: %(message)s"
@@ -264,10 +255,11 @@ class XiaoMusic:
             await asyncio.sleep(minutes * 60)
             await self.sync_jellyfin_music_lists_if_needed()
 
-    async def analytics_task_daily(self):
+    async def temp_clean_loop(self):
+        """Empty the temp directory once a day."""
         while True:
-            await self.analytics.send_daily_event()
-            await asyncio.sleep(3600)
+            await asyncio.sleep(24 * 3600)
+            await clean_temp_dir(self.config)
 
     def start_file_watch(self):
         try:
@@ -328,15 +320,10 @@ class XiaoMusic:
         except Exception as e:
             self.log.exception("startup self-check error: %s", e)
         self.music_library.try_gen_all_music_tag()  # 事件循环开始后调用一次
-        self.crontab.start()
-        await asyncio.create_task(self.analytics.send_startup_event())
         # 取配置 enable_file_watch 循环开始时调用一次，控制目录监控开关
         if self.config.enable_file_watch:
             self.start_file_watch()
-        analytics_task = asyncio.create_task(self.analytics_task_daily())
-        assert (
-            analytics_task is not None
-        )  # to keep the reference to task, do not remove this
+        self.temp_clean_task = asyncio.create_task(self.temp_clean_loop())
         # 先完成认证与设备初始化，避免 Jellyfin 同步耗时导致 runtime_auth_ready 长时间为 false。
         await self.auth_manager.init_all_data()
         await self.sync_jellyfin_music_lists_if_needed()
@@ -344,10 +331,12 @@ class XiaoMusic:
         self.jellyfin_sync_task = asyncio.create_task(self.jellyfin_sync_loop())
         # 启动对话循环，传递回调函数
         try:
-            await self.conversation_poller.run_conversation_loop(
-                self.do_check_cmd, self.reset_timer_when_answer
-            )
+            await self.conversation_poller.run_conversation_loop(self.do_check_cmd)
         finally:
+            if self.temp_clean_task is not None:
+                self.temp_clean_task.cancel()
+                await asyncio.gather(self.temp_clean_task, return_exceptions=True)
+                self.temp_clean_task = None
             if self.keepalive_task is not None:
                 self.keepalive_task.cancel()
                 await asyncio.gather(self.keepalive_task, return_exceptions=True)
@@ -361,10 +350,6 @@ class XiaoMusic:
     async def do_check_cmd(self, did="", query="", ctrl_panel=True, **kwargs):
         """检查并执行命令（委托给 command_handler）"""
         return await self.command_handler.do_check_cmd(did, query, ctrl_panel, **kwargs)
-
-    # 重置计时器
-    async def reset_timer_when_answer(self, answer_length, did):
-        await self.device_manager.devices[did].reset_timer_when_answer(answer_length)
 
     def append_running_task(self, task):
         self.running_task.append(task)
@@ -477,18 +462,6 @@ class XiaoMusic:
         self.music_library.gen_all_music_list()
         self.update_all_playlist()
         self.log.info("gen_music_list ok")
-
-    # 更新网络歌单
-    async def refresh_web_music_list(self, **kwargs):
-        url = self.config.music_list_url
-        if url:
-            self.log.debug(f"refresh_web_music_list begin url:{url}")
-            content = await downloadfile(url, self.config)
-            self.config.music_list_json = content
-            # 配置文件落地
-            self.save_cur_config()
-            self.log.debug(f"refresh_web_music_list url:{url} content:{content}")
-        self.log.info(f"refresh_web_music_list ok {url}")
 
     # 口令:删除歌曲
     async def cmd_del_music(self, did="", arg1="", **kwargs):
@@ -846,9 +819,6 @@ class XiaoMusic:
         else:
             self.log.info("配置更新：关闭目录监控")
             self.stop_file_watch()
-
-        # 重新加载计划任务
-        self.crontab.reload_config(self)
 
     # 重新初始化
     async def reinit(

@@ -38,7 +38,6 @@ WebUI 当前使用的 Public API：
 - `POST /api/auth/refresh`
 - `POST /api/auth/logout`
 - `GET /api/get_qrcode`
-- `POST /api/file/fetch_playlist_json`
 - `POST /api/file/cleantempdir`
 
 ---

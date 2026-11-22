@@ -861,11 +861,10 @@ async def test_background_confirmation_failure_preserves_timer_and_no_retry():
 
 
 @pytest.mark.asyncio
-async def test_stop_if_xiaoai_is_playing_checks_target_device_id():
+async def test_stop_if_xiaoai_is_playing_stops_target_without_status_probe():
     d = XiaoMusicDevice.__new__(XiaoMusicDevice)
     d.log = logging.getLogger("stop-device-id-test")
     d.device_id = "self-device"
-    d.config = types.SimpleNamespace(enable_force_stop=False)
 
     calls = []
 
@@ -879,8 +878,7 @@ async def test_stop_if_xiaoai_is_playing_checks_target_device_id():
 
     await d.stop_if_xiaoai_is_playing("target-device")
 
-    assert calls[0] == ("player_get_status", "target-device")
-    assert calls[1] == ("player_stop", "target-device")
+    assert calls == [("player_stop", "target-device")]
 
 
 @pytest.mark.asyncio

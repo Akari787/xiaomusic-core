@@ -206,9 +206,8 @@ Internal API：
   - 归类理由：这些接口服务于认证状态、会话刷新与二维码登录流程，属于 WebUI 内部认证交互，不属于插件与第三方可复用的产品能力
 
 - 管理 / 文件 / 工具 Internal API
-  - `POST /api/file/fetch_playlist_json`
   - `POST /api/file/cleantempdir`
-  - 归类理由：这些接口服务于歌单 JSON 导入与目录清理等内部文件/工具动作，不属于对外稳定控制面
+  - 归类理由：这些接口服务于目录清理等内部文件/工具动作，不属于对外稳定控制面
 
 Forbidden / Removed：
 

@@ -127,7 +127,7 @@ class FileWatcherManager:
         # 创建文件监控处理器
         self._file_watch_handler = XiaoMusicPathWatch(
             callback=self.on_change_callback,
-            debounce_delay=self.config.file_watch_debounce,
+            debounce_delay=10,  # seconds
             loop=loop,
         )
 

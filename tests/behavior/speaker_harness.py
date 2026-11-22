@@ -244,10 +244,8 @@ def build_rig(
         conf_path=str(tmp_path / "conf"),
         music_list_json=_music_list_json(playlists),
         delay_sec=0,
-        jellyfin_proxy_mode="off",
         disable_download=True,
         edge_tts_voice="",  # route TTS through the fake speaker, never the network
-        enable_force_stop=True,
     )
     for key, value in (config_overrides or {}).items():
         setattr(config, key, value)
@@ -278,7 +276,6 @@ def build_rig(
             get_group_device_id_list=lambda group: [DEVICE_ID],
             get_group_devices=lambda group: {},
         ),
-        analytics=types.SimpleNamespace(send_play_event=lambda *a, **k: asyncio.sleep(0)),
         js_plugin_manager=None,
         event_bus=None,
         last_download_result=None,

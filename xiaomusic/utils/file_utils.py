@@ -147,27 +147,6 @@ def remove_common_prefix(directory: str) -> None:
             log.debug(f'Renamed: "{filename}" to "{new_filename}"')
 
 
-def not_in_dirs(filename: str, ignore_absolute_dirs: list) -> bool:
-    """
-    判断文件是否不在排除目录列表中
-
-    Args:
-        filename: 文件路径
-        ignore_absolute_dirs: 要忽略的绝对路径列表
-
-    Returns:
-        True 如果文件不在排除目录中
-    """
-    file_absolute_path = os.path.abspath(filename)
-    file_dir = os.path.dirname(file_absolute_path)
-    for ignore_dir in ignore_absolute_dirs:
-        if file_dir.startswith(ignore_dir):
-            log.info(f"{file_dir} in {ignore_dir}")
-            return False  # 文件在排除目录中
-
-    return True  # 文件不在排除目录中
-
-
 def chmodfile(file_path: str) -> None:
     """修改文件权限为 775"""
     try:

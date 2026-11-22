@@ -46,10 +46,6 @@ class MusicItem(BaseModel):
     name: str
 
 
-class UrlInfo(BaseModel):
-    url: str
-
-
 class DidUrl(BaseModel):
     did: str
     url: str
@@ -109,6 +105,5 @@ __all__ = [
     "SystemSettingItemUpdateRequest",
     "SystemSettingsSaveRequest",
     "TtsRequest",
-    "UrlInfo",
     "VolumeRequest",
 ]

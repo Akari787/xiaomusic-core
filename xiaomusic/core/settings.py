@@ -16,24 +16,9 @@ class AuthSettings(BaseSettings):
     )
 
 
-class AnalyticsSettings(BaseSettings):
-    API_SECRET: str | None = None
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-
 @lru_cache(maxsize=1)
 def get_auth_settings() -> AuthSettings:
     return AuthSettings()
-
-
-@lru_cache(maxsize=1)
-def get_analytics_settings() -> AnalyticsSettings:
-    return AnalyticsSettings()
 
 
 def get_settings() -> AuthSettings:

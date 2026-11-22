@@ -241,11 +241,10 @@ class Transport(ABC):
 | 类 | 字段 | 说明 |
 |---|---|---|
 | `AuthSettings` | `HTTP_AUTH_HASH` | HTTP Basic Auth 密码哈希，必填 |
-| `AnalyticsSettings` | `API_SECRET` | Analytics 密钥，可选 |
 
-两者均通过 `pydantic-settings` 从环境变量（`.env` 文件或系统环境）加载，使用 `@lru_cache` 缓存单例。
+通过 `pydantic-settings` 从环境变量（`.env` 文件或系统环境）加载，使用 `@lru_cache` 缓存单例。
 
-`get_auth_settings()` / `get_analytics_settings()` 是推荐的访问函数，不应直接实例化这两个类。
+`get_auth_settings()` 是推荐的访问函数，不应直接实例化该类。
 
 ---
 

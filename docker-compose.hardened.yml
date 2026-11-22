@@ -11,7 +11,6 @@ services:
       - .env
     environment:
       TZ: Asia/Tokyo
-      XIAOMUSIC_PUBLIC_PORT: 58090
       HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:-}
       HTTP_AUTH_PASSWORD: ${HTTP_AUTH_PASSWORD:-}
       XIAOMUSIC_DISABLE_HTTPAUTH: "false"
@@ -20,7 +19,6 @@ services:
       XIAOMUSIC_LOG_FILE: /app/conf/xiaomusic.log.txt
       # Security defaults
       XIAOMUSIC_ENABLE_EXEC_PLUGIN: "false"
-      XIAOMUSIC_ENABLE_ANALYTICS: "false"
       XIAOMUSIC_LOG_REDACT: "true"
       XIAOMUSIC_PERSIST_TOKEN: "true"
       XIAOMUSIC_ENABLE_SELF_UPDATE: "false"

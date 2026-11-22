@@ -28,12 +28,29 @@ def test_config_defaults_and_priority():
 
 
 def test_public_base_url_prefers_manual_override():
-    cfg = Config(hostname="http://192.168.1.10", public_port=58090, public_base_url="https://edge.example.com:9443")
+    cfg = Config(public_base_url="https://edge.example.com:9443")
     assert cfg.get_public_base_url() == "https://edge.example.com:9443"
     assert cfg.get_self_netloc() == "edge.example.com:9443"
 
 
-def test_public_base_url_falls_back_to_legacy_host_port():
-    cfg = Config(hostname="http://192.168.1.10", public_port=58090, public_base_url="")
-    assert cfg.get_public_base_url() == "http://192.168.1.10:58090"
-    assert cfg.get_self_netloc() == "192.168.1.10:58090"
+def test_public_base_url_empty_when_not_configured():
+    cfg = Config(public_base_url="")
+    assert cfg.get_public_base_url() == ""
+    assert cfg.get_self_netloc() == ""
+
+
+def test_removed_settings_in_old_setting_json_are_ignored(tmp_path):
+    import json
+
+    path = tmp_path / "setting.json"
+    path.write_text(
+        json.dumps({"hostname": "http://192.168.1.10", "delay_sec": -2, "crontab_json": "[]"}),
+        encoding="utf-8",
+    )
+    data = Config.read_from_file(str(path))
+    assert data == {"delay_sec": -2}
+
+    cfg = Config()
+    cfg.update_config({"hostname": "http://x", "music_list_url": "http://y"})
+    assert not hasattr(cfg, "hostname")
+    assert not hasattr(cfg, "music_list_url")

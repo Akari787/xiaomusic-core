@@ -5,12 +5,6 @@ import logging
 import os
 import signal
 
-import sentry_sdk
-from sentry_sdk.integrations.asyncio import AsyncioIntegration
-from sentry_sdk.integrations.logging import LoggingIntegration, ignore_logger
-
-from xiaomusic.security.redaction import redact_text
-
 LOGO = r"""
  __  __  _                   __  __                 _
  \ \/ / (_)   __ _    ___   |  \/ |  _   _   ___  (_)   ___
@@ -57,33 +51,6 @@ def _ensure_http_auth_configured() -> None:
         "HTTP auth: generated runtime HTTP_AUTH_HASH from HTTP_AUTH_PASSWORD",
         flush=True,
     )
-
-
-def _sentry_before_send(event, hint):
-    try:
-        # Best-effort redact strings inside the event payload
-        event_json = json.dumps(event, ensure_ascii=False)
-        redacted = redact_text(event_json)
-        return json.loads(redacted)
-    except Exception:
-        return event
-
-
-if os.getenv("XIAOMUSIC_ENABLE_SENTRY", "false").lower() == "true":
-    sentry_sdk.init(
-        dsn="https://ffe4962642d04b29afe62ebd1a065231@glitchtip.hanxi.cc/1",
-        integrations=[
-            AsyncioIntegration(),
-            LoggingIntegration(
-                level=logging.WARNING,
-                event_level=logging.ERROR,
-            ),
-        ],
-        before_send=_sentry_before_send,
-        # debug=True,
-    )
-
-ignore_logger("miservice")
 
 
 def _detect_configured_worker_count() -> int:
@@ -186,12 +153,6 @@ def main():
         "--ffmpeg_location",
         dest="ffmpeg_location",
         help="ffmpeg bin path",
-    )
-    parser.add_argument(
-        "--enable_config_example",
-        dest="enable_config_example",
-        help="是否输出示例配置文件",
-        action="store_true",
     )
 
     print(LOGO.format(f"XiaoMusic v{__version__} by: github.com/hanxi"), flush=True)

@@ -2,7 +2,6 @@
 
 import asyncio
 import base64
-import json
 import os
 import shutil
 from pathlib import Path
@@ -39,7 +38,6 @@ from xiaomusic.api.dependencies import (
 from xiaomusic.api.models import (
     DownloadOneMusic,
     DownloadPlayList,
-    UrlInfo,
 )
 from xiaomusic.utils.file_utils import (
     chmoddir,
@@ -57,7 +55,6 @@ from xiaomusic.utils.network_utils import (
     check_bili_fav_list,
     download_one_music,
     download_playlist,
-    downloadfile,
 )
 
 router = APIRouter()
@@ -130,57 +127,6 @@ async def cleantempdir(Verifcation=Depends(verification)):
     await clean_temp_dir(xiaomusic.config)
     log.info("clean_temp_dir ok")
     return api_response.ok(contract="ret")
-
-
-@router.post("/downloadjson")
-async def downloadjson(data: UrlInfo, Verifcation=Depends(verification)):
-    """下载 JSON"""
-    log.info(data)
-    url = data.url
-    content = ""
-    try:
-        ret = "OK"
-        content = await downloadfile(url, config)
-    except Exception as e:
-        log.exception(f"Execption {e}")
-        ret = "Download JSON file failed."
-    return api_response.ok({"content": content}, contract="ret", ret=ret)
-
-
-# Internal API - 仅供 WebUI/内部文件流程使用，不承诺兼容性。
-@router.post("/api/file/fetch_playlist_json")
-async def fetch_playlist_json(data: UrlInfo, Verifcation=Depends(verification)):
-    """仅供 WebUI 歌单 JSON 导入流程使用。"""
-    url = str(data.url or "").strip()
-    if not url:
-        return api_response.ok({"content": ""}, contract="ret", ret="URL required")
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"}:
-        return api_response.ok(
-            {"content": ""}, contract="ret", ret="URL must use http or https"
-        )
-    log.info(data)
-    content = ""
-    try:
-        content = await downloadfile(url, config)
-        json.loads(content)
-        return api_response.ok({"content": content}, contract="ret")
-    except json.JSONDecodeError:
-        return api_response.ok(
-            {"content": content}, contract="ret", ret="Playlist JSON required"
-        )
-    except Exception as e:
-        log.exception(f"Execption {e}")
-        detail = str(e).strip()
-        if detail:
-            ret = f"Download JSON file failed: {type(e).__name__}: {detail}"
-        else:
-            ret = f"Download JSON file failed: {type(e).__name__}"
-        return api_response.ok(
-            {"content": content},
-            contract="ret",
-            ret=ret,
-        )
 
 
 @router.post("/downloadplaylist")

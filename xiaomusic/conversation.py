@@ -55,7 +55,7 @@ class ConversationPoller:
         self.channel_settings = ChannelSettings.from_config(config, log)
         self.cycle_controller = ChannelCycleController(self.channel_settings.cycle_interval)
 
-    async def run_conversation_loop(self, do_check_cmd_callback, reset_timer_callback):
+    async def run_conversation_loop(self, do_check_cmd_callback):
         """运行对话循环
 
         持续运行的主循环，负责：
@@ -65,7 +65,6 @@ class ConversationPoller:
 
         Args:
             do_check_cmd_callback: 处理命令的回调函数 async def(did, query, ctrl_panel)
-            reset_timer_callback: 重置计时器的回调函数 async def(answer_length, did)
         """
         # 启动轮询任务
         async with ClientSession() as session:
@@ -88,7 +87,6 @@ class ConversationPoller:
                     answers = new_record.get("answers", [{}])
                     if answers:
                         answer = answers[0].get("tts", {}).get("text", "").strip()
-                        await reset_timer_callback(len(answer), did)
                         self.log.debug(f"query:{query} did:{did} answer:{answer}")
             except asyncio.CancelledError:
                 self.log.info("Conversation loop cancelled, cleaning up...")

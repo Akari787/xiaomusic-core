@@ -21,42 +21,21 @@ from xiaomusic.device_player import XiaoMusicDevice
 
 
 @pytest.mark.parametrize(
-    ("play_url_mode", "continue_play", "use_music_api", "hardware", "expected"),
-    [
-        ("auto", False, False, "OH2P", "play_by_music_url"),
-        ("auto", False, False, "OTHER", "play_by_url"),
-        ("auto", True, False, "OTHER", "continue_play"),
-        ("auto", False, True, "OTHER", "play_by_music_url"),
-        ("play_by_url", False, False, "OH2P", "play_by_url"),
-        ("url", False, False, "OH2P", "play_by_url"),
-        ("play_by_music_url", False, False, "OTHER", "play_by_music_url"),
-        ("music_url", False, False, "OTHER", "play_by_music_url"),
-    ],
+    ("hardware", "expected"),
+    [("OH2P", "play_by_music_url"), ("OTHER", "play_by_url")],
 )
-def test_resolve_play_url_dispatch_mode(
-    play_url_mode, continue_play, use_music_api, hardware, expected
-):
+def test_resolve_play_url_dispatch_mode_follows_hardware(hardware, expected):
     d = XiaoMusicDevice.__new__(XiaoMusicDevice)
-    d.config = types.SimpleNamespace(
-        play_url_mode=play_url_mode,
-        continue_play=continue_play,
-        use_music_api=use_music_api,
-    )
     d.device = types.SimpleNamespace(hardware=hardware)
 
     assert d._resolve_play_url_dispatch_mode() == expected
 
 
 @pytest.mark.asyncio
-async def test_play_one_url_forced_play_by_url_uses_expected_mina_call():
+async def test_play_one_url_play_by_url_hardware_uses_expected_mina_call():
     d = XiaoMusicDevice.__new__(XiaoMusicDevice)
     d.log = logging.getLogger("test-play-one-url")
-    d.config = types.SimpleNamespace(
-        play_url_mode="play_by_url",
-        continue_play=False,
-        use_music_api=False,
-    )
-    d.device = types.SimpleNamespace(hardware="OH2P")
+    d.device = types.SimpleNamespace(hardware="OTHER")
 
     calls = []
 
@@ -83,15 +62,10 @@ async def test_play_one_url_forced_play_by_url_uses_expected_mina_call():
 
 
 @pytest.mark.asyncio
-async def test_play_one_url_forced_play_by_music_url_uses_expected_mina_call():
+async def test_play_one_url_music_api_hardware_uses_expected_mina_call():
     d = XiaoMusicDevice.__new__(XiaoMusicDevice)
     d.log = logging.getLogger("test-play-one-music-url")
-    d.config = types.SimpleNamespace(
-        play_url_mode="play_by_music_url",
-        continue_play=False,
-        use_music_api=False,
-    )
-    d.device = types.SimpleNamespace(hardware="OTHER")
+    d.device = types.SimpleNamespace(hardware="OH2P")
 
     calls = []
 

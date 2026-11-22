@@ -8,6 +8,10 @@ SUPPORT_MUSIC_TYPE = [
     ".wma",
 ]
 
+# audio_id sent with play_by_music_url; the speaker plays the stream URL, the id
+# only has to be a valid catalogue id.
+DEFAULT_AUDIO_ID = "1582971365183456177"
+
 LATEST_ASK_API = "https://userprofile.mina.mi.com/device_profile/v2/conversation?source=dialogu&hardware={hardware}&timestamp={timestamp}&limit=2"
 COOKIE_TEMPLATE = "deviceId={device_id}; serviceToken={service_token}; userId={user_id}"
 
