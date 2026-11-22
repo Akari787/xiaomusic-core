@@ -151,7 +151,7 @@ SpeakerClient（新增，唯一调用小米云的地方）
 
 每一步都要通过行为测试和全量测试，在测试服完整构建并实机验收后再推送。
 
-1. **StreamGateway（只读模式）**：新增稳定签名地址和请求合并，先只记录 TrackFetched、不改变播放行为；现有下发改用新地址。验收：各来源都能播，日志里 TrackFetched 与切歌一一对应。
+1. ✅ **StreamGateway（只读模式）**（2026-11-22 完成：测试服本地/Jellyfin/直链各来源 6 次下发各对应 1 条 `track_fetched`，重启后地址仍有效）：新增稳定签名地址和请求合并，先只记录 TrackFetched、不改变播放行为；现有下发改用新地址。验收：各来源都能播，日志里 TrackFetched 与切歌一一对应。
 2. **SpeakerClient**：把 `mina_call` 收进一个类，`device_player` 改为调用它。行为不变。
 3. **SpeakerQueue + 队列下发**：按播放模式生成列表和 `loop_type`，自动切歌交给音箱；保留计时器但只做兜底。验收：各播放模式实机连续播放，不再出现重放开头。
 4. **PlaybackFollower**：当前曲目改由 TrackFetched 驱动；删除逐首计时切歌、开播确认轮询，以及外部链接路径的那一套独立状态；同时删除只为计时器服务的配置 `auto_next_confirm_*`、`auto_next_preplay_stop`（2026-11-22 已从设置页撤下），以及固定的切歌提前量 `TRACK_END_LEAD_SEC`（2026-11-22 取代了 `delay_sec`）。
