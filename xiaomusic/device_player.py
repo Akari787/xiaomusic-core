@@ -3937,6 +3937,9 @@ class XiaoMusicDevice:
             if self.get_runtime_state().phase == PlaybackPhase.PLAYING:
                 self._start_time = time.time()
                 self._paused_time = 0
+                # Position is not part of the runtime key: push it so the
+                # WebUI progress bar restarts now, not at its next poll.
+                self._publish_state_changed()
             return
         if not queue["stale"] and 0 <= ref.index < len(names) and names[ref.index] == name:
             await self._follow_queue_track(ref.index, name, sid)
@@ -3970,7 +3973,17 @@ class XiaoMusicDevice:
         )
 
     async def _follow_queue_track(self, index: int, name: str, sid: int) -> None:
-        """The speaker moved on by itself: make ``name`` the current track."""
+        """The speaker moved on by itself: make ``name`` the current track.
+
+        Every field the WebUI reads (title, index, start time, duration) is
+        set before the runtime state changes, so the one state push it
+        triggers already carries the complete new track.
+        """
+        fetched_at = time.time()
+        token = self._capture_lifecycle_token()
+        sec = await self.xiaomusic.music_library.get_music_duration(name)
+        if sid != self._play_session_id or self._is_lifecycle_token_stale(token):
+            return
         state = self.get_runtime_state()
         if state.phase != PlaybackPhase.PLAYING:
             self.log.info(
@@ -3983,22 +3996,7 @@ class XiaoMusicDevice:
         item = self._play_list_items[index]
         entity_id = str(item.get("entity_id") or "").strip()
         playlist_item_id = str(item.get("item_id") or "").strip()
-        now = time.time()
-        try:
-            self._set_runtime_state(
-                follow_track(
-                    state,
-                    track=TrackReference(
-                        entity_id=entity_id,
-                        playlist_item_id=playlist_item_id,
-                        display_name=name,
-                        source="legacy",
-                    ),
-                    updated_at=now,
-                )
-            )
-        except TransitionError:
-            return
+
         self._set_runtime_track_reference(
             playlist_name=str(self.device.cur_playlist or "").strip(),
             display_name=name,
@@ -4006,16 +4004,25 @@ class XiaoMusicDevice:
             playlist_item_id=playlist_item_id,
             current_index=index,
         )
-        self._start_time = now
+        self._start_time = fetched_at
         self._paused_time = 0
-        self._duration = 0
-        token = self._capture_lifecycle_token()
+        # Set directly: _set_duration would push a frame that still carries
+        # the previous runtime track.
+        self._duration = max(float(sec or 0), 0.0)
+        self._set_runtime_state(  # PLAYING -> PLAYING with a new track: pushes
+            follow_track(
+                state,
+                track=TrackReference(
+                    entity_id=entity_id,
+                    playlist_item_id=playlist_item_id,
+                    display_name=name,
+                    source="legacy",
+                ),
+                updated_at=fetched_at,
+            )
+        )
         self.log.info("queue_follow did=%s queue=%s index=%d name=%s", self.did, sid, index, name)
 
-        sec = await self.xiaomusic.music_library.get_music_duration(name)
-        if sid != self._play_session_id or self._is_lifecycle_token_stale(token):
-            return
-        self._set_duration(sec)
         if sec <= 0.1:
             self._start_duration_probe(name, sid, token=token)
             return

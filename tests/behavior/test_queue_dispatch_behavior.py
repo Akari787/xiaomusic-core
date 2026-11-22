@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from xiaomusic.const import PLAY_TYPE_ONE, PLAY_TYPE_SEQ, PLAY_TYPE_SIN
+from xiaomusic.events import PLAYER_STATE_CHANGED
 from xiaomusic.playback.runtime_state import PlaybackPhase
 
 from .speaker_harness import build_rig
@@ -256,5 +257,45 @@ async def test_switch_to_sequential_mid_track_follows_the_next_track_without_red
         assert rig.speaker.queues() == [["a", "b", "c", "d"]]
         assert rig.speaker.timeline()[-1] == "loop:2"
         assert rig.state().phase == PlaybackPhase.PLAYING
+    finally:
+        await rig.close()
+
+
+@pytest.mark.asyncio
+async def test_followed_track_reaches_the_webui_with_its_duration(monkeypatch, tmp_path):
+    """The WebUI redraws on PLAYER_STATE_CHANGED; the last push after a local
+    advance must already carry the followed track and its real duration."""
+    rig = build_rig(
+        monkeypatch, tmp_path, playlists=FOUR, durations={"b": 45.0}, queue=True
+    )
+    try:
+        await rig.play_playlist("L", "a")
+        await rig.wait_until(lambda: rig.player.get_cur_music() == "b", player_seconds=SONG + 10)
+        await rig.settle(5)
+
+        # The first push after "a" already shows "b" with its own duration:
+        # no frame with the old title, a zero or the previous duration.
+        first_b = next(i for i, seen in enumerate(rig.events.seen) if seen[0] == "b")
+        assert rig.events.seen[first_b] == ("b", 45.0), rig.events.seen
+        assert rig.events.seen[first_b - 1][0] == "a"  # one push, straight from a to b
+        assert ("a", 45.0) not in rig.events.seen
+        offset, _ = rig.player.get_offset_duration()
+        assert offset < 10
+    finally:
+        await rig.close()
+
+
+@pytest.mark.asyncio
+async def test_single_loop_repeat_is_pushed_to_the_webui(monkeypatch, tmp_path):
+    rig = build_rig(monkeypatch, tmp_path, playlists=FOUR, play_type=PLAY_TYPE_ONE, queue=True)
+    try:
+        await rig.play_playlist("L", "b")
+        await rig.settle(SONG - 5)
+        pushes_before = rig.events.count(PLAYER_STATE_CHANGED)
+        await rig.settle(10)  # the speaker starts "b" again
+
+        assert rig.events.count(PLAYER_STATE_CHANGED) > pushes_before
+        offset, _ = rig.player.get_offset_duration()
+        assert offset < 10
     finally:
         await rig.close()

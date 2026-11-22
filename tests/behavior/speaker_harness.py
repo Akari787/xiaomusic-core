@@ -265,10 +265,29 @@ def _scaled_asyncio() -> types.SimpleNamespace:
 
 
 @dataclass
+class EventLog:
+    """Records what the player publishes (the WebUI's SSE trigger)."""
+
+    events: list[tuple[str, dict]] = field(default_factory=list)
+    # What a WebUI fetching state at publish time would see; set by build_rig.
+    probe: Any = None
+    seen: list[Any] = field(default_factory=list)
+
+    def publish(self, name: str, **kwargs) -> None:
+        self.events.append((name, kwargs))
+        if self.probe is not None and name == "player_state_changed":
+            self.seen.append(self.probe())
+
+    def count(self, name: str) -> int:
+        return sum(1 for n, _ in self.events if n == name)
+
+
+@dataclass
 class Rig:
     player: Any
     speaker: FakeSpeaker
     library: MusicLibrary
+    events: EventLog = field(default_factory=EventLog)
 
     # -- public driving helpers -----------------------------------------
     async def play_playlist(self, list_name: str, song: str = "") -> Any:
@@ -377,7 +396,7 @@ def build_rig(
             get_group_devices=lambda group: {},
         ),
         js_plugin_manager=None,
-        event_bus=None,
+        event_bus=EventLog(),
         last_download_result=None,
     )
     if queue:
@@ -393,8 +412,15 @@ def build_rig(
     # Group fan-out helpers look players up through the device manager.
     xm.device_manager.get_group_devices = lambda group: {DID: player}
     speaker.current_title = player.get_cur_music
+
+    def _webui_view():
+        # The state API takes the title from the runtime track.
+        track = player.get_runtime_state().confirmed_track
+        return (track.display_name if track else "", player.get_offset_duration()[1])
+
+    xm.event_bus.probe = _webui_view
     if queue:
         gateway.add_fetch_listener(
             lambda ref: player.on_track_fetched(ref) if ref.did == DID else None
         )
-    return Rig(player=player, speaker=speaker, library=library)
+    return Rig(player=player, speaker=speaker, library=library, events=xm.event_bus)
