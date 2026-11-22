@@ -3,6 +3,7 @@
 ### 播放
 
 - 新增 StreamGateway（ADR-0007 第 1 步）：下发给音箱的地址统一改为 `/stream/v1/<did>/<queue>/<index>/<source>/<item>?sig=`，用 `conf/stream_gateway.key` 签名。服务重启后地址仍然有效（此前的 `/proxy` 令牌只存在内存里），只接受自己签发的地址；Jellyfin 地址只含曲目 ID，令牌在服务端拉流时附加，重新登录后旧地址照样能播。本地文件沿用 `/music` 的处理（含 m4a 转码），网络来源由服务端转发并透传 Range。YouTube 中转、电台和 m3u8 暂不经过网关。
+- 新增 SpeakerClient（ADR-0007 第 2 步）：所有发往小米云的音箱命令集中到 `xiaomusic/speaker_client.py`，调用方式、重试与日志标签不变；守护测试保证其他代码不再直接调用 `mina_call` / `miio_call`。删除没有调用方的 `relay/xiaomi_adapter.py`。
 - 音箱拉流时会对同一首歌连发多个请求，网关把它们合并为一条 `track_fetched` 日志，用来确认当前曲目；本步只记录，不改变播放逻辑。
 
 - 切歌更及时，减少"当前歌曲从头播几秒再切"：音箱会循环只有一首的播放队列，服务端切歌的每一秒都会让刚播完的歌从头重放。实测切换耗时 3.4–6.4 s（云端慢时停止命令可达 31 s），而计时器只提前 2 s。
