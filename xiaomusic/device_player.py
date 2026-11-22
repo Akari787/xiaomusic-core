@@ -3830,16 +3830,17 @@ class XiaoMusicDevice:
         device_id_list = self.xiaomusic.device_manager.get_group_device_id_list(
             self.group_name
         )
+        speaker_url = self._speaker_url(url)
         if navigation_generation is None:
             tasks = [
-                self.play_one_url(device_id, url, name)
+                self.play_one_url(device_id, speaker_url, name)
                 for device_id in device_id_list
             ]
         else:
             tasks = [
                 self.play_one_url(
                     device_id,
-                    url,
+                    speaker_url,
                     name,
                     navigation_generation=navigation_generation,
                 )
@@ -3848,6 +3849,35 @@ class XiaoMusicDevice:
         results = await asyncio.gather(*tasks)
         self.log.info(f"group_player_play {url} {device_id_list} {results}")
         return results
+
+    def _speaker_url(self, url):
+        """Hand the speaker a stable StreamGateway address (ADR-0007).
+
+        Callers keep working with the original URL (fallback decisions,
+        logs); only the dispatched address changes. Unhandled URLs (relay,
+        radio, m3u8) pass through unchanged.
+        """
+        gateway = getattr(self.xiaomusic, "stream_gateway", None)
+        if gateway is None:
+            return url
+        try:
+            speaker_url = gateway.wrap(
+                url,
+                did=self.did,
+                queue=str(self._play_session_id),
+                index=max(int(self._current_index), 0),
+            )
+        except Exception as exc:
+            self.log.warning("stream_gateway wrap failed: %s", type(exc).__name__)
+            return url
+        if speaker_url != url:
+            self.log.info(
+                "stream_gateway dispatch did=%s queue=%s index=%s",
+                self.did,
+                self._play_session_id,
+                max(int(self._current_index), 0),
+            )
+        return speaker_url
 
     def _bootstrap_playlist_session_for_external_url(self, context: dict | None = None):
         context = context if isinstance(context, dict) else {}

@@ -27,6 +27,7 @@ from xiaomusic.music_library import MusicLibrary
 from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
 from xiaomusic.security.token_store import TokenStore
 from xiaomusic.services.online_music_service import OnlineMusicService
+from xiaomusic.stream_gateway import StreamGateway
 from xiaomusic.utils.file_utils import clean_temp_dir
 from xiaomusic.utils.system_utils import deepcopy_data_no_sensitive_info
 from xiaomusic.utils.text_utils import chinese_to_number
@@ -127,6 +128,16 @@ class XiaoMusic:
             log=self.log,
             js_plugin_manager=self.js_plugin_manager,
             xiaomusic_instance=self,  # 传递xiaomusic实例
+        )
+
+        # Stable signed stream addresses for the speaker (ADR-0007).
+        self.stream_gateway = StreamGateway(
+            self.config,
+            self.log,
+            music_library_getter=lambda: self.music_library,
+            jellyfin_client_getter=lambda: getattr(
+                self.online_music_service, "jellyfin_client", None
+            ),
         )
 
         # 初始化设备管理器（在配置准备好之后）

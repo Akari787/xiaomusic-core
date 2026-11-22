@@ -25,6 +25,7 @@ def register_routers(app):
         playlist,
         plugin,
         relay,
+        stream,
         system,
         v1,
     )
@@ -49,5 +50,7 @@ def register_routers(app):
     app.include_router(relay.router, tags=["Relay"], dependencies=[auth_dep], include_in_schema=False)
     app.include_router(file.router, tags=["文件操作"], dependencies=[auth_dep], include_in_schema=False)
     app.include_router(file.media_router, tags=["媒体访问"], include_in_schema=False)
+    # Signed speaker stream addresses (ADR-0007); anonymous like /music.
+    app.include_router(stream.router, tags=["媒体访问"], include_in_schema=False)
     app.include_router(plugin.router, tags=["插件管理"], dependencies=[auth_dep], include_in_schema=False)
     app.include_router(websocket.router, tags=["WebSocket"], include_in_schema=False)

@@ -68,6 +68,8 @@ def test_production_assembly_keeps_media_public_and_management_private(monkeypat
     assert client.get("/music/missing.mp3").status_code == 404
     assert client.get("/picture/cover.jpg").status_code == 200
     assert client.get("/picture/missing.jpg").status_code == 404
+    # Speaker stream addresses are anonymous; unsigned ones are just unknown.
+    assert client.get("/stream/v1/d/1/0/local/eA?sig=bad").status_code in (404, 503)
     assert client.get("/api/js-plugins").status_code == 401
 
     management_requests = [
