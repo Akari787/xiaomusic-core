@@ -644,7 +644,7 @@ async def test_scheduled_refresh_full_chain_never_calls_account_login(auth_manag
         "xiaomusic.auth.MiAccount", return_value=account
     ) as account_factory, patch(
         "xiaomusic.auth.MiNAService", return_value=candidate_mina
-    ), patch("xiaomusic.auth.MiIOService", return_value=object()):
+    ):
         assert await manager._maybe_scheduled_refresh() is True
 
     account_factory.assert_called()
@@ -691,7 +691,7 @@ async def test_manual_reload_full_chain_never_calls_account_login(auth_manager):
 
     with patch("xiaomusic.auth.MiAccount", return_value=account), patch(
         "xiaomusic.auth.MiNAService", return_value=_HealthyRuntime()
-    ), patch("xiaomusic.auth.MiIOService", return_value=object()):
+    ):
         out = await manager.manual_reload_runtime(reason="ut-manual-atomic")
 
     assert out["refreshed"] is True
@@ -1420,7 +1420,6 @@ async def test_fast_path_binds_runtime_without_login(auth_manager):
         patch("xiaomusic.auth.ClientSession", _patch_client_session()),
         patch("xiaomusic.auth.MiAccount", _patch_mi_account()) as mock_account,
         patch("xiaomusic.auth.MiNAService", return_value=healthy),
-        patch("xiaomusic.auth.MiIOService", return_value=object()),
     ):
         ok = await manager._try_login(reason="test_fast_path")
 
@@ -1446,7 +1445,6 @@ async def test_fast_path_verify_failure_leaves_no_residue(auth_manager):
         patch("xiaomusic.auth.ClientSession", _patch_client_session()),
         patch("xiaomusic.auth.MiAccount", _patch_mi_account()),
         patch("xiaomusic.auth.MiNAService", return_value=_FailingRuntime()),
-        patch("xiaomusic.auth.MiIOService", return_value=object()),
         patch.object(
             manager,
             "_try_miaccount_persistent_auth_relogin",
@@ -1515,7 +1513,6 @@ async def test_fast_path_failure_does_not_clobber_concurrent_runtime(auth_manage
             "xiaomusic.auth.MiNAService",
             return_value=_FailingRuntimeWithHook(_concurrent_success),
         ),
-        patch("xiaomusic.auth.MiIOService", return_value=object()),
         patch.object(
             manager,
             "_try_miaccount_persistent_auth_relogin",
@@ -1761,7 +1758,7 @@ async def test_scheduled_service_login_challenge_keeps_healthy_and_suspends(
     account._securityTokenService = AsyncMock(return_value="scheduled-token")
     with patch("xiaomusic.auth.MiAccount", return_value=account), patch(
         "xiaomusic.auth.MiNAService", return_value=_HealthyRuntime()
-    ), patch("xiaomusic.auth.MiIOService", return_value=object()):
+    ):
         assert await manager._maybe_scheduled_refresh() is False
         assert manager._state == manager.STATE_HEALTHY
         assert manager._scheduled_refresh_suspended is True

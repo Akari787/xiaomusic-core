@@ -76,7 +76,7 @@ source 的输出（`ResolvedMedia`）经过 `DeliveryAdapter` 处理后，才能
 ```
 ResolvedMedia (source 输出)
     → DeliveryAdapter → PreparedStream / DeliveryPlan
-    → TransportRouter → mina / miio transport
+    → TransportRouter → mina transport
 ```
 
 source 提供的 `stream_url` 必须是 `http://` 或 `https://` 格式。非法 URL 会在 `DeliveryAdapter` 处被拒绝并抛出 `UndeliverableStreamError`，不会传入 transport 层。

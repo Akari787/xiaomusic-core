@@ -82,7 +82,7 @@ WebUI / 外部调用方
 | api | 稳定 | v1 白名单接口已形成正式契约，`api_v1_spec.md` 为权威 |
 | playback | 稳定 | 状态快照、revision、SSE 推送已实现；`facade.py` 是唯一入口 |
 | source | 稳定 | 五种内置来源经统一 registry 分派，`SourcePlugin.resolve()` 是唯一规范点 |
-| device | 稳定 | 设备执行层边界清晰，transport（mina/miio）已抽象 |
+| device | 稳定 | 设备执行层边界清晰，transport（mina）已抽象 |
 | auth | 稳定 | persistent auth / short session / runtime 三层边界已明确，`auth.json` 是持久事实来源 |
 | config | 稳定 | `Config` 对象是运行时单一配置入口 |
 | relay | 稳定 | relay/proxy 是现行术语；`network_audio` 只允许作为仍受兼容测试保护的旧数据字段出现 |

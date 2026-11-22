@@ -61,7 +61,7 @@ async def test_probe_error_keeps_physical_status_unknown_and_barrier_locked():
     class _Core:
         async def probe(self, did):
             return {
-                "transport": "miio",
+                "transport": "mina",
                 "dispatch": type(
                     "D",
                     (),
@@ -101,7 +101,7 @@ async def test_probe_error_keeps_physical_status_unknown_and_barrier_locked():
 async def test_control_facade_returns_accepted_action_contract():
     class _Core:
         async def stop(self, did):
-            return {"transport": "miio", "dispatch": type("D", (), {"data": {}})()}
+            return {"transport": "mina", "dispatch": type("D", (), {"data": {}})()}
         async def pause(self, did):
             return {"transport": "mina", "dispatch": type("D", (), {"data": {}})()}
         async def resume(self, did):
@@ -110,7 +110,7 @@ async def test_control_facade_returns_accepted_action_contract():
     facade = PlaybackFacade(object())
     facade._core = lambda: _Core()
     for method, action, transport in (
-        (facade.stop, "stop", "miio"),
+        (facade.stop, "stop", "mina"),
         (facade.pause, "pause", "mina"),
         (facade.resume, "resume", "mina"),
     ):

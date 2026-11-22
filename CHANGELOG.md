@@ -43,6 +43,7 @@
 - 随之删除只为播报服务的 `check_replay` 与 REPLAY 意图、`TTS_TIMER` 任务类型。
 - `delay_sec` 删除，改为固定提前 2 s 切歌（`TRACK_END_LEAD_SEC`）：音箱会重放只有一首的队列，提前切歌可以避开“从头播几秒”。改为音箱持有队列（ADR-0007）后这个提前量会一起去掉。
 - 设置页删除“语音命令”分类和首页的“语音口令”开关；“设备对话”改名为“设备”。
+- 删除 MiIO 残留：登录时不再创建 `MiIOService`，`AuthManager` 去掉 `miio_service` / `miio_call`，删除 `adapters/miio`（`MiioTransport`）。原 `MiioTransport` 并不走 MiIO，只是转调设备播放器（实际仍是 MiNA），却排在每个控制动作的首位；它失败时路由会再用 MinaTransport 把同一动作执行一次（下一首可能被执行两次）。现在所有动作只走 `mina`，API 返回的 `transport` 字段从 `miio` 变为 `mina`；诊断页的可达性显示为 `local/cloud`。
 
 ### 测试
 

@@ -9,7 +9,7 @@
 
 1. **persistent auth**：最小能力为 `userId`、`passToken`、`deviceId`；`psecurity`、`ssecurity`、`cUserId` 仅作诊断/兼容字段。
 2. **short session**：`serviceToken`、`yetAnotherServiceToken`。
-3. **runtime**：`login_account`、`mina_service`、`miio_service`、session、cookie 和签名。
+3. **runtime**：`login_account`、`mina_service`、session、cookie 和签名。
 
 `TokenStore`/`conf/auth.json` 是持久认证事实来源。env credential 是运行时覆盖，
 不属于持久事实，禁止写回磁盘。
@@ -115,7 +115,6 @@ TokenStore commit 失败时同样保留旧 token 镜像和旧 runtime。
 device_id
 login_account
 mina_service
-miio_service
 mi_session
 cookie_jar
 login_signature

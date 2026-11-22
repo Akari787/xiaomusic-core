@@ -415,7 +415,6 @@ async def auth_logout():
         if getattr(xiaomusic, "auth_manager", None) is not None:
             am = xiaomusic.auth_manager
             am.mina_service = None
-            am.miio_service = None
             am.login_acount = None
             am.login_signature = None
             am.cookie_jar = None

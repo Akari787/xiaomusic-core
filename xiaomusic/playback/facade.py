@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from xiaomusic.adapters.miio import MiioTransport
 from xiaomusic.adapters.mina import MinaTransport
 from xiaomusic.adapters.sources import register_default_source_plugins
 from xiaomusic.constants.api_fields import DEVICE_ID, REQUEST_ID
@@ -37,7 +36,7 @@ LOG = logging.getLogger("xiaomusic.playback.facade")
 
 
 def _extract_physical_status(value: Any) -> int | None:
-    """Extract numeric player status from Mina/MiIO response envelopes."""
+    """Extract numeric player status from MiNA response envelopes."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -155,7 +154,6 @@ class PlaybackFacade:
         delivery_adapter = DeliveryAdapter(proxy_url_builder=proxy_builder)
         router = TransportRouter(policy=TransportPolicy())
         router.register_transport(MinaTransport(self.xiaomusic))
-        router.register_transport(MiioTransport(self.xiaomusic))
         self._core_coordinator = PlaybackCoordinator(
             source_registry=source_registry,
             device_registry=device_registry,

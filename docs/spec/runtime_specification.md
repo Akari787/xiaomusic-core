@@ -94,7 +94,7 @@
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `ok` | `bool` | 是否成功 |
-| `transport` | `str` | 实际使用的 transport 名称（`mina / miio`） |
+| `transport` | `str` | 实际使用的 transport 名称（当前只有 `mina`） |
 
 ---
 
@@ -184,7 +184,7 @@ class SourcePlugin(ABC):
 
 ```python
 class Transport(ABC):
-    name: str  # transport 标识（"mina" 或 "miio"）
+    name: str  # transport 标识（当前只有 "mina"）
 
     async def play_url(self, device_id: str, prepared: PreparedStream) -> dict: ...
     async def stop(self, device_id: str) -> dict: ...
@@ -193,19 +193,16 @@ class Transport(ABC):
     async def probe(self, device_id: str) -> dict: ...
 ```
 
-> 迁移说明：按 ADR-0007，与小米云的通信将收进 `SpeakerClient`，mina/miio transport 删除或改为包装它；`pause` 计划移除。
+> 迁移说明：按 ADR-0007，与小米云的通信将收进 `SpeakerClient`，mina transport 删除或改为包装它；`pause` 计划移除。MiIO transport 已于 2026-11 删除。
 
 ### 4.2 TransportPolicy（当前策略）
 
 | 动作 | 优先顺序 |
 |---|---|
 | `play` | `mina` |
-| `volume` | `miio` → fallback `mina` |
-| `stop` | `miio` → fallback `mina` |
-| `pause` | `miio` → fallback `mina` |
-| `probe` | `miio` → fallback `mina` |
+| `previous` / `next` / `volume` / `stop` / `pause` / `resume` / `probe` | `mina` |
 
-注意：`MiioTransport.play_url()` 显式不支持（Phase 3 策略），调用时直接抛 `TransportError`，play 动作必须走 mina。
+所有动作只有一个候选 transport，失败不再"换一个 transport 重试同一动作"（以前 miio 失败会回落到 mina，同一个 next 可能执行两次）。
 
 ### 4.3 能力矩阵
 

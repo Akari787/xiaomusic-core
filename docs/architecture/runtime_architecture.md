@@ -115,7 +115,7 @@ relay
 
 - `DeviceManager` 管理所有设备的生命周期
 - 每个设备由一个 `DevicePlayer` 实例表示，持有设备侧连接
-- transport（mina/miio）由 `TransportRouter` 统一路由，不由 runtime 直接管理
+- transport（mina）由 `TransportRouter` 统一路由，不由 runtime 直接管理
 
 ### 4.4 MusicLibrary（音乐库）
 

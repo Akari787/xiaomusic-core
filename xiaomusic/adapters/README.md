@@ -21,19 +21,11 @@
 
 注册入口：`default_registry.py` 中的 `register_default_source_plugins()` 函数，按确定性顺序注册上述五个正式插件。`OnlinePluginSourcePlugin` 只消费 v1 搜索生成的进程内 opaque 引用，不接收 WebUI raw item。
 
-## miio/
-
-`MiioTransport`（`miio_transport.py`）：基于 miio 协议的传输适配，实现 `xiaomusic.core.transport.Transport` 接口。
-
-当前 Phase 3 策略：
-- **支持**：stop / pause / tts / set_volume / probe
-- **不支持**：play_url（显式 raise `TransportError`，play 动作必须走 mina）
-
 ## mina/
 
 `MinaTransport`（`mina_transport.py`）：基于 mina（micoapi）协议的传输适配，实现 `xiaomusic.core.transport.Transport` 接口。
 
-当前覆盖：play_url / stop / pause / tts / set_volume / probe 全量动作，是 play 动作的唯一合法 transport。
+当前覆盖：play_url / previous / next / stop / pause / resume / set_volume / probe，是唯一注册的 transport（2026-11 起 MiIO 适配已删除：本 fork 从未取得 xiaomiio 票据，原 `MiioTransport` 实际也是转调设备播放器走 MiNA）。
 
 # 不应该放什么
 
@@ -45,7 +37,6 @@
 # 关键入口
 
 - `xiaomusic/adapters/sources/default_registry.py`：来源插件注册统一入口
-- `xiaomusic/adapters/miio/miio_transport.py`：Miio 传输
 - `xiaomusic/adapters/mina/mina_transport.py`：Mina 传输
 
 # 与其他目录的关系

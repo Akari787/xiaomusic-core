@@ -22,12 +22,24 @@ class _Auth:
 
 
 def test_only_auth_and_speaker_client_talk_to_the_cloud():
-    pattern = re.compile(r"\.(mina_call|miio_call)\(")
+    pattern = re.compile(r"\.mina_call\(")
     offenders = []
     for path in (ROOT / "xiaomusic").rglob("*.py"):
         rel = path.relative_to(ROOT).as_posix()
         if rel in ("xiaomusic/auth.py", "xiaomusic/speaker_client.py"):
             continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if pattern.search(line):
+                offenders.append(f"{rel}:{lineno}")
+    assert offenders == []
+
+
+def test_no_miio_runtime_remains():
+    """MiIO needs a xiaomiio ticket this fork never obtains; everything is MiNA."""
+    pattern = re.compile(r"MiIOService|miio_service|miio_call|adapters\.miio|MiioTransport")
+    offenders = []
+    for path in (ROOT / "xiaomusic").rglob("*.py"):
+        rel = path.relative_to(ROOT).as_posix()
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if pattern.search(line):
                 offenders.append(f"{rel}:{lineno}")

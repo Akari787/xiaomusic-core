@@ -20,7 +20,7 @@ from typing import Any, TypeVar
 from urllib.parse import parse_qs, urlsplit
 
 from aiohttp import ClientSession
-from miservice import MiAccount, MiIOService, MiNAService
+from miservice import MiAccount, MiNAService
 from yarl import URL
 
 from xiaomusic.const import COOKIE_TEMPLATE
@@ -322,7 +322,6 @@ class SimpleAuthManager:
 
         # 运行时对象
         self.mina_service = None
-        self.miio_service = None
         self.login_account = None
         self.login_signature = None
         self.cookie_jar = None
@@ -1025,7 +1024,6 @@ class SimpleAuthManager:
                     self.device_id = candidate.get("device_id") or self.device_id
                     self.login_account = candidate["account"]
                     self.mina_service = candidate["mina_service"]
-                    self.miio_service = candidate["miio_service"]
                     self.login_signature = self._get_login_signature()
                     self._runtime_generation += 1
                     # 旧 session 仍可见期间不 await close；先完成 runtime 引用替换。
@@ -1965,7 +1963,7 @@ class SimpleAuthManager:
     ) -> dict[str, Any]:
         """用持久化 token 构造候选运行时，并在**不修改 self 运行时字段**的前提下校验。
 
-        返回 {"ok": True, "account", "mina_service", "miio_service", "session"}
+        返回 {"ok": True, "account", "mina_service", "session"}
         或 {"ok": False, "error"}。调用方校验通过后自行提交到 self。
 
         这样做的目的：校验失败时不会留下半成品运行时，也不会覆盖并发成功的运行时。
@@ -1985,10 +1983,6 @@ class SimpleAuthManager:
                 mina_service = MiNAService(account)
             except TypeError:
                 mina_service = MiNAService()
-            try:
-                miio_service = MiIOService(account)
-            except TypeError:
-                miio_service = MiIOService()
             await mina_service.device_list()
             if not session_used:
                 try:
@@ -1999,7 +1993,6 @@ class SimpleAuthManager:
                 "ok": True,
                 "account": account,
                 "mina_service": mina_service,
-                "miio_service": miio_service,
                 "session": login_session if session_used else None,
                 "device_id": auth_data.get("deviceId") or previous_device_id,
             }
@@ -2039,7 +2032,6 @@ class SimpleAuthManager:
         self.device_id = candidate.get("device_id") or self.device_id
         self.login_account = candidate["account"]
         self.mina_service = candidate["mina_service"]
-        self.miio_service = candidate["miio_service"]
         if candidate.get("session") is not None:
             self.mi_session = candidate["session"]
             self.cookie_jar = self.mi_session.cookie_jar
@@ -2204,7 +2196,6 @@ class SimpleAuthManager:
         self.device_id = candidate.get("device_id") or self.device_id
         self.login_account = candidate["account"]
         self.mina_service = candidate["mina_service"]
-        self.miio_service = candidate["miio_service"]
         self.mi_session = new_session
         self.cookie_jar = new_cookie_jar
         self.login_signature = self._get_login_signature()
@@ -2755,10 +2746,6 @@ class SimpleAuthManager:
 
         return await self.auth_call(_call, retry=retry, ctx=f"mina:{method_name}:{ctx}")
 
-    async def miio_call(self, fn, *, retry: int = 1, ctx: str = ""):
-        """调用 miio 服务的便捷方法"""
-        return await self.auth_call(fn, retry=retry, ctx=f"miio:{ctx}")
-
     # ==================== 主动探测 ====================
 
     def _keepalive_gate(self) -> str:
@@ -2873,7 +2860,6 @@ class SimpleAuthManager:
         self.device_id = candidate.get("device_id") or self.device_id
         self.login_account = candidate["account"]
         self.mina_service = candidate["mina_service"]
-        self.miio_service = candidate["miio_service"]
         self.mi_session = new_session
         self.cookie_jar = (
             new_session.cookie_jar

@@ -115,10 +115,6 @@ class FakeSpeaker:
             return {"code": 0, "data": {"songList": []}}
         raise AssertionError(f"unexpected speaker command {method_name}")
 
-    async def miio_call(self, fn, *, retry: int = 1, ctx: str = ""):
-        self.commands.append(Command("tts"))
-        return {"code": 0}
-
     # -- helpers for assertions ----------------------------------------
     def played(self) -> list[str]:
         """Titles of the tracks actually handed to the speaker, in order."""

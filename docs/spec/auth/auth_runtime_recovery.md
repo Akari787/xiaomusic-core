@@ -11,7 +11,7 @@
 |---|---|---|
 | persistent auth | **最小能力**：`userId`、`passToken`、`deviceId`；其余为诊断/兼容字段 | TokenStore/`conf/auth.json` 的持久事实；用于 serviceLogin 换取 short session |
 | short session | `serviceToken`、`yetAnotherServiceToken` | 短期业务会话；旧 token 存在不代表仍有效 |
-| runtime | account、Mina/MiIO service、session、cookie、signature、device_id | 进程内、必须经过 verify 才能成为当前运行态 |
+| runtime | account、MiNA service、session、cookie、signature、device_id | 进程内、必须经过 verify 才能成为当前运行态 |
 
 当前 primary 观测值为 `miaccount_persistent_auth_exchange`：它表示 `passToken → serviceToken` exchange via `serviceLogin`，不是 `MiAccount.login`。
 
@@ -34,7 +34,7 @@ candidate auth/runtime
   -> 关闭旧 session
 ```
 
-全部引用包括：`device_id`、`login_account`、`mina_service`、`miio_service`、
+全部引用包括：`device_id`、`login_account`、`mina_service`、
 `mi_session`、`cookie_jar`、`login_signature`。
 
 约束：

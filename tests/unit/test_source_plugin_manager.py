@@ -231,7 +231,6 @@ def test_playback_facade_rebuilds_core_when_source_registry_version_changes(monk
 
     monkeypatch.setattr("xiaomusic.playback.facade.PlaybackCoordinator", _FakeCoordinator)
     monkeypatch.setattr("xiaomusic.playback.facade.MinaTransport", _FakeTransport)
-    monkeypatch.setattr("xiaomusic.playback.facade.MiioTransport", _FakeTransport)
     monkeypatch.setattr("xiaomusic.playback.facade.TransportRouter", _FakeRouter)
 
     manager = _FakeManager()

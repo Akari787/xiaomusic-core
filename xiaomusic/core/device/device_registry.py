@@ -113,12 +113,12 @@ class DeviceRegistry:
         )
         capability = TransportCapabilityMatrix(
             play=["mina"],
-            previous=["miio", "mina"],
-            next=["miio", "mina"],
-            volume=["miio", "mina"],
-            stop=["miio", "mina"],
-            pause=["miio", "mina"],
-            resume=["miio", "mina"],
-            probe=["miio", "mina"],
+            previous=["mina"],
+            next=["mina"],
+            volume=["mina"],
+            stop=["mina"],
+            pause=["mina"],
+            resume=["mina"],
+            probe=["mina"],
         )
         self.register_device(profile, reachability, capability)

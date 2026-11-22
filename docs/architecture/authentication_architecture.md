@@ -31,7 +31,7 @@ userId, passToken, deviceId
 serviceToken, yetAnotherServiceToken
 ```
 
-- 参与 Mina/MiIO 业务调用，生命周期短。
+- 参与 MiNA 业务调用，生命周期短。
 - 旧 `serviceToken` 即使仍存在，也不能证明 session 未过期。
 - short session 缺失或自然过期时，不能因此回退到无口令 `MiAccount.login`。
 
@@ -40,7 +40,7 @@ serviceToken, yetAnotherServiceToken
 包括：
 
 ```text
-login_account, mina_service, miio_service,
+login_account, mina_service,
 mi_session, cookie_jar, login_signature, device_id
 ```
 
@@ -89,7 +89,6 @@ candidate auth data
 - `device_id`
 - `login_account`
 - `mina_service`
-- `miio_service`
 - `mi_session`
 - `cookie_jar`
 - `login_signature`

@@ -27,11 +27,11 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
     class _Facade:
         async def previous(self, device_id: str, request_id: str | None = None):
             calls.append(("facade.previous", (), {"device_id": device_id, "request_id": request_id}))
-            return {"status": "ok", "device_id": device_id, "transport": "miio", "request_id": request_id, "action": "previous"}
+            return {"status": "ok", "device_id": device_id, "transport": "mina", "request_id": request_id, "action": "previous"}
 
         async def next(self, device_id: str, request_id: str | None = None):
             calls.append(("facade.next", (), {"device_id": device_id, "request_id": request_id}))
-            return {"status": "ok", "device_id": device_id, "transport": "miio", "request_id": request_id, "action": "next"}
+            return {"status": "ok", "device_id": device_id, "transport": "mina", "request_id": request_id, "action": "next"}
 
     class _XM:
         @staticmethod
@@ -92,8 +92,8 @@ async def test_api_v1_structured_controls_call_xiaomusic(monkeypatch):
     assert calls[5][2]["arg1"] == "song-a"
     assert "dotts" not in calls[2][2]
     assert calls[2][2]["refresh_playlist"] is True
-    assert out_prev["data"]["transport"] == "miio"
-    assert out_next["data"]["transport"] == "miio"
+    assert out_prev["data"]["transport"] == "mina"
+    assert out_next["data"]["transport"] == "mina"
     assert pushed == []
     for out in (out_prev, out_next, out_mode, out_timer, out_add, out_remove, out_refresh):
         assert out["code"] == 0
@@ -247,7 +247,7 @@ async def test_api_v1_control_next_does_not_push_player_state_event(monkeypatch)
             return {
                 "status": "ok",
                 "device_id": device_id,
-                "transport": "miio",
+                "transport": "mina",
                 "request_id": request_id,
                 "action": "next",
             }

@@ -80,7 +80,7 @@ WebUI / 外部调用方
   → PlaybackFacade.next
   → PlaybackCoordinator.next
   → TransportRouter
-  → MinaTransport 或 MiioTransport
+  → MinaTransport
   → XiaoMusicDevice._play_next(manual=True)
   → current_index + 1
   → 播放队列快照中的目标曲目

@@ -117,27 +117,18 @@ class MockMiNAService:
         ]
 
 
-class MockMiIOService:
-    """模拟 MiIOService"""
-
-    pass
-
-
 @pytest.fixture
 def mock_miservice():
     """Mock miservice 模块"""
     with (
         patch("xiaomusic.auth.MiAccount") as mock_account,
         patch("xiaomusic.auth.MiNAService") as mock_mina,
-        patch("xiaomusic.auth.MiIOService") as mock_miio,
     ):
         mock_account.return_value = MockMiAccount()
         mock_mina.return_value = MockMiNAService()
-        mock_miio.return_value = MockMiIOService()
         yield {
             "MiAccount": mock_account,
             "MiNAService": mock_mina,
-            "MiIOService": mock_miio,
         }
 
 
@@ -189,7 +180,6 @@ class TestSimpleAuthManager:
         am, _, _ = auth_manager
         assert am._state == am.STATE_HEALTHY
         assert am.mina_service is None
-        assert am.miio_service is None
 
     def test_get_auth_data(self, auth_manager):
         """测试获取认证数据"""
@@ -218,9 +208,7 @@ class TestSimpleAuthManager:
 
         # Mock 服务
         mock_mina = MockMiNAService()
-        mock_miio = MockMiIOService()
         mock_miservice["MiNAService"].return_value = mock_mina
-        mock_miservice["MiIOService"].return_value = mock_miio
 
         result = await am.ensure_auth()
         assert result is True
@@ -235,9 +223,7 @@ class TestSimpleAuthManager:
 
         # Mock 服务
         mock_mina = MockMiNAService()
-        mock_miio = MockMiIOService()
         mock_miservice["MiNAService"].return_value = mock_mina
-        mock_miservice["MiIOService"].return_value = mock_miio
 
         result = await am.ensure_auth()
         assert result is True
@@ -271,9 +257,7 @@ class TestSimpleAuthManager:
                 raise RuntimeError("connection timeout")
 
         mock_mina = _NetworkFailService()
-        mock_miio = MockMiIOService()
         mock_miservice["MiNAService"].return_value = mock_mina
-        mock_miservice["MiIOService"].return_value = mock_miio
 
         result = await am.ensure_auth(force=True)
         assert result is False
@@ -292,9 +276,7 @@ class TestSimpleAuthManager:
                 raise RuntimeError("boom")
 
         mock_mina = _RuntimeFailService()
-        mock_miio = MockMiIOService()
         mock_miservice["MiNAService"].return_value = mock_mina
-        mock_miservice["MiIOService"].return_value = mock_miio
 
         result = await am.ensure_auth(force=True)
         assert result is False
@@ -315,9 +297,7 @@ class TestSimpleAuthManager:
                 raise RuntimeError("passport token expired")
 
         mock_mina = _ExpiredService()
-        mock_miio = MockMiIOService()
         mock_miservice["MiNAService"].return_value = mock_mina
-        mock_miservice["MiIOService"].return_value = mock_miio
 
         result = await am.ensure_auth(force=True)
 
@@ -405,9 +385,7 @@ class TestSimpleAuthManager:
 
         # Mock 服务
         mock_mina = MockMiNAService()
-        mock_miio = MockMiIOService()
         mock_miservice["MiNAService"].return_value = mock_mina
-        mock_miservice["MiIOService"].return_value = mock_miio
 
         result = await am.manual_reload_runtime()
         assert result["refreshed"] is True
