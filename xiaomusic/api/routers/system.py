@@ -634,12 +634,23 @@ async def experiment_speaker(request: Request):
         }
     if op == "operation":
         action = str(body.get("action") or "")
-        if action not in {"next", "prev", "play", "pause", "stop"}:
+        if not re.fullmatch(r"[a-z_]{1,24}", action):
             raise HTTPException(status_code=400, detail="bad action")
+        message = {"action": action}
+        if body.get("media") != "":
+            message["media"] = str(body.get("media") or "app_ios")
+        t0 = time.time()
+        ret = await ubus("player_play_operation", "mediaplayer", message, f"op_{action}")
+        return {"ret": ret, "call_s": round(time.time() - t0, 3)}
+    if op == "seek":
+        method = str(body.get("method") or "player_set_positon")
+        if method not in {"player_set_positon", "player_set_position"}:
+            raise HTTPException(status_code=400, detail="bad method")
         t0 = time.time()
         ret = await ubus(
-            "player_play_operation", "mediaplayer",
-            {"action": action, "media": str(body.get("media") or "app_ios")}, f"op_{action}",
+            method, "mediaplayer",
+            {"position": int(body.get("position_ms", 0)), "media": str(body.get("media") or "app_ios")},
+            "seek",
         )
         return {"ret": ret, "call_s": round(time.time() - t0, 3)}
     if op == "status":
