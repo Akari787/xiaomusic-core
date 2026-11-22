@@ -153,7 +153,11 @@ SpeakerClient（新增，唯一调用小米云的地方）
 
 1. ✅ **StreamGateway（只读模式）**（2026-11-22 完成：测试服本地/Jellyfin/直链各来源 6 次下发各对应 1 条 `track_fetched`，重启后地址仍有效）：新增稳定签名地址和请求合并，先只记录 TrackFetched、不改变播放行为；现有下发改用新地址。验收：各来源都能播，日志里 TrackFetched 与切歌一一对应。
 2. ✅ **SpeakerClient**（2026-11-22 完成）：把 `mina_call` 收进一个类，`device_player` 改为调用它。行为不变。
-3. **SpeakerQueue + 队列下发**：按播放模式生成列表和 `loop_type`，自动切歌交给音箱；保留计时器但只做兜底。验收：各播放模式实机连续播放，不再出现重放开头。
+3. ✅ **SpeakerQueue + 队列下发**（2026-11-23 完成）：按播放模式生成列表和 `loop_type`，自动切歌交给音箱；保留计时器但只做兜底。验收：各播放模式实机连续播放，不再出现重放开头。
+   - 实现：`xiaomusic/speaker_queue.py` 生成窗口；`device_player` 在 `group_player_play` 中按窗口下发（`player_play_music`），StreamGateway 的拉流事件驱动跟随（`follow_track`，保持 PLAYING，不新增生命周期编号）；哨兵为代码生成的 60 s 静音 MP3（`/stream/v1/…/silence/60`，序号 = 续接起点）。窗口大小 `queue_window_size`（环境变量 `XIAOMUSIC_QUEUE_WINDOW_SIZE`，默认 20，0 = 逐首）。
+   - 兜底计时器在预期结束后 8 s 才触发（单曲循环时不设）；改播放模式时立即改 `loop_type`，下一次拉流时若音箱所在曲目正是新模式要的下一首就直接跟随，否则重发。
+   - 实测（OH2P）：`loop_type` 在替换队列后保持不变，只在变化时发送；`loop_type=0` 时音箱每次重播都会重新拉流（用来重置进度）；窗口续接的静音间隔约 1 s；改为单曲播放后，音箱进入下一首时由服务端停止，停止命令本身约 2.5 s。
+   - 本步顺带落实决策 1 的旧入口部分：`update_playlist` 不再按歌名排序。v1 API 播放的第一首仍逐首下发（URL 为 `/api/proxy/plugin-url`），从下一首起进入队列，第 5 步合并。
 4. **PlaybackFollower**：当前曲目改由 TrackFetched 驱动；删除逐首计时切歌、开播确认轮询，以及外部链接路径的那一套独立状态；同时删除只为计时器服务的配置 `auto_next_confirm_*`、`auto_next_preplay_stop`（2026-11-22 已从设置页撤下），以及固定的切歌提前量 `TRACK_END_LEAD_SEC`（2026-11-22 取代了 `delay_sec`）。
 5. **合并入口**：API（外部链接）和本地歌单都走“生成队列 → 下发 → 跟随”这一条路径；`site_media` 的中转移入 StreamGateway。
 6. **拆分与清理**：`device_player.py` 拆成 DevicePlayer / SpeakerQueue / PlaybackFollower；把 sid / LifecycleToken / 手动切歌代际 / barrier 收敛为每个队列的版本号；删除暂停/恢复（见“不提供暂停 / 恢复”）；用行为测试替换绑定内部实现的单元测试。
@@ -164,7 +168,7 @@ SpeakerClient（新增，唯一调用小米云的地方）
 2. 同一分组多台音箱：每台独立队列，地址里的 `did` 用于区分；是否需要同步起播待定。
 3. 网站来源在拉流时才解析（约 3.5 s），会增加这一首的起播延迟；可以在前一首开始后预解析下一首，再按需要加入。
 4. 窗口大小 N 的取值：越大续接越少，但每次手动操作的下发越慢（181 项约 3.7 s，3 项约 0.7 s）。先取 20，按实测调整。
-5. 静音哨兵的实现：已用 60 s 静态静音文件验证可行；是否改为 StreamGateway 按需生成更长的静音流（应对超过 60 s 的云端卡顿），在实现时决定。
+5. ~~静音哨兵的实现~~：已定（2026-11-23），StreamGateway 用代码生成 60 s 静音 MP3（MPEG-1 Layer III 32 kbps 单声道帧，不依赖 ffmpeg），OH2P 实测可播。如遇超过 60 s 的云端卡顿再加长。
 
 ## 后果
 
