@@ -84,6 +84,9 @@ class XiaoMusicDevice:
 
     MAX_PLAYING_GRACE_EXTENSIONS = 0  # device may keep reporting playing after EOF/replay
     MAX_UNKNOWN_GRACE_EXTENSIONS = 3  # tolerate transient status-query failures
+    # Failures that happen before the new track is dispatched to the speaker.
+    # For these, a "speaker is playing" probe reflects the previous track.
+    _FAILURE_REASONS_WITHOUT_DISPATCH = frozenset({"preplay_stop_failed"})
 
     def __init__(self, xiaomusic: "XiaoMusic", device: Device, group_name: str):
         """初始化设备播放控制器
@@ -2389,17 +2392,17 @@ class XiaoMusicDevice:
             self.log.warning("preplay_stop_cancelled name=%s", name)
             return False
         except Exception:
-            try:
-                self._report_runtime_failure(
-                    reason="preplay_stop_failed", updated_at=time.time()
-                )
-            except TransitionError:
-                self.log.info(
-                    "preplay_stop_failed phase already advanced name=%s phase=%s",
-                    name,
-                    self.get_runtime_state().phase.value,
-                )
             self.log.exception("preplay_stop_failed name=%s", name)
+            # Route through the failure policy so retry / advance / degrade
+            # still happen.  Reporting the runtime failure alone left the
+            # server with no retry and no next timer, while the speaker kept
+            # repeating its single-item list (observed as "单曲循环").
+            await self._handle_play_failure(
+                name=name,
+                sid=sid,
+                reason="preplay_stop_failed",
+                token=request_token,
+            )
             return False
         self._log_measure("after_group_force_stop_xiaoai")
         if not self._manual_navigation_is_current(navigation_generation):
@@ -4582,18 +4585,20 @@ class XiaoMusicDevice:
                 PlaybackPhase.PAUSED,
             } or self._degraded:
                 return
-            try:
-                is_playing = await self.get_if_xiaoai_is_playing()
-            except Exception:
-                if sid != self._play_session_id or self._is_lifecycle_token_stale(token):
-                    return
+            if reason in self._FAILURE_REASONS_WITHOUT_DISPATCH:
+                # The new track was never sent, so "speaker is playing" can
+                # only mean the previous track (or the speaker looping it).
+                # Skipping the retry here would strand playback.
+                is_playing = False
             else:
-                if sid != self._play_session_id or self._is_lifecycle_token_stale(token):
-                    return
-                if is_playing:
-                    self.log.info("retry_skip_speaker_already_playing(session_id=%s, name=%s)", sid, name)
-                    return
+                try:
+                    is_playing = await self.get_if_xiaoai_is_playing()
+                except Exception:
+                    is_playing = False
             if sid != self._play_session_id or self._is_lifecycle_token_stale(token):
+                return
+            if is_playing:
+                self.log.info("retry_skip_speaker_already_playing(session_id=%s, name=%s)", sid, name)
                 return
             self._submit_auto_retry(
                 IntentKind.RETRY,

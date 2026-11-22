@@ -485,6 +485,39 @@ async def test_G_cloud_playing_true_zero_submit():
     assert st["active"] is False
 
 
+@pytest.mark.asyncio
+async def test_G2_preplay_stop_failed_ignores_cloud_playing():
+    """Preplay stop failed → new track never dispatched → a "playing" report
+    is the previous track looping; retry must still submit (2026-11-22 incident).
+    """
+    d = _make_t05b_device()
+    d._runtime_state = PlaybackRuntimeState(phase=PlaybackPhase.RESOLVING)
+    _install_physical_stubs(d)
+    gate = _install_backoff_gate(d)
+    cloud_calls = []
+
+    async def _cloud(device_id=None):
+        cloud_calls.append(device_id)
+        return True
+
+    d.get_if_xiaoai_is_playing = _cloud
+    _submits = _track_submits(d)
+    token = d._capture_lifecycle_token()
+
+    await d._handle_play_failure(
+        name="g2", sid=1, reason="preplay_stop_failed", token=token
+    )
+    assert d.get_runtime_state().phase == PlaybackPhase.FAILED
+
+    gate.set()
+    await _wait_done(d)
+
+    assert cloud_calls == []
+    assert len(_submits) == 1
+    assert _submits[0]["reason"] == "preplay_stop_failed"
+    assert _submits[0]["payload"] == {"name": "g2", "retry_same_song": True}
+
+
 # ── H: cloud exception → still submit ────────────────────────────────
 
 

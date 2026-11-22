@@ -1531,6 +1531,17 @@ def _build_playmusic_attempt_device():
     return d
 
 
+def _use_real_failure_handler(d):
+    """Restore the real failure policy; keep retries parked behind the backoff."""
+    d._handle_play_failure = XiaoMusicDevice._handle_play_failure.__get__(d)
+    d.do_tts = lambda *a, **k: asyncio.sleep(0)
+
+    async def _park(delay):
+        await asyncio.Event().wait()
+
+    d._wait_failure_retry_backoff = _park
+
+
 class _AttemptError(Exception):
     pass
 
@@ -1623,12 +1634,16 @@ async def test_playmusic_stop_failure_no_attempt_increment():
     async def _raise_stop(fast_stop=False, sid=0):
         raise _AttemptError("stop failed")
     d._execute_group_stop = _raise_stop
+    _use_real_failure_handler(d)
 
-    result = await d._playmusic("song1", confirm_start_in_background=True, fast_stop=True)
-    assert result is False
-    assert d.get_runtime_state().phase == PlaybackPhase.FAILED
-    assert d.get_runtime_state().failure.reason == "preplay_stop_failed"
-    assert d.get_runtime_state().track_attempt_id == 0
+    try:
+        result = await d._playmusic("song1", confirm_start_in_background=True, fast_stop=True)
+        assert result is False
+        assert d.get_runtime_state().phase == PlaybackPhase.FAILED
+        assert d.get_runtime_state().failure.reason == "preplay_stop_failed"
+        assert d.get_runtime_state().track_attempt_id == 0
+    finally:
+        await d._await_cancelled_failure_retry()
 
 
 @pytest.mark.asyncio
@@ -1717,13 +1732,17 @@ async def test_real_playmusic_terminal_stop_failure_sets_failed_without_attempt(
 
     d.group_force_stop_xiaoai = _failed_stop
     d.group_player_play = _group_play
-    result = await d._playmusic("song1", confirm_start_in_background=True, fast_stop=True)
+    _use_real_failure_handler(d)
+    try:
+        result = await d._playmusic("song1", confirm_start_in_background=True, fast_stop=True)
 
-    assert result is False
-    assert dispatched == []
-    assert d.get_runtime_state().phase == PlaybackPhase.FAILED
-    assert d.get_runtime_state().failure.reason == "preplay_stop_failed"
-    assert d.get_runtime_state().track_attempt_id == 0
+        assert result is False
+        assert dispatched == []
+        assert d.get_runtime_state().phase == PlaybackPhase.FAILED
+        assert d.get_runtime_state().failure.reason == "preplay_stop_failed"
+        assert d.get_runtime_state().track_attempt_id == 0
+    finally:
+        await d._await_cancelled_failure_retry()
 
 
 # ── on_external_url_play one-time init guard ──────────────────────────
@@ -9139,10 +9158,43 @@ async def test_playmusic_preplay_stop_exception_reports_visible_failure():
         raise RuntimeError("preplay stop io")
 
     d._execute_group_stop = _raise_preplay_stop
+    _use_real_failure_handler(d)
+    try:
+        result = await d._playmusic("song1", confirm_start_in_background=True, fast_stop=False)
+        assert result is False
+        assert d.get_runtime_state().phase == PlaybackPhase.FAILED
+        assert d.get_runtime_state().failure.reason == "preplay_stop_failed"
+    finally:
+        await d._await_cancelled_failure_retry()
+
+
+@pytest.mark.asyncio
+async def test_playmusic_preplay_stop_exception_routes_to_failure_policy():
+    """Regression (2026-11-22): a preplay stop timeout must enter the failure
+    policy (retry / advance / degrade), not just mark the runtime FAILED.
+    Previously playback stalled while the speaker looped its single-item list.
+    """
+    d = _build_playmusic_attempt_device()
+    calls: list[dict] = []
+
+    async def _raise_preplay_stop(*args, **kwargs):
+        raise RuntimeError("远程控制超时 code 3012")
+
+    async def _record_failure(*, name, sid, reason, token):
+        calls.append(
+            {"name": name, "sid": sid, "reason": reason, "token": token}
+        )
+
+    d._execute_group_stop = _raise_preplay_stop
+    d._handle_play_failure = _record_failure
     result = await d._playmusic("song1", confirm_start_in_background=True, fast_stop=False)
+
     assert result is False
-    assert d.get_runtime_state().phase == PlaybackPhase.FAILED
-    assert d.get_runtime_state().failure.reason == "preplay_stop_failed"
+    assert len(calls) == 1
+    assert calls[0]["name"] == "song1"
+    assert calls[0]["reason"] == "preplay_stop_failed"
+    assert calls[0]["sid"] == d._play_session_id
+    assert calls[0]["token"] == d._capture_lifecycle_token()
 
 
 @pytest.mark.asyncio
