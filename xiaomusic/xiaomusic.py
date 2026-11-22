@@ -27,6 +27,7 @@ from xiaomusic.music_library import MusicLibrary
 from xiaomusic.playback.link_strategy import LinkPlaybackStrategy
 from xiaomusic.security.token_store import TokenStore
 from xiaomusic.services.online_music_service import OnlineMusicService
+from xiaomusic.speaker_client import SpeakerClient
 from xiaomusic.stream_gateway import StreamGateway
 from xiaomusic.utils.file_utils import clean_temp_dir
 from xiaomusic.utils.system_utils import deepcopy_data_no_sensitive_info
@@ -725,9 +726,7 @@ class XiaoMusic:
     async def getalldevices(self, **kwargs):
         device_list = []
         try:
-            device_list = await self.auth_manager.mina_call(
-                "device_list", retry=1, ctx="getalldevices"
-            )
+            device_list = await SpeakerClient(self.auth_manager).device_list()
             # 运行时可能拿到设备列表但本地 device_manager 仍为空（例如重建会话后）。
             # 这里做一次轻量自愈，保证 did_exist 与控制接口可用。
             if device_list and not self.device_manager.devices:
@@ -758,14 +757,8 @@ class XiaoMusic:
         data = arg1
         device_id = self.config.get_one_device_id()
         self.log.info(f"debug_play_by_music_url: {data} {device_id}")
-        return await self.auth_manager.mina_call(
-            "ubus_request",
-            device_id,
-            "player_play_music",
-            "mediaplayer",
-            data,
-            retry=1,
-            ctx="debug_play_by_music_url",
+        return await SpeakerClient(self.auth_manager).ubus(
+            device_id, "player_play_music", "mediaplayer", data, ctx="debug_play_by_music_url"
         )
 
     # 此接口用于插件中获取当前设备

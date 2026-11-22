@@ -47,6 +47,7 @@ from xiaomusic.api.routers.v1_shared import (
 )
 from xiaomusic.diagnostics import build_runtime_diagnostics_view
 from xiaomusic.qrcode_login import MiJiaAPI
+from xiaomusic.speaker_client import SpeakerClient
 from xiaomusic.utils.system_utils import (
     deepcopy_data_no_sensitive_info,
     get_latest_version,
@@ -587,9 +588,7 @@ async def experiment_speaker(request: Request):
     am = xiaomusic.auth_manager
 
     async def ubus(method, path, message, ctx):
-        return await am.mina_call(
-            "ubus_request", device_id, method, path, message, retry=1, ctx=f"experiment_{ctx}"
-        )
+        return await SpeakerClient(am).ubus(device_id, method, path, message, ctx=f"experiment_{ctx}")
 
     if op == "queue":
         playlist = str(body.get("playlist") or "")

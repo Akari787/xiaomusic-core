@@ -11,8 +11,6 @@ import time
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
-from miservice import miio_command
-
 from xiaomusic.config import Device
 
 if TYPE_CHECKING:
@@ -67,6 +65,7 @@ from xiaomusic.playback.task_registry import (
     TaskGeneration,
     TaskKind,
 )
+from xiaomusic.speaker_client import SpeakerClient
 from xiaomusic.utils.file_utils import chmodfile
 from xiaomusic.utils.text_utils import custom_sort_key, list2str
 
@@ -273,6 +272,11 @@ class XiaoMusicDevice:
     def did(self):
         """获取设备DID"""
         return self.device.did
+
+    @property
+    def speaker(self) -> SpeakerClient:
+        """Cloud commands for this device go through SpeakerClient (ADR-0007)."""
+        return SpeakerClient(self.auth_manager)
 
     @property
     def hardware(self):
@@ -3372,17 +3376,13 @@ class XiaoMusicDevice:
     async def pause_xiaoai(self, device_id):
         if not await self.get_if_xiaoai_is_playing(device_id):
             return True
-        ret = await self.auth_manager.mina_call(
-            "player_pause", device_id, retry=1, ctx="pause_xiaoai"
-        )
+        ret = await self.speaker.pause(device_id, ctx="pause_xiaoai")
         return self._physical_result_succeeded(ret)
 
     async def resume_xiaoai(self, device_id):
         if await self.get_if_xiaoai_is_playing(device_id):
             return True
-        ret = await self.auth_manager.mina_call(
-            "player_pause", device_id, retry=1, ctx="resume_xiaoai"
-        )
+        ret = await self.speaker.pause(device_id, ctx="resume_xiaoai")
         return self._physical_result_succeeded(ret)
 
     async def group_pause_xiaoai(self):
@@ -3396,16 +3396,12 @@ class XiaoMusicDevice:
     async def force_stop_xiaoai(self, device_id, *, fast: bool = False):
         """Stop one device and return an explicit physical success boolean."""
         if fast:
-            ret = await self.auth_manager.mina_call(
-                "player_stop", device_id, retry=1, ctx="force_stop_xiaoai_fast"
-            )
+            ret = await self.speaker.stop(device_id, ctx="force_stop_xiaoai_fast")
             self.log.info(
                 f"force_stop_xiaoai_fast player_stop device_id:{device_id} ret:{ret}"
             )
             return self._physical_result_succeeded(ret)
-        ret = await self.auth_manager.mina_call(
-            "player_pause", device_id, retry=1, ctx="force_stop_xiaoai"
-        )
+        ret = await self.speaker.pause(device_id, ctx="force_stop_xiaoai")
         self.log.info(
             f"force_stop_xiaoai player_pause device_id:{device_id} ret:{ret}"
         )
@@ -3416,26 +3412,20 @@ class XiaoMusicDevice:
     async def get_if_xiaoai_is_playing(self, device_id=None):
         """检查小爱是否正在播放"""
         target_device_id = device_id or self.device_id
-        playing_info = await self.auth_manager.mina_call(
-            "player_get_status",
-            target_device_id,
-            retry=1,
-            ctx="get_if_xiaoai_is_playing",
+        playing_info = await self.speaker.status_raw(
+            target_device_id, ctx="get_if_xiaoai_is_playing"
         )
         self.log.info(playing_info)
         # WTF xiaomi api
         is_playing = (
-            json.loads(playing_info.get("data", {}).get("info", "{}")).get("status", -1)
-            == 1
+            SpeakerClient.parse_status(playing_info).get("status", -1) == 1
         )
         return is_playing
 
     async def stop_if_xiaoai_is_playing(self, device_id):
         """Send player_stop. No status probe first: the OH2P keeps reporting
         status=1 while paused, so the probe only added a cloud round trip."""
-        ret = await self.auth_manager.mina_call(
-            "player_stop", device_id, retry=1, ctx="stop_if_xiaoai_is_playing"
-        )
+        ret = await self.speaker.stop(device_id, ctx="stop_if_xiaoai_is_playing")
         self.log.info(
             f"stop_if_xiaoai_is_playing player_stop device_id:{device_id} ret:{ret}"
         )
@@ -3741,24 +3731,12 @@ class XiaoMusicDevice:
                     tts_cmd = TTS_COMMAND[self.hardware]
                     self.log.info("Call MiIOService tts.")
                     value = value.replace(" ", ",")  # 不能有空格
-                    await self.auth_manager.miio_call(
-                        lambda: miio_command(
-                            self.auth_manager.miio_service,
-                            self.did,
-                            f"{tts_cmd} {value}",
-                        ),
-                        retry=1,
-                        ctx="text_to_speech_miio",
+                    await self.speaker.miio_command(
+                        self.did, f"{tts_cmd} {value}", ctx="text_to_speech_miio"
                     )
                 else:
                     self.log.debug("Call MiNAService tts.")
-                    await self.auth_manager.mina_call(
-                        "text_to_speech",
-                        self.device_id,
-                        value,
-                        retry=1,
-                        ctx="text_to_speech",
-                    )
+                    await self.speaker.tts(self.device_id, value)
         except Exception as e:
             self.log.exception(f"Execption {e}")
 
@@ -4266,25 +4244,12 @@ class XiaoMusicDevice:
                 device_id,
             )
             if dispatch_mode == "play_by_music_url":
-                ret = await self.auth_manager.mina_call(
-                    "play_by_music_url",
-                    device_id,
-                    url,
-                    audio_id=audio_id,
-                    retry=1,
-                    ctx="play_one_url_music_api",
-                )
+                ret = await self.speaker.play_music_url(device_id, url, audio_id=audio_id)
                 self.log.info(
                     f"play_one_url play_by_music_url device_id:{device_id} ret:{ret} url:{url} audio_id:{audio_id}"
                 )
             else:
-                ret = await self.auth_manager.mina_call(
-                    "play_by_url",
-                    device_id,
-                    url,
-                    retry=1,
-                    ctx="play_one_url",
-                )
+                ret = await self.speaker.play_url(device_id, url)
                 self.log.info(
                     f"play_one_url play_by_url device_id:{device_id} ret:{ret} url:{url}"
                 )
@@ -4584,13 +4549,7 @@ class XiaoMusicDevice:
         volume = self._normalize_volume_value(volume, self._last_volume)
         self.log.info(f"set_volume.  did: {self.did} volume: {volume}")
         try:
-            ret = await self.auth_manager.mina_call(
-                "player_set_volume",
-                self.device_id,
-                volume,
-                retry=1,
-                ctx="set_volume",
-            )
+            ret = await self.speaker.set_volume(self.device_id, volume)
         except Exception as e:
             self.log.exception(f"Execption {e}")
             return False
@@ -4606,16 +4565,9 @@ class XiaoMusicDevice:
         """Read volume without committing the runtime cache."""
         fallback = self._last_volume
         try:
-            playing_info = await self.auth_manager.mina_call(
-                "player_get_status",
-                self.device_id,
-                retry=1,
-                ctx="get_volume",
-            )
+            playing_info = await self.speaker.status_raw(self.device_id, ctx="get_volume")
             self.log.info(f"get_volume. playing_info:{playing_info}")
-            volume = json.loads(playing_info.get("data", {}).get("info", "{}")).get(
-                "volume", fallback
-            )
+            volume = SpeakerClient.parse_status(playing_info).get("volume", fallback)
         except Exception as e:
             self.log.warning(f"Execption {e}")
             return fallback
@@ -4626,14 +4578,11 @@ class XiaoMusicDevice:
     async def get_player_status(self):
         """获取完整播放状态"""
         try:
-            playing_info = await self.auth_manager.mina_call(
-                "player_get_status",
-                self.device_id,
-                retry=1,
-                ctx="get_player_status",
+            playing_info = await self.speaker.status_raw(
+                self.device_id, ctx="get_player_status"
             )
             self.log.info(f"get_player_status. playing_info:{playing_info}")
-            info = json.loads(playing_info.get("data", {}).get("info", "{}"))
+            info = SpeakerClient.parse_status(playing_info)
             return info
         except Exception as e:
             self.log.warning(f"Execption {e}")
