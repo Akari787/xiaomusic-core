@@ -23,6 +23,7 @@ ADR 是决策历史。只有 **Accepted 且未被撤回或取代** 的记录可�
 | [0004 状态权威单一化](0004-state-authority.md) | Accepted | 状态 ownership 原则 |
 | [0005 统一事件模型](0005-event-model.md) | Withdrawn | 未实施设计的历史记录，不约束当前代码 |
 | [0006 WebUI 播放请求与在线搜索引用边界](0006-webui-playback-contract.md) | Accepted | typed request 与 opaque play reference |
+| [0007 音箱持有播放队列，服务端跟随](0007-speaker-owned-queue.md) | Proposed | 队列下发、稳定流地址、按拉流请求跟随当前曲目（分步实施中） |
 
 ## 编写要求
 
