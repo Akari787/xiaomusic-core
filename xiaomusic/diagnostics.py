@@ -271,26 +271,38 @@ def _local_library_source_item(config, xiaomusic) -> dict[str, Any]:
 def _jellyfin_source_item(config) -> dict[str, Any]:
     enabled = bool(getattr(config, "jellyfin_enabled", False))
     base_url = str(getattr(config, "jellyfin_base_url", "") or "").strip()
-    api_key = str(getattr(config, "jellyfin_api_key", "") or "").strip()
-    if not enabled and not base_url and not api_key:
+    if not enabled and not base_url:
         return {
             "source": "jellyfin",
             "status": _STATUS_UNKNOWN,
             "summary": "jellyfin not configured",
             "last_failure": "",
         }
-    if base_url and api_key:
+    if not base_url:
+        return {
+            "source": "jellyfin",
+            "status": _STATUS_FAILED,
+            "summary": "jellyfin configuration is incomplete",
+            "last_failure": "missing jellyfin_base_url",
+        }
+    from xiaomusic.jellyfin_client import JellyfinClient
+
+    try:
+        logged_in = JellyfinClient(config, None).login_status()["logged_in"]
+    except Exception:
+        logged_in = False
+    if logged_in:
         return {
             "source": "jellyfin",
             "status": _STATUS_OK,
-            "summary": "jellyfin configuration is present",
+            "summary": "jellyfin logged in",
             "last_failure": "",
         }
     return {
         "source": "jellyfin",
         "status": _STATUS_FAILED,
-        "summary": "jellyfin configuration is incomplete",
-        "last_failure": "missing jellyfin_base_url or jellyfin_api_key",
+        "summary": "jellyfin not logged in",
+        "last_failure": "jellyfin login required",
     }
 
 

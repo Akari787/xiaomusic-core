@@ -220,9 +220,7 @@ async def getsetting(need_device_list: bool = False):
     config_data = xiaomusic.getconfig()
     data = asdict(config_data)
     data["httpauth_password"] = "******"
-    # Never expose secrets to the browser.
-    if data.get("jellyfin_api_key"):
-        data["jellyfin_api_key"] = "******"
+    data.update(_jellyfin_login_fields())
 
     def _token_valid(j: dict) -> bool:
         # Current short session is usable and its related persistent fields are present.
@@ -496,6 +494,80 @@ async def auth_refresh_runtime():
     return await auth_refresh()
 
 
+def _jellyfin_client():
+    service = getattr(xiaomusic, "online_music_service", None)
+    return getattr(service, "jellyfin_client", None)
+
+
+def _jellyfin_login_fields() -> dict:
+    client = _jellyfin_client()
+    status = client.login_status() if client is not None else {}
+    return {
+        "jellyfin_logged_in": bool(status.get("logged_in")),
+        "jellyfin_username": str(status.get("username") or ""),
+    }
+
+
+def _drop_jellyfin_secret_fields(data: dict) -> None:
+    """Settings saves never carry Jellyfin credentials (login has its own
+    endpoint); also discard the retired API key fields from old clients."""
+    for key in (
+        "jellyfin_password",
+        "jellyfin_api_key",
+        "jellyfin_user_id",
+        "jellyfin_logged_in",
+        "jellyfin_username",
+    ):
+        data.pop(key, None)
+
+
+@router.get("/api/jellyfin/status")
+async def jellyfin_status():
+    return api_response.ok(_jellyfin_login_fields(), contract="raw")
+
+
+@router.post("/api/jellyfin/login")
+async def jellyfin_login(request: Request):
+    """Username/password login. The password is used once and never stored,
+    logged, or returned."""
+    from xiaomusic.jellyfin_client import JellyfinAuthError
+
+    client = _jellyfin_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Jellyfin 客户端不可用")
+    try:
+        body = json.loads((await request.body()).decode("utf-8") or "{}")
+    except (json.JSONDecodeError, UnicodeDecodeError) as err:
+        raise HTTPException(status_code=400, detail="Invalid JSON") from err
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    username = str(body.get("username") or "")
+    password = str(body.get("password") or "")
+    base_url = str(body.get("base_url") or "").strip()
+    if base_url and base_url.rstrip("/") != (config.jellyfin_base_url or "").rstrip("/"):
+        config.jellyfin_base_url = base_url
+        config.jellyfin_enabled = True
+        xiaomusic.save_cur_config()
+    try:
+        await client.login(username, password)
+    except JellyfinAuthError as err:
+        raise HTTPException(status_code=401, detail=str(err)) from err
+    except Exception as err:
+        log.warning("jellyfin_login_failed: %s", type(err).__name__)
+        raise HTTPException(status_code=502, detail="Jellyfin 登录失败，请检查地址") from err
+    log.info("jellyfin_login_ok username=%s", username)
+    sync = await xiaomusic.online_music_service.sync_jellyfin_music_lists()
+    return api_response.ok({**_jellyfin_login_fields(), "sync": sync}, contract="raw")
+
+
+@router.post("/api/jellyfin/logout")
+async def jellyfin_logout():
+    client = _jellyfin_client()
+    if client is not None:
+        await client.logout()
+    return api_response.ok(_jellyfin_login_fields(), contract="raw")
+
+
 @router.post("/api/jellyfin/sync")
 async def jellyfin_sync():
     ret = await xiaomusic.online_music_service.sync_jellyfin_music_lists()
@@ -519,10 +591,7 @@ async def savesetting(request: Request):
         ):
             data["httpauth_password"] = config_obj.httpauth_password
 
-        # Jellyfin API key should not be displayed; keep existing unless user overrides.
-        # Some browsers clear password fields on refresh, so empty string should also keep old value.
-        if data.get("jellyfin_api_key") in {"******", ""}:
-            data["jellyfin_api_key"] = config_obj.jellyfin_api_key
+        _drop_jellyfin_secret_fields(data)
         await xiaomusic.saveconfig(data)
 
         # 重置 HTTP 服务器配置
@@ -553,10 +622,7 @@ async def modifiysetting(request: Request):
         ):
             data["httpauth_password"] = config_obj.httpauth_password
 
-        # Jellyfin API key should not be displayed; keep existing unless user overrides.
-        # Some browsers clear password fields on refresh, so empty string should also keep old value.
-        if "jellyfin_api_key" in data and data["jellyfin_api_key"] in {"******", ""}:
-            data["jellyfin_api_key"] = config_obj.jellyfin_api_key
+        _drop_jellyfin_secret_fields(data)
 
         # 检查是否有HTTP服务器相关配置被修改
         has_http_config_changed = any(

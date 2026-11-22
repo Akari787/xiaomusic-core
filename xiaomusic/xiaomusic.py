@@ -53,6 +53,7 @@ class XiaoMusic:
 
         self.running_task = []
         self.keepalive_task = None
+        self.jellyfin_sync_task = None
 
         # 音乐库管理器（延迟初始化，在配置准备好之后）
         self.music_library = None
@@ -252,6 +253,17 @@ class XiaoMusic:
         console_handler.setFormatter(formatter)
         self.log.addHandler(console_handler)
 
+    async def jellyfin_sync_loop(self):
+        """Periodically re-import Jellyfin playlists so edits made in Jellyfin
+        show up without restarting. Interval <= 0 disables it."""
+        while True:
+            minutes = int(getattr(self.config, "jellyfin_sync_interval_minutes", 30) or 0)
+            if minutes <= 0:
+                await asyncio.sleep(300)
+                continue
+            await asyncio.sleep(minutes * 60)
+            await self.sync_jellyfin_music_lists_if_needed()
+
     async def analytics_task_daily(self):
         while True:
             await self.analytics.send_daily_event()
@@ -329,6 +341,7 @@ class XiaoMusic:
         await self.auth_manager.init_all_data()
         await self.sync_jellyfin_music_lists_if_needed()
         self.keepalive_task = asyncio.create_task(self.auth_manager.keepalive_loop())
+        self.jellyfin_sync_task = asyncio.create_task(self.jellyfin_sync_loop())
         # 启动对话循环，传递回调函数
         try:
             await self.conversation_poller.run_conversation_loop(
@@ -339,6 +352,10 @@ class XiaoMusic:
                 self.keepalive_task.cancel()
                 await asyncio.gather(self.keepalive_task, return_exceptions=True)
                 self.keepalive_task = None
+            if self.jellyfin_sync_task is not None:
+                self.jellyfin_sync_task.cancel()
+                await asyncio.gather(self.jellyfin_sync_task, return_exceptions=True)
+                self.jellyfin_sync_task = None
 
     # 匹配命令
     async def do_check_cmd(self, did="", query="", ctrl_panel=True, **kwargs):

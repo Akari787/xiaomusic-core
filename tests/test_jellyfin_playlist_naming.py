@@ -7,7 +7,6 @@ def _client() -> JellyfinClient:
     config = SimpleNamespace(
         jellyfin_enabled=True,
         jellyfin_base_url="http://server",
-        jellyfin_api_key="key123",
     )
     log = SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None, error=lambda *a, **k: None)
     return JellyfinClient(config, log)

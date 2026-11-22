@@ -115,8 +115,11 @@ async def _settings_snapshot(include_devices: bool) -> dict[str, Any]:
     xm = _get_xiaomusic()
     config_data = asdict(xm.getconfig())
     config_data["httpauth_password"] = "******"
-    if config_data.get("jellyfin_api_key"):
-        config_data["jellyfin_api_key"] = "******"
+    _service = getattr(xm, "online_music_service", None)
+    _jf = getattr(_service, "jellyfin_client", None)
+    _jf_status = _jf.login_status() if _jf is not None else {}
+    config_data["jellyfin_logged_in"] = bool(_jf_status.get("logged_in"))
+    config_data["jellyfin_username"] = str(_jf_status.get("username") or "")
 
     token_available = False
     try:
@@ -500,8 +503,14 @@ async def api_v1_system_settings_save(data: SystemSettingsSaveRequest):
         config_obj = _get_xiaomusic().getconfig()
         if settings.get("httpauth_password") in {"******", ""}:
             settings["httpauth_password"] = config_obj.httpauth_password
-        if settings.get("jellyfin_api_key") in {"******", ""}:
-            settings["jellyfin_api_key"] = config_obj.jellyfin_api_key
+        for _key in (
+            "jellyfin_password",
+            "jellyfin_api_key",
+            "jellyfin_user_id",
+            "jellyfin_logged_in",
+            "jellyfin_username",
+        ):
+            settings.pop(_key, None)
 
         await _get_xiaomusic().saveconfig(settings)
 

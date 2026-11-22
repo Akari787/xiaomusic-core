@@ -66,7 +66,7 @@ def test_register_routers_production_assembly(monkeypatch):
     }))
     _patch_xiaomusic(monkeypatch, type("_XM", (), {
         "getconfig": lambda s: type("_C", (), {
-            "httpauth_password": "x", "jellyfin_api_key": "",
+            "httpauth_password": "x",
             "cors_allow_origins": [], "disable_httpauth": True,
             "mi_did": "",
         })(),
@@ -391,7 +391,7 @@ def _assemble_and_authed(monkeypatch):
     }))
     _patch_xiaomusic(monkeypatch, type("_XM", (), {
         "getconfig": lambda s: type("_C", (), {
-            "httpauth_password": "x", "jellyfin_api_key": "",
+            "httpauth_password": "x",
             "cors_allow_origins": [], "disable_httpauth": True, "mi_did": "",
         })(),
         "auth_manager": None,

@@ -397,8 +397,11 @@ class Config:
         os.getenv("XIAOMUSIC_JELLYFIN_ENABLED", "false").lower() == "true"
     )
     jellyfin_base_url: str = os.getenv("XIAOMUSIC_JELLYFIN_BASE_URL", "")
-    jellyfin_api_key: str = os.getenv("XIAOMUSIC_JELLYFIN_API_KEY", "")
-    jellyfin_user_id: str = os.getenv("XIAOMUSIC_JELLYFIN_USER_ID", "")
+    # Jellyfin uses username/password login; the session token lives in
+    # conf/jellyfin_auth.json and the password is never stored.
+    jellyfin_sync_interval_minutes: int = int(
+        os.getenv("XIAOMUSIC_JELLYFIN_SYNC_INTERVAL_MINUTES", "30")
+    )
 
     # Computed / diagnostic fields (not user-configurable)
     keyword_conflicts: list[str] = field(default_factory=list, init=False, repr=False)
@@ -458,7 +461,6 @@ class Config:
                     "cors_allow_origins": self.cors_allow_origins,
                     "log_redact": self.log_redact,
                     "jellyfin_base_url": self.jellyfin_base_url,
-                    "jellyfin_api_key": self.jellyfin_api_key,
                     "port": self.port,
                 }
             )
@@ -474,7 +476,6 @@ class Config:
             self.cors_allow_origins = list(typed.cors_allow_origins)
             self.log_redact = typed.log_redact
             self.jellyfin_base_url = typed.jellyfin_base_url
-            self.jellyfin_api_key = typed.jellyfin_api_key.get_secret_value()
         else:
             self.allowed_exec_commands = [x.strip() for x in self.allowed_exec_commands if x.strip()]
             self.allowlist_domains = [x.strip().lower() for x in self.allowlist_domains if x.strip()]

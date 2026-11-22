@@ -113,7 +113,6 @@ def test_diagnostics_route_returns_unified_view(monkeypatch, client):
         ffmpeg_location = ""
         jellyfin_enabled = False
         jellyfin_base_url = ""
-        jellyfin_api_key = ""
 
     music_library = SimpleNamespace(all_music={"song1": "a.mp3"})
     device_manager = SimpleNamespace(
@@ -250,7 +249,6 @@ def test_diagnostics_route_marks_overall_failed_when_auth_failed(monkeypatch, cl
         ffmpeg_location = ""
         jellyfin_enabled = False
         jellyfin_base_url = ""
-        jellyfin_api_key = ""
 
     xiaomusic = SimpleNamespace(
         startup_diagnostics=startup,

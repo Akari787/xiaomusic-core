@@ -173,6 +173,13 @@ class OnlineMusicService:
 
     async def sync_jellyfin_music_lists(self):
         if not self.jellyfin_client or not self.jellyfin_client.enabled():
+            config = getattr(self.xiaomusic, "config", None)
+            if (
+                self.jellyfin_client
+                and getattr(config, "jellyfin_enabled", False)
+                and getattr(config, "jellyfin_base_url", "")
+            ):
+                return {"success": False, "error": "Jellyfin 未登录，请在设置页登录"}
             return {"success": False, "error": "Jellyfin 未启用或配置不完整"}
         if not self.xiaomusic or not self.xiaomusic.music_library:
             return {"success": False, "error": "MusicLibrary 不可用"}

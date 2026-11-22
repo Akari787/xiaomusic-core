@@ -37,6 +37,7 @@ import {
 } from "../services/playbackRequestBuilder";
 import { fetchAuthStatus, logoutAuth as logoutAuthRequest, reloadAuthRuntime, type AuthStatus } from "../services/auth";
 import { credentialAgeText } from "../services/credentialAge";
+import { loginJellyfin, logoutJellyfin } from "../services/jellyfin";
 import {
   cleanTempDir as cleanTempDirRequest,
   fetchPlaylistJson,
@@ -1039,6 +1040,10 @@ export function HomePage() {
   const [qrcodeUrl, setQrcodeUrl] = useState<string>("");
   const [qrcodeStatus, setQrcodeStatus] = useState<string>("点击上方按钮获取登录二维码");
   const [settingData, setSettingData] = useState<Record<string, unknown>>({});
+  const [jellyfinLoginUser, setJellyfinLoginUser] = useState("");
+  const [jellyfinLoginPassword, setJellyfinLoginPassword] = useState("");
+  const [jellyfinLoginBusy, setJellyfinLoginBusy] = useState(false);
+  const [jellyfinLoginMessage, setJellyfinLoginMessage] = useState("");
   const [settingJsonText, setSettingJsonText] = useState<string>("{}");
   const [settingDeviceList, setSettingDeviceList] = useState<Device[]>([]);
   const [selectedSettingDids, setSelectedSettingDids] = useState<string[]>([]);
@@ -1490,6 +1495,40 @@ export function HomePage() {
         };
         await saveSystemSettings(payload, dids);
       }
+    }
+  }
+
+  async function handleJellyfinLogin() {
+    if (jellyfinLoginBusy) return;
+    setJellyfinLoginBusy(true);
+    setJellyfinLoginMessage("登录中…");
+    const result = await loginJellyfin(
+      String(settingData.jellyfin_base_url || ""),
+      jellyfinLoginUser.trim(),
+      jellyfinLoginPassword,
+    );
+    // Never keep the password around after an attempt.
+    setJellyfinLoginPassword("");
+    setJellyfinLoginBusy(false);
+    setJellyfinLoginMessage(result.message);
+    if (result.ok) {
+      setSettingData((prev) => ({
+        ...prev,
+        jellyfin_enabled: true,
+        jellyfin_logged_in: true,
+        jellyfin_username: result.username,
+      }));
+    }
+  }
+
+  async function handleJellyfinLogout() {
+    if (jellyfinLoginBusy) return;
+    setJellyfinLoginBusy(true);
+    const ok = await logoutJellyfin();
+    setJellyfinLoginBusy(false);
+    setJellyfinLoginMessage(ok ? "已退出 Jellyfin" : "退出失败");
+    if (ok) {
+      setSettingData((prev) => ({ ...prev, jellyfin_logged_in: false, jellyfin_username: "" }));
     }
   }
 
@@ -2850,21 +2889,41 @@ export function HomePage() {
               onChange={(e) => updateSettingField("jellyfin_base_url", e.target.value)}
             />
 
-            <label htmlFor="jellyfin_api_key">Jellyfin API Key:</label>
-            <input
-              id="jellyfin_api_key"
-              type="password"
-              value={String(settingData.jellyfin_api_key || "")}
-              onChange={(e) => updateSettingField("jellyfin_api_key", e.target.value)}
-            />
-
-            <label htmlFor="jellyfin_user_id">Jellyfin User ID(可选):</label>
-            <input
-              id="jellyfin_user_id"
-              type="text"
-              value={String(settingData.jellyfin_user_id || "")}
-              onChange={(e) => updateSettingField("jellyfin_user_id", e.target.value)}
-            />
+            {settingData.jellyfin_logged_in ? (
+              <div className="jellyfin-login-status">
+                <span>Jellyfin 已登录：{String(settingData.jellyfin_username || "")}</span>
+                <button type="button" onClick={() => void handleJellyfinLogout()} disabled={jellyfinLoginBusy}>
+                  退出登录
+                </button>
+              </div>
+            ) : (
+              <>
+                <label htmlFor="jellyfin_login_user">Jellyfin 用户名:</label>
+                <input
+                  id="jellyfin_login_user"
+                  type="text"
+                  autoComplete="username"
+                  value={jellyfinLoginUser}
+                  onChange={(e) => setJellyfinLoginUser(e.target.value)}
+                />
+                <label htmlFor="jellyfin_login_password">Jellyfin 密码:</label>
+                <input
+                  id="jellyfin_login_password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={jellyfinLoginPassword}
+                  onChange={(e) => setJellyfinLoginPassword(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleJellyfinLogin()}
+                  disabled={jellyfinLoginBusy || !jellyfinLoginUser.trim() || !String(settingData.jellyfin_base_url || "").trim()}
+                >
+                  登录 Jellyfin
+                </button>
+              </>
+            )}
+            {jellyfinLoginMessage ? <p className="auth-hint">{jellyfinLoginMessage}</p> : null}
 
             <h3 className="card-title" style={{ marginTop: 12 }}>主题</h3>
             <div className="theme-select-row">

@@ -3,7 +3,7 @@ from __future__ import annotations
 import warnings
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 
 class ConfigModel(BaseModel):
@@ -17,7 +17,6 @@ class ConfigModel(BaseModel):
     cors_allow_origins: list[str]
     log_redact: bool
     jellyfin_base_url: str
-    jellyfin_api_key: SecretStr
     port: int = 8090
 
     @field_validator(
@@ -59,11 +58,6 @@ def validate_config_model(data: dict[str, Any], *, warn: bool = True) -> ConfigM
                         f"config field '{key}' accepted legacy string bool '{value}'",
                         stacklevel=2,
                     )
-
-    if "jellyfin_api_key" in normalized and not isinstance(
-        normalized["jellyfin_api_key"], SecretStr
-    ):
-        normalized["jellyfin_api_key"] = SecretStr(str(normalized["jellyfin_api_key"] or ""))
 
     model = ConfigModel.model_validate(normalized)
     if not model.outbound_allowlist_domains and model.allowlist_domains:

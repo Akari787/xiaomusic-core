@@ -1,54 +1,195 @@
-import aiohttp
+import json
+import os
+import time
+import uuid
 from urllib.parse import urlencode
+
+import aiohttp
+
+AUTH_FILE_NAME = "jellyfin_auth.json"
+CLIENT_NAME = "xiaomusic"
+DEVICE_NAME = "xiaomusic-core"
+
+
+class JellyfinAuthError(Exception):
+    """Jellyfin login missing, rejected, or expired."""
+
+
+class JellyfinAuthStore:
+    """Persists the Jellyfin session (never the password) under conf/.
+
+    File content: username, user_id, access_token, device_id, base_url,
+    logged_in_at. Written with mode 0600.
+    """
+
+    def __init__(self, config):
+        self.config = config
+
+    def path(self):
+        conf_path = getattr(self.config, "conf_path", "") or "conf"
+        return os.path.join(conf_path, AUTH_FILE_NAME)
+
+    def load(self) -> dict:
+        try:
+            with open(self.path(), encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def save(self, data: dict) -> None:
+        path = self.path()
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = f"{path}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+
+    def clear_session(self) -> None:
+        """Drop the token but keep device_id so re-login reuses the device."""
+        data = self.load()
+        device_id = data.get("device_id")
+        if device_id:
+            self.save({"device_id": device_id})
+        else:
+            try:
+                os.remove(self.path())
+            except OSError:
+                pass
 
 
 class JellyfinClient:
     def __init__(self, config, log):
         self.config = config
         self.log = log
+        self.auth_store = JellyfinAuthStore(config)
+
+    def _session(self) -> dict:
+        data = self.auth_store.load()
+        if not data.get("access_token") or not data.get("user_id"):
+            return {}
+        # A session belongs to the server it was issued by.
+        if data.get("base_url") and data.get("base_url") != self._base():
+            return {}
+        return data
 
     def enabled(self):
         return bool(
             self.config.jellyfin_enabled
             and self.config.jellyfin_base_url
-            and self.config.jellyfin_api_key
+            and self._session()
         )
 
-    def _headers(self):
+    def login_status(self) -> dict:
+        session = self._session()
         return {
-            "X-Emby-Token": self.config.jellyfin_api_key,
+            "logged_in": bool(session),
+            "username": str(session.get("username", "")) if session else "",
+            "logged_in_at": session.get("logged_in_at") if session else None,
+        }
+
+    def _device_id(self) -> str:
+        data = self.auth_store.load()
+        device_id = str(data.get("device_id") or "").strip()
+        return device_id or uuid.uuid4().hex
+
+    @staticmethod
+    def _auth_header(device_id: str, token: str = "") -> str:
+        from xiaomusic import __version__
+
+        parts = [
+            f'Client="{CLIENT_NAME}"',
+            f'Device="{DEVICE_NAME}"',
+            f'DeviceId="{device_id}"',
+            f'Version="{__version__}"',
+        ]
+        if token:
+            safe_token = token.replace('"', "")
+            parts.append(f'Token="{safe_token}"')
+        return "MediaBrowser " + ", ".join(parts)
+
+    def _headers(self):
+        session = self._session()
+        if not session:
+            raise JellyfinAuthError("Jellyfin 未登录，请在设置页登录")
+        return {
+            "Authorization": self._auth_header(
+                str(session.get("device_id") or ""), str(session["access_token"])
+            ),
             "Accept": "application/json",
         }
 
     def _base(self):
-        return self.config.jellyfin_base_url.rstrip("/")
+        return (self.config.jellyfin_base_url or "").rstrip("/")
+
+    async def login(self, username: str, password: str) -> dict:
+        """Log in with username/password. The password is used once and
+        never stored or logged; only the issued access token is persisted."""
+        username = (username or "").strip()
+        if not self._base():
+            raise JellyfinAuthError("请先填写 Jellyfin 地址")
+        if not username:
+            raise JellyfinAuthError("请填写 Jellyfin 用户名")
+        device_id = self._device_id()
+        url = f"{self._base()}/Users/AuthenticateByName"
+        headers = {
+            "Authorization": self._auth_header(device_id),
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                url, json={"Username": username, "Pw": password or ""}, headers=headers
+            ) as resp:
+                if resp.status in (401, 403):
+                    raise JellyfinAuthError("Jellyfin 用户名或密码错误")
+                if resp.status != 200:
+                    raise JellyfinAuthError(f"Jellyfin 登录失败: HTTP {resp.status}")
+                payload = await resp.json()
+        token = str(payload.get("AccessToken") or "")
+        user = payload.get("User") or {}
+        user_id = str(user.get("Id") or "")
+        if not token or not user_id:
+            raise JellyfinAuthError("Jellyfin 登录响应缺少令牌")
+        self.auth_store.save(
+            {
+                "username": str(user.get("Name") or username),
+                "user_id": user_id,
+                "access_token": token,
+                "device_id": device_id,
+                "base_url": self._base(),
+                "logged_in_at": int(time.time()),
+            }
+        )
+        return self.login_status()
+
+    async def logout(self) -> None:
+        session = self._session()
+        if session:
+            try:
+                timeout = aiohttp.ClientTimeout(total=8)
+                async with aiohttp.ClientSession(timeout=timeout) as http:
+                    async with http.post(
+                        f"{self._base()}/Sessions/Logout", headers=self._headers()
+                    ):
+                        pass
+            except Exception as e:  # best effort; local session is dropped anyway
+                if self.log:
+                    self.log.info("jellyfin_logout_remote_failed: %s", type(e).__name__)
+        self.auth_store.clear_session()
+
+    def _raise_if_unauthorized(self, status: int) -> None:
+        if status == 401:
+            raise JellyfinAuthError("Jellyfin 登录已失效，请在设置页重新登录")
 
     async def _resolve_user_id(self):
-        url = f"{self._base()}/Users"
-        timeout = aiohttp.ClientTimeout(total=8)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers=self._headers()) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    raise Exception(f"Jellyfin 获取用户失败: {resp.status} {text}")
-                users = await resp.json()
-        if not users:
-            raise Exception("Jellyfin 无可用用户")
-
-        configured = (self.config.jellyfin_user_id or "").strip()
-        if configured:
-            for user in users:
-                uid = str(user.get("Id", "")).strip()
-                name = str(user.get("Name", "")).strip()
-                if configured == uid:
-                    return uid
-                if configured.lower() == name.lower() and uid:
-                    return uid
-            raise Exception(
-                f"Jellyfin 用户标识无效: {configured}（应为用户ID或用户名）"
-            )
-
-        return str(users[0].get("Id", ""))
+        session = self._session()
+        if not session:
+            raise JellyfinAuthError("Jellyfin 未登录，请在设置页登录")
+        return str(session["user_id"])
 
     def _need_transcode_mp3(self, item):
         container = str(item.get("Container", "")).lower()
@@ -90,7 +231,9 @@ class JellyfinClient:
 
     def _stream_url(self, item_id, user_id="", force_transcode=False):
         base = self._base()
-        api_key = self.config.jellyfin_api_key
+        # The speaker fetches the stream itself and cannot send headers, so the
+        # session access token travels as the api_key query parameter.
+        api_key = str(self._session().get("access_token") or "")
         # Use single-param direct URL for XiaoAi compatibility (see note in
         # build_stream_url). Jellyfin can still transcode stream.mp3 when needed.
         return self.build_stream_url(base, item_id, api_key)
@@ -113,11 +256,9 @@ class JellyfinClient:
             async with session.get(
                 url, params=params, headers=self._headers()
             ) as response:
+                self._raise_if_unauthorized(response.status)
                 if response.status != 200:
-                    text = await response.text()
-                    raise Exception(
-                        f"Jellyfin 搜索失败: HTTP {response.status}, {text}"
-                    )
+                    raise Exception(f"Jellyfin 搜索失败: HTTP {response.status}")
                 payload = await response.json()
 
         items = payload.get("Items", []) if isinstance(payload, dict) else []
@@ -240,8 +381,9 @@ class JellyfinClient:
             async with session.get(
                 playlist_url, params=playlist_params, headers=headers
             ) as resp:
+                self._raise_if_unauthorized(resp.status)
                 if resp.status != 200:
-                    return exported_lists
+                    raise Exception(f"Jellyfin 获取歌单失败: HTTP {resp.status}")
                 playlist_payload = await resp.json()
 
             playlists = (
@@ -265,8 +407,13 @@ class JellyfinClient:
                 async with session.get(
                     items_url, params=items_params, headers=headers
                 ) as items_resp:
+                    # Abort the whole sync rather than silently dropping a
+                    # playlist: a partial export would overwrite the old copy.
+                    self._raise_if_unauthorized(items_resp.status)
                     if items_resp.status != 200:
-                        continue
+                        raise Exception(
+                            f"Jellyfin 获取歌单内容失败: {playlist_name} HTTP {items_resp.status}"
+                        )
                     items_payload = await items_resp.json()
                 playlist_items = (
                     items_payload.get("Items", [])

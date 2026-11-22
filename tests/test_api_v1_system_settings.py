@@ -24,7 +24,6 @@ class _Config:
     public_port: int = 58090
     enable_pull_ask: bool = False
     httpauth_password: str = "secret"
-    jellyfin_api_key: str = "jf-secret"
     devices: dict = field(default_factory=lambda: {
         "did-1": Device(did="did-1", device_id="did-1", hardware="OH2P", name="XiaoAI")
     })
@@ -70,7 +69,11 @@ def test_system_settings_query_success(monkeypatch):
     assert body["data"]["device_ids"] == ["did-1", "did-2"]
     assert body["data"]["devices"][0]["device_id"] == "did-1"
     assert body["data"]["settings"]["httpauth_password"] == "******"
-    assert body["data"]["settings"]["jellyfin_api_key"] == "******"
+    settings = body["data"]["settings"]
+    assert "jellyfin_api_key" not in settings
+    assert "jellyfin_password" not in settings
+    assert settings["jellyfin_logged_in"] is False
+    assert settings["jellyfin_username"] == ""
 
 
 def test_system_settings_save_success(monkeypatch):

@@ -98,7 +98,7 @@ def deepcopy_data_no_sensitive_info(data, fields_to_anonymize: list = None):
     """
     if fields_to_anonymize is None:
         fields_to_anonymize = [
-            "jellyfin_api_key",
+            "jellyfin_password",
             "httpauth_username",
             "httpauth_password",
         ]

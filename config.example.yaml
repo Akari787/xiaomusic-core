@@ -19,8 +19,9 @@ auth_refresh_min_interval_minutes: 30
 # Jellyfin
 jellyfin_enabled: true
 jellyfin_base_url: "http://192.168.7.4:30013"
-jellyfin_api_key: "replace_me"
-jellyfin_user_id: ""
+# Log in from the WebUI settings page with a Jellyfin username/password.
+# The session token is stored in conf/jellyfin_auth.json; the password is never saved.
+jellyfin_sync_interval_minutes: 30
 
 # Outbound controls
 outbound_allowlist_domains: []
