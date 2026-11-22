@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import types
 from dataclasses import dataclass, field
 from typing import Any
@@ -80,6 +81,11 @@ class FakeSpeaker:
             raise SpeakerTimeout(f"{method_name} timed out")
         if method_name in ("play_by_music_url", "play_by_url"):
             url = args[1] if len(args) > 1 else kwargs.get("url", "")
+            if not title_at_call:
+                # A one-off external URL has no current track until it starts;
+                # raw harness URLs carry the song name.
+                m = re.search(r"/Audio/([^/]+)/stream", url)
+                title_at_call = m.group(1) if m else ""
             self.commands.append(Command("play", url, title_at_call))
             self.playing_url = url
             self.paused = False
@@ -171,6 +177,21 @@ class Rig:
     # -- public driving helpers -----------------------------------------
     async def play_playlist(self, list_name: str, song: str = "") -> Any:
         return await self.player.play_music_list(list_name, song)
+
+    async def play_url(self, song: str, playlist: str = "", **context_extra) -> Any:
+        """The v1 API path: a pre-resolved URL with optional playlist context,
+        as PlaybackFacade/Coordinator hand it to the device."""
+        context: dict[str, Any] = {"title": song, **context_extra}
+        if playlist:
+            context["context_hint"] = {
+                "context_type": "playlist",
+                "context_id": playlist,
+                "context_name": playlist,
+            }
+        resolved = {"title": song, "id": song}
+        return await self.player.submit_external_url_play(
+            url=song_url(song), context=context, resolved=resolved
+        )
 
     def state(self):
         return self.player.get_runtime_state()
