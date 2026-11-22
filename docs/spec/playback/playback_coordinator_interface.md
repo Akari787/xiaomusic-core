@@ -1,7 +1,7 @@
 # PlaybackCoordinator 接口约束
 
 > 状态：现行内部接口
-> 最后核对：2026-09-28
+> 最后核对：2026-11-22
 > 实现：`xiaomusic/core/coordinator/playback_coordinator.py`
 
 ## 1. 作用
@@ -35,7 +35,7 @@ Coordinator 不接收完整 `XiaoMusic` runtime。
 
 ### 控制方法
 
-`stop`、`previous`、`next`、`pause`、`resume`、`tts`、`set_volume`、`probe` 统一经 `TransportRouter`。`resume` 是独立的控制动作；底层 Mina transport 可以继续使用 `player_pause` 作为 toggle 实现，但不得与 API/Facade 的 pause 语义混淆。
+`stop`、`previous`、`next`、`pause`、`resume`、`tts`、`set_volume`、`probe` 统一经 `TransportRouter`。`pause` / `resume` 计划在 ADR-0007 第 6 步删除（项目不提供暂停/恢复），删除前保持现状、不再扩展。
 
 ## 4. 状态投影边界
 

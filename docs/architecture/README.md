@@ -23,7 +23,7 @@
 | [webui_playlist_state.md](webui_playlist_state.md) | WebUI playlist identity 与 selector 状态模型 |
 | [authentication_architecture.md](authentication_architecture.md) | 认证系统三层状态模型（persistent auth / short session / runtime） |
 | [unified_playback_model.md](unified_playback_model.md) | 统一播放模型、来源接入、执行路径 |
-| [playback-control-model.md](playback-control-model.md) | 播放队列、随机 session 与 next/previous 控制不变量 |
+| [playback-control-model.md](playback-control-model.md) | 现行逐首路径的播放队列、随机 session 与 next/previous 控制不变量（按 ADR-0007 迁移中） |
 | [contributor_guide.md](contributor_guide.md) | 改动前置规则与文档更新约束 |
 
 ## 设计 / 治理文档
@@ -35,7 +35,8 @@
 | [state-authority.md](state-authority.md) | 每类运行时事实的唯一权威与生命周期边界 |
 | [constraints.md](constraints.md) | 当前可由代码和测试执行的系统约束 |
 | [auth_runtime_recovery.md](auth_runtime_recovery.md) | 认证运行时恢复架构 |
-| [webui_playback_contract_incident_and_repair_plan.md](webui_playback_contract_incident_and_repair_plan.md) | WebUI 播放契约故障与方案 A 完整实施、测试服务器及设备实播验收记录 |
+
+正在实施的播放架构见 [ADR-0007 音箱持有播放队列](../adr/0007-speaker-owned-queue.md)。已完成工作的过程记录放在 [`../maintenance/`](../maintenance/)，不作为现行规则。
 
 ## 相关入口
 

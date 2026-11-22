@@ -111,3 +111,7 @@ session_manager.update_state(sid, "stopped", error_code=None)
 - `_play_session_id` 只用于 async media session invalidation，不复用为 queue/command/attempt ID。
 - 正常 completion 唯一由 duration timer expiry gate 负责。confirmation 只观察，不切歌；保留 T05 的 two-false 与 unknown grace 行为。
 - 查询路径必须纯读：状态异常不得写状态、创建/取消任务、调用 Mina 或隐式修复。
+## 2026-11-22 变更
+
+- T07 中“保留 T05 的 two-false 与 unknown grace 行为”已撤销：计时器到期后直接推进下一首，不再查询音箱状态。依据：OH2P 循环单项队列时总报告 playing，查询从未改变判断，只会推迟切歌（实测导致“当前曲从头播几秒再切”）。
+- 播放队列快照、当前曲目与小米云通信的权威将按 [ADR-0007](0007-speaker-owned-queue.md) 迁移到 `SpeakerQueue` / `PlaybackFollower` / `SpeakerClient`；迁移完成前本 ADR 的归属表仍描述现行代码。

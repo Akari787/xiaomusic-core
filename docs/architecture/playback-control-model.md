@@ -1,10 +1,12 @@
 # 播放控制模型
 
 版本：v1.1
-状态：正式架构文档
-最后更新：2026-07-28（T07）
+状态：现行（迁移中）
+最后更新：2026-11-22
 
-本文定义 xiaomusic-core 的播放队列、随机会话与上一首/下一首控制边界。
+本文描述**当前代码**的播放队列、随机会话与上一首/下一首控制边界（服务端逐首下发）。
+
+> **迁移说明**：[ADR-0007](../adr/0007-speaker-owned-queue.md) 已确定改为“音箱持有播放队列，服务端跟随”，正在分步实施。第 1、4 节的意图边界（UI 只发意图、next/previous 不重建队列、随机只洗一次）在新架构中继续有效；第 2、4、5 节中关于计时器、`_play_list_items` 和设备导航方法的内容会在对应步骤完成时改写。新增代码按 ADR-0007 的组件划分写，不要再往本文描述的逐首路径上叠加机制。
 
 ---
 
@@ -90,8 +92,8 @@ previous 同理，最终进入 `XiaoMusicDevice._play_prev(manual=True)`。
 
 ```text
 next timer 到期
-  → 有限设备状态宽限
-  → XiaoMusicDevice._play_next(manual=False)
+  → 提交 AUTO_NEXT（reason=timer_track_end）
+  → XiaoMusicDevice._play_next(manual=False, auto_advance=True)
 ```
 
 ### 禁止行为
@@ -111,11 +113,10 @@ WebUI 点击 next/previous 时不得：
 ## 5. 播放完成与失败
 
 - `get_offset_duration()` 是纯查询，不得触发切歌或创建任务。
-- 自动完成判定只在 next timer 到期路径执行。
-- 音箱仍报告 playing 或状态未知时，最多延期三次，每次三秒；第四次到期后推进下一首。
-- 音箱连续两次明确报告未播放时，可以提前推进下一首。
+- 自动完成判定只在 next timer 到期路径执行；到期后**直接**推进下一首，不再查询音箱状态（2026-11-22 起：音箱在循环单项队列时总报告 playing，查询只会推迟切歌）。
+- 自动切歌默认不先停止（`auto_next_preplay_stop=false`）；手动操作和新播放仍先停止。
+- 顺序播放到歌单末尾时停止，不回到开头；单曲播放到期即停止。
 - 后台启动确认是观察路径：confirmation 不切歌、不取消 completion timer、不创建 retry；确认异常只形成安全 observation/log。
-- 正常 completion 只有 duration timer 的 expiry gate；timer 保留 two-false 与 unknown grace 策略，确认不会替代它。
 - 失败由 `completion_policy` 决策，retry/auto-next 经过 Device arbiter，并由 `PlaybackTaskRegistry` 持有。
 - `_bump_play_session()` 不得取消当前正在执行导航的 task 自身。
 - 所有延迟回调在执行前必须校验 session ID 与 LifecycleToken，旧 session 回调直接丢弃。
@@ -175,7 +176,8 @@ xiaomusic-core 与本地播放器的关键差异是：播放设备位于远端�
 - stop 返回失败或 unknown 时，当前 play/AUTO_NEXT 不得 dispatch；普通 `_playmusic` 会捕获 stop 异常并将 runtime 置为 `FAILED` 后返回 `False`，未吞异常的 executor 路径则由 arbiter 记录 executor failure；最新 pending/after-barrier intent 按现有 generation/token 规则继续处理。
 - 若 stop RPC 永久挂死，active owner 保持 fail-closed，后续 intent 不越过它；这是已知运维风险，只能通过 transport/设备侧恢复处理，不以软超时放行。
 - 外部 URL 与本地播放共用同一 exact stop 与 stale-token fence。facade probe 只观测；failure 仍是 unknown，不执行 physical-confirm、stop recovery 或放行逻辑，probe response 也不再提供 group-stop recovery extra 字段。
-- Pause/Resume toggle 暂不重构。当前 owner 仍是 per-device；group fan-out 的 group-scoped owner 是已知后续边界，不宣称已经完成。
+- preplay stop 失败时本曲不下发，交给统一失败处理（`_handle_play_failure`）按重试/下一首策略继续；此时不以“音箱仍在播放”为由跳过重试（那只是上一首或单项队列在循环）。
+- 暂停/恢复不在产品范围内，将在 ADR-0007 第 6 步删除；在此之前不修、不扩展。
 
 ## 10. 相关文档
 

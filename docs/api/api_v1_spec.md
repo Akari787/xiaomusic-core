@@ -2,7 +2,7 @@
 
 版本：v1.4
 状态：正式契约
-最后更新：2026-07-23
+最后更新：2026-11-22
 适用范围：XiaoMusic Runtime HTTP API 与 SSE 状态流（WebUI、Home Assistant 与第三方调用）
 
 ---
@@ -330,6 +330,8 @@ Forbidden / Removed：
 
 本版本正式白名单接口共 25 个：
 
+> `control/pause` 与 `control/resume` 计划在 ADR-0007 第 6 步删除（项目不提供暂停/恢复，且 OH2P 实测无法原地恢复），届时白名单改为 23 个。删除前它们保持现状，不再扩展；新调用方不要使用。
+
 ### 5.1 播放与解析
 
 1. `POST /api/v1/play`
@@ -338,8 +340,8 @@ Forbidden / Removed：
 ### 5.2 控制
 
 3. `POST /api/v1/control/stop`
-4. `POST /api/v1/control/pause`
-5. `POST /api/v1/control/resume`
+4. `POST /api/v1/control/pause`（计划移除）
+5. `POST /api/v1/control/resume`（计划移除）
 6. `POST /api/v1/control/tts`
 7. `POST /api/v1/control/volume`
 8. `POST /api/v1/control/probe`
@@ -823,9 +825,9 @@ v1 通过两个接口暴露播放器权威状态：
 
 成功响应必须包含 `data.status=accepted`、`data.action=stop` 和 `data.transport`。这只承诺 stop 已被接受，不承诺播放器已完成物理停止；调用方须通过状态通道确认 runtime phase/`transport_state == "stopped"`。
 
-### 12.4 `POST /api/v1/control/pause`
+### 12.4 `POST /api/v1/control/pause`（计划移除）
 
-用途：暂停当前播放。
+用途：暂停当前播放。计划在 ADR-0007 第 6 步删除。
 
 最小请求体：
 
@@ -835,9 +837,9 @@ v1 通过两个接口暴露播放器权威状态：
 
 成功响应必须包含 `data.status=accepted`、`data.action=pause` 和 `data.transport`。成功响应不承诺播放器已达到 `paused` 状态，调用方须通过状态通道确认。
 
-### 12.5 `POST /api/v1/control/resume`
+### 12.5 `POST /api/v1/control/resume`（计划移除）
 
-用途：恢复当前播放。
+用途：恢复当前播放。OH2P 上实际不生效；计划在 ADR-0007 第 6 步删除。
 
 最小请求体：
 

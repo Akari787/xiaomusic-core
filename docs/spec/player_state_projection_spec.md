@@ -2,7 +2,7 @@
 
 版本：v1.0
 状态：正式规范
-最后更新：2026-03-22
+最后更新：2026-11-22
 适用范围：`GET /api/v1/player/state`、未来的 `GET /api/v1/player/stream`（SSE）、PlaybackCoordinator / PlaybackFacade、WebUI 状态消费
 
 ---
@@ -286,7 +286,7 @@
 | `starting` | 正在启动播放（首次解析、准备流、下发命令中），尚未确认设备侧开始播放 |
 | `switching` | 正在从当前曲目切换到下一曲目，过渡期间 |
 | `playing` | 设备侧已确认正在播放 |
-| `paused` | 设备侧已确认处于暂停状态 |
+| `paused` | 设备侧已确认处于暂停状态（计划随暂停/恢复一起移除，见 ADR-0007） |
 | `stopped` | 设备侧已确认停止 |
 | `error` | 播放器进入明确的异常状态，不可自动恢复 |
 

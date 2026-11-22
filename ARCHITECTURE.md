@@ -1,7 +1,7 @@
 # xiaomusic-core 架构入口
 
 > 状态：现行入口
-> 最后核对：2026-09-28
+> 最后核对：2026-11-22
 
 xiaomusic-core 是面向小米音箱的 Python 后端，负责播放编排、设备控制、认证、媒体来源解析、relay 与 WebUI 服务。
 
@@ -11,7 +11,8 @@ xiaomusic-core 是面向小米音箱的 Python 后端，负责播放编排、设
 2. 读 `docs/architecture/constraints.md`，确认现行硬约束。
 3. 涉及 API 时读 `docs/api/api_v1_spec.md`。
 4. 涉及状态、生命周期或跨层依赖时读 `docs/architecture/state-authority.md` 及对应 `docs/spec/*`。
-5. 提交前按 `docs/architecture/contributor_guide.md` 运行受影响测试和生产装配门禁。
+5. 涉及播放、设备或流地址时先读 `docs/adr/0007-speaker-owned-queue.md`（正在分步实施的播放架构），再读 `docs/architecture/playback-control-model.md`（现行逐首路径）。
+6. 提交前按 `docs/architecture/contributor_guide.md` 运行受影响测试和生产装配门禁。
 
 ## 九个一级边界
 
@@ -45,16 +46,15 @@ xiaomusic-core 是面向小米音箱的 Python 后端，负责播放编排、设
 以下区域并非永久禁改，但必须先补足调用链和针对性测试：
 
 - `auth.py` 与 `security/token_store.py`：持久认证、短会话和 runtime swap 形成事务边界。
-- `device_player.py`：运行态、队列、timer 与任务 ownership 高度耦合。
+- `device_player.py`：运行态、队列、timer 与任务 ownership 高度耦合；将按 ADR-0007 拆分。改播放行为时先在 `tests/behavior/`（FakeSpeaker 行为测试）补用例。
 - `playback/facade.py`：API、core coordinator 与状态投影的适配边界。
 - `xiaomusic/xiaomusic.py`：应用装配与多个子系统生命周期入口。
 
 ## 当前可证实的维护边界
 
-- v1 Public API 由 25 项白名单和生产装配测试约束。
+- v1 Public API 由 25 项白名单和生产装配测试约束；其中 `control/pause`、`control/resume` 计划在 ADR-0007 第 6 步删除（项目不提供暂停/恢复）。
 - `/api/v1/sources*`、`/api/v1/auth/status` 与 `/api/v1/debug/*` 仍是 v1.1.x 兼容入口；已有等价性测试，未到明确移除窗口前保留。
 - `LegacyPayloadSourcePlugin` 与 source hint 映射是兼容层，计划到 v1.2 再依据真实调用证据评估。
-- WebUI 在线播放契约已完成代码与无声测试服务器验收，设备实播仍受认证状态阻断；见 `docs/architecture/webui_playback_contract_incident_and_repair_plan.md`。
 - 旧统一事件模型、`play_id` / SSE `session_id`、snapshot 调试端点从未落地，不属于当前规则。
 
 ## 文档入口

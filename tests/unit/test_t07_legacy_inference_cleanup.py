@@ -132,7 +132,7 @@ def test_required_playback_docs_facts_exist():
         "accepted=true",
         "started=null",
         "STOPPED",
-        "two-false",
+        "timer_track_end",
         "_play_session_id",
         "_last_cmd",
     ):

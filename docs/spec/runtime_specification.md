@@ -1,7 +1,7 @@
 # Runtime 核心层技术规范
 
 > 版本：v1.1.1 Phase 1
-> 最后更新：2026-03-19
+> 最后更新：2026-11-22
 > 适用范围：`xiaomusic/core/` 下所有模块
 
 本文档定义 `xiaomusic/core/` 的数据模型、接口契约、错误体系与运行时行为约束。它是 core 层的技术规范，不是对外 API 文档（对外 API 见 `docs/api/api_v1_spec.md`）。
@@ -193,6 +193,8 @@ class Transport(ABC):
     async def set_volume(self, device_id: str, volume: int) -> dict: ...
     async def probe(self, device_id: str) -> dict: ...
 ```
+
+> 迁移说明：按 ADR-0007，与小米云的通信将收进 `SpeakerClient`，mina/miio transport 删除或改为包装它；`pause` 计划移除。
 
 ### 4.2 TransportPolicy（当前策略）
 

@@ -64,7 +64,7 @@ PlaybackFollower（新增，每设备一个）
     - 计时器只做兜底
         │
 SpeakerClient（新增，唯一调用小米云的地方）
-    - play_queue / pause_toggle / stop / set_loop / set_volume / tts / status
+    - play_queue / stop / set_loop / set_volume / tts / status
 ```
 
 `DevicePlayer`（由 `device_player.py` 拆出）只负责编排：接收命令 → 让 SpeakerQueue 生成列表 → SpeakerClient 下发 → PlaybackFollower 跟随。
@@ -76,8 +76,6 @@ SpeakerClient（新增，唯一调用小米云的地方）
 | 自动切歌 | 音箱本地完成；StreamGateway 收到请求 → TrackFetched → Follower 更新 | 否 |
 | 点播一首 / 换歌单 | 生成新列表，从目标曲开始下发（`startaudioid`） | 1 次 |
 | 手动下一首 / 上一首 / 跳到某首 | 重发当前列表，`startaudioid` 指向目标曲 | 1 次 |
-| 暂停 | `player_pause`（media=app_ios） | 1 次 |
-| 恢复 | 无法原地恢复（见实验结论）；以当前曲为起点重发窗口，**当前曲从头播放**（待确认，见待确认问题 1） | 1 次 |
 | 停止 | `player_stop` | 1 次 |
 | 改播放模式 | 不打断当前曲：只改 `loop_type`（一次云端调用）；需要重新排序时（切换随机），在下一次 TrackFetched 时以当前曲为起点重发 | 1–2 次 |
 | 歌单内容同步更新 | 标记队列过期，在下一次续接窗口或用户操作时生效 | 0–1 次 |
@@ -135,6 +133,16 @@ SpeakerClient（新增，唯一调用小米云的地方）
 | 当前曲目与开始时间 | `PlaybackFollower` | 由 TrackFetched 驱动，取代计时器推测与 `cur_music` 多处写入 |
 | 与小米云的通信 | `SpeakerClient` | 取代 `device_player` 中分散的 `mina_call`；mina/miio 两个空壳 transport 删除或改为包装它 |
 
+### 不提供暂停 / 恢复
+
+项目从未规划暂停功能（2026-11-22 Akari 确认），而且实测音箱无法原地恢复、也无法跳转。因此：
+
+- 删除 `/api/v1/control/pause`、`/api/v1/control/resume`（v1 白名单 25 → 23）、WebUI 中未被页面使用的 `pause()` / `resume()`、`PlaybackPhase.PAUSED` 及相关的 arbiter 意图、transport 方法和测试。
+- 语音“暂停”维持现状，按停止处理（`keywords_stop`）。
+- 用户在音箱上手动暂停时，`status` 仍为 1，服务端看不出来；兜底计时器到点后若没有新的 TrackFetched，按“跟随丢失”处理。
+
+在第 6 步删除前，现有暂停/恢复代码保持原样，不修、不扩展。
+
 ### 不支持队列的硬件
 
 `play_by_url` 路径（不使用 `player_play_music` 的型号）只能逐首下发。保留现在的逐首模式作为后备，按硬件能力选择；StreamGateway 和 Follower 两种模式共用。
@@ -148,16 +156,15 @@ SpeakerClient（新增，唯一调用小米云的地方）
 3. **SpeakerQueue + 队列下发**：按播放模式生成列表和 `loop_type`，自动切歌交给音箱；保留计时器但只做兜底。验收：各播放模式实机连续播放，不再出现重放开头。
 4. **PlaybackFollower**：当前曲目改由 TrackFetched 驱动；删除逐首计时切歌、开播确认轮询，以及外部链接路径的那一套独立状态。
 5. **合并入口**：API（外部链接）和本地歌单都走“生成队列 → 下发 → 跟随”这一条路径；`site_media` 的中转移入 StreamGateway。
-6. **拆分与清理**：`device_player.py` 拆成 DevicePlayer / SpeakerQueue / PlaybackFollower；把 sid / LifecycleToken / 手动切歌代际 / barrier 收敛为每个队列的版本号；用行为测试替换绑定内部实现的单元测试。
+6. **拆分与清理**：`device_player.py` 拆成 DevicePlayer / SpeakerQueue / PlaybackFollower；把 sid / LifecycleToken / 手动切歌代际 / barrier 收敛为每个队列的版本号；删除暂停/恢复（见“不提供暂停 / 恢复”）；用行为测试替换绑定内部实现的单元测试。
 
 ## 待确认问题
 
-1. **恢复的行为**：已实测现有恢复在 OH2P 上从未生效（先查状态，暂停期间 `status` 仍为 1 → 直接跳过，什么都不发）；而且没有任何已知命令能原地恢复或跳转。可行做法只有重发当前曲（从头播放）。需要确认是否接受“恢复 = 当前曲从头播放”，还是继续寻找其他通道（例如 MIoT 局域网的 Play 动作，需要设备 token）。
-2. `loop_type=3` 的实际顺序（只用两首测过）。
-3. 同一分组多台音箱：每台独立队列，地址里的 `did` 用于区分；是否需要同步起播待定。
-4. 网站来源在拉流时才解析（约 3.5 s），会增加这一首的起播延迟；可以在前一首开始后预解析下一首，再按需要加入。
-5. 窗口大小 N 的取值：越大续接越少，但每次手动操作的下发越慢（181 项约 3.7 s，3 项约 0.7 s）。先取 20，按实测调整。
-6. 静音哨兵的实现：已用 60 s 静态静音文件验证可行；是否改为 StreamGateway 按需生成更长的静音流（应对超过 60 s 的云端卡顿），在实现时决定。
+1. `loop_type=3` 的实际顺序（只用两首测过）。
+2. 同一分组多台音箱：每台独立队列，地址里的 `did` 用于区分；是否需要同步起播待定。
+3. 网站来源在拉流时才解析（约 3.5 s），会增加这一首的起播延迟；可以在前一首开始后预解析下一首，再按需要加入。
+4. 窗口大小 N 的取值：越大续接越少，但每次手动操作的下发越慢（181 项约 3.7 s，3 项约 0.7 s）。先取 20，按实测调整。
+5. 静音哨兵的实现：已用 60 s 静态静音文件验证可行；是否改为 StreamGateway 按需生成更长的静音流（应对超过 60 s 的云端卡顿），在实现时决定。
 
 ## 后果
 

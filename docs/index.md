@@ -41,7 +41,7 @@ features:
 
 | 文档 | 说明 |
 |---|---|
-| [ARCHITECTURE.md](https://github.com/Akari787/xiaomusic-core/blob/main/ARCHITECTURE.md) | AI 开工协议：5 步开工流程、九大边界、约束清单 |
+| [ARCHITECTURE.md](https://github.com/Akari787/xiaomusic-core/blob/main/ARCHITECTURE.md) | AI 开工协议：开工顺序、九大边界、约束清单 |
 | [Architecture 文档地图](architecture/README) | 架构文档索引 |
 | [Spec 文档地图](spec/README) | 规范文档索引（规范 > 架构） |
 | [API v1 规范](api/api_v1_spec) | v1 接口契约、白名单、错误模型 |
@@ -51,7 +51,7 @@ features:
 | 专题 | 入口文档 |
 |---|---|
 | auth 认证恢复 | [spec/auth/ 入口](spec/auth/README) |
-| playback 播放编排 | [spec/playback/ 入口](spec/playback/README) |
+| playback 播放编排 | [ADR-0007 音箱持有播放队列](adr/0007-speaker-owned-queue)（实施中）、[spec/playback/ 入口](spec/playback/README) |
 | WebUI playlist 状态 | [架构：webui_playlist_state](architecture/webui_playlist_state) |
 | 播放状态快照 | [spec：player_state_projection_spec](spec/player_state_projection_spec) |
 | SSE 推送协议 | [spec：player_stream_sse_spec](spec/player_stream_sse_spec) |

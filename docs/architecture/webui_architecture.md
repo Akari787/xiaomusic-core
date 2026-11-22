@@ -2,7 +2,7 @@
 
 版本：v1.0
 状态：正式架构文档
-最后更新：2026-03-28
+最后更新：2026-11-22
 
 本文档定义 WebUI 与后端的接口依赖边界、状态来源模型与禁止依赖范围。具体状态字段语义见 `docs/spec/player_state_projection_spec.md`，SSE 协议见 `docs/spec/player_stream_sse_spec.md`，API 契约见 `docs/api/api_v1_spec.md`。
 
@@ -27,7 +27,7 @@ WebUI 当前使用的 Public API：
 - `POST /api/v1/system/settings`
 - `POST /api/v1/system/settings/item`
 - `POST /api/v1/play`
-- `POST /api/v1/control/*`（stop、pause、resume、next、previous 等）
+- `POST /api/v1/control/*`（stop、next、previous、volume 等；页面不使用 pause / resume，二者计划移除）
 - `GET /api/v1/search/online`（仅使用服务端生成的 opaque `play_reference` 播放；不得以标题或搜索词回退）
 
 ### 1.2 Internal API（`/api/auth/*`、`/api/file/*`）
