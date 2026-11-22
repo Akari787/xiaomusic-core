@@ -36,7 +36,7 @@
 | [constraints.md](constraints.md) | 当前可由代码和测试执行的系统约束 |
 | [auth_runtime_recovery.md](auth_runtime_recovery.md) | 认证运行时恢复架构 |
 
-正在实施的播放架构见 [ADR-0007 音箱持有播放队列](../adr/0007-speaker-owned-queue.md)。已完成工作的过程记录放在 [`../maintenance/`](../maintenance/)，不作为现行规则。
+正在实施的播放架构见 [ADR-0007 音箱持有播放队列](../adr/0007-speaker-owned-queue.md)。已完成工作的过程记录放在 `docs/maintenance/`（例如 [WebUI 播放契约故障记录](../maintenance/2026-09-23-webui-playback-contract-incident.md)），不作为现行规则。
 
 ## 相关入口
 
