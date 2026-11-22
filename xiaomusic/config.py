@@ -248,11 +248,13 @@ class Config:
         os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_INTERVAL_MS", "300")
     )
     # Send player_stop before dispatching the next track on timer-driven
-    # auto-advance. play_by_music_url already replaces the speaker queue, so
-    # the stop only adds a cloud round trip (1-2 s measured), during which the
-    # speaker audibly restarts the finished track. Manual commands always stop.
+    # auto-advance. Off by default: play_by_music_url already replaces the
+    # speaker queue, and the stop is a cloud round trip measured at 1-5 s and
+    # up to 31 s on the OH2P, during which the speaker audibly restarts the
+    # finished track. Manual commands and retries always stop first. Turn this
+    # back on only for hardware that will not switch without a stop.
     auto_next_preplay_stop: bool = (
-        os.getenv("XIAOMUSIC_AUTO_NEXT_PREPLAY_STOP", "true").lower() == "true"
+        os.getenv("XIAOMUSIC_AUTO_NEXT_PREPLAY_STOP", "false").lower() == "true"
     )
     # 目录监控配置
     enable_file_watch: bool = (
