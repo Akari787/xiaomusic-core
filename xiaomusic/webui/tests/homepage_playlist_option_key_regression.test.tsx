@@ -64,7 +64,6 @@ vi.mock("../src/services/v1Api", () => ({
   saveSystemSettings: vi.fn(),
   setPlayMode: vi.fn(),
   setShutdownTimer: vi.fn(),
-  tts: vi.fn(),
   updateSystemSettingItem: vi.fn(),
   setVolume: vi.fn(),
   stop: vi.fn(),

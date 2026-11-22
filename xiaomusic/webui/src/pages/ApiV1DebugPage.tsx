@@ -15,7 +15,6 @@ import {
   resume,
   setVolume,
   stop,
-  tts,
   type ApiEnvelope,
   type ControlData,
   type DeviceRow,
@@ -40,7 +39,6 @@ export function ApiV1DebugPage() {
 
   const [query, setQuery] = useState("");
   const [sourceHint, setSourceHint] = useState<SourceHint>("auto");
-  const [ttsText, setTtsText] = useState("XiaoMusic API v1 测试");
   const [volume, setVolumeValue] = useState(30);
 
   const [resolveResult, setResolveResult] = useState<ApiEnvelope<ResolveData> | null>(null);
@@ -112,15 +110,7 @@ export function ApiV1DebugPage() {
     setMessage(detailsText(`控制-${action}`, out));
   }
 
-  async function runTts() {
-    if (!activeDeviceId) {
-      setMessage("请先选择设备");
-      return;
-    }
-    const out = await tts(activeDeviceId, ttsText);
-    setControlResult(out);
-    setMessage(detailsText("TTS", out));
-  }
+
 
   async function runSetVolume() {
     if (!activeDeviceId) {
@@ -228,19 +218,6 @@ export function ApiV1DebugPage() {
         </div>
 
         <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
-          <div>
-            <label htmlFor="tts-input">TTS 文本：</label>
-            <input
-              id="tts-input"
-              data-testid="tts-input"
-              value={ttsText}
-              onChange={(e) => setTtsText(e.target.value)}
-              style={{ marginLeft: 8, minWidth: 320 }}
-            />
-            <button data-testid="tts-button" style={{ marginLeft: 8 }} onClick={() => void runTts()}>
-              tts
-            </button>
-          </div>
           <div>
             <label htmlFor="volume-input">音量：</label>
             <input

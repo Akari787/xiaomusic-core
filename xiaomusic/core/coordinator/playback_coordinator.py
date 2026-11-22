@@ -152,9 +152,6 @@ class PlaybackCoordinator:
     async def resume(self, device_id: str) -> dict:
         return await self._dispatch_action("resume", device_id)
 
-    async def tts(self, device_id: str, text: str) -> dict:
-        return await self._dispatch_action("tts", device_id, text=text)
-
     async def set_volume(self, device_id: str, volume: int) -> dict:
         return await self._dispatch_action("volume", device_id, volume=volume)
 
@@ -171,7 +168,6 @@ class PlaybackCoordinator:
         self,
         action: str,
         device_id: str,
-        text: str | None = None,
         volume: int | None = None,
         transport_action: str | None = None,
     ) -> dict:
@@ -190,7 +186,6 @@ class PlaybackCoordinator:
                 device_id=device_id,
                 profile=profile,
                 capability_matrix=capability,
-                text=text,
                 volume=volume,
             )
         except Exception as exc:

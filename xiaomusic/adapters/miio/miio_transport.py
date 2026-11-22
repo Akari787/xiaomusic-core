@@ -15,7 +15,7 @@ class MiioTransport(Transport):
     """Miio transport adapter.
 
     Phase 3 strategy:
-    - stop/pause/tts/set_volume/probe: direct device-path compatibility adapter
+    - stop/pause/set_volume/probe: direct device-path compatibility adapter
     - play_url: explicitly unsupported as official play transport
     """
 
@@ -129,24 +129,6 @@ class MiioTransport(Transport):
             return {"ret": "OK"}
         except Exception:
             LOG.warning("transport_action action=resume success=false device_id=%s", device_id)
-            raise
-
-    async def tts(self, device_id: str, text: str) -> dict[str, Any]:
-        start = time.perf_counter()
-        try:
-            ret = await self._xiaomusic.do_tts(device_id, text)
-            LOG.info(
-                "transport_action action=tts success=true latency_ms=%d device_id=%s",
-                int((time.perf_counter() - start) * 1000),
-                device_id,
-            )
-            return {"ret": ret}
-        except Exception:
-            LOG.warning(
-                "transport_action action=tts success=false latency_ms=%d device_id=%s",
-                int((time.perf_counter() - start) * 1000),
-                device_id,
-            )
             raise
 
     async def set_volume(self, device_id: str, volume: int) -> dict[str, Any]:

@@ -93,7 +93,6 @@ def _build_coordinator(
             next=["mina"],
             stop=["mina"],
             pause=["mina"],
-            tts=["mina"],
             volume=["mina"],
             probe=["mina"],
         ),

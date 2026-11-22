@@ -1,8 +1,10 @@
 """SpeakerClient: the only place that sends commands to the Xiaomi cloud
 (ADR-0007 step 2).
 
-Every speaker command goes through ``AuthManager.mina_call`` / ``miio_call``
-(auth retry and recovery live there). This class names the commands the
+Every speaker command goes through ``AuthManager.mina_call`` (auth retry and
+recovery live there). Only the MiNA service is used: MiIO needs a second
+service ticket ("xiaomiio") that this fork never obtains, and upstream got it
+through silent background logins. This class names the commands the
 project actually uses, so callers no longer pass raw MiNA method names
 around and the cloud surface is visible in one file.
 
@@ -14,8 +16,6 @@ from __future__ import annotations
 
 import json
 from typing import Any
-
-from miservice import miio_command
 
 
 class SpeakerClient:
@@ -59,19 +59,6 @@ class SpeakerClient:
         Raises on malformed responses, like the callers did before.
         """
         return json.loads(raw.get("data", {}).get("info", "{}"))
-
-    # ── speech ──────────────────────────────────────────────────────────
-
-    async def tts(self, device_id: str, text: str, *, ctx: str = "text_to_speech"):
-        return await self._mina("text_to_speech", device_id, text, ctx=ctx)
-
-    async def miio_command(self, did: str, command: str, *, ctx: str):
-        """Raw MiIO command (used for TTS on hardware that needs it)."""
-        return await self._auth.miio_call(
-            lambda: miio_command(self._auth.miio_service, did, command),
-            retry=1,
-            ctx=ctx,
-        )
 
     # ── low level ───────────────────────────────────────────────────────
 

@@ -52,7 +52,7 @@ xiaomusic-core 是面向小米音箱的 Python 后端，负责播放编排、设
 
 ## 当前可证实的维护边界
 
-- v1 Public API 由 25 项白名单和生产装配测试约束；其中 `control/pause`、`control/resume` 计划在 ADR-0007 第 6 步删除（项目不提供暂停/恢复）。
+- v1 Public API 由 24 项白名单和生产装配测试约束；其中 `control/pause`、`control/resume` 计划在 ADR-0007 第 6 步删除（项目不提供暂停/恢复）。
 - `/api/v1/sources*`、`/api/v1/auth/status` 与 `/api/v1/debug/*` 仍是 v1.1.x 兼容入口；已有等价性测试，未到明确移除窗口前保留。
 - `LegacyPayloadSourcePlugin` 与 source hint 映射是兼容层，计划到 v1.2 再依据真实调用证据评估。
 - 旧统一事件模型、`play_id` / SSE `session_id`、snapshot 调试端点从未落地，不属于当前规则。

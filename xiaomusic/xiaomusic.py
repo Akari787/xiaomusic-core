@@ -490,7 +490,7 @@ class XiaoMusic:
         list_name = self._find_real_music_list_name(list_name)
         # 检查音乐列表是否存在，如果不存在则进行语音提示并返回
         if list_name not in self.music_library.music_list:
-            await self.do_tts(did, f"播放列表{list_name}不存在")
+            self.log.info("播放列表 %s 不存在", list_name)
             return False
 
         # 调用设备播放音乐列表的方法
@@ -764,6 +764,3 @@ class XiaoMusic:
     # 此接口用于插件中获取当前设备
     def get_cur_did(self):
         return self.auth_manager._cur_did
-
-    async def do_tts(self, did, value):
-        return await self.device_manager.devices[did].do_tts(value)

@@ -49,7 +49,6 @@ class TransportRouter:
         profile: DeviceProfile,
         capability_matrix: TransportCapabilityMatrix,
         prepared: PreparedStream | None = None,
-        text: str | None = None,
         volume: int | None = None,
         request_context: dict[str, Any] | None = None,
     ) -> TransportDispatchResult:
@@ -76,7 +75,6 @@ class TransportRouter:
                     action=action,
                     device_id=device_id,
                     prepared=prepared,
-                    text=text,
                     volume=volume,
                     request_context=request_context,
                 )
@@ -127,7 +125,6 @@ class TransportRouter:
         action: str,
         device_id: str,
         prepared: PreparedStream | None,
-        text: str | None,
         volume: int | None,
         request_context: dict[str, Any] | None,
     ) -> dict[str, Any]:
@@ -145,10 +142,6 @@ class TransportRouter:
             return await transport.pause(device_id)
         if action == "resume":
             return await transport.resume(device_id)
-        if action == "tts":
-            if text is None:
-                raise TransportError("text is required for tts")
-            return await transport.tts(device_id, text)
         if action == "volume":
             if volume is None:
                 raise TransportError("volume is required for set_volume")

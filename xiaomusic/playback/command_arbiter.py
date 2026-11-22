@@ -8,7 +8,7 @@ supported.  All internal state transitions happen on the submitting thread /
 event loop; no locks are needed.
 
 **Barrier semantics**: STOP and PAUSE are barrier kinds. When a barrier is
-pending or active, new regular intents (PLAY/NEXT/PREVIOUS/AUTO_NEXT/RESUME/REPLAY/
+pending or active, new regular intents (PLAY/NEXT/PREVIOUS/AUTO_NEXT/RESUME/
 RETRY) cannot replace it; they are buffered in an ``_after_barrier`` slot
 (latest-wins).  A new barrier always replaces any prior pending barrier and
 clears the after-barrier slot.  After a barrier completes, the worker
@@ -34,7 +34,6 @@ class IntentKind(str, Enum):
     STOP = "stop"
     PAUSE = "pause"
     RESUME = "resume"
-    REPLAY = "replay"
     RETRY = "retry"
 
 

@@ -39,10 +39,6 @@ class Transport(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def tts(self, device_id: str, text: str) -> dict[str, Any]:
-        raise NotImplementedError
-
-    @abstractmethod
     async def set_volume(self, device_id: str, volume: int) -> dict[str, Any]:
         raise NotImplementedError
 

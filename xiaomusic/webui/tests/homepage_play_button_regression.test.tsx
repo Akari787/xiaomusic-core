@@ -26,7 +26,6 @@ const mockedV1 = vi.hoisted(() => ({
   saveSystemSettings: vi.fn(),
   setPlayMode: vi.fn(),
   setShutdownTimer: vi.fn(),
-  tts: vi.fn(),
   updateSystemSettingItem: vi.fn(),
   setVolume: vi.fn(),
   stop: vi.fn(),
@@ -94,7 +93,6 @@ vi.mock("../src/services/v1Api", () => ({
   saveSystemSettings: mockedV1.saveSystemSettings,
   setPlayMode: mockedV1.setPlayMode,
   setShutdownTimer: mockedV1.setShutdownTimer,
-  tts: mockedV1.tts,
   updateSystemSettingItem: mockedV1.updateSystemSettingItem,
   setVolume: mockedV1.setVolume,
   stop: mockedV1.stop,
@@ -175,7 +173,6 @@ describe("HomePage play button regression", () => {
     mockedV1.getPlayerState.mockReset();
     mockedV1.libraryRefresh.mockReset();
     mockedV1.saveSystemSettings.mockReset();
-    mockedV1.tts.mockReset();
     mockedV1.updateSystemSettingItem.mockReset();
     mockedV1.setVolume.mockReset();
     mockedV1.stop.mockReset();
@@ -288,7 +285,6 @@ describe("HomePage play button regression", () => {
     });
     mockedV1.libraryRefresh.mockResolvedValue({ code: 0, message: "ok", data: { status: "ok", refreshed: true }, request_id: "rid-refresh" });
     mockedV1.saveSystemSettings.mockResolvedValue({ code: 0, message: "ok", data: { status: "ok", saved: true }, request_id: "rid-save-settings" });
-    mockedV1.tts.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-tts" });
     mockedV1.updateSystemSettingItem.mockResolvedValue({ code: 0, message: "ok", data: { status: "ok", updated: true, key: "enable_pull_ask" }, request_id: "rid-update-setting" });
     mockedV1.setVolume.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-vol" });
     mockedV1.stop.mockResolvedValue({ code: 0, message: "ok", data: {}, request_id: "rid-stop" });

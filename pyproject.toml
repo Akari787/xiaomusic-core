@@ -21,7 +21,6 @@ dependencies = [
     "pyjwt>=2.10.1",
     "fake-useragent>=2.2.0",
     "miservice-fork",
-    "edge-tts>=7.2.3",
     "psutil>=5.9.0",
     "pycryptodome>=3.23.0",
     "qrcode>=8.2",

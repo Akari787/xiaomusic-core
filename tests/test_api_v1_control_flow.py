@@ -4,7 +4,6 @@ import pytest
 
 from xiaomusic.api.models import (
     ControlRequest,
-    TtsRequest,
     VolumeRequest,
 )
 from xiaomusic.api.routers import v1
@@ -15,7 +14,6 @@ async def test_api_v1_all_controls_call_facade(monkeypatch):
     called = {
         "pause": False,
         "resume": False,
-        "tts": False,
         "stop": False,
         "volume": False,
         "probe": False,
@@ -31,13 +29,6 @@ async def test_api_v1_all_controls_call_facade(monkeypatch):
             _ = request_id
             called["resume"] = True
             return {"status": "accepted", "action": "resume", "device_id": device_id, "transport": "miio", "request_id": "r00", "extra": {}}
-
-        async def tts(self, device_id: str, text: str, request_id: str | None = None):
-            _ = request_id
-            assert device_id == "did-1"
-            assert text
-            called["tts"] = True
-            return {"status": "ok", "device_id": device_id, "transport": "miio", "request_id": "r1", "extra": {}}
 
         async def stop(self, device_id: str, request_id: str | None = None):
             _ = request_id
@@ -75,7 +66,6 @@ async def test_api_v1_all_controls_call_facade(monkeypatch):
 
     pause_out = await v1.api_v1_control_pause(ControlRequest(device_id="did-1"))
     resume_out = await v1.api_v1_control_resume(ControlRequest(device_id="did-1"))
-    tts_out = await v1.api_v1_control_tts(TtsRequest(device_id="did-1", text="hello"))
     stop_out = await v1.api_v1_control_stop(ControlRequest(device_id="did-1"))
     volume_out = await v1.api_v1_control_volume(VolumeRequest(device_id="did-1", volume=40))
     probe_out = await v1.api_v1_control_probe(ControlRequest(device_id="did-1"))
@@ -92,7 +82,6 @@ async def test_api_v1_all_controls_call_facade(monkeypatch):
     assert resume_out["data"]["device_id"] == "did-1"
     assert resume_out["data"]["transport"] == "miio"
     assert resume_out["request_id"]
-    assert tts_out["code"] == 0
     assert stop_out["code"] == 0
     assert stop_out["data"]["status"] == "accepted"
     assert stop_out["data"]["action"] == "stop"

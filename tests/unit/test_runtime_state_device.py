@@ -771,8 +771,7 @@ def test_start_queue_session_called_only_in_on_external_url_play():
 
 def test_accept_command_called_only_in_allowed_funcs():
     """AST: _accept_command calls in on_external_url_play, _queue_manual_navigation,
-    stop, pause, _play_next, play, playlocal, _play_internal, submit_external_url_play,
-    check_replay.
+    stop, pause, _play_next, play, playlocal, _play_internal, submit_external_url_play.
     submit_external_url_play may have 2 call sites (new-command branches).
     T04-C2b/C2c/C3b1 constraint."""
     _check_calls("_accept_command", {
@@ -787,7 +786,6 @@ def test_accept_command_called_only_in_allowed_funcs():
         "_play_internal",
         "_submit_auto_retry",
         "submit_external_url_play",
-        "check_replay",
     })
 
 

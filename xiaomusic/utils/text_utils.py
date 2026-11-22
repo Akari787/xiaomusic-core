@@ -3,16 +3,11 @@
 
 import difflib
 import re
-from collections.abc import AsyncIterator
 
 from opencc import OpenCC
 
 # 繁简转换器
 cc = OpenCC("t2s")
-
-# TTS 相关正则
-_no_elapse_chars = re.compile(r"([「」『』《》" "'\"()（）]|(?<!-)-(?!-))", re.UNICODE)
-_ending_punctuations = ("。", "？", "！", "；", ".", "?", "!", ";")
 
 # 中文数字映射
 chinese_to_arabic = {
@@ -32,34 +27,6 @@ chinese_to_arabic = {
     "万": 10000,
     "亿": 100000000,
 }
-
-
-def calculate_tts_elapse(text: str) -> float:
-    """计算 TTS 语音时长"""
-    # for simplicity, we use a fixed speed
-    speed = 4.5  # this value is picked by trial and error
-    # Exclude quotes and brackets that do not affect the total elapsed time
-    return len(_no_elapse_chars.sub("", text)) / speed
-
-
-async def split_sentences(text_stream: AsyncIterator[str]) -> AsyncIterator[str]:
-    """分句处理，按标点符号分割"""
-    cur = ""
-    async for text in text_stream:
-        cur += text
-        if cur.endswith(_ending_punctuations):
-            yield cur
-            cur = ""
-    if cur:
-        yield cur
-
-
-def find_key_by_partial_string(dictionary: dict[str, str], partial_key: str) -> str:
-    """通过部分字符串查找字典中的键"""
-    for key, value in dictionary.items():
-        if key in partial_key:
-            return value
-    return None
 
 
 def traditional_to_simple(to_convert: str) -> str:

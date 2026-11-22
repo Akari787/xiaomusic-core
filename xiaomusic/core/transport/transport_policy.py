@@ -9,7 +9,6 @@ class TransportPolicy:
             "play": ["mina"],
             "previous": ["miio", "mina"],
             "next": ["miio", "mina"],
-            "tts": ["miio", "mina"],
             "volume": ["miio", "mina"],
             "stop": ["miio", "mina"],
             "pause": ["miio", "mina"],

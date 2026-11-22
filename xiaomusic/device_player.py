@@ -1,6 +1,6 @@
 """设备播放控制模块
 
-负责单个设备的播放控制、下载管理、TTS处理等功能。
+负责单个设备的播放控制、下载管理等功能。
 """
 
 import asyncio
@@ -23,7 +23,6 @@ from xiaomusic.const import (
     PLAY_TYPE_RND,
     PLAY_TYPE_SEQ,
     PLAY_TYPE_SIN,
-    TTS_COMMAND,
 )
 from xiaomusic.download_result import DownloadResult
 from xiaomusic.events import DEVICE_CONFIG_CHANGED, PLAYER_STATE_CHANGED
@@ -82,7 +81,6 @@ class XiaoMusicDevice:
     - 播放控制（播放、暂停、上一首、下一首）
     - 播放列表管理
     - 下载管理
-    - TTS（文字转语音）
     - 定时器管理
     - 设备状态管理
     """
@@ -243,14 +241,6 @@ class XiaoMusicDevice:
     @_failure_retry_task.setter
     def _failure_retry_task(self, task):
         self._set_task_compat(TaskKind.FAILURE_RETRY, task)
-
-    @property
-    def _tts_timer(self):
-        return self._task_ref(TaskKind.TTS_TIMER)
-
-    @_tts_timer.setter
-    def _tts_timer(self, task):
-        self._set_task_compat(TaskKind.TTS_TIMER, task)
 
     @property
     def _add_song_timer(self):
@@ -995,12 +985,12 @@ class XiaoMusicDevice:
         # 根据 allow_download 参数决定行为
         if not allow_download:
             # playlocal 的行为：不下载，直接提示
-            await self.do_tts(f"本地不存在歌曲{name}")
+            self.log.info("本地不存在歌曲 %s", name)
             return False
 
         # _play 的行为：检查配置决定是否下载
         if self.config.disable_download:
-            await self.do_tts(f"本地不存在歌曲{name}")
+            self.log.info("本地不存在歌曲 %s，下载已关闭", name)
             return False
 
         # 下载歌曲
@@ -1241,7 +1231,6 @@ class XiaoMusicDevice:
         - PAUSE → _execute_pause_intent
         - PLAY  → _execute_play_intent
         - RESUME → paused-session toggle/resume
-        - REPLAY → legacy check_replay replay
         - NEXT / PREVIOUS → manual navigation dispatch
 
         Exceptions propagate to arbiter.last_error; no fake completion.
@@ -1265,9 +1254,6 @@ class XiaoMusicDevice:
             return
         if intent.kind == IntentKind.RESUME:
             await self._execute_resume_intent(intent)
-            return
-        if intent.kind == IntentKind.REPLAY:
-            await self._execute_replay_intent(intent)
             return
         if intent.kind not in (IntentKind.NEXT, IntentKind.PREVIOUS):
             return
@@ -1776,22 +1762,6 @@ class XiaoMusicDevice:
             )
             await self._play_next(command_already_accepted=True)
 
-    async def _execute_replay_intent(self, intent) -> None:
-        """Execute legacy check_replay by replaying the current track."""
-        payload = intent.payload or {}
-        sid = payload.get("sid")
-        accepted_token = payload.get("accepted_token")
-        if sid != self._play_session_id or accepted_token is None:
-            return
-        current = self.get_runtime_state()
-        if (
-            current.queue_session_id != accepted_token.queue_session_id
-            or current.command_generation != accepted_token.command_generation
-            or current.track_attempt_id != accepted_token.track_attempt_id
-        ):
-            return
-        await self._play(command_already_accepted=True)
-
     async def _execute_resume_intent(self, intent) -> None:
         """Execute RESUME through the device pause toggle, never by replaying.
 
@@ -2072,7 +2042,7 @@ class XiaoMusicDevice:
             name = self.get_prev_music()
         self.log.info(f"_play_prev. name:{name}, cur_music:{self.get_cur_music()}")
         if name == "":
-            await self.do_tts("本地没有歌曲")
+            self.log.info("本地没有歌曲")
             return False
         self._stage_playlist_navigation_transition(name, reason="play_prev")
         return await self._play(
@@ -2211,8 +2181,7 @@ class XiaoMusicDevice:
         self._play_session_id += 1
         registry = self._ensure_playback_tasks()
         # Attempt-scoped: tied to individual track lifecycle.
-        # Session-scoped: TTS timer (stops audio on session change) and
-        # add-song work are invalidated by a new session.
+        # Session-scoped: add-song work is invalidated by a new session.
         # STOP_TIMER (global) intentionally excluded — must survive bumps.
         registry.cancel_by_kinds(*ATTEMPT_SCOPED_KINDS, *SESSION_SCOPED_KINDS)
         self._timer_expiry_false_count = 0
@@ -3357,22 +3326,6 @@ class XiaoMusicDevice:
         self._log_measure("after_confirm_playback_started")
         return result
 
-    async def do_tts(self, value):
-        """执行TTS（文字转语音）"""
-        self.log.info(f"try do_tts value:{value}")
-        if not value:
-            self.log.info("do_tts no value")
-            return
-
-        # await self.group_force_stop_xiaoai()
-        await self.text_to_speech(value)
-
-        # 最大等8秒
-        sec = min(8, int(len(value) / 3))
-        await asyncio.sleep(sec)
-        self.log.info(f"do_tts ok. cur_music:{self.get_cur_music()}")
-        await self.check_replay()
-
     async def pause_xiaoai(self, device_id):
         if not await self.get_if_xiaoai_is_playing(device_id):
             return True
@@ -3454,10 +3407,6 @@ class XiaoMusicDevice:
         ):
             msg = "出站网络未允许，已禁止下载（请配置 outbound_allowlist_domains）"
             self.log.warning(msg)
-            try:
-                await self.do_tts(msg)
-            except Exception:
-                pass
             res = DownloadResult(
                 success=False,
                 reason="outbound not allowlisted",
@@ -3507,7 +3456,6 @@ class XiaoMusicDevice:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await self.do_tts(f"正在下载歌曲{search_key}")
         self.log.info(f"正在下载中 {search_key} {name}")
         stdout, stderr = await self._download_proc.communicate()
         elapsed_ms = int((time.time() - start) * 1000)
@@ -3528,51 +3476,6 @@ class XiaoMusicDevice:
             elapsed_ms=elapsed_ms,
         )
         self.xiaomusic.last_download_result = asdict(res)
-
-    async def check_replay(self):
-        """Check and replay interrupted playback via DeviceCommandArbiter REPLAY.
-
-        Condition semantic:
-        - is_playing=False or isdownloading()→ return False, zero arbiter/lifecycle write
-        - Need replay: submit REPLAY (C3a pattern: expected accepted token, sid in payload),
-          then accept command synchronously (c+1), return True.
-
-        Does NOT await physical.  Executor resolves sid+token strict current
-        before calling ``_play(command_already_accepted=True)``.
-        """
-        if not self.is_playing or self.isdownloading():
-            self.log.info(
-                "check_replay_skip isplaying=%s isdownloading=%s",
-                self.is_playing,
-                self.isdownloading(),
-            )
-            return False
-
-        # ── Need replay: construct expected accepted token (C3a pattern) ──
-        current = self.get_runtime_state()
-        expected_accepted_token = LifecycleToken(
-            queue_session_id=current.queue_session_id,
-            command_generation=current.command_generation + 1,
-            track_attempt_id=current.track_attempt_id,
-        )
-
-        from xiaomusic.playback.command_arbiter import ArbiterClosedError, IntentKind
-
-        arbiter = self._get_or_create_arbiter()
-        try:
-            arbiter.submit(IntentKind.REPLAY, payload={
-                "sid": self._play_session_id,
-                "accepted_token": expected_accepted_token,
-            })
-        except ArbiterClosedError:
-            self.log.info("check_replay_arbiter_closed")
-            return False
-
-        # ── Only on successful submit: accept command (bump c by +1) ──
-        self._accept_command(updated_at=time.time())
-
-        self.log.info("check_replay_replay_submitted")
-        return True
 
     async def add_download_music(self, name):
         """把下载的音乐加入播放列表"""
@@ -3717,85 +3620,6 @@ class XiaoMusicDevice:
                 self.log.info(f"当前播放的歌曲 {self.get_cur_music()} 不存在了")
                 return True
         return False
-
-    async def text_to_speech(self, value):
-        """文字转语音"""
-        try:
-            # 检查是否配置了 edge-tts 语音角色
-            if self.config.edge_tts_voice:
-                await self._text_to_speech_edge_tts(value)
-            else:
-                # 使用原有的 TTS 逻辑
-                # 有 tts command 优先使用 tts command 说话
-                if self.hardware in TTS_COMMAND:
-                    tts_cmd = TTS_COMMAND[self.hardware]
-                    self.log.info("Call MiIOService tts.")
-                    value = value.replace(" ", ",")  # 不能有空格
-                    await self.speaker.miio_command(
-                        self.did, f"{tts_cmd} {value}", ctx="text_to_speech_miio"
-                    )
-                else:
-                    self.log.debug("Call MiNAService tts.")
-                    await self.speaker.tts(self.device_id, value)
-        except Exception as e:
-            self.log.exception(f"Execption {e}")
-
-    async def _text_to_speech_edge_tts(self, value):
-        """使用 edge-tts 进行文字转语音"""
-        from xiaomusic.utils.music_utils import get_local_music_duration
-        from xiaomusic.utils.network_utils import text_to_mp3
-
-        self.log.info(f"_text_to_speech_edge_tts {value}")
-        try:
-            # 取消之前的 TTS 定时器
-            if self._ensure_playback_tasks().cancel(TaskKind.TTS_TIMER):
-                self.log.info("已取消之前的 TTS 定时器")
-
-            # 使用 edge-tts 生成 MP3 文件
-            self.log.info(
-                f"使用 edge-tts 生成语音: {value}, voice: {self.config.edge_tts_voice}"
-            )
-            mp3_path = await text_to_mp3(
-                text=value,
-                save_dir=self.config.temp_dir,
-                voice=self.config.edge_tts_voice,
-            )
-            self.log.info(f"edge-tts 生成的文件路径: {mp3_path}")
-
-            # 生成播放 URL
-            url = self.xiaomusic.music_library._get_file_url(mp3_path)
-            self.log.info(f"TTS 播放 URL: {url}")
-
-            # 播放 TTS 音频
-            await self.group_player_play(url)
-
-            # 获取 MP3 时长
-            duration = await get_local_music_duration(mp3_path, self.config)
-            self.log.info(f"TTS 音频时长: {duration} 秒")
-
-            # 创建定时器，时长到后停止
-            if duration > 0:
-
-                async def _tts_timeout():
-                    await asyncio.sleep(duration)
-                    try:
-                        self.log.info("TTS 播放定时器时间到")
-                        # The registry deliberately ignores cancellation of the
-                        # current task; never self-cancel or self-await here.
-                        await self.stop(arg1="notts")
-                    except Exception as e:
-                        self.log.error(f"TTS 定时器异常: {e}")
-
-                self._ensure_playback_tasks().start(
-                    TaskKind.TTS_TIMER,
-                    TaskGeneration(),
-                    _tts_timeout(),
-                    metadata={"scope": "tts", "duration": duration},
-                )
-                self.log.info(f"已设置 TTS 定时器，{duration} 秒后停止")
-
-        except Exception as e:
-            self.log.exception(f"edge-tts 播放失败: {e}")
 
     async def group_player_play(
         self,
@@ -4445,12 +4269,7 @@ class XiaoMusicDevice:
             await self._await_cancelled_failure_retry()
             if not self._degraded_notified:
                 self._degraded_notified = True
-                try:
-                    # Announce only. do_tts() would "resume" playback afterwards
-                    # (check_replay), contradicting the announcement.
-                    await self.text_to_speech("播放失败过多，已停止自动切歌，请稍后再试")
-                except Exception:
-                    pass
+                self.log.warning("播放失败过多，已停止自动切歌")
                 if sid != self._play_session_id or self._is_lifecycle_token_stale(token):
                     return
             return
@@ -4775,7 +4594,7 @@ class XiaoMusicDevice:
             _do_stop(),
             metadata={"scope": "global_stop_timer", "minute": minute},
         )
-        await self.do_tts(f"收到,{minute}分钟后将关机")
+        self.log.info("%s 分钟后停止播放", minute)
 
     async def cancel_next_timer(self):
         """取消下一首定时器"""
@@ -4810,7 +4629,7 @@ class XiaoMusicDevice:
         """清空所有定时器"""
         self.log.info("in cancel_all_timer")
         registry = self._ensure_playback_tasks()
-        for kind in (TaskKind.COMPLETION_NEXT_TIMER, TaskKind.STOP_TIMER, TaskKind.TTS_TIMER):
+        for kind in (TaskKind.COMPLETION_NEXT_TIMER, TaskKind.STOP_TIMER):
             if registry.cancel(kind):
                 self.log.info("cancel_all_timer kind=%s", kind.value)
 

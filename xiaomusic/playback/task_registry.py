@@ -21,7 +21,6 @@ class TaskKind(str, Enum):
     STATUS_PROBE = "status_probe"
     COMPLETION_NEXT_TIMER = "completion_next_timer"
     FAILURE_RETRY = "failure_retry"
-    TTS_TIMER = "tts_timer"
     ADD_SONG_TIMER = "add_song_timer"
     STOP_TIMER = "stop_timer"
 
@@ -37,7 +36,6 @@ ATTEMPT_SCOPED_KINDS: tuple[TaskKind, ...] = (
 )
 
 SESSION_SCOPED_KINDS: tuple[TaskKind, ...] = (
-    TaskKind.TTS_TIMER,
     TaskKind.ADD_SONG_TIMER,
 )
 

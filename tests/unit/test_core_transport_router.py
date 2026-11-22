@@ -51,12 +51,6 @@ class _TransportStub(Transport):
             raise RuntimeError("pause failed")
         return {"ret": "OK"}
 
-    async def tts(self, device_id: str, text: str) -> dict:
-        _ = (device_id, text)
-        if "tts" in self.fail_actions:
-            raise RuntimeError("tts failed")
-        return {"ret": "OK"}
-
     async def set_volume(self, device_id: str, volume: int) -> dict:
         _ = (device_id, volume)
         if "volume" in self.fail_actions:
@@ -89,20 +83,20 @@ async def test_transport_router_uses_capability_policy_intersection_for_play():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_transport_router_fallback_for_tts_inside_candidates():
-    router = TransportRouter(policy=TransportPolicy({"tts": ["miio", "mina"]}))
-    router.register_transport(_TransportStub("miio", fail_actions={"tts"}))
+async def test_transport_router_falls_back_inside_candidates():
+    router = TransportRouter(policy=TransportPolicy({"volume": ["miio", "mina"]}))
+    router.register_transport(_TransportStub("miio", fail_actions={"volume"}))
     router.register_transport(_TransportStub("mina"))
 
     profile = DeviceProfile(did="d1", model="m", name="n", group="g")
-    capability = TransportCapabilityMatrix(tts=["miio", "mina"])
+    capability = TransportCapabilityMatrix(volume=["miio", "mina"])
 
     out = await router.dispatch(
-        action="tts",
+        action="volume",
         device_id="d1",
         profile=profile,
         capability_matrix=capability,
-        text="hello",
+        volume=30,
     )
 
     assert out.ok is True

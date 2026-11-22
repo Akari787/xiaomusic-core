@@ -121,11 +121,11 @@ async def test_c_self_cancel_is_ignored_and_task_completes():
     finished = asyncio.Event()
 
     async def worker():
-        assert not registry.cancel(TaskKind.TTS_TIMER)
+        assert not registry.cancel(TaskKind.ADD_SONG_TIMER)
         finished.set()
         return "ok"
 
-    task = registry.start(TaskKind.TTS_TIMER, G0, worker())
+    task = registry.start(TaskKind.ADD_SONG_TIMER, G0, worker())
     assert task is not None
     await _event_wait(finished)
     result = await asyncio.wait_for(task, _TIMEOUT)
@@ -274,7 +274,7 @@ async def test_start_immediately_close_zero_warnings():
 def real_device():
     """``XiaoMusicDevice.__new__`` with real runtime / lifecycle / arbiter.
 
-    Only leaf I/O is stubbed: group_force_stop_xiaoai, do_tts (mina),
+    Only leaf I/O is stubbed: group_force_stop_xiaoai,
     TTS generation, music library, cloud status.
     """
     d = XiaoMusicDevice.__new__(XiaoMusicDevice)
@@ -304,7 +304,7 @@ def real_device():
     )
     d.config = SimpleNamespace(
         delay_sec=0, verbose=False, ffmpeg_location="", jellyfin_proxy_mode="off",
-        stop_tts_msg="bye", edge_tts_voice="zh-CN-XiaoxiaoNeural", temp_dir=".",
+        temp_dir=".",
     )
     d.xiaomusic = SimpleNamespace(
         music_library=SimpleNamespace(
@@ -349,7 +349,6 @@ def real_device():
     ]
     d._current_index = 0
 
-    d.do_tts = lambda *a, **kw: _async_none()
     d.group_force_stop_xiaoai = lambda *a, **kw: _async_return([True])
 
     return d
@@ -510,75 +509,6 @@ async def test_j_stop_during_fast_stop_no_self_cancel_final_stopped(real_device)
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.asyncio
-async def test_k_tts_timer_replacement_no_self_await(real_device):
-    d = real_device
-
-    d.group_player_play = lambda url, name="", **kw: _async_return([{"ok": True}])
-    d.xiaomusic.music_library._get_file_url = lambda p: f"file:///{p}"
-
-    call_count = 0
-    first_leaf_done = asyncio.Event()
-    second_leaf_done = asyncio.Event()
-    dur1_done = asyncio.Event()
-    dur2_done = asyncio.Event()
-
-    import xiaomusic.utils.music_utils as _mu
-    import xiaomusic.utils.network_utils as _nu
-    _orig_tts = getattr(_nu, "text_to_mp3", None)
-    _orig_dur = getattr(_mu, "get_local_music_duration", None)
-
-    async def _fake_tts(*a, **kw):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            first_leaf_done.set()
-        else:
-            second_leaf_done.set()
-        return "fake.mp3"
-
-    async def _fake_group_play(url, name="", **kw):
-        return [{"ok": True}]
-
-    async def _fake_dur1(*a, **kw):
-        dur1_done.set()
-        return 5.0
-
-    async def _fake_dur2(*a, **kw):
-        dur2_done.set()
-        return 5.0
-
-    d.group_player_play = _fake_group_play
-    d.xiaomusic.music_library._get_file_url = lambda p: f"file:///{p}"
-    _nu.text_to_mp3 = _fake_tts
-
-    _mu.get_local_music_duration = _fake_dur1
-    try:
-        t1 = asyncio.create_task(d._text_to_speech_edge_tts("first-tts"))
-        await _event_wait(dur1_done)
-        tts1 = d._playback_tasks.get_task(TaskKind.TTS_TIMER)
-        assert tts1 is not None
-
-        _mu.get_local_music_duration = _fake_dur2
-        t2 = asyncio.create_task(d._text_to_speech_edge_tts("second-tts"))
-        await _event_wait(dur2_done)
-        t1.cancel()
-
-        await _wait_cancelled(tts1)
-        tts2 = d._playback_tasks.get_task(TaskKind.TTS_TIMER)
-        assert tts2 is not None and not tts2.cancelled()
-
-        d._playback_tasks.cancel(TaskKind.TTS_TIMER)
-        t2.cancel()
-    finally:
-        if _orig_tts is not None:
-            _nu.text_to_mp3 = _orig_tts
-        if _orig_dur is not None:
-            _mu.get_local_music_duration = _orig_dur
-
-    await d.close_command_arbiter()
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # L  close → all cancelled/awaited, arbiter shut, zero pending
 # ═══════════════════════════════════════════════════════════════════════
@@ -656,26 +586,6 @@ async def test_n_real_device_close_zero_pending(real_device):
     token = d._capture_lifecycle_token()
     await d.set_next_music_timeout(999.0, token=token)
 
-    # Real TTS scheduling with leaf stub that signals when timer is created
-    d.group_player_play = lambda url, name="", **kw: _async_return([{"ok": True}])
-    d.xiaomusic.music_library._get_file_url = lambda p: f"file:///{p}"
-    import xiaomusic.utils.music_utils as _mu
-    import xiaomusic.utils.network_utils as _nu
-    _orig_tts = getattr(_nu, "text_to_mp3", None)
-    _orig_dur = getattr(_mu, "get_local_music_duration", None)
-    dur_done = asyncio.Event()
-    _nu.text_to_mp3 = lambda *a, **kw: _async_return("fake.mp3")
-    _mu.get_local_music_duration = lambda *a, **kw: _set_and_return(dur_done, 5.0)
-    try:
-        tts_t = asyncio.create_task(d._text_to_speech_edge_tts("tts-test"))
-        await _event_wait(dur_done)
-        tts_t.cancel()
-    finally:
-        if _orig_tts is not None:
-            _nu.text_to_mp3 = _orig_tts
-        if _orig_dur is not None:
-            _mu.get_local_music_duration = _orig_dur
-
     # Real fast stop
     fast_task = await d._execute_group_stop(fast_stop=True, sid=d._play_session_id)
 
@@ -710,9 +620,8 @@ def test_attempt_kinds_complete():
         assert k in ATTEMPT_SCOPED_KINDS
 
 
-def test_session_kinds_include_tts_addsong():
-    for k in (TaskKind.TTS_TIMER, TaskKind.ADD_SONG_TIMER):
-        assert k in SESSION_SCOPED_KINDS
+def test_session_kinds_include_addsong():
+    assert TaskKind.ADD_SONG_TIMER in SESSION_SCOPED_KINDS
 
 
 @pytest.mark.asyncio
@@ -721,11 +630,11 @@ async def test_cancel_by_kinds_respects_self_cancel():
     finished = asyncio.Event()
 
     async def _safe():
-        cancelled = registry.cancel_by_kinds(TaskKind.TTS_TIMER)
+        cancelled = registry.cancel_by_kinds(TaskKind.ADD_SONG_TIMER)
         assert cancelled == 0
         finished.set()
 
-    t = registry.start(TaskKind.TTS_TIMER, G0, _safe())
+    t = registry.start(TaskKind.ADD_SONG_TIMER, G0, _safe())
     assert t is not None
     await _event_wait(finished)
     await asyncio.wait_for(t, _TIMEOUT)

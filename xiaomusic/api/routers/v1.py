@@ -23,7 +23,6 @@ from xiaomusic.api.models import (
     ShutdownTimerRequest,
     SystemSettingItemUpdateRequest,
     SystemSettingsSaveRequest,
-    TtsRequest,
     VolumeRequest,
 )
 from xiaomusic.api.routers.v1_shared import (
@@ -293,24 +292,6 @@ async def api_v1_control_resume(data: ControlRequest):
             default_error_code="E_RESUME_OPERATION_FAILED",
             default_stage="dispatch",
             default_message="resume operation failed",
-        )
-
-
-@router.post("/api/v1/control/tts")
-async def api_v1_control_tts(data: TtsRequest):
-    request_id = _next_request_id(data.request_id)
-    try:
-        out = await _get_facade().tts(data.device_id, data.text, request_id=request_id)
-        return _api_ok(
-            {k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id
-        )
-    except Exception as exc:
-        return _map_public_endpoint_exception(
-            exc,
-            request_id,
-            default_error_code="E_TTS_OPERATION_FAILED",
-            default_stage="dispatch",
-            default_message="tts operation failed",
         )
 
 

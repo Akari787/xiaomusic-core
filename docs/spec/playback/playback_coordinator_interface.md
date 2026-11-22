@@ -35,7 +35,7 @@ Coordinator 不接收完整 `XiaoMusic` runtime。
 
 ### 控制方法
 
-`stop`、`previous`、`next`、`pause`、`resume`、`tts`、`set_volume`、`probe` 统一经 `TransportRouter`。`pause` / `resume` 计划在 ADR-0007 第 6 步删除（项目不提供暂停/恢复），删除前保持现状、不再扩展。
+`stop`、`previous`、`next`、`pause`、`resume`、`set_volume`、`probe` 统一经 `TransportRouter`。`pause` / `resume` 计划在 ADR-0007 第 6 步删除（项目不提供暂停/恢复），删除前保持现状、不再扩展。
 
 ## 4. 状态投影边界
 

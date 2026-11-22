@@ -15,15 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 class _Auth:
     def __init__(self):
         self.calls = []
-        self.miio_service = object()
 
     async def mina_call(self, method, *args, retry=1, ctx="", **kwargs):
         self.calls.append((method, args, {"retry": retry, "ctx": ctx, **kwargs}))
         return {"code": 0}
-
-    async def miio_call(self, fn, *, retry=1, ctx=""):
-        self.calls.append(("miio", (), {"retry": retry, "ctx": ctx}))
-        return "ok"
 
 
 def test_only_auth_and_speaker_client_talk_to_the_cloud():
@@ -49,7 +44,6 @@ async def test_commands_keep_previous_mina_calls():
     await sc.pause("dev", ctx="force_stop_xiaoai")
     await sc.set_volume("dev", 30)
     await sc.status_raw("dev", ctx="get_volume")
-    await sc.tts("dev", "hi")
     await sc.ubus("dev", "player_play_music", "mediaplayer", {"a": 1}, ctx="x")
     await sc.device_list()
     assert auth.calls == [
@@ -59,17 +53,9 @@ async def test_commands_keep_previous_mina_calls():
         ("player_pause", ("dev",), {"retry": 1, "ctx": "force_stop_xiaoai"}),
         ("player_set_volume", ("dev", 30), {"retry": 1, "ctx": "set_volume"}),
         ("player_get_status", ("dev",), {"retry": 1, "ctx": "get_volume"}),
-        ("text_to_speech", ("dev", "hi"), {"retry": 1, "ctx": "text_to_speech"}),
         ("ubus_request", ("dev", "player_play_music", "mediaplayer", {"a": 1}), {"retry": 1, "ctx": "x"}),
         ("device_list", (), {"retry": 1, "ctx": "getalldevices"}),
     ]
-
-
-@pytest.mark.asyncio
-async def test_miio_command_goes_through_miio_call():
-    auth = _Auth()
-    assert await SpeakerClient(auth).miio_command("did", "5-1 hi", ctx="text_to_speech_miio") == "ok"
-    assert auth.calls == [("miio", (), {"retry": 1, "ctx": "text_to_speech_miio"})]
 
 
 def test_parse_status():

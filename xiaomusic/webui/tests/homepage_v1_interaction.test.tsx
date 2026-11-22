@@ -11,7 +11,6 @@ const mocked = vi.hoisted(() => ({
   stop: vi.fn(),
   pause: vi.fn(),
   resume: vi.fn(),
-  tts: vi.fn(),
   setVolume: vi.fn(),
   probe: vi.fn(),
 }));
@@ -34,7 +33,6 @@ vi.mock("../src/services/v1Api", () => ({
   stop: mocked.stop,
   pause: mocked.pause,
   resume: mocked.resume,
-  tts: mocked.tts,
   setVolume: mocked.setVolume,
   probe: mocked.probe,
 }));
@@ -75,7 +73,6 @@ describe("ApiV1DebugPage interaction", () => {
     mocked.stop.mockReset();
     mocked.pause.mockReset();
     mocked.resume.mockReset();
-    mocked.tts.mockReset();
     mocked.setVolume.mockReset();
     mocked.probe.mockReset();
 
@@ -90,7 +87,6 @@ describe("ApiV1DebugPage interaction", () => {
     mocked.stop.mockResolvedValue(ok({ status: "accepted", action: "stop", device_id: "did-1", transport: "miio" }));
     mocked.pause.mockResolvedValue(ok({ status: "accepted", action: "pause", device_id: "did-1", transport: "miio" }));
     mocked.resume.mockResolvedValue(ok({ status: "accepted", action: "resume", device_id: "did-1", transport: "miio" }));
-    mocked.tts.mockResolvedValue(ok({ status: "ok", device_id: "did-1", transport: "miio" }));
     mocked.setVolume.mockResolvedValue(ok({ status: "ok", device_id: "did-1", transport: "miio" }));
     mocked.probe.mockResolvedValue(ok({ status: "ok", device_id: "did-1", transport: "miio", reachable: true }));
 

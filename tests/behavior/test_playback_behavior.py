@@ -305,7 +305,7 @@ async def test_dispatch_timeouts_retry_same_track(rig_factory):
 @pytest.mark.asyncio
 async def test_persistent_dispatch_failure_advances_then_degrades(rig_factory):
     """Policy: retry the same track twice, then the next track twice, then
-    stop auto-advancing and announce it."""
+    stop auto-advancing (no announcement: TTS was removed)."""
     rig = rig_factory()
     try:
         rig.speaker.fail("play_by_music_url", *([True] * 20))
@@ -314,12 +314,8 @@ async def test_persistent_dispatch_failure_advances_then_degrades(rig_factory):
         await rig.settle(60)
 
         timeline = rig.speaker.timeline()
-        assert timeline.count("tts") == 1
-        before_tts = timeline[: timeline.index("tts")]
-        assert sum(e.endswith("!timeout") for e in before_tts) == 5
-        # The announcement must not be followed by another attempt.
-        after_tts = timeline[timeline.index("tts") + 1 :]
-        assert not any(e.endswith("!timeout") or e.startswith("play:") for e in after_tts), timeline
+        assert "tts" not in timeline
+        assert sum(e.endswith("!timeout") for e in timeline) == 5, timeline
         assert rig.state().phase == PlaybackPhase.FAILED
 
         settled = len(rig.speaker.commands)

@@ -244,7 +244,6 @@ def build_rig(
         conf_path=str(tmp_path / "conf"),
         music_list_json=_music_list_json(playlists),
         disable_download=True,
-        edge_tts_voice="",  # route TTS through the fake speaker, never the network
     )
     for key, value in (config_overrides or {}).items():
         setattr(config, key, value)

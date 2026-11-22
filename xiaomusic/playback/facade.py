@@ -825,22 +825,6 @@ class PlaybackFacade:
             "extra": {"dispatch": result["dispatch"].data},
         }
 
-    async def tts(
-        self, device_id: str, text: str, request_id: str | None = None
-    ) -> dict[str, Any]:
-        did = self._validate_device_id(device_id)
-        content = str(text or "").strip()
-        if not content:
-            raise InvalidRequestError("text is required")
-        result = await self._core().tts(did, text=content)
-        return {
-            "status": "ok",
-            DEVICE_ID: did,
-            "transport": result["transport"],
-            REQUEST_ID: str(request_id or uuid4().hex[:16]),
-            "extra": {"dispatch": result["dispatch"].data},
-        }
-
     async def set_volume(
         self,
         device_id: str,

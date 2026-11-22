@@ -60,7 +60,6 @@ def test_device_registry_hydrate_legacy_uses_mina_only_for_play():
     capability = registry.get_capability_matrix("d1")
 
     assert capability.play == ["mina"]
-    assert capability.tts == ["miio", "mina"]
     assert registry.get_reachability("d1").local_reachable is False
     assert registry.get_reachability("d1").cloud_reachable is False
 

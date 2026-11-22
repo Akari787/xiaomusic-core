@@ -15,7 +15,7 @@ class MinaTransport(Transport):
     """Mina transport adapter.
 
     Real action coverage in Phase 2:
-    - play_url, stop, pause, tts, set_volume, probe
+    - play_url, stop, pause, set_volume, probe
     """
 
     name = "mina"
@@ -146,24 +146,6 @@ class MinaTransport(Transport):
             return {"ret": "OK"}
         except Exception:
             LOG.warning("transport_action action=resume success=false device_id=%s", device_id)
-            raise
-
-    async def tts(self, device_id: str, text: str) -> dict[str, Any]:
-        start = time.perf_counter()
-        try:
-            ret = await self._xiaomusic.do_tts(device_id, text)
-            LOG.info(
-                "transport_action action=tts success=true latency_ms=%d device_id=%s",
-                int((time.perf_counter() - start) * 1000),
-                device_id,
-            )
-            return {"ret": ret}
-        except Exception:
-            LOG.warning(
-                "transport_action action=tts success=false latency_ms=%d device_id=%s",
-                int((time.perf_counter() - start) * 1000),
-                device_id,
-            )
             raise
 
     async def set_volume(self, device_id: str, volume: int) -> dict[str, Any]:

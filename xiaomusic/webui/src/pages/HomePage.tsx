@@ -22,7 +22,6 @@ import {
   setShutdownTimer as v1SetShutdownTimer,
   setVolume as v1SetVolume,
   stop as v1Stop,
-  tts as v1Tts,
   type ApiEnvelope,
   type OnlineSearchItemData,
   type PlayMode,
@@ -101,24 +100,6 @@ type SettingField = {
   options?: Array<{ value: string; label: string }>;
 };
 
-const EDGE_TTS_VOICE_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "", label: "不使用(默认)" },
-  { value: "zh-CN-XiaoxiaoNeural", label: "晓晓 (女声,温柔)" },
-  { value: "zh-CN-XiaoyiNeural", label: "晓伊 (女声,活泼)" },
-  { value: "zh-CN-YunjianNeural", label: "云健 (男声,成熟)" },
-  { value: "zh-CN-YunxiNeural", label: "云希 (男声,阳光)" },
-  { value: "zh-CN-YunxiaNeural", label: "云夏 (男声,少年)" },
-  { value: "zh-CN-YunyangNeural", label: "云扬 (男声,新闻)" },
-  { value: "zh-CN-liaoning-XiaobeiNeural", label: "晓北 (女声,东北)" },
-  { value: "zh-CN-shaanxi-XiaoniNeural", label: "晓妮 (女声,陕西)" },
-  { value: "zh-HK-HiuGaaiNeural", label: "曉佳 (女声,粤语)" },
-  { value: "zh-HK-HiuMaanNeural", label: "曉曼 (女声,粤语)" },
-  { value: "zh-HK-WanLungNeural", label: "雲龍 (男声,粤语)" },
-  { value: "zh-TW-HsiaoChenNeural", label: "曉臻 (女声,台湾)" },
-  { value: "zh-TW-YunJheNeural", label: "雲哲 (男声,台湾)" },
-  { value: "zh-TW-HsiaoYuNeural", label: "曉雨 (女声,台湾)" },
-];
-
 const BUILT_IN_THEME_OPTIONS: Array<{ value: "default" | "dark"; label: string }> = [
   { value: "default", label: "Default" },
   { value: "dark", label: "Dark" },
@@ -153,12 +134,6 @@ const ADVANCED_TABS: Array<{ key: string; label: string; fields: SettingField[] 
     label: "设备",
     fields: [
       { key: "group_list", label: "设备分组配置" },
-      {
-        key: "edge_tts_voice",
-        label: "Edge-TTS 语音角色",
-        kind: "select",
-        options: EDGE_TTS_VOICE_OPTIONS,
-      },
     ],
   },
   {
@@ -906,7 +881,6 @@ export function HomePage() {
   const [showSettings, setShowSettings] = useState<boolean>(false);
 
   const [linkUrl, setLinkUrl] = useState<string>("https://www.youtube.com/watch?v=iPnaF8Ngk3Q");
-  const [ttsText, setTtsText] = useState<string>("播放文字测试");
   const [searchKeyword, setSearchKeyword] = useState<string>("");
   const [searchMessage, setSearchMessage] = useState<string>("");
   const [soundscapeFilter, setSoundscapeFilter] = useState<string>("");
@@ -1787,18 +1761,7 @@ export function HomePage() {
     }
   }
 
-  async function playTts() {
-    if (!requireDid()) {
-      return;
-    }
-    const out = await v1Tts(activeDid, ttsText);
-    if (isApiOk(out)) {
-      setMessage("文字播放已发送");
-      return;
-    }
-    const err = apiErrorInfo(out);
-    setMessage(err.message || err.errorCode || "文字播放失败");
-  }
+
 
   async function timedShutdown(minutes: number) {
     if (!requireDid()) {
@@ -2547,14 +2510,6 @@ export function HomePage() {
           <div className="component-button-group">
             <button onClick={() => void playLink(false)}>播放链接</button>
             <button onClick={() => void playLink(true)}>代理播放</button>
-          </div>
-        </div>
-
-        <div className="card-section">
-          <h3 className="card-title">💬 播放文字</h3>
-          <input type="text" className="search-input" value={ttsText} onChange={(e) => setTtsText(e.target.value)} />
-          <div className="component-button-group">
-            <button onClick={() => void playTts()}>播放文字</button>
           </div>
         </div>
 

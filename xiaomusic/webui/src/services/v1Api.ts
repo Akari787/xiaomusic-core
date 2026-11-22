@@ -347,10 +347,6 @@ export async function resume(deviceId: string): Promise<ApiEnvelope<ControlData>
   return await safePost<ControlData>("/api/v1/control/resume", { device_id: deviceId });
 }
 
-export async function tts(deviceId: string, text: string): Promise<ApiEnvelope<ControlData>> {
-  return await safePost<ControlData>("/api/v1/control/tts", { device_id: deviceId, text });
-}
-
 export async function setVolume(deviceId: string, volume: number): Promise<ApiEnvelope<ControlData>> {
   return await safePost<ControlData>("/api/v1/control/volume", { device_id: deviceId, volume });
 }

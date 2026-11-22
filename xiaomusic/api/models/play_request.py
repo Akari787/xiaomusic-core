@@ -141,14 +141,6 @@ class SystemSettingItemUpdateRequest(BaseModel):
     request_id: str | None = Field(default=None, alias=REQUEST_ID)
 
 
-class TtsRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    device_id: str = Field(alias=DEVICE_ID, min_length=1)
-    text: str = Field(min_length=1)
-    request_id: str | None = Field(default=None, alias=REQUEST_ID)
-
-
 class VolumeRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

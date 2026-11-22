@@ -25,7 +25,6 @@ import {
   setShutdownTimer,
   setVolume,
   stop,
-  tts,
 } from "../src/services/v1Api";
 
 const mockedGet = vi.mocked(apiGetJson);
@@ -50,7 +49,6 @@ describe("v1Api service", () => {
     await stop("did-1");
     await pause("did-1");
     await resume("did-1");
-    await tts("did-1", "hello");
     await setVolume("did-1", 25);
     await probe("did-1");
     await previous("did-1");
@@ -62,7 +60,6 @@ describe("v1Api service", () => {
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/stop", { device_id: "did-1" });
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/pause", { device_id: "did-1" });
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/resume", { device_id: "did-1" });
-    expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/tts", { device_id: "did-1", text: "hello" });
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/volume", { device_id: "did-1", volume: 25 });
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/probe", { device_id: "did-1" });
     expect(mockedPost).toHaveBeenCalledWith("/api/v1/control/previous", { device_id: "did-1" });

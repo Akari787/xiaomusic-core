@@ -64,7 +64,7 @@ PlaybackFollower（新增，每设备一个）
     - 计时器只做兜底
         │
 SpeakerClient（新增，唯一调用小米云的地方）
-    - play_queue / stop / set_loop / set_volume / tts / status
+    - play_queue / stop / set_loop / set_volume / status（只用 MiNA；不提供 TTS）
 ```
 
 `DevicePlayer`（由 `device_player.py` 拆出）只负责编排：接收命令 → 让 SpeakerQueue 生成列表 → SpeakerClient 下发 → PlaybackFollower 跟随。
@@ -137,7 +137,7 @@ SpeakerClient（新增，唯一调用小米云的地方）
 
 项目从未规划暂停功能（2026-11-22 Akari 确认），而且实测音箱无法原地恢复、也无法跳转。因此：
 
-- 删除 `/api/v1/control/pause`、`/api/v1/control/resume`（v1 白名单 25 → 23）、WebUI 中未被页面使用的 `pause()` / `resume()`、`PlaybackPhase.PAUSED` 及相关的 arbiter 意图、transport 方法和测试。
+- 删除 `/api/v1/control/pause`、`/api/v1/control/resume`（v1 白名单 24 → 22）、WebUI 中未被页面使用的 `pause()` / `resume()`、`PlaybackPhase.PAUSED` 及相关的 arbiter 意图、transport 方法和测试。
 - 语音“暂停”维持现状，按停止处理（`keywords_stop`）。
 - 用户在音箱上手动暂停时，`status` 仍为 1，服务端看不出来；兜底计时器到点后若没有新的 TrackFetched，按“跟随丢失”处理。
 

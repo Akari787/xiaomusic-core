@@ -632,8 +632,8 @@ async def test_I_confirmed_playing_cancels_pending_clears_failure():
 
 
 @pytest.mark.asyncio
-async def test_J_degraded_one_tts_no_retry():
-    """count >= 5 → degraded, one TTS, no retry task."""
+async def test_J_degraded_no_retry():
+    """count >= 5 → degraded, no retry task, no announcement."""
     d = _make_t05b_device()
     _stage_dispatching(d)
     _install_physical_stubs(d)
@@ -644,21 +644,17 @@ async def test_J_degraded_one_tts_no_retry():
 
     d._play_failed_cnt = 4
     d._play_fail_first_ts = time.time() - 5
-    tts_calls: list[str] = []
-    d.text_to_speech = lambda msg: tts_calls.append(msg) or _async_none()
 
     # 5th failure → degraded
     await d._handle_play_failure(name="j", sid=1, reason="r", token=token)
 
     assert d._degraded is True
-    assert len(tts_calls) == 1
     assert d._failure_retry_task is None
     assert d.get_failure_retry_status()["action"] == "degraded"
     assert d.get_failure_retry_status()["active"] is False
 
-    # 6th failure → no second TTS (already notified)
+    # 6th failure → still no retry
     await d._handle_play_failure(name="j2", sid=1, reason="r2", token=token)
-    assert len(tts_calls) == 1
 
     gate.set()
     assert len(_submits) == 0

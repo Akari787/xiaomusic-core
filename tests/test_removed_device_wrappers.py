@@ -83,5 +83,4 @@ def test_v1_routes_still_available_after_wrapper_removal(monkeypatch) -> None:
 
     assert client.get("/api/v1/player/state", params={"device_id": "did-1"}).status_code == 200
     assert client.post("/api/v1/control/stop", json={"device_id": "did-1"}).status_code == 200
-    assert client.post("/api/v1/control/tts", json={"device_id": "did-1", "text": "hello"}).status_code == 200
     assert client.post("/api/v1/control/volume", json={"device_id": "did-1", "volume": 30}).status_code == 200

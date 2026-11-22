@@ -206,8 +206,6 @@ class Config:
 
 
 
-    # edge-tts 语音角色
-    edge_tts_voice: str = os.getenv("XIAOMUSIC_EDGE_TTS_VOICE", "zh-CN-XiaoyiNeural")
     qrcode_timeout: int = int(os.getenv("QRCODE_TIMEOUT", "120"))
     auth_refresh_interval_hours: float = field(default_factory=default_auth_refresh_interval_hours)
     auth_refresh_min_interval_minutes: int = field(default_factory=default_auth_refresh_min_interval_minutes)

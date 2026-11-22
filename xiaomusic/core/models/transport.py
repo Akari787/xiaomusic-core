@@ -9,7 +9,6 @@ class TransportCapabilityMatrix:
     play: list[str] = field(default_factory=list)
     previous: list[str] = field(default_factory=list)
     next: list[str] = field(default_factory=list)
-    tts: list[str] = field(default_factory=list)
     volume: list[str] = field(default_factory=list)
     stop: list[str] = field(default_factory=list)
     pause: list[str] = field(default_factory=list)

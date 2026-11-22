@@ -129,7 +129,6 @@ def _build_coordinator(
             next=["mina"],
             stop=["mina"],
             pause=["mina"],
-            tts=["mina"],
             volume=["mina"],
             probe=["mina"],
         ),
@@ -207,7 +206,6 @@ async def test_playback_coordinator_control_actions_and_probe_update():
     previous_out = await coordinator.previous("d1")
     next_out = await coordinator.next("d1")
     pause_out = await coordinator.pause("d1")
-    tts_out = await coordinator.tts("d1", "hello")
     volume_out = await coordinator.set_volume("d1", 33)
     probe_out = await coordinator.probe("d1")
 
@@ -215,7 +213,6 @@ async def test_playback_coordinator_control_actions_and_probe_update():
     assert previous_out["transport"] == "mina"
     assert next_out["transport"] == "mina"
     assert pause_out["transport"] == "mina"
-    assert tts_out["dispatch"].data["text"] == "hello"
     assert volume_out["dispatch"].data["volume"] == 33
     assert probe_out["dispatch"].data["local_reachable"] is True
     assert probe_out["reachability"].local_reachable is True
