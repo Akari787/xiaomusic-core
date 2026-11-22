@@ -267,14 +267,41 @@ async def test_auto_next_in_one_mode_repeats_current():
 
 @pytest.mark.asyncio
 async def test_auto_next_in_seq_mode_stops_at_end():
-    """顺序播放：自动切歌到末尾时 get_next_music 返回空，_play_next 返回 False。"""
+    """顺序播放：自动切歌到末尾时 get_next_music 返回空，_play_next 返回 False，
+    并显式停止音箱（否则音箱会一直循环最后一首）。"""
     d = _make_device(PLAY_TYPE_SEQ, ["song-a", "song-b", "song-c"], cur_music="song-c")
     d.get_next_music = lambda *, skip_one_repeat=False: d.get_music("next", skip_one_repeat=skip_one_repeat)
     d._stage_playlist_navigation_transition = lambda name, *, reason: None
+    stops: list[str] = []
+
+    async def _stop(arg1=""):
+        stops.append(arg1)
+        return True
+
+    d.stop = _stop
 
     # auto-next 应在发现 name 为空时返回 False 而不调用 _play
     result = await d._play_next(manual=False)
     assert result is False
+    assert stops == ["notts"]
+
+
+@pytest.mark.asyncio
+async def test_manual_next_in_seq_mode_at_end_does_not_stop():
+    """顺序播放：手动下一首到末尾时什么也不做，不停止当前播放。"""
+    d = _make_device(PLAY_TYPE_SEQ, ["song-a", "song-b", "song-c"], cur_music="song-c")
+    d.get_next_music = lambda *, skip_one_repeat=False: d.get_music("next", skip_one_repeat=skip_one_repeat)
+    d._stage_playlist_navigation_transition = lambda name, *, reason: None
+    stops: list[str] = []
+
+    async def _stop(arg1=""):
+        stops.append(arg1)
+        return True
+
+    d.stop = _stop
+
+    assert await d._play_next(manual=True) is False
+    assert stops == []
 
 
 @pytest.mark.asyncio

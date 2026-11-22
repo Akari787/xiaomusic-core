@@ -2034,6 +2034,13 @@ class XiaoMusicDevice:
         self.log.info(f"_play_next. name:{name}, cur_music:{self.get_cur_music()}")
         if name == "":
             self.log.info("本地没有歌曲")
+            if not manual and self.device.play_type == PLAY_TYPE_SEQ:
+                # Sequential play reached the end of the list. Stop the speaker
+                # explicitly, as single-play mode does; otherwise the speaker
+                # keeps looping its one-item queue while the server believes
+                # playback is still running.
+                self.log.info("顺序播放结束，停止播放")
+                await self.stop(arg1="notts")
             return False
         self._stage_playlist_navigation_transition(name, reason="play_next")
         return await self._play(

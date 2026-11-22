@@ -75,6 +75,22 @@ async def test_list_loop_advances_in_order_and_wraps(rig_factory):
 
 
 @pytest.mark.asyncio
+async def test_sequential_stops_speaker_after_last_track(rig_factory):
+    """Regression (2026-11-22): reaching the end used to leave the server in
+    PLAYING and the speaker looping the last track."""
+    rig = rig_factory(play_type=PLAY_TYPE_SEQ)
+    try:
+        await rig.play_playlist("日语", "b")
+        await rig.settle(2 * SONG + 20)
+
+        assert rig.speaker.played() == ["b", "c"]
+        assert rig.speaker.timeline()[-1] == "stop"
+        assert rig.state().phase == PlaybackPhase.STOPPED
+    finally:
+        await rig.close()
+
+
+@pytest.mark.asyncio
 async def test_single_play_stops_after_one_track(rig_factory):
     rig = rig_factory(play_type=PLAY_TYPE_SIN)
     try:
