@@ -13,8 +13,13 @@ used as an open proxy.
 When the speaker fetches an address, several HTTP requests usually arrive for
 the same track within a fraction of a second (open + abort, a tail read for
 ID3 tags, the real download). ``FetchTracker`` folds them into one
-``track_fetched`` event. In step 1 the event is only logged; later steps let
-the playback follower act on it.
+``track_fetched`` event. Listeners registered with ``add_fetch_listener``
+receive it; the device player uses it to follow the speaker through its own
+queue (step 3).
+
+The ``silence`` source is the window sentinel: a generated silent MP3 that
+the speaker reaches after the last track of a window. Its ``index`` is the
+playlist index to continue from.
 """
 
 from __future__ import annotations
@@ -33,11 +38,15 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 SOURCE_LOCAL = "local"
 SOURCE_JELLYFIN = "jellyfin"
 SOURCE_WEB = "web"
-SOURCES = frozenset({SOURCE_LOCAL, SOURCE_JELLYFIN, SOURCE_WEB})
+SOURCE_SILENCE = "silence"
+SOURCES = frozenset({SOURCE_LOCAL, SOURCE_JELLYFIN, SOURCE_WEB, SOURCE_SILENCE})
 
 KEY_FILE = "stream_gateway.key"
 SIG_BYTES = 16
 FETCH_WINDOW_SEC = 3.0
+# Longer than the cloud stalls seen on the OH2P (~31 s), so a slow dispatch
+# of the next window is heard as silence, never as the window restarting.
+SENTINEL_SECONDS = 60
 
 _JELLYFIN_ITEM_RE = re.compile(r"/Audio/([0-9A-Za-z-]+)/")
 _RANGE_START_RE = re.compile(r"^\s*bytes\s*=\s*(\d*)\s*-")
@@ -131,6 +140,23 @@ def range_start(range_header: str | None) -> int | None:
     return int(m.group(1))
 
 
+# MPEG-1 Layer III frame: 32 kbps, 44.1 kHz, mono, no CRC. All-zero side
+# info and main data decode as silence; 1152 samples per frame. Generated in
+# code so the sentinel needs no ffmpeg (verified on the OH2P 2026-11-23).
+_SILENT_FRAME = bytes([0xFF, 0xFB, 0x10, 0xC4]) + bytes(100)
+_silence_cache: dict[int, bytes] = {}
+
+
+def silent_mp3(seconds: int) -> bytes:
+    seconds = max(1, min(int(seconds), 600))
+    data = _silence_cache.get(seconds)
+    if data is None:
+        frames = int(seconds * 44100 / 1152) + 1
+        data = _SILENT_FRAME * frames
+        _silence_cache[seconds] = data
+    return data
+
+
 class FetchTracker:
     """Folds the speaker's request burst for one track into one event."""
 
@@ -146,6 +172,10 @@ class FetchTracker:
         self._clock = clock
         self._last_request: dict[tuple[str, str, int], float] = {}
         self.last_fetch: dict[str, dict] = {}
+        self._listeners: list[Callable[[StreamRef], None]] = []
+
+    def add_listener(self, listener: Callable[[StreamRef], None]) -> None:
+        self._listeners.append(listener)
 
     def observe(self, ref: StreamRef, range_header: str | None) -> bool:
         """Return True when this request starts a new fetch of the track."""
@@ -173,6 +203,11 @@ class FetchTracker:
             ref.index,
             ref.source,
         )
+        for listener in list(self._listeners):
+            try:
+                listener(ref)
+            except Exception as exc:  # a listener must never break serving
+                self.log.warning("track_fetched listener failed: %s", exc)
         return True
 
     def _prune(self, now: float) -> None:
@@ -191,6 +226,11 @@ class LocalTarget:
 @dataclass(frozen=True)
 class HttpTarget:
     url: str
+
+
+@dataclass(frozen=True)
+class SilenceTarget:
+    seconds: int
 
 
 class StreamGateway:
@@ -263,6 +303,15 @@ class StreamGateway:
         )
         return f"{self._base()}/{path}?sig={sig}"
 
+    def add_fetch_listener(self, listener: Callable[[StreamRef], None]) -> None:
+        self.tracker.add_listener(listener)
+
+    def sentinel_url(self, did: str, queue: str, next_index: int) -> str:
+        """Silent end-of-window item; ``next_index`` is where to continue."""
+        return self.url_for(
+            str(did), str(queue), max(int(next_index), 0), SOURCE_SILENCE, str(SENTINEL_SECONDS)
+        )
+
     def wrap(self, url: str, *, did: str, queue: str, index: int) -> str:
         """Gateway address for ``url``; ``url`` itself when not handled."""
         if not self._base():
@@ -288,7 +337,12 @@ class StreamGateway:
             return None
         return StreamRef(did=did, queue=queue, index=index, source=source, item=item)
 
-    def resolve(self, ref: StreamRef) -> LocalTarget | HttpTarget:
+    def resolve(self, ref: StreamRef) -> LocalTarget | HttpTarget | SilenceTarget:
+        if ref.source == SOURCE_SILENCE:
+            try:
+                return SilenceTarget(int(ref.item))
+            except ValueError as exc:
+                raise LookupError("bad sentinel") from exc
         if ref.source == SOURCE_LOCAL:
             return LocalTarget(ref.item)
         if ref.source == SOURCE_JELLYFIN:

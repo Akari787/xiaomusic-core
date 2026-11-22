@@ -147,6 +147,8 @@ class XiaoMusic:
             log=self.log,
             xiaomusic=self,
         )
+        # The speaker's fetches drive queue following (ADR-0007 step 3).
+        self.stream_gateway.add_fetch_listener(self._on_track_fetched)
 
         # 初始化认证管理器（在配置和设备管理器准备好之后）
         self.auth_manager = AuthManager(
@@ -526,6 +528,11 @@ class XiaoMusic:
         return await self.device_manager.devices[did].play_prev()
 
     # 口令:停止
+    def _on_track_fetched(self, ref):
+        player = self.device_manager.devices.get(ref.did)
+        if player is not None:
+            player.on_track_fetched(ref)
+
     async def stop(self, did="", arg1="", **kwargs):
         return await self.device_manager.devices[did].stop(arg1=arg1)
 

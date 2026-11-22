@@ -12,7 +12,13 @@ from fastapi.responses import Response, StreamingResponse
 
 from xiaomusic.api.dependencies import log, xiaomusic
 from xiaomusic.api.routers import file as file_routes
-from xiaomusic.stream_gateway import HttpTarget, LocalTarget
+from xiaomusic.stream_gateway import (
+    HttpTarget,
+    LocalTarget,
+    SilenceTarget,
+    range_start,
+    silent_mp3,
+)
 
 router = APIRouter()
 
@@ -66,6 +72,27 @@ async def _proxy(url: str, range_header: str | None) -> Response:
     )
 
 
+def _bytes_response(data: bytes, range_header: str | None) -> Response:
+    """Serve in-memory audio with the Range forms the speaker sends: a full
+    GET, ``bytes=N-`` and the suffix tail read ``bytes=-N``."""
+    total = len(data)
+    headers = {"Accept-Ranges": "bytes"}
+    start = range_start(range_header)
+    if start is None:
+        return Response(data, media_type="audio/mpeg", headers=headers)
+    if start == -1:
+        try:
+            suffix = int(str(range_header).split("-", 1)[1])
+        except (IndexError, ValueError):
+            suffix = 0
+        start = max(total - max(suffix, 0), 0)
+    if start >= total:
+        headers["Content-Range"] = f"bytes */{total}"
+        return Response(status_code=416, headers=headers)
+    headers["Content-Range"] = f"bytes {start}-{total - 1}/{total}"
+    return Response(data[start:], status_code=206, media_type="audio/mpeg", headers=headers)
+
+
 @router.get("/stream/v1/{did}/{queue}/{index}/{source}/{item}")
 async def stream(
     request: Request,
@@ -91,6 +118,8 @@ async def stream(
         return await file_routes.music_file(request, target.relative_path)
     if isinstance(target, HttpTarget):
         return await _proxy(target.url, range_header)
+    if isinstance(target, SilenceTarget):
+        return _bytes_response(silent_mp3(target.seconds), range_header)
     raise HTTPException(status_code=404, detail="not found")
 
 

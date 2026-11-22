@@ -70,6 +70,26 @@ async def test_commands_keep_previous_mina_calls():
     ]
 
 
+@pytest.mark.asyncio
+async def test_queue_commands_use_mediaplayer_ubus():
+    auth = _Auth()
+    sc = SpeakerClient(auth)
+    await sc.set_loop("dev", 2)
+    await sc.play_queue("dev", {"startaudioid": "1", "music": "{}"})
+    assert auth.calls == [
+        (
+            "ubus_request",
+            ("dev", "player_set_loop", "mediaplayer", {"media": "common", "type": 2}),
+            {"retry": 1, "ctx": "set_loop"},
+        ),
+        (
+            "ubus_request",
+            ("dev", "player_play_music", "mediaplayer", {"startaudioid": "1", "music": "{}"}),
+            {"retry": 1, "ctx": "play_queue"},
+        ),
+    ]
+
+
 def test_parse_status():
     raw = {"data": {"info": '{"status": 1, "volume": 21, "loop_type": 1}'}}
     assert SpeakerClient.parse_status(raw) == {"status": 1, "volume": 21, "loop_type": 1}

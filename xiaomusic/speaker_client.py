@@ -37,6 +37,22 @@ class SpeakerClient:
         """Single URL via ``play_by_music_url`` (replaces the speaker queue)."""
         return await self._mina("play_by_music_url", device_id, url, audio_id=audio_id, ctx=ctx)
 
+    async def play_queue(self, device_id: str, payload: dict, *, ctx: str = "play_queue"):
+        """Several items via ``player_play_music`` (replaces the speaker queue;
+        the speaker advances through them on its own, ADR-0007 step 3)."""
+        return await self.ubus(device_id, "player_play_music", "mediaplayer", payload, ctx=ctx)
+
+    async def set_loop(self, device_id: str, loop_type: int, *, ctx: str = "set_loop"):
+        """0 = repeat item, 1 = repeat list, 2 = play list once. Persists across
+        queue replacements on the OH2P."""
+        return await self.ubus(
+            device_id,
+            "player_set_loop",
+            "mediaplayer",
+            {"media": "common", "type": int(loop_type)},
+            ctx=ctx,
+        )
+
     async def stop(self, device_id: str, *, ctx: str):
         return await self._mina("player_stop", device_id, ctx=ctx)
 

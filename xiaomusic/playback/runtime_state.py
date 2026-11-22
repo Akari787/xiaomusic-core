@@ -297,6 +297,30 @@ def confirm_playing(
     )
 
 
+def follow_track(
+    state: PlaybackRuntimeState,
+    *,
+    track: TrackReference,
+    updated_at: float,
+) -> PlaybackRuntimeState:
+    """The speaker moved to the next item of its own queue (ADR-0007 step 3).
+
+    Stays PLAYING and replaces both desired and confirmed track. No lifecycle
+    counter changes: the queue that was dispatched is still the current one.
+    Only from PLAYING.
+    """
+    if state.phase != PlaybackPhase.PLAYING:
+        raise TransitionError(f"follow_track requires PLAYING, got {state.phase.value}")
+    return replace(
+        state,
+        transition_reason="follow_track",
+        desired_track=track,
+        confirmed_track=track,
+        expected_end_at=None,
+        updated_at=updated_at,
+    )
+
+
 def confirm_failed(
     state: PlaybackRuntimeState,
     *,

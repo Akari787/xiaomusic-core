@@ -16,14 +16,17 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from xiaomusic.stream_gateway import (
+    SENTINEL_SECONDS,
     SOURCE_JELLYFIN,
     SOURCE_LOCAL,
+    SOURCE_SILENCE,
     SOURCE_WEB,
     FetchTracker,
     StreamGateway,
     StreamRef,
     StreamSigner,
     range_start,
+    silent_mp3,
 )
 
 BASE = "http://192.168.7.178:58090"
@@ -347,3 +350,56 @@ async def test_group_player_play_dispatches_gateway_address(tmp_path):
     sent.clear()
     await d.group_player_play(f"{BASE}/relay/stream/sid1", "live")
     assert sent == [f"{BASE}/relay/stream/sid1"]
+
+
+# ── sentinel and fetch listeners (step 3) ──────────────────────────────
+
+
+def test_sentinel_address_carries_the_next_index(tmp_path):
+    gw = _gateway(tmp_path)
+    url = gw.sentinel_url("981257654", "12", 20)
+    ref = gw.verify(*_parts(url))
+    assert (ref.queue, ref.index, ref.source) == ("12", 20, SOURCE_SILENCE)
+    target = gw.resolve(ref)
+    assert target.seconds == SENTINEL_SECONDS
+
+
+def test_silent_mp3_is_whole_mpeg_frames_of_the_requested_length():
+    data = silent_mp3(60)
+    assert data[:4] == bytes([0xFF, 0xFB, 0x10, 0xC4])
+    assert len(data) % 104 == 0
+    frames = len(data) // 104
+    assert 60.0 <= frames * 1152 / 44100 < 60.1
+
+
+def test_fetch_listener_gets_new_fetches_only_and_cannot_break_serving():
+    seen = []
+    tracker = FetchTracker(LOG, clock=lambda: 100.0)
+
+    def boom(ref):
+        raise RuntimeError("listener bug")
+
+    tracker.add_listener(boom)
+    tracker.add_listener(seen.append)
+    ref = StreamRef("d", "3", 1, SOURCE_WEB, "http://x/a.mp3")
+    assert tracker.observe(ref, None) is True
+    assert tracker.observe(ref, "bytes=-128") is False
+    assert tracker.observe(ref, None) is False  # same burst
+    assert seen == [ref]
+
+
+def test_route_serves_the_sentinel_with_range(client):
+    tc, gw = client
+    path = _path(gw.sentinel_url("d", "1", 5))
+    full = tc.get(path)
+    assert full.status_code == 200
+    assert full.headers["content-type"] == "audio/mpeg"
+    assert full.content == silent_mp3(SENTINEL_SECONDS)
+    tail = tc.get(path, headers={"Range": "bytes=-128"})
+    assert tail.status_code == 206
+    assert len(tail.content) == 128
+    total = len(full.content)
+    assert tail.headers["content-range"] == f"bytes {total - 128}-{total - 1}/{total}"
+    past = tc.get(path, headers={"Range": f"bytes={total}-"})
+    assert past.status_code == 416
+    assert gw.tracker.last_fetch["d"]["source"] == SOURCE_SILENCE

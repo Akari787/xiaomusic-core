@@ -30,6 +30,7 @@ from xiaomusic.playback.runtime_state import (
     complete_stop,
     confirm_failed,
     confirm_playing,
+    follow_track,
     new_queue_session,
     next_command,
     pause,
@@ -747,3 +748,30 @@ def test_begin_play_dispatch_preserves_all_fields():
     assert s2.queue_session_id == 7
     assert s2.command_generation == 13
     assert s2.track_attempt_id == 5
+
+
+def test_follow_track_replaces_track_and_keeps_lifecycle_counters():
+    s = PlaybackRuntimeState(
+        phase=PlaybackPhase.PLAYING,
+        desired_track=_tr("e1", "a"),
+        confirmed_track=_tr("e1", "a"),
+        expected_end_at=50.0,
+        queue_session_id=3,
+        command_generation=7,
+        track_attempt_id=2,
+    )
+    s2 = follow_track(s, track=_tr("e2", "b"), updated_at=9.0)
+    assert s2.phase == PlaybackPhase.PLAYING
+    assert s2.confirmed_track == _tr("e2", "b")
+    assert s2.desired_track == _tr("e2", "b")
+    assert s2.expected_end_at is None
+    assert (s2.queue_session_id, s2.command_generation, s2.track_attempt_id) == (3, 7, 2)
+    assert s2.transition_reason == "follow_track"
+
+
+@pytest.mark.parametrize(
+    "phase", [PlaybackPhase.CONFIRMING, PlaybackPhase.STOPPING, PlaybackPhase.STOPPED]
+)
+def test_follow_track_only_while_playing(phase):
+    with pytest.raises(TransitionError):
+        follow_track(PlaybackRuntimeState(phase=phase), track=_tr("e2", "b"), updated_at=1.0)

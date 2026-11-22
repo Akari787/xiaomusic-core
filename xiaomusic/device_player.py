@@ -50,6 +50,7 @@ from xiaomusic.playback.runtime_state import (
     check_stale_strict,
     complete_stop,
     confirm_playing,
+    follow_track,
     new_queue_session,
     next_command,
     report_failure,
@@ -65,13 +66,26 @@ from xiaomusic.playback.task_registry import (
     TaskKind,
 )
 from xiaomusic.speaker_client import SpeakerClient
+from xiaomusic.speaker_queue import (
+    DEFAULT_WINDOW_SIZE,
+    LOOP_LIST,
+    LOOP_SINGLE,
+    loop_type_for,
+    plan_window,
+)
+from xiaomusic.stream_gateway import SOURCE_SILENCE
 from xiaomusic.utils.file_utils import chmodfile
-from xiaomusic.utils.text_utils import custom_sort_key, list2str
+from xiaomusic.utils.text_utils import list2str
 
 # Send the next track this long before the current one ends. The speaker
 # restarts a finished single-item queue, so a late switch is audible as the
 # old track starting over. Goes away with the speaker-owned queue (ADR-0007).
 TRACK_END_LEAD_SEC = 2.0
+# Queue dispatch (ADR-0007 step 3): the speaker switches tracks itself and the
+# duration timer is only a fallback for a missed fetch. The next fetch lands
+# at the track boundary (live-paced sources about 4 s later), so the fallback
+# waits this long past the expected end.
+QUEUE_FOLLOW_GRACE_SEC = 8.0
 
 
 class XiaoMusicDevice:
@@ -160,6 +174,11 @@ class XiaoMusicDevice:
         # update_playlist() 刷新。_get_playlist_names() 是从 _play_list_items 派生的只读视图。
         self._play_list_items = []
         self._current_index = -1  # 当前歌曲在播放列表中的索引
+
+        # Queue dispatch (ADR-0007 step 3): the window last sent to the speaker
+        # (None = single-track dispatch) and the loop type last set per device.
+        self._queue_dispatch: dict | None = None
+        self._loop_type_sent: dict[str, int] = {}
 
         self._last_cmd = None
         self.update_playlist()
@@ -919,9 +938,10 @@ class XiaoMusicDevice:
                 f"随机打乱 {list_name} {list2str([item.get('display_name', '') for item in playlist_items], self.config.verbose)}"
             )
         else:
-            playlist_items.sort(
-                key=lambda item: custom_sort_key(str(item.get("display_name") or ""))
-            )
+            # Playlist order as the library has it (Jellyfin order, local
+            # library order), the same as the v1 API path (ADR-0007 decision
+            # 1). Sorting by name here made a play mode change reorder the
+            # list under a queue already on the speaker.
             self.log.info(
                 f"没打乱 {list_name} {list2str([item.get('display_name', '') for item in playlist_items], self.config.verbose)}"
             )
@@ -1691,7 +1711,11 @@ class XiaoMusicDevice:
             intent.sequence,
             payload.get("reason", ""),
         )
-        await self._play_next(command_already_accepted=True)
+        target = str(payload.get("target_name") or "")
+        if target:
+            await self._play_next(command_already_accepted=True, target_name=target)
+        else:
+            await self._play_next(command_already_accepted=True)
 
     async def _execute_retry_intent(self, intent) -> None:
         """Execute RETRY: guard accepted_token strict, route same-song vs next.
@@ -1990,7 +2014,12 @@ class XiaoMusicDevice:
             display_name=target,
         )
 
-    async def _play_next(self, manual: bool = False, command_already_accepted: bool = False):
+    async def _play_next(
+        self,
+        manual: bool = False,
+        command_already_accepted: bool = False,
+        target_name: str = "",
+    ):
         """播放下一首（内部实现）
 
         manual=True（用户主动点击）：单曲循环模式下前进到下一首
@@ -2001,11 +2030,13 @@ class XiaoMusicDevice:
 
         command_already_accepted: True when command was already accepted
             upstream.  False (default) preserves legacy behavior.
+        target_name: play this track instead of computing the next one
+            (queue dispatch: the next window starts at a known track).
         """
         if not command_already_accepted:
             self._accept_command(updated_at=time.time())
         self.log.info("开始播放下一首")
-        name = self.get_next_music(skip_one_repeat=manual)
+        name = target_name or self.get_next_music(skip_one_repeat=manual)
         self.log.info(f"get_next_music {name}")
         self.log.info(f"_play_next. name:{name}, cur_music:{self.get_cur_music()}")
         if name == "":
@@ -3632,6 +3663,29 @@ class XiaoMusicDevice:
         device_id_list = self.xiaomusic.device_manager.get_group_device_id_list(
             self.group_name
         )
+        queue = None
+        if name:
+            try:
+                queue = await self._plan_queue_dispatch(url, name)
+            except Exception as exc:
+                # Planning must never stop playback: send the track alone.
+                self.log.warning("queue_plan_failed name=%s error=%r", name, exc)
+        if queue is not None:
+            payload, loop_type = queue
+            results = await asyncio.gather(
+                *[
+                    self._play_queue_one(
+                        device_id,
+                        payload,
+                        loop_type,
+                        navigation_generation=navigation_generation,
+                    )
+                    for device_id in device_id_list
+                ]
+            )
+            self.log.info(f"group_player_play queue {name} {device_id_list} {results}")
+            return results
+        self._queue_dispatch = None
         speaker_url = self._speaker_url(url)
         if navigation_generation is None:
             tasks = [
@@ -3680,6 +3734,331 @@ class XiaoMusicDevice:
                 max(int(self._current_index), 0),
             )
         return speaker_url
+
+    # ── queue dispatch (ADR-0007 step 3) ────────────────────────────────
+
+    def _active_queue(self) -> dict | None:
+        """The dispatched window if it belongs to the current play session."""
+        queue = getattr(self, "_queue_dispatch", None)
+        if not queue or queue.get("sid") != self._play_session_id:
+            return None
+        return queue
+
+    async def _queue_item_url(self, name: str) -> str:
+        """URL for a non-current window item, or "" to end the window there.
+
+        Songs resolved through a music API need a fresh address at play
+        time, so they are left to a later dispatch.
+        """
+        library = self.xiaomusic.music_library
+        try:
+            if library.is_web_music(name) and library.is_need_use_play_music_api(name):
+                return ""
+            url, _origin = await library.get_music_url(name)
+        except Exception as exc:
+            self.log.warning("queue_item_url_failed name=%s error=%s", name, type(exc).__name__)
+            return ""
+        return str(url or "")
+
+    async def _plan_queue_dispatch(self, url: str, name: str):
+        """Build a window starting at ``name`` (the current playlist item).
+
+        Returns ``(payload, loop_type)``, or None to dispatch ``url`` alone:
+        hardware without the music API, queue dispatch disabled, no gateway,
+        ``name`` not the current playlist item, or a current URL the gateway
+        does not handle.
+        """
+        try:
+            size = int(
+                getattr(getattr(self, "config", None), "queue_window_size", DEFAULT_WINDOW_SIZE)
+            )
+        except (TypeError, ValueError):
+            size = DEFAULT_WINDOW_SIZE
+        if size <= 0 or self._resolve_play_url_dispatch_mode() != "play_by_music_url":
+            return None
+        gateway = getattr(self.xiaomusic, "stream_gateway", None)
+        if gateway is None:
+            return None
+        names = self._get_playlist_names()
+        index = self._current_index
+        if not 0 <= index < len(names) or names[index] != name:
+            return None
+
+        window = plan_window(self.device.play_type, len(names), index, size)
+        sid = self._play_session_id
+        queue_id = str(sid)
+        entries: list[tuple[str, str]] = []
+        snapshot: dict[int, str] = {}
+        sentinel_next = window.sentinel_next
+        for i in window.indices:
+            item_url = url if i == index else await self._queue_item_url(names[i])
+            wrapped = (
+                gateway.wrap(item_url, did=self.did, queue=queue_id, index=i)
+                if item_url
+                else ""
+            )
+            if not wrapped or wrapped == item_url:
+                if i == index:
+                    return None
+                # Not served by the gateway: no fetch would mark it, so the
+                # window ends here and the next dispatch starts with it.
+                sentinel_next = i
+                break
+            entries.append((names[i], wrapped))
+            snapshot[i] = names[i]
+        if sid != self._play_session_id:
+            return None
+        if sentinel_next is not None:
+            entries.append(("", gateway.sentinel_url(self.did, queue_id, sentinel_next)))
+
+        # A one-item list under repeat replays from the speaker's buffer
+        # without a new fetch, so a fallback timer would only cut it short.
+        loops_alone = len(entries) == 1 and window.loop_type in (LOOP_SINGLE, LOOP_LIST)
+        self._queue_dispatch = {
+            "sid": sid,
+            "names": snapshot,
+            "sentinel_next": sentinel_next,
+            "loop_type": window.loop_type,
+            "has_successor": len(entries) > 1,
+            "stale": False,
+            # "grace": the speaker moves on by itself, the timer is a late
+            # fallback; "none": it repeats from its buffer (no fetch), no
+            # timer; "lead": the server must switch (after a mode change).
+            "timer": "none" if loops_alone else "grace",
+        }
+        audio_id = await self._get_audio_id(name)
+        payload = self._build_music_queue_payload(entries, str(audio_id), start_index=0)
+        self.log.info(
+            "queue_dispatch did=%s queue=%s start=%d items=%d sentinel_next=%s loop_type=%d",
+            self.did,
+            queue_id,
+            index,
+            len(snapshot),
+            sentinel_next,
+            window.loop_type,
+        )
+        return payload, window.loop_type
+
+    async def _ensure_loop_type(self, device_id: str, loop_type: int) -> None:
+        sent = getattr(self, "_loop_type_sent", None)
+        if sent is None:
+            sent = self._loop_type_sent = {}
+        if sent.get(device_id) == loop_type:
+            return
+        try:
+            await self.speaker.set_loop(device_id, loop_type)
+            sent[device_id] = loop_type
+            self.log.info("set_loop device_id=%s loop_type=%d", device_id, loop_type)
+        except Exception as exc:
+            sent.pop(device_id, None)
+            self.log.warning("set_loop_failed device_id=%s error=%s", device_id, exc)
+
+    async def _play_queue_one(
+        self,
+        device_id,
+        payload: dict,
+        loop_type: int,
+        *,
+        navigation_generation: int | None = None,
+    ):
+        """Dispatch a window to one device; None on failure (like play_one_url)."""
+        ret = None
+        try:
+            if not self._manual_navigation_is_current(navigation_generation):
+                self.log.info(
+                    "manual_nav_stale generation=%s stage=before_queue_dispatch",
+                    navigation_generation,
+                )
+                return None
+            await self._ensure_loop_type(device_id, loop_type)
+            ret = await self.speaker.play_queue(device_id, payload)
+            self.log.info("play_queue device_id=%s ret=%s", device_id, ret)
+        except Exception as e:
+            self.log.exception(f"Execption {e}")
+        return ret
+
+    def on_track_fetched(self, ref) -> None:
+        """StreamGateway listener: the speaker fetched an item of a window."""
+        queue = self._active_queue()
+        if queue is None or str(ref.queue) != str(queue["sid"]):
+            self.log.info(
+                "queue_fetch_ignored did=%s queue=%s index=%s cur_sid=%s",
+                ref.did,
+                ref.queue,
+                ref.index,
+                self._play_session_id,
+            )
+            return
+        self._ensure_playback_tasks().start(
+            TaskKind.QUEUE_FOLLOW,
+            self._task_generation(sid=queue["sid"]),
+            self._handle_queue_fetch(ref, queue),
+            metadata={"sid": queue["sid"], "index": ref.index, "source": ref.source},
+        )
+
+    async def _handle_queue_fetch(self, ref, queue: dict) -> None:
+        from xiaomusic.playback.command_arbiter import IntentKind
+
+        sid = queue["sid"]
+        if self._active_queue() is not queue:
+            return
+        names = self._get_playlist_names()
+
+        if ref.source == SOURCE_SILENCE:
+            # The window has played out; the speaker is on the sentinel.
+            target = ""
+            if not queue["stale"] and 0 <= ref.index < len(names):
+                target = names[ref.index]
+            elif self.device.play_type == PLAY_TYPE_SIN:
+                await self.stop(arg1="notts")
+                return
+            self.log.info(
+                "queue_window_exhausted did=%s queue=%s next=%s target=%s",
+                self.did,
+                sid,
+                ref.index,
+                target or "<next>",
+            )
+            self._submit_auto_retry(
+                IntentKind.AUTO_NEXT,
+                source_token=self._capture_lifecycle_token(),
+                sid=sid,
+                payload={"target_name": target},
+                reason="queue_window_exhausted",
+            )
+            return
+
+        name = queue["names"].get(ref.index)
+        if name is None:
+            return
+        if name == self.get_cur_music():
+            # The dispatched start item, or the speaker starting the current
+            # track again (single loop re-fetches on every repeat).
+            if self.get_runtime_state().phase == PlaybackPhase.PLAYING:
+                self._start_time = time.time()
+                self._paused_time = 0
+            return
+        if not queue["stale"] and 0 <= ref.index < len(names) and names[ref.index] == name:
+            await self._follow_queue_track(ref.index, name, sid)
+            return
+
+        # Play mode or list changed after the window was sent: the speaker's
+        # next item may not be what the current mode wants next.
+        if self.device.play_type == PLAY_TYPE_SIN:
+            self.log.info("queue_follow_stale_stop did=%s name=%s", self.did, name)
+            await self.stop(arg1="notts")
+            return
+        wanted = self.get_next_music()
+        if wanted == name:
+            index = self._find_playlist_index(display_name=name)
+            if index >= 0:
+                await self._follow_queue_track(index, name, sid)
+                return
+        self.log.info(
+            "queue_follow_stale_resync did=%s fetched=%s wanted=%s", self.did, name, wanted
+        )
+        if not wanted:
+            # Sequential play has reached the end of the list.
+            await self.stop(arg1="notts")
+            return
+        self._submit_auto_retry(
+            IntentKind.AUTO_NEXT,
+            source_token=self._capture_lifecycle_token(),
+            sid=sid,
+            payload={"target_name": wanted},
+            reason="queue_stale_resync",
+        )
+
+    async def _follow_queue_track(self, index: int, name: str, sid: int) -> None:
+        """The speaker moved on by itself: make ``name`` the current track."""
+        state = self.get_runtime_state()
+        if state.phase != PlaybackPhase.PLAYING:
+            self.log.info(
+                "queue_follow_skipped did=%s phase=%s name=%s",
+                self.did,
+                state.phase.value,
+                name,
+            )
+            return
+        item = self._play_list_items[index]
+        entity_id = str(item.get("entity_id") or "").strip()
+        playlist_item_id = str(item.get("item_id") or "").strip()
+        now = time.time()
+        try:
+            self._set_runtime_state(
+                follow_track(
+                    state,
+                    track=TrackReference(
+                        entity_id=entity_id,
+                        playlist_item_id=playlist_item_id,
+                        display_name=name,
+                        source="legacy",
+                    ),
+                    updated_at=now,
+                )
+            )
+        except TransitionError:
+            return
+        self._set_runtime_track_reference(
+            playlist_name=str(self.device.cur_playlist or "").strip(),
+            display_name=name,
+            entity_id=entity_id,
+            playlist_item_id=playlist_item_id,
+            current_index=index,
+        )
+        self._start_time = now
+        self._paused_time = 0
+        self._duration = 0
+        token = self._capture_lifecycle_token()
+        self.log.info("queue_follow did=%s queue=%s index=%d name=%s", self.did, sid, index, name)
+
+        sec = await self.xiaomusic.music_library.get_music_duration(name)
+        if sid != self._play_session_id or self._is_lifecycle_token_stale(token):
+            return
+        self._set_duration(sec)
+        if sec <= 0.1:
+            self._start_duration_probe(name, sid, token=token)
+            return
+        elapsed = max(time.time() - self._start_time, 0.0)
+        await self.set_next_music_timeout(
+            max(sec - TRACK_END_LEAD_SEC - elapsed, 0.1), token=token
+        )
+        if self.event_bus:
+            self.event_bus.publish(DEVICE_CONFIG_CHANGED)
+
+    async def _on_play_type_changed_for_queue(self, play_type: int) -> None:
+        """Apply a play mode change to the queue already on the speaker
+        without interrupting the current track (ADR-0007 decision 3)."""
+        queue = self._active_queue()
+        if queue is None:
+            return
+        queue["stale"] = True
+        loop_type = loop_type_for(play_type)
+        for device_id in self.xiaomusic.device_manager.get_group_device_id_list(
+            self.group_name
+        ):
+            await self._ensure_loop_type(device_id, loop_type)
+        if play_type == PLAY_TYPE_ONE:
+            queue["timer"] = "none"  # the speaker now repeats this track
+        elif queue["has_successor"] or play_type == PLAY_TYPE_SIN:
+            queue["timer"] = "grace"  # it moves on or stops by itself
+        else:
+            queue["timer"] = "lead"  # one-item list: the server must switch
+        self.log.info(
+            "queue_play_type_changed did=%s play_type=%s loop_type=%d timer=%s",
+            self.did,
+            play_type,
+            loop_type,
+            queue["timer"],
+        )
+        if queue["timer"] == "none":
+            await self.cancel_next_timer()
+            return
+        duration = float(getattr(self, "_duration", 0) or 0)
+        if duration <= 0.1 or not self.is_playing:
+            return
+        elapsed = max(time.time() - self._start_time, 0.0)
+        await self.set_next_music_timeout(max(duration - TRACK_END_LEAD_SEC - elapsed, 0.1))
 
     def _bootstrap_playlist_session_for_external_url(self, context: dict | None = None):
         context = context if isinstance(context, dict) else {}
@@ -4132,6 +4511,14 @@ class XiaoMusicDevice:
             token = self._capture_lifecycle_token()
         sid = self._play_session_id
 
+        queue = self._active_queue()
+        if queue is not None and queue["timer"] == "none":
+            await self.cancel_next_timer()
+            self.log.info("timer_skipped_speaker_loops(session_id=%s, did=%s)", sid, self.did)
+            return
+        if queue is not None and queue["timer"] == "grace":
+            sec = sec + TRACK_END_LEAD_SEC + QUEUE_FOLLOW_GRACE_SEC
+
         await self.cancel_next_timer()
         if self._is_lifecycle_token_stale(token):
             self.log.info(
@@ -4424,6 +4811,7 @@ class XiaoMusicDevice:
             self.event_bus.publish(DEVICE_CONFIG_CHANGED)
         if refresh_playlist:
             self.update_playlist()
+        await self._on_play_type_changed_for_queue(play_type)
 
     async def play_music_list(self, list_name, music_name):
         """播放指定播放列表"""

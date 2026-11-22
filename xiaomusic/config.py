@@ -145,6 +145,11 @@ class Config:
     auto_next_preplay_stop: bool = (
         os.getenv("XIAOMUSIC_AUTO_NEXT_PREPLAY_STOP", "false").lower() == "true"
     )
+    # Tracks per queue dispatch on hardware with the music API (ADR-0007
+    # step 3): the speaker plays them in order by itself; a silent sentinel
+    # at the end triggers the next dispatch. 0 = send one track at a time
+    # (the previous behavior).
+    queue_window_size: int = int(os.getenv("XIAOMUSIC_QUEUE_WINDOW_SIZE", "20") or 0)
     # EXPERIMENT (default off): enables /api/experiment/speaker for probing
     # speaker-side queue behavior on the test server (see ADR-0007).
     enable_playback_experiments: bool = (

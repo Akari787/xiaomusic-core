@@ -23,6 +23,7 @@ class TaskKind(str, Enum):
     FAILURE_RETRY = "failure_retry"
     ADD_SONG_TIMER = "add_song_timer"
     STOP_TIMER = "stop_timer"
+    QUEUE_FOLLOW = "queue_follow"
 
 
 # ── scope classification ──────────────────────────────────────────────
@@ -37,6 +38,7 @@ ATTEMPT_SCOPED_KINDS: tuple[TaskKind, ...] = (
 
 SESSION_SCOPED_KINDS: tuple[TaskKind, ...] = (
     TaskKind.ADD_SONG_TIMER,
+    TaskKind.QUEUE_FOLLOW,
 )
 
 
