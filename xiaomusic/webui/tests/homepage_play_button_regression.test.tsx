@@ -321,6 +321,46 @@ describe("HomePage play button regression", () => {
     container.remove();
   });
 
+  it("settings auth poll shows renewal risk without hiding a ready runtime or forcing unknown-age login", async () => {
+    let warning = "refresh_suspended";
+    let qrRequested = false;
+    mockedApi.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/api/auth/status") {
+        return {
+          token_valid: true, runtime_auth_ready: true,
+          login_in_progress: qrRequested,
+          status_reason: warning === "refresh_suspended" ? "persistent_auth_refresh_suspended" : "healthy",
+          credential_warning: warning,
+        };
+      }
+      if (path === "/api/get_qrcode") {
+        qrRequested = true;
+        return { success: true, qrcode_url: "data:image/png;base64,AA", expire_seconds: 120 };
+      }
+      return {};
+    });
+    const settingsButton = Array.from(container.querySelectorAll(".icon-item"))
+      .find((item) => item.textContent?.trim().endsWith("设置")) as HTMLElement;
+    await act(async () => { settingsButton.click(); });
+    await advanceAndFlush(2500);
+    expect(container.querySelector(".auth-status-item")?.textContent).toContain("续期已暂停");
+    expect(container.textContent).toContain("当前运行时仍可用");
+    const qrButton = Array.from(container.querySelectorAll(".setting-card button"))
+      .find((item) => item.textContent === "获取二维码") as HTMLButtonElement;
+    await act(async () => { qrButton.click(); });
+    expect(mockedApi.apiGet).toHaveBeenCalledWith("/api/get_qrcode");
+    warning = "unknown_age";
+    await advanceAndFlush(2500);
+    expect(container.textContent).toContain("无需仅因年龄未知而扫码");
+    expect(container.querySelector(".auth-status-item")?.textContent).toContain("已登录");
+    expect(mockedApi.apiGet.mock.calls.filter(([path]) => path === "/api/get_qrcode")).toHaveLength(1);
+    warning = "approaching_expiry";
+    await advanceAndFlush(2500);
+    expect(container.textContent).toContain("长期凭据签发时间未知");
+    expect(container.textContent).not.toContain("72–84 小时存在失效风险");
+    expect(container.querySelector(".auth-status-item")?.textContent).toContain("已登录");
+  });
+
   it("clicking play calls v1 service with unified payload", async () => {
     const playTooltip = Array.from(container.querySelectorAll(".control-button .tooltip")).find(
       (el) => (el.textContent || "").trim() === "播放",

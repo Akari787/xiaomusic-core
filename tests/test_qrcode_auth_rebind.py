@@ -20,6 +20,8 @@ async def test_qrcode_poll_rebinds_before_reinit_and_does_not_clear_lock(monkeyp
     calls = []
 
     class _QRAPI:
+        auth_data = {"passTokenIssuedAt": 123, "passToken": "synthetic"}
+
         def get_logint_status(self, lp):
             calls.append(("poll", lp))
 
@@ -72,7 +74,8 @@ async def test_qrcode_poll_rebinds_before_reinit_and_does_not_clear_lock(monkeyp
         ("poll", "lp"),
         (
             "reload",
-            {"reason": "qrcode_login_success", "rebind_current_auth": True},
+            {"reason": "qrcode_login_success", "rebind_current_auth": True,
+             "qr_scan_verified": True, "qr_auth_snapshot": _QRAPI.auth_data},
         ),
         (
             "reinit",
@@ -162,9 +165,10 @@ async def test_manual_reload_qrcode_rebind_uses_persisted_short_session_without_
     assert manager.mina_service is candidate["mina_service"]
     assert manager.mina_service is not old_runtime
     assert manager._state == manager.STATE_HEALTHY
-    assert manager._scheduled_refresh_suspended is False
-    assert manager._scheduled_refresh_suspend_reason == ""
-    assert manager._scheduled_refresh_suspend_code == ""
+    # A reason string alone is not proof that a new QR credential was committed.
+    assert manager._scheduled_refresh_suspended is True
+    assert manager._scheduled_refresh_suspend_reason == "old scheduled gate"
+    assert manager._scheduled_refresh_suspend_code == "credential_session_rejected"
     assert manager._last_manual_login_required_reason == ""
     assert manager._last_error == ""
     assert manager._last_login_trace["auth_class"] == ""
@@ -284,7 +288,7 @@ async def test_manual_reload_qrcode_failure_preserves_healthy_runtime_and_gate(a
     assert manager._state == manager.STATE_HEALTHY
     assert manager._scheduled_refresh_suspended is True
     assert manager._scheduled_refresh_suspend_code == "old_gate"
-    assert manager._last_error == "new verify failed"
+    assert manager._last_error == "runtime_candidate_verification_failed"
     assert manager.auth_short_session_rebuild_debug_state()["last_short_session_rebuild"]["result"] == "failed"
 
 
@@ -371,6 +375,98 @@ async def test_qrcode_rebind_uses_new_disk_auth_and_converges_public_status(auth
     assert manager._last_retry_increment_reason == ""
     assert manager._last_health_probe_result == "ok"
     assert manager._last_health_probe_error == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("concurrent_generation", [False, True])
+async def test_qr_cas_then_system_rebind_with_shared_store_respects_generation(
+    auth_manager, monkeypatch, concurrent_generation
+):
+    from xiaomusic.qrcode_login import MiJiaAPI
+    from xiaomusic.security.token_store import TokenStore
+
+    manager, _ = auth_manager
+    store = TokenStore(manager.config)
+    initial = {**manager._get_auth_data(), "ua": "saved-ua", "passTokenIssuedAt": 111}
+    store.save(initial)
+    manager.token_store = store
+    api = MiJiaAPI(auth_data_path=manager.auth_token_path, token_store=store)
+    lp_result = {
+        "psecurity": "ps", "nonce": "n", "ssecurity": "ss", "passToken": "scan-new",
+        "userId": initial["userId"], "cUserId": initial["cUserId"],
+        "location": "https://account.example/cb?nonce=n",
+    }
+    api._handle_ret = lambda *args, **kwargs: lp_result
+    api._http_request = lambda *args, **kwargs: SimpleNamespace(cookies={})
+    monkeypatch.setattr(api, "_init_session", lambda: None)
+    manager._scheduled_refresh_suspended = True
+    manager._scheduled_refresh_suspend_code = "credential_session_rejected"
+    exchange = AsyncMock(side_effect=AssertionError("QR rebind must not exchange"))
+    manager._try_miaccount_persistent_auth_relogin = exchange
+
+    async def _candidate(auth_data):
+        assert auth_data["passToken"] == "scan-new"
+        if concurrent_generation:
+            scanned = store.get_persisted()
+            assert store.commit_if_unchanged(
+                scanned, {**scanned, "serviceToken": "concurrent-new"}, reason="race"
+            )
+        return {
+            "ok": True, "account": object(), "mina_service": object(),
+            "miio_service": object(), "session": None, "device_id": auth_data["deviceId"],
+        }
+
+    manager._build_verified_runtime_candidate = _candidate
+    reinit = AsyncMock()
+    monkeypatch.setattr(system, "xiaomusic", SimpleNamespace(auth_manager=manager, reinit=reinit))
+    monkeypatch.setattr(system, "qrcode_login_error", "")
+    await system.get_logint_status(api, "lp")
+    persisted = store.get_persisted()
+    assert persisted["passToken"] == "scan-new"
+    assert persisted["passTokenIssuedAt"] > 111
+    assert persisted["serviceToken"] == ("concurrent-new" if concurrent_generation else initial["serviceToken"])
+    assert manager._scheduled_refresh_suspended is concurrent_generation
+    assert system.qrcode_login_error == ""
+    exchange.assert_not_awaited()
+    reinit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_qr_credential", [False, True])
+async def test_qrcode_verified_rebind_only_clears_for_matching_scan_generation(
+    auth_manager, new_qr_credential
+):
+    from xiaomusic.security.token_store import TokenStore
+
+    manager, _ = auth_manager
+    initial = {**manager._get_auth_data(), "passTokenIssuedAt": 111}
+    store = TokenStore(manager.config)
+    store.save(initial)
+    manager.token_store = store
+    from_qr = {
+        **initial, "serviceToken": "new-short", "passToken": "fresh-qr",
+        "passTokenIssuedAt": int(time.time() * 1000),
+    }
+    assert store.commit_if_unchanged(initial, from_qr, reason="qr-scan")
+    snapshot = dict(store.get_persisted())
+    if not new_qr_credential:
+        snapshot["passToken"] = "stale-generation"
+    manager._scheduled_refresh_suspended = True
+    manager._scheduled_refresh_suspend_code = "credential_session_rejected"
+    manager._build_verified_runtime_candidate = AsyncMock(return_value={
+        "ok": True, "account": object(), "mina_service": object(),
+        "miio_service": object(), "session": None, "device_id": from_qr["deviceId"],
+    })
+    out = await manager.manual_reload_runtime(
+        reason="qrcode_login_success", rebind_current_auth=True,
+        qr_scan_verified=True, qr_auth_snapshot=snapshot,
+    )
+    assert out["refreshed"] is True
+    assert manager._scheduled_refresh_suspended is (not new_qr_credential)
+    public = manager.map_auth_public_status(runtime_auth_ready=True)
+    assert public["status_reason"] == ("healthy" if new_qr_credential else "persistent_auth_refresh_suspended")
+    assert store.get_persisted()["passTokenIssuedAt"] == from_qr["passTokenIssuedAt"]
+    assert store.get_persisted()["passToken"] == from_qr["passToken"]
 
 
 @pytest.mark.asyncio

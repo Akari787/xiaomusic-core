@@ -128,8 +128,11 @@ class MiJiaAPI:
 
         self.token_store = token_store
 
+        self._initial_token_snapshot = None
         if self.token_store is not None:
-            self.auth_data = self.token_store.get()
+            get_persisted = getattr(self.token_store, "get_persisted", self.token_store.get)
+            self.auth_data = get_persisted()
+            self._initial_token_snapshot = dict(self.auth_data)
             if self.auth_data:
                 self._init_session()
         elif self.auth_data_path.exists():
@@ -232,21 +235,23 @@ class MiJiaAPI:
 
     def _parse_service_ret(self, service_ret: requests.Response) -> dict:
         text = service_ret.text.replace("&&&START&&&", "")
-        service_data = json.loads(text)
+        try:
+            service_data = json.loads(text)
+        except (TypeError, json.JSONDecodeError):
+            raise ValueError("invalid_auth_service_response") from None
+        if not isinstance(service_data, dict):
+            raise ValueError("invalid_auth_service_response")
         return service_data
 
     def _handle_ret(
             self, fetch_ret: requests.Response, verify_code: bool = True
     ) -> dict:
         if fetch_ret.status_code != 200:
-            raise ValueError(
-                f"请求失败，状态码: {fetch_ret.status_code}, 响应: {fetch_ret.text}"
-            )
+            # Response bodies may carry passToken, serviceToken, or redirect tickets.
+            raise ValueError(f"请求失败，状态码: {fetch_ret.status_code}")
         fetch_data = self._parse_service_ret(fetch_ret)
         if verify_code and fetch_data.get("code", 0) != 0:
-            raise ValueError(
-                f"验证码错误，状态码: {fetch_data['code']}, 响应: {fetch_data.get('desc', '未知错误')}"
-            )
+            raise ValueError(f"验证码错误，状态码: {fetch_data['code']}")
         return fetch_data
 
     @staticmethod
@@ -265,10 +270,30 @@ class MiJiaAPI:
                 "如`Maple Mono`、`Fira Code`等。"
             )
 
+    @staticmethod
+    def _valid_pass_token(value: object) -> bool:
+        return isinstance(value, str) and bool(value.strip()) and value.strip().lower() != "deleted"
+
+    def _record_pass_token_issuance(self, previous: object, *, scanned: bool = False):
+        """Only a real QR scan or a confirmed changed token starts a new age."""
+        candidate = self.auth_data.get("passToken")
+        if not self._valid_pass_token(candidate):
+            raise ValueError("invalid_pass_token_candidate")
+        if scanned or candidate.strip() != previous:
+            self.auth_data["passTokenIssuedAt"] = int(time.time() * 1000)
+
     def _save_auth_data(self):
         self.auth_data["saveTime"] = int(time.time() * 1000)
         if self.token_store is not None:
-            self.token_store.save(self.auth_data)
+            compare_commit = getattr(self.token_store, "commit_if_unchanged", None)
+            if compare_commit is not None and self._initial_token_snapshot is not None:
+                if not compare_commit(
+                    self._initial_token_snapshot, self.auth_data, reason="qrcode_login"
+                ):
+                    raise ValueError("qrcode_auth_generation_conflict")
+                self._initial_token_snapshot = dict(self.auth_data)
+            else:
+                self.token_store.save(self.auth_data)
             return
         self.auth_data_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.auth_data_path, "w", encoding="utf-8") as f:
@@ -297,6 +322,7 @@ class MiJiaAPI:
                 cookies = self.session.cookies.get_dict()
                 _pt_before = self.auth_data.get("passToken", "")
                 self.auth_data.update(cookies)
+                self._record_pass_token_issuance(_pt_before)
                 self.auth_data["ssecurity"] = service_data["ssecurity"]
                 _pt_after = self.auth_data.get("passToken", "")
                 if _pt_before and _pt_after:
@@ -698,6 +724,8 @@ class MiJiaAPI:
             "userId",
             "cUserId",
         ]
+        if not self._valid_pass_token(lp_data.get("passToken")):
+            raise ValueError("invalid_pass_token_candidate")
         for key in auth_keys:
             self.auth_data[key] = lp_data[key]
         callback_url = lp_data["location"]
@@ -720,6 +748,7 @@ class MiJiaAPI:
         self._http_request("get", callback_url, session=session, headers=headers)
         cookies = session.cookies.get_dict()
         self.auth_data.update(cookies)
+        self._record_pass_token_issuance(None, scanned=True)
 
         # Ensure serviceToken exists (required by downstream APIs and our availability check).
         # Some flows only return yetAnotherServiceToken.
@@ -804,12 +833,15 @@ class MiJiaAPI:
             "userId",
             "cUserId",
         ]
+        if not self._valid_pass_token(lp_data.get("passToken")):
+            raise ValueError("invalid_pass_token_candidate")
         for key in auth_keys:
             self.auth_data[key] = lp_data[key]
         callback_url = lp_data["location"]
         self._http_request("get", callback_url, session=session, headers=headers)
         cookies = session.cookies.get_dict()
         self.auth_data.update(cookies)
+        self._record_pass_token_issuance(None, scanned=True)
 
         st = self.auth_data.get("serviceToken") or self.auth_data.get("yetAnotherServiceToken")
         if st:
@@ -829,7 +861,6 @@ class MiJiaAPI:
         return self.auth_data
 
     def _request(self, uri: str, data: dict, refresh_token: bool = True) -> dict:
-        print(f"请求 URI: {uri}，数据: {data}")
         if refresh_token:
             self._refresh_token()
         url = self.api_base_url + uri
@@ -843,19 +874,24 @@ class MiJiaAPI:
         try:
             ret_data = json.loads(ret.text)
         except json.JSONDecodeError:
-            dec_data = decrypt(self.auth_data["ssecurity"], nonce, ret.text)
-            ret_data = json.loads(dec_data)
-        print(f"响应数据: {ret_data}")
+            try:
+                dec_data = decrypt(self.auth_data["ssecurity"], nonce, ret.text)
+                ret_data = json.loads(dec_data)
+            except Exception:
+                raise ValueError("invalid_mijia_api_response") from None
+        if not isinstance(ret_data, dict):
+            raise ValueError("invalid_mijia_api_response")
         if ret_data.get("code", 0) != 0 or "result" not in ret_data:
-            raise ValueError(
-                f"API错误，状态码: {ret_data['code']}, 响应: {ret_data.get('message', ret_data.get('desc', '未知错误'))}"
-            )
+            raise ValueError(f"mijia_api_error_code_{ret_data.get('code', 'unknown')}")
         return ret_data["result"]
 
     def _http_request(self, method: str, url: str, session=None, **kwargs):
         client = session or requests
         timeout = kwargs.pop("timeout", self.request_timeout)
         retries = max(1, int(self.request_retries))
+        parsed_url = parse.urlparse(url)
+        request_host = parsed_url.hostname or ""
+        request_path = parsed_url.path
         last_error: Exception | None = None
         for attempt in range(1, retries + 1):
             try:
@@ -867,7 +903,8 @@ class MiJiaAPI:
                     extra={
                         "event": "mijia_http_retry",
                         "method": method.upper(),
-                        "url": url,
+                        "host": request_host,
+                        "path": request_path,
                         "attempt": attempt,
                         "retries": retries,
                         "error": exc.__class__.__name__,
@@ -882,9 +919,10 @@ class MiJiaAPI:
             extra={
                 "event": "mijia_http_failed",
                 "method": method.upper(),
-                "url": url,
+                "host": parsed_url.hostname or "",
+                "path": parsed_url.path,
                 "error_id": error_id,
-                "error": str(last_error) if last_error else "unknown",
+                "error_type": type(last_error).__name__ if last_error else "unknown",
             },
         )
         raise ValueError(
@@ -899,7 +937,7 @@ class MiJiaAPI:
                 },
                 ensure_ascii=False,
             )
-        )
+        ) from None
 
     def check_new_msg(
             self, begin_at: int = int(time.time()) - 3600, refresh_token: bool = True

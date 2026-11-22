@@ -9,7 +9,7 @@ services:
     env_file:
       - .env
     environment:
-      TZ: Asia/Shanghai
+      TZ: Asia/Tokyo
       XIAOMUSIC_PUBLIC_PORT: 58090
       # Basic auth is opt-in via .env; use docker-compose.hardened.yml to require it.
       API_SECRET: ${API_SECRET:-}
@@ -30,7 +30,7 @@ services:
     env_file:
       - .env
     environment:
-      TZ: Asia/Shanghai
+      TZ: Asia/Tokyo
       XIAOMUSIC_PUBLIC_PORT: 58091
       # Basic auth is opt-in via .env; use docker-compose.hardened.yml to require it.
       API_SECRET: ${API_SECRET:-}

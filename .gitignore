@@ -186,3 +186,4 @@ xiaomusic-oauth2-prod-latest-*.tar.gz
 # Local development notes and generated review artifacts (do not commit)
 .local/
 .git_commit_msg.txt
+_git-history/

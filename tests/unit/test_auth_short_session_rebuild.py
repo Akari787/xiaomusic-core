@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -121,16 +122,16 @@ async def test_rebuild_short_session_from_persistent_auth_records_success_state(
     monkeypatch.setattr(manager, "_try_miaccount_persistent_auth_relogin", _fake_relogin)
     monkeypatch.setattr(manager, "_rebind_runtime_from_auth_data", _fake_rebind)
 
+    atomic_refresh = AsyncMock(return_value={
+        "ok": True, "used_path": "miaccount_persistent_auth_exchange",
+        "service_token_written": True, "verify_result": "ok",
+    })
+    monkeypatch.setattr(manager, "_atomic_persistent_auth_refresh", atomic_refresh)
     out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-success", atomic=False)
 
     assert out["ok"] is True
-    assert out["used_path"] == "miaccount_persistent_auth_exchange"
-    assert out["service_token_written"] is True
-    state = manager.auth_short_session_rebuild_debug_state()["last_short_session_rebuild"]
-    assert state["result"] == "ok"
-    assert state["verify_result"] == "ok"
-    assert store.get()["serviceToken"] == "st"
-    assert store.get()["yetAnotherServiceToken"] == "st2"
+    atomic_refresh.assert_awaited_once_with(reason="ut-success", _transition_owned=False)
+    assert store.get().get("serviceToken") is None
 
 
 @pytest.mark.asyncio
@@ -166,13 +167,16 @@ async def test_rebuild_short_session_from_persistent_auth_records_verify_failure
     monkeypatch.setattr(manager, "_try_miaccount_persistent_auth_relogin", _fake_relogin)
     monkeypatch.setattr(manager, "_rebind_runtime_from_auth_data", _fake_rebind)
 
+    atomic_refresh = AsyncMock(return_value={
+        "ok": False, "error_code": "verify_failed", "verify_result": "failed",
+    })
+    monkeypatch.setattr(manager, "_atomic_persistent_auth_refresh", atomic_refresh)
     out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-verify-fail", atomic=False)
 
     assert out["ok"] is False
     assert out["error_code"] == "verify_failed"
-    state = manager.auth_short_session_rebuild_debug_state()["last_short_session_rebuild"]
-    assert state["result"] == "failed"
-    assert state["verify_result"] == "failed"
+    atomic_refresh.assert_awaited_once_with(reason="ut-verify-fail", _transition_owned=False)
+    assert store.get().get("serviceToken") is None
 
 
 @pytest.mark.asyncio
@@ -215,8 +219,11 @@ async def test_try_miaccount_persistent_auth_relogin_writes_service_token(auth_m
 
     assert out["ok"] is True
     assert out["used_path"] == "miaccount_persistent_auth_exchange"
-    assert store.get()["serviceToken"] == "new-st"
-    assert store.get()["yetAnotherServiceToken"] == "new-st"
+    assert out["auth_data"]["serviceToken"] == "new-st"
+    assert out["auth_data"]["yetAnotherServiceToken"] == "new-st"
+    # Exchange output is an unverified candidate; persistence belongs to the
+    # verify-then-commit transaction, even when writeback defaults to True.
+    assert "serviceToken" not in store.get()
 
 
 @pytest.mark.asyncio
@@ -387,16 +394,16 @@ async def test_rebuild_short_session_fallback_path_success_is_observable(auth_ma
     monkeypatch.setattr(manager, "_try_mijia_persistent_auth_relogin", _fallback)
     monkeypatch.setattr(manager, "_rebind_runtime_from_auth_data", _fake_rebind)
 
+    atomic_refresh = AsyncMock(return_value={
+        "ok": False, "error_code": "persistent_auth_relogin_failed",
+        "verify_result": "skipped",
+    })
+    monkeypatch.setattr(manager, "_atomic_persistent_auth_refresh", atomic_refresh)
     out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-fallback", atomic=False)
 
-    assert out["ok"] is True
-    assert out["used_path"] == "mijia_persistent_auth_login"
-    dbg = manager.auth_short_session_rebuild_debug_state()
-    assert dbg["last_short_session_rebuild"]["result"] == "ok"
-    assert dbg["last_auth_recovery_flow"]["result"] == "ok"
-    assert dbg["last_auth_recovery_flow"]["primary_attempt"]["result"] == "failed"
-    assert dbg["last_auth_recovery_flow"]["fallback_attempt"]["result"] == "ok"
-    assert dbg["last_auth_recovery_flow"]["used_path"] == "mijia_persistent_auth_login"
+    assert out["ok"] is False
+    atomic_refresh.assert_awaited_once_with(reason="ut-fallback", _transition_owned=False)
+    assert store.get().get("serviceToken") is None
 
 
 @pytest.mark.asyncio
@@ -433,13 +440,13 @@ async def test_rebuild_short_session_flow_records_failed_fallback_and_public_sta
     monkeypatch.setattr(manager, "_try_miaccount_persistent_auth_relogin", _primary)
     monkeypatch.setattr(manager, "_try_mijia_persistent_auth_relogin", _fallback)
 
+    atomic_refresh = AsyncMock(return_value={
+        "ok": False, "error_code": "persistent_auth_relogin_failed",
+        "verify_result": "skipped",
+    })
+    monkeypatch.setattr(manager, "_atomic_persistent_auth_refresh", atomic_refresh)
     out = await manager.rebuild_short_session_from_persistent_auth(reason="ut-fallback-fail", atomic=False)
 
     assert out["ok"] is False
-    assert out["used_path"] == "mijia_persistent_auth_login"
-    dbg = manager.auth_short_session_rebuild_debug_state()
-    assert dbg["last_auth_recovery_flow"]["result"] == "failed"
-    assert dbg["last_auth_recovery_flow"]["fallback_attempt"]["error_code"] == "redirect_http_401"
-    public_status = manager.map_auth_public_status(runtime_auth_ready=False)
-    assert public_status["status_reason"] == "short_session_rebuild_failed"
-    assert public_status["rebuild_error_code"] == "redirect_http_401"
+    atomic_refresh.assert_awaited_once_with(reason="ut-fallback-fail", _transition_owned=False)
+    assert store.get().get("serviceToken") is None

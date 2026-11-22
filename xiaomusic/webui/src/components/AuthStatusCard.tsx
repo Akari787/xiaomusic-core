@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { credentialAgeText } from "../services/credentialAge";
 
 import {
   fetchAuthStatus,
@@ -42,8 +43,10 @@ export function AuthStatusCard() {
     }
 
     void load();
+    const timer = window.setInterval(() => void load(), 60_000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -88,7 +91,11 @@ export function AuthStatusCard() {
   const statusDetail = status?.status_reason_detail || "";
 
   let authStateText: string;
-  if (statusReason === "healthy") {
+  if (statusReason === "persistent_auth_refresh_suspended") {
+    authStateText = runtimeReady
+      ? "长期凭据续期受阻；当前运行时仍可用，请尽快重新扫码"
+      : "长期凭据续期受阻；当前运行时不可用，请重新扫码";
+  } else if (statusReason === "healthy") {
     authStateText = "运行时已恢复";
   } else if (statusReason === "persistent_auth_missing") {
     authStateText = "需要重新扫码登录（长期态缺失）";
@@ -107,11 +114,21 @@ export function AuthStatusCard() {
       : "需要重新扫码登录";
   }
 
+  const warningText = status?.credential_warning === "refresh_suspended"
+    ? "自动续期已暂停，请主动重新扫码；不代表当前会话立即失效。"
+    : "";
+  const ageText = credentialAgeText(status);
+
   return (
     <section className="auth-card">
       <h2>认证状态</h2>
       {error ? <p className="auth-error">请求失败：{error}</p> : null}
       {actionMessage ? <p>{actionMessage}</p> : null}
+      {warningText ? <p role="status">⚠️ {warningText}</p> : null}
+      {ageText ? <p>{ageText}</p> : null}
+      {statusReason === "persistent_auth_refresh_suspended" ? (
+        <p><a href="/webui/#/">前往首页认证登录，主动获取扫码二维码</a></p>
+      ) : null}
       {authLocked ? (
         <p className="auth-error" style={{ color: "#b00020", fontWeight: 700 }}>
           ⚠️ 认证已锁定：{status?.auth_lock_reason || "unknown"}
@@ -129,6 +146,7 @@ export function AuthStatusCard() {
           <li>short_session_available: {String(status.short_session_available ?? "n/a")}</li>
           <li>persistent_auth_available: {String(status.persistent_auth_available ?? "n/a")}</li>
           <li>status_reason: {statusReason}</li>
+          <li>当前运行时：{runtimeReady ? "仍可用" : "不可用"}</li>
           <li>status_reason_detail: {statusDetail || "n/a"}</li>
           <li>rebuild_failed: {String(rebuildFailed)}</li>
           {rebuildFailed ? (

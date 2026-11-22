@@ -20,6 +20,9 @@ async def test_api_v1_auth_status_returns_v1_envelope_and_core_fields(monkeypatc
                 "auth_mode": "degraded",
                 "status_reason": "short_session_missing",
                 "status_mapping_source": "short_session_missing",
+                "pass_token_issued_at": 123456,
+                "pass_token_age_seconds": 216000,
+                "credential_warning": "approaching_expiry",
                 "recovery_failure_count": 2,
                 "persistent_auth_available": True,
                 "short_session_available": False,
@@ -82,6 +85,9 @@ async def test_api_v1_auth_status_returns_v1_envelope_and_core_fields(monkeypatc
     assert v1_out["data"]["status_reason"] == system_out["status_reason"]
     assert v1_out["data"]["recovery_failure_count"] == system_out["recovery_failure_count"]
     assert v1_out["data"]["status_mapping_source"] == system_out["status_mapping_source"]
+    assert system_out["pass_token_issued_at"] == 123456
+    assert system_out["pass_token_age_seconds"] == 216000
+    assert system_out["credential_warning"] == "approaching_expiry"
 
 
 @pytest.mark.asyncio
@@ -143,3 +149,10 @@ async def test_system_auth_payload_uses_minimal_exchange_capability(monkeypatch)
 
     out = await system._build_auth_status_payload()
     assert out["persistent_auth_available"] is True
+    monkeypatch.setattr(_TokenStore, "get", staticmethod(lambda: {
+        "userId": "u", "passToken": " DeLeTeD ", "deviceId": "d",
+        "ssecurity": "s", "serviceToken": "short",
+    }))
+    invalid = await system._build_auth_status_payload()
+    assert invalid["persistent_auth_available"] is False
+    assert invalid["token_valid"] is False

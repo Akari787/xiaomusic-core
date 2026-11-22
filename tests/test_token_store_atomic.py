@@ -6,6 +6,18 @@ import pytest
 from xiaomusic.security.token_store import TokenStore
 
 
+def test_compare_and_commit_rejects_stale_auth_generation(tmp_path):
+    store = TokenStore(tmp_path / "auth.json")
+    initial = {"userId": "u", "passToken": "old", "deviceId": "d"}
+    store.save(initial)
+    qr_result = {**initial, "passToken": "qr-new"}
+    old_refresh_result = {**initial, "passToken": "refresh-old", "serviceToken": "st-new"}
+
+    assert store.commit_if_unchanged(initial, qr_result, reason="qr") is True
+    assert store.commit_if_unchanged(initial, old_refresh_result, reason="stale-refresh") is False
+    assert store.get_persisted() == qr_result
+
+
 def test_flush_atomic_no_partial_json(tmp_path):
     token_path = tmp_path / "auth.json"
     store = TokenStore(token_path)

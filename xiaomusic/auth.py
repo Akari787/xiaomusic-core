@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from aiohttp import ClientSession
 from miservice import MiAccount, MiIOService, MiNAService
+from yarl import URL
 
 from xiaomusic.const import COOKIE_TEMPLATE
 from xiaomusic.utils.system_utils import (
@@ -100,6 +101,28 @@ NETWORK_ERROR_KEYWORDS = (
 T = TypeVar("T")
 
 
+# Legacy auth.json files predate the QR flow's persisted `ua`. A fixed, documented
+# fallback is preferable to miservice's random UserAgent on each request.
+_LEGACY_AUTH_UA = "xiaomusic/1.0 (legacy auth without saved ua)"
+
+
+class _AccountRequestSession:
+    """Per-account transport: keep Passport and STS outbound identity identical."""
+
+    def __init__(self, session, ua: str):
+        self._session = session
+        self._ua = ua
+        self.cookie_jar = session.cookie_jar
+
+    def request(self, method, url, **kwargs):
+        headers = dict(kwargs.pop("headers", None) or {})
+        headers["User-Agent"] = self._ua
+        return self._session.request(method, url, headers=headers, **kwargs)
+
+    def get(self, url, **kwargs):
+        return self.request("GET", url, **kwargs)
+
+
 class _MemoryTokenStore:
     """MiAccount-compatible token store that can never touch .mi.token."""
 
@@ -111,6 +134,22 @@ class _MemoryTokenStore:
 
     def save_token(self, token=None):
         self.token = dict(token or {})
+
+
+class _CandidateAuthDataStore:
+    """MiJiaAPI-compatible store that keeps refresh output isolated until verified."""
+
+    def __init__(self, data: dict[str, Any]):
+        self._data = dict(data)
+
+    def get(self):
+        return dict(self._data)
+
+    def get_persisted(self):
+        return self.get()
+
+    def save(self, data: dict[str, Any]):
+        self._data = dict(data)
 
 
 def is_auth_error(exc=None, resp=None, body=None) -> bool:
@@ -375,6 +414,12 @@ class SimpleAuthManager:
         # keepalive 退化跟踪
         self._keepalive_degraded: bool = False
         self._keepalive_fail_streak: int = 0
+        self._health_probe_sequence: int = 0
+        self._keepalive_diagnostic: dict[str, Any] = {}
+        self._keepalive_failure_total = 0
+        self._keepalive_probe_failure_total = 0
+        self._keepalive_gate_skip_total = 0
+        self._keepalive_recovery_total = 0
         self._keepalive_recovery_cooldown_ts: float = 0.0
 
         # 兼容性调试状态
@@ -409,9 +454,13 @@ class SimpleAuthManager:
         """Minimal exchange capability: userId + passToken + deviceId."""
         return bool(
             auth_data.get("userId")
-            and auth_data.get("passToken")
+            and self._valid_pass_token(auth_data.get("passToken"))
             and auth_data.get("deviceId")
         )
+
+    @staticmethod
+    def _valid_pass_token(value: Any) -> bool:
+        return isinstance(value, str) and bool(value.strip()) and value.strip().lower() != "deleted"
 
     def _has_complete_auth_diagnostics(self, auth_data: dict[str, Any]) -> bool:
         return bool(
@@ -426,7 +475,7 @@ class SimpleAuthManager:
         """Construct MiAccount without exposing the canonical persistent token path."""
         memory_store = _MemoryTokenStore(token)
         try:
-            return MiAccount(session, user_id, password, memory_store)
+            account = MiAccount(session, user_id, password, memory_store)
         except TypeError:
             # Older miservice builds/test doubles may only expose MiAccount().
             # Explicitly replace any constructor default store with our memory store.
@@ -434,7 +483,34 @@ class SimpleAuthManager:
             account.token_store = memory_store
             if getattr(account, "token", None) is None:
                 account.token = memory_store.load_token() or {}
-            return account
+        # Installed miservice-fork uses account.ua.random for serviceLogin but
+        # session.get() with no headers for STS. Bind both to this account only.
+        auth_ua = token.get("ua") if isinstance(token, dict) else None
+        if not isinstance(auth_ua, str) or not auth_ua.strip():
+            auth_ua = _LEGACY_AUTH_UA
+        else:
+            auth_ua = auth_ua.strip()
+        account.ua = type("_FixedUA", (), {"random": auth_ua})()
+        account.now_ua = auth_ua
+        if getattr(account, "session", None) is session and hasattr(session, "cookie_jar"):
+            account.session = _AccountRequestSession(session, auth_ua)
+        # MiAccount retries 401 by clearing its token then calling login(), which
+        # can enter its password flow. Keep all recovery under AuthManager and
+        # never replay an operation (device commands included) in this layer.
+        async def _deny_implicit_login(sid):  # noqa: ARG001
+            raise RuntimeError("implicit_miaccount_login_disabled")
+
+        account.login = _deny_implicit_login
+        mi_request = getattr(account, "mi_request", None)
+        if mi_request is not None:
+            async def _no_implicit_relogin(sid, url, data, headers, relogin=True):  # noqa: ARG001
+                return await mi_request(sid, url, data, headers, False)
+
+            # relogin=False only blocks retry after a 401; the dependency still
+            # calls login() when the requested sid is absent. Block that entry
+            # point too, so no path can reach serviceLoginAuth2/password fallback.
+            account.mi_request = _no_implicit_relogin
+        return account
 
     # The current Config intentionally has no Xiaomi username/password fields.
 
@@ -544,21 +620,23 @@ class SimpleAuthManager:
         self._locked_until = 0
         return True
 
-    def _mark_verified_runtime_recovered(self) -> None:
-        """Verified runtime success clears manual/scheduled gates and old errors."""
+    def _mark_verified_runtime_recovered(self, *, clear_scheduled_refresh: bool = False) -> None:
+        """Runtime verification resets runtime errors; only new long-term auth clears its gate."""
         self._state = self.STATE_HEALTHY
         self._locked_until = 0
         self._last_manual_login_required_reason = ""
         self._last_lock_transition_reason = ""
-        self._scheduled_refresh_suspended = False
-        self._scheduled_refresh_suspend_reason = ""
-        self._scheduled_refresh_suspend_code = ""
+        if clear_scheduled_refresh:
+            self._scheduled_refresh_suspended = False
+            self._scheduled_refresh_suspend_reason = ""
+            self._scheduled_refresh_suspend_code = ""
         self._retry_count = 0
         self._retry_count_effective = 0
         self._lock_counter = 0
         self._probe_failure_count = 0
         self._recovery_failure_count = 0
         self._cooldown_until = 0.0
+        self._recovery_backoff_until_ts = 0.0
         self._last_retry_increment_reason = ""
         self._last_health_probe_result = "ok"
         self._last_health_probe_error = ""
@@ -712,6 +790,7 @@ class SimpleAuthManager:
                 )
             try:
                 self._health_probe_attempted = True
+                self._health_probe_sequence += 1
                 await self.mina_service.device_list()
                 now = time.time()
                 self._last_ok_ts = now
@@ -720,7 +799,7 @@ class SimpleAuthManager:
                 self._last_health_probe_error = ""
                 return True
             except Exception as e:
-                self._last_error = str(e)[:200]
+                self._last_error = "network_error" if is_network_error(exc=e) else "auth_error"
                 self._probe_failure_count += 1
                 self._last_health_probe_error = self._last_error
                 if is_network_error(exc=e):
@@ -753,9 +832,10 @@ class SimpleAuthManager:
         ):
             try:
                 self._health_probe_attempted = True
+                self._health_probe_sequence += 1
                 await self.mina_service.device_list()
             except Exception as e:
-                self._last_error = str(e)[:200]
+                self._last_error = "network_error" if is_network_error(exc=e) else "auth_error"
                 self._probe_failure_count += 1
                 self._last_health_probe_error = self._last_error
                 if is_network_error(exc=e):
@@ -1006,8 +1086,19 @@ class SimpleAuthManager:
                     return True
 
                 # 校验失败：self 未被改动，只记审计，落回原有登录/重建流程
-                verify_error_text = str(candidate.get("error") or "")[:200]
-                self._last_error = verify_error_text or "runtime rebind verify failed"
+                verify_error_text = "runtime_candidate_verification_failed"
+                self._last_error = verify_error_text
+                candidate_classification = {
+                    key: candidate[key]
+                    for key in (
+                        "error_type", "auth_class", "long_term_expired",
+                        "need_qr_scan", "user_action_required",
+                    )
+                    if key in candidate
+                }
+                if candidate_classification:
+                    structured_failure_classification = candidate_classification
+                    failure_classification.update(candidate_classification)
                 self._last_recovery_result = "failed"
                 self._last_recovery_stage = "runtime_rebind_fast_path"
                 self._last_recovery_error_code = "runtime_rebind_verify_failed"
@@ -1102,21 +1193,21 @@ class SimpleAuthManager:
                     "error_type"
                 ):
                     rebuild_classification["error_type"] = "auth_error"
-                structured_failure_classification = (
-                    rebuild_classification
-                    if (
-                        rebuild_classification.get("auth_class")
-                        or any(
-                            rebuild_classification.get(key)
-                            for key in (
-                                "long_term_expired",
-                                "need_qr_scan",
-                                "user_action_required",
-                            )
+                if (
+                    rebuild_classification.get("auth_class")
+                    or any(
+                        rebuild_classification.get(key)
+                        for key in (
+                            "long_term_expired",
+                            "need_qr_scan",
+                            "user_action_required",
                         )
                     )
-                    else None
-                )
+                ):
+                    structured_failure_classification = {
+                        **(structured_failure_classification or {}),
+                        **rebuild_classification,
+                    }
                 if structured_failure_classification:
                     failure_classification.update(structured_failure_classification)
                 self._last_login_trace = {
@@ -1295,55 +1386,6 @@ class SimpleAuthManager:
         self._last_status_mapping_source = str(
             failure_classification.get("error_type", "") or reason or "unknown"
         )
-
-    def _persist_auth_data(self, auth_data: dict, mi_account, reason: str = "") -> None:
-        """持久化认证数据。
-
-        仅在 token 内容发生变化时才更新 saveTime，防止每次调用都刷新 TTL。
-        """
-        if self.token_store is None:
-            return
-        # 环境凭据只属于运行时接管，任何认证路径都不得固化到 token_store。
-        if os.getenv("AUTH_ACCESS_TOKEN") or os.getenv("AUTH_REFRESH_TOKEN"):
-            self.log.info("persist_auth_data: skipped because env credentials override runtime")
-            return
-
-        merged = dict(auth_data or {})
-        old_token = self.token_store.get() if self.token_store else {}
-        try:
-            acct = getattr(mi_account, "token", {}) or {}
-            for key in ("passToken", "userId", "deviceId", "cUserId"):
-                if acct.get(key):
-                    merged[key] = acct.get(key)
-
-            mico = acct.get("micoapi")
-            if isinstance(mico, (tuple, list)) and len(mico) >= 2:
-                if mico[0]:
-                    merged["ssecurity"] = mico[0]
-                if mico[1]:
-                    merged["serviceToken"] = mico[1]
-                    merged.setdefault("yetAnotherServiceToken", mico[1])
-
-            if acct.get("serviceToken"):
-                merged["serviceToken"] = acct.get("serviceToken")
-            if acct.get("yetAnotherServiceToken"):
-                merged["yetAnotherServiceToken"] = acct.get("yetAnotherServiceToken")
-
-            # 仅在新 token 与旧 token 不同时才更新 saveTime
-            new_service_token = merged.get("serviceToken") or merged.get("yetAnotherServiceToken")
-            old_service_token = old_token.get("serviceToken") or old_token.get("yetAnotherServiceToken")
-            if new_service_token and new_service_token != old_service_token:
-                merged["saveTime"] = int(time.time() * 1000)
-                self.log.info(
-                    f"persist_auth_data: token changed, updating saveTime reason={reason}"
-                )
-            elif "saveTime" not in merged and old_token.get("saveTime"):
-                # 保留旧的 saveTime，避免丢失
-                merged["saveTime"] = old_token["saveTime"]
-        except Exception as e:
-            self.log.warning(f"persist token merge failed: {e}")
-
-        self.token_store.commit(merged, reason=reason or "login")
 
     def _record_short_session_rebuild_state(self, payload: dict[str, Any]) -> None:
         state = dict(payload or {})
@@ -1596,6 +1638,16 @@ class SimpleAuthManager:
             if not nonce and location:
                 query = parse_qs(urlsplit(location).query)
                 nonce = (query.get("nonce") or [""])[0]
+            response_user_id = resp.get("userId")
+            if response_user_id is not None and str(response_user_id) != str(auth_data.get("userId")):
+                return {
+                    "ok": False, "used_path": "miaccount_persistent_auth_exchange",
+                    "error_code": "service_login_user_mismatch",
+                    "failed_reason": "service_login_user_mismatch",
+                    "error_message": "serviceLogin user mismatch", "http_stage": "serviceLogin",
+                    "writeback_target": "none", "sid": sid,
+                    "diagnostic": {"reason": reason, "via": "miaccount_persistent_auth_exchange", "response_valid": False},
+                }
             ssecurity = str(resp.get("ssecurity", "") or auth_data.get("ssecurity", "") or "")
             diagnostic = {
                 "reason": reason,
@@ -1607,7 +1659,6 @@ class SimpleAuthManager:
                 "blocked_before_security_token_service": False,
                 "security_token_service_invoked": False,
             }
-            response_text = json.dumps(resp, ensure_ascii=False, default=str)
             response_code = resp.get("code")
             try:
                 response_code = int(response_code) if response_code is not None else None
@@ -1615,16 +1666,19 @@ class SimpleAuthManager:
                 response_code = None
             captcha_url = resp.get("captchaUrl") or resp.get("captchaurl")
             if (response_code is not None and response_code != 0) or bool(captcha_url):
-                error_text = f"service_login_code_{resp.get('code')} {response_text[:500]}"
+                # Never retain service response content: it may include credentials,
+                # redirect URLs, cookies, or account identifiers.
+                error_text = f"service_login_code_{response_code}"
                 classification = self._classify_auth_failure(
-                    error_text, auth_data, auth_evidence=resp
+                    error_text, auth_data,
+                    auth_evidence={"code": response_code, "captchaUrl": bool(captcha_url)},
                 )
                 return {
                     "ok": False,
                     "used_path": "miaccount_persistent_auth_exchange",
                     "error_code": "service_login_failed",
                     "failed_reason": error_text,
-                    "error_message": str(resp),
+                    "error_message": error_text,
                     "http_stage": "serviceLogin",
                     "writeback_target": "none",
                     "sid": sid,
@@ -1673,13 +1727,13 @@ class SimpleAuthManager:
             diagnostic["security_token_service_invoked"] = True
             try:
                 service_token = await account._securityTokenService(location, nonce, ssecurity)
-            except Exception as exc:
+            except Exception:
                 return {
                     "ok": False,
                     "used_path": "miaccount_persistent_auth_exchange",
                     "error_code": "security_token_service_failed",
-                    "failed_reason": str(exc)[:200],
-                    "error_message": str(exc)[:200],
+                    "failed_reason": "security_token_service_failed",
+                    "error_message": "security_token_service_failed",
                     "http_stage": "redirect",
                     "writeback_target": "none",
                     "sid": sid,
@@ -1704,14 +1758,114 @@ class SimpleAuthManager:
             account.token["yetAnotherServiceToken"] = service_token
             account.token[sid] = (ssecurity, service_token)
             merged = dict(auth_data)
+            # Diagnostic-only evidence; never log credential material or URL data.
+            try:
+                redirect_host = (urlsplit(str(location)).hostname or "").lower()
+            except (TypeError, ValueError):
+                redirect_host = ""
+            if redirect_host == "account.xiaomi.com" or redirect_host.endswith(".account.xiaomi.com"):
+                redirect_host_class = "account_domain"
+            elif (
+                redirect_host == "xiaomi.com" or redirect_host.endswith(".xiaomi.com")
+                or redirect_host == "mi.com" or redirect_host.endswith(".mi.com")
+            ):
+                redirect_host_class = "service_domain"
+            else:
+                redirect_host_class = "other"
+            json_has_pass_token = "passToken" in resp
+            account_cookie_value = None
+            try:
+                account_cookies = account.session.cookie_jar.filter_cookies(
+                    URL("https://account.xiaomi.com/")
+                )
+                account_cookie_value = getattr(account_cookies.get("passToken"), "value", None)
+            except Exception:
+                pass
+            account_jar_has_pass_token = isinstance(account_cookie_value, str) and bool(account_cookie_value.strip())
+            account_cookie_differs = bool(
+                account_jar_has_pass_token
+                and account_cookie_value.strip() != str(auth_data.get("passToken") or "")
+            )
+            # Observe cookies applicable to the STS redirect URL separately. A
+            # service-host-only cookie is not sufficient evidence for replacing
+            # the long-lived Passport passToken, so this is diagnostic-only.
+            redirect_cookie_value = None
+            redirect_cookie_observation_error = False
+            try:
+                redirect_cookies = account.session.cookie_jar.filter_cookies(URL(str(location)))
+                redirect_cookie_value = getattr(redirect_cookies.get("passToken"), "value", None)
+            except Exception:
+                redirect_cookie_observation_error = True
+            redirect_jar_has_pass_token = (
+                isinstance(redirect_cookie_value, str) and bool(redirect_cookie_value.strip())
+            )
+            redirect_cookie_differs = bool(
+                redirect_jar_has_pass_token
+                and redirect_cookie_value.strip() != str(auth_data.get("passToken") or "")
+            )
+            json_cookie_same = (
+                isinstance(resp.get("passToken"), str)
+                and account_jar_has_pass_token
+                and resp["passToken"].strip() == account_cookie_value.strip()
+            ) if json_has_pass_token else None
+            # Accept only passToken from the explicit serviceLogin payload or a
+            # Xiaomi-owned redirect cookie. Explicit JSON wins if both channels
+            # carry a value; empty/non-string values never erase canonical data.
+            rotated_pass_token = resp.get("passToken")
+            selected_source = "none"
+            if self._valid_pass_token(rotated_pass_token):
+                selected_source = "service_login_json"
+            if rotated_pass_token is not None and not self._valid_pass_token(rotated_pass_token):
+                return {
+                    "ok": False, "used_path": "miaccount_persistent_auth_exchange",
+                    "error_code": "invalid_rotated_pass_token",
+                    "failed_reason": "invalid_rotated_pass_token",
+                    "error_message": "invalid rotated passToken", "http_stage": "serviceLogin",
+                    "writeback_target": "none", "sid": sid,
+                    "diagnostic": {"reason": reason, "via": "miaccount_persistent_auth_exchange", "response_valid": False},
+                }
+            if not self._valid_pass_token(rotated_pass_token):
+                host = redirect_host
+                if host == "account.xiaomi.com" or host.endswith(".account.xiaomi.com"):
+                    try:
+                        cookies = account.session.cookie_jar.filter_cookies(location)
+                        cookie_value = cookies.get("passToken")
+                        rotated_pass_token = getattr(cookie_value, "value", None)
+                        if self._valid_pass_token(rotated_pass_token):
+                            selected_source = "account_domain_cookie"
+                    except Exception:
+                        rotated_pass_token = None
+            candidate_differs = bool(
+                self._valid_pass_token(rotated_pass_token)
+                and rotated_pass_token.strip() != str(auth_data.get("passToken") or "")
+            )
+            self.log.info(
+                "persistent_auth_pass_token_observation json_present=%s account_jar_present=%s "
+                "account_cookie_differs=%s redirect_cookie_present=%s "
+                "redirect_cookie_differs=%s redirect_cookie_equals_json=%s "
+                "redirect_cookie_observation_error=%s json_cookie_same=%s redirect_host_class=%s "
+                "candidate_differs=%s selected_source=%s",
+                json_has_pass_token, account_jar_has_pass_token, account_cookie_differs,
+                redirect_jar_has_pass_token, redirect_cookie_differs,
+                bool(
+                    redirect_jar_has_pass_token
+                    and isinstance(resp.get("passToken"), str)
+                    and redirect_cookie_value.strip() == resp["passToken"].strip()
+                ),
+                redirect_cookie_observation_error,
+                json_cookie_same, redirect_host_class, candidate_differs, selected_source,
+            )
+            if self._valid_pass_token(rotated_pass_token):
+                merged["passToken"] = rotated_pass_token.strip()
+                if candidate_differs:
+                    merged["passTokenIssuedAt"] = int(time.time() * 1000)
             merged["ssecurity"] = ssecurity
             merged["serviceToken"] = service_token
             merged["yetAnotherServiceToken"] = service_token
             merged["saveTime"] = int(time.time() * 1000)
             writeback_target = "none"
-            if writeback and self.token_store is not None:
-                self.token_store.commit(merged, reason=reason or "persistent_auth_relogin")
-                writeback_target = "token_store"
+            # The exchange is unverified. Never persist here; callers must verify
+            # the candidate runtime and perform the single commit afterwards.
             return {
                 "ok": True,
                 "used_path": "miaccount_persistent_auth_exchange",
@@ -1752,20 +1906,21 @@ class SimpleAuthManager:
         try:
             from xiaomusic.qrcode_login import MiJiaAPI
 
+            candidate_store = _CandidateAuthDataStore(auth_data)
             api = MiJiaAPI(
                 auth_data_path=auth_dir or os.path.dirname(self.auth_token_path),
-                token_store=self.token_store,
+                token_store=candidate_store,
             )
             out = await asyncio.to_thread(
                 api.rebuild_service_cookies_from_persistent_auth, sid
             )
-        except Exception as exc:
+        except Exception:
             return {
                 "ok": False,
                 "used_path": "mijia_persistent_auth_login",
                 "error_code": "mijia_persistent_auth_login_failed",
-                "failed_reason": str(exc)[:200],
-                "error_message": str(exc)[:200],
+                "failed_reason": "mijia_persistent_auth_login_failed",
+                "error_message": "mijia_persistent_auth_login_failed",
                 "http_stage": "serviceLogin",
                 "writeback_target": "none",
                 "sid": sid,
@@ -1789,8 +1944,10 @@ class SimpleAuthManager:
                     "response_valid": False,
                 },
             }
-        latest = self._get_auth_data()
+        latest = candidate_store.get()
         normalized = dict(out)
+        if normalized.get("ok"):
+            normalized["auth_data"] = latest
         normalized.setdefault("used_path", "mijia_persistent_auth_login")
         normalized.setdefault("sid", sid)
         normalized.setdefault("diagnostic", {"via": "mijia_persistent_auth_login", "response_valid": True})
@@ -1851,7 +2008,21 @@ class SimpleAuthManager:
                 await login_session.close()
             except Exception:
                 pass
-            return {"ok": False, "error": str(exc)[:200]}
+            # Preserve classification evidence without retaining exception text,
+            # which may contain a remote response, URL, or credential material.
+            classification = self._classify_auth_failure(str(exc), auth_data)
+            safe_classification = {
+                key: classification[key]
+                for key in (
+                    "error_type", "auth_class", "long_term_expired",
+                    "need_qr_scan", "user_action_required",
+                )
+            }
+            return {
+                "ok": False,
+                "error": "runtime_candidate_build_failed",
+                **safe_classification,
+            }
 
     async def _rebind_runtime_from_auth_data(self, auth_data: dict[str, Any]) -> dict[str, Any]:
         """Build, verify, then commit a runtime candidate without clobbering self."""
@@ -1861,7 +2032,7 @@ class SimpleAuthManager:
                 "ok": False,
                 "result": "failed",
                 "error_code": "runtime_rebind_failed",
-                "failed_reason": str(candidate.get("error") or "runtime candidate verify failed"),
+                "failed_reason": "runtime_candidate_verification_failed",
             }
 
         old_session = self.mi_session
@@ -1916,11 +2087,11 @@ class SimpleAuthManager:
                 sid="micoapi",
                 writeback=False,
             )
-        except Exception as exc:
+        except Exception:
             primary = {
                 "ok": False,
                 "error_code": "persistent_auth_relogin_exception",
-                "failed_reason": str(exc)[:200],
+                "failed_reason": "persistent_auth_relogin_exception",
             }
         if not primary.get("ok"):
             primary_error = str(
@@ -1958,7 +2129,15 @@ class SimpleAuthManager:
                 "error_code": "verify_failed",
                 "primary_result": "ok",
                 "primary_error_code": "",
-                "failed_reason": str(candidate.get("error") or "runtime candidate verify failed"),
+                "failed_reason": "runtime_candidate_verification_failed",
+                **{
+                    key: candidate[key]
+                    for key in (
+                        "error_type", "auth_class", "long_term_expired",
+                        "need_qr_scan", "user_action_required",
+                    )
+                    if key in candidate
+                },
                 "used_path": "miaccount_persistent_auth_exchange",
                 "service_token_written": False,
                 "runtime_rebind_result": "skipped",
@@ -1972,11 +2151,28 @@ class SimpleAuthManager:
         candidate_auth_data["saveTime"] = int(time.time() * 1000)
         try:
             if self.token_store is not None and not env_override:
-                self.token_store.commit(
-                    candidate_auth_data,
-                    reason=reason or "scheduled_persistent_auth_refresh",
-                )
-        except Exception as exc:
+                commit_cas = getattr(self.token_store, "commit_if_unchanged", None)
+                if commit_cas is not None:
+                    if not commit_cas(
+                        auth_data, candidate_auth_data,
+                        reason=reason or "scheduled_persistent_auth_refresh",
+                    ):
+                        session = candidate.get("session")
+                        if session is not None:
+                            await session.close()
+                        return {
+                            "ok": False, "result": "failed",
+                            "error_code": "auth_generation_conflict",
+                            "failed_reason": "auth_generation_conflict",
+                            "used_path": "miaccount_persistent_auth_exchange",
+                            "verify_result": "ok", "atomic": True,
+                        }
+                else:
+                    self.token_store.commit(
+                        candidate_auth_data,
+                        reason=reason or "scheduled_persistent_auth_refresh",
+                    )
+        except Exception:
             session = candidate.get("session")
             if session is not None:
                 try:
@@ -1989,7 +2185,7 @@ class SimpleAuthManager:
                 "error_code": "token_commit_failed",
                 "primary_result": "ok",
                 "primary_error_code": "",
-                "failed_reason": str(exc)[:200],
+                "failed_reason": "token_commit_failed",
                 "used_path": "miaccount_persistent_auth_exchange",
                 "service_token_written": False,
                 "runtime_rebind_result": "skipped",
@@ -2013,7 +2209,7 @@ class SimpleAuthManager:
         self.cookie_jar = new_cookie_jar
         self.login_signature = self._get_login_signature()
         self._runtime_generation += 1
-        self._mark_verified_runtime_recovered()
+        self._mark_verified_runtime_recovered(clear_scheduled_refresh=True)
         self._last_recovery_result = "ok"
         self._last_recovery_error_code = ""
         self._last_recovery_error_message = ""
@@ -2040,6 +2236,13 @@ class SimpleAuthManager:
         atomic: bool = True,
         _transition_owned: bool = False,
     ) -> dict[str, Any]:
+        if not atomic:
+            # Compatibility for legacy callers: all refreshes now share the
+            # verify-then-CAS-commit transaction. The historical implementation
+            # rebound runtime before verification and could persist via MiJia.
+            return await self.rebuild_short_session_from_persistent_auth(
+                reason=reason, atomic=True, _transition_owned=_transition_owned
+            )
         if atomic:
             started_at = int(time.time() * 1000)
             out = await self._atomic_persistent_auth_refresh(
@@ -2078,204 +2281,8 @@ class SimpleAuthManager:
                 "finished_at": finished_at,
             })
             return out
-        if not _transition_owned:
-            async with self._auth_transition_lock:
-                return await self.rebuild_short_session_from_persistent_auth(
-                    reason=reason, atomic=False, _transition_owned=True
-                )
-
-        auth_data = self._get_auth_data()
-        started_at = int(time.time() * 1000)
-        flow: dict[str, Any] = {
-            "reason": reason,
-            "started_at": started_at,
-            "primary_attempt": {"result": "skipped"},
-            "fallback_attempt": {"result": "skipped"},
-            "rebind": {"result": "skipped"},
-            "verify": {"result": "skipped"},
-            "result": "running",
-            "used_path": "",
-            "finished_at": 0,
-        }
-        if not self._has_persistent_auth_fields(auth_data):
-            out = {
-                "ok": False,
-                "result": "failed",
-                "used_path": "miaccount_persistent_auth_exchange",
-                "error_code": "missing_persistent_auth_fields",
-                "failed_reason": "missing_persistent_auth_fields",
-                "service_token_written": False,
-                "runtime_rebind_result": "skipped",
-                "verify_result": "skipped",
-            }
-            flow["primary_attempt"] = {
-                "attempt_at": started_at,
-                "used_path": "miaccount_persistent_auth_exchange",
-                "error_code": "missing_persistent_auth_fields",
-                "result": "failed",
-            }
-            flow["result"] = "failed"
-            flow["used_path"] = "miaccount_persistent_auth_exchange"
-            flow["finished_at"] = int(time.time() * 1000)
-            self._record_short_session_rebuild_state(out)
-            self._record_auth_recovery_flow_state(flow)
-            return out
-
-        primary = await self._try_miaccount_persistent_auth_relogin(
-            before=auth_data,
-            reason=reason,
-            sid="micoapi",
-        )
-        flow["primary_attempt"] = {
-            "attempt_at": int(time.time() * 1000),
-            "used_path": str(primary.get("used_path", "") or "miaccount_persistent_auth_exchange"),
-            "error_code": str(primary.get("error_code", "") or ""),
-            "result": "ok" if primary.get("ok") else "failed",
-        }
-
-        relogin = primary
-        if not bool(primary.get("ok", False)):
-            fallback = await self._try_mijia_persistent_auth_relogin(
-                auth_dir=os.path.dirname(self.auth_token_path),
-                sid="micoapi",
-            )
-            flow["fallback_attempt"] = {
-                "attempt_at": int(time.time() * 1000),
-                "used_path": str(fallback.get("used_path", "") or "mijia_persistent_auth_login"),
-                "error_code": str(fallback.get("error_code", "") or ""),
-                "result": "ok" if fallback.get("ok") else "failed",
-            }
-            if bool(fallback.get("ok", False)):
-                relogin = fallback
-            else:
-                relogin = fallback if fallback else primary
-
-        used_path = str(relogin.get("used_path", "") or "miaccount_persistent_auth_exchange")
-        flow["used_path"] = used_path
-        if not bool(relogin.get("ok", False)):
-            out = {
-                "ok": False,
-                "result": "failed",
-                "used_path": used_path,
-                "error_code": str(relogin.get("error_code", "persistent_auth_relogin_failed") or "persistent_auth_relogin_failed"),
-                "failed_reason": str(relogin.get("failed_reason", "persistent_auth_relogin_failed") or "persistent_auth_relogin_failed"),
-                "service_token_written": False,
-                "runtime_rebind_result": "skipped",
-                "verify_result": "skipped",
-            }
-            flow["result"] = "failed"
-            flow["finished_at"] = int(time.time() * 1000)
-            self._record_short_session_rebuild_state(out)
-            self._record_auth_recovery_flow_state(flow)
-            return out
-
-        latest_auth_data = self._get_auth_data()
-        merged = dict(auth_data)
-        merged.update(latest_auth_data)
-        for key in ("serviceToken", "yetAnotherServiceToken", "ssecurity", "cUserId", "deviceId", "userId", "passToken", "psecurity"):
-            if relogin.get(key):
-                merged[key] = relogin.get(key)
-        service_token_written = bool(
-            merged.get("serviceToken") or merged.get("yetAnotherServiceToken")
-        )
-        if self.token_store is not None and service_token_written:
-            merged["saveTime"] = int(time.time() * 1000)
-            self.token_store.commit(merged, reason=reason or "short_session_rebuild")
-
-        if not service_token_written:
-            out = {
-                "ok": False,
-                "result": "failed",
-                "used_path": used_path,
-                "error_code": "service_token_not_written",
-                "failed_reason": "service_token_not_written",
-                "service_token_written": False,
-                "runtime_rebind_result": "skipped",
-                "verify_result": "skipped",
-            }
-            flow["result"] = "failed"
-            flow["finished_at"] = int(time.time() * 1000)
-            self._record_short_session_rebuild_state(out)
-            self._record_auth_recovery_flow_state(flow)
-            return out
-
-        rebind = await self._rebind_runtime_from_auth_data(merged)
-        flow["rebind"] = {
-            "attempt_at": int(time.time() * 1000),
-            "used_path": used_path,
-            "error_code": str(rebind.get("error_code", "") or ""),
-            "result": "ok" if rebind.get("ok") else "failed",
-        }
-        if not bool(rebind.get("ok", False)):
-            out = {
-                "ok": False,
-                "result": "failed",
-                "used_path": used_path,
-                "error_code": str(rebind.get("error_code", "runtime_rebind_failed") or "runtime_rebind_failed"),
-                "failed_reason": str(rebind.get("failed_reason", "runtime_rebind_failed") or "runtime_rebind_failed"),
-                "service_token_written": True,
-                "runtime_rebind_result": "failed",
-                "verify_result": "skipped",
-            }
-            flow["result"] = "failed"
-            flow["finished_at"] = int(time.time() * 1000)
-            self._record_short_session_rebuild_state(out)
-            self._record_auth_recovery_flow_state(flow)
-            return out
-
-        try:
-            if self.mina_service is None:
-                raise RuntimeError("mina service unavailable")
-            await self.mina_service.device_list()
-            now = time.time()
-            self._last_ok_ts = now
-            self._last_runtime_verify_ts = now
-            flow["verify"] = {
-                "attempt_at": int(time.time() * 1000),
-                "used_path": used_path,
-                "error_code": "",
-                "result": "ok",
-            }
-            out = {
-                "ok": True,
-                "result": "ok",
-                "used_path": used_path,
-                "error_code": "",
-                "failed_reason": "",
-                "service_token_written": True,
-                "runtime_rebind_result": "ok",
-                "verify_result": "ok",
-            }
-            flow["result"] = "ok"
-            flow["finished_at"] = int(time.time() * 1000)
-            self._record_short_session_rebuild_state(out)
-            self._record_auth_recovery_flow_state(flow)
-            return out
-        except Exception as exc:
-            flow["verify"] = {
-                "attempt_at": int(time.time() * 1000),
-                "used_path": used_path,
-                "error_code": "verify_failed",
-                "result": "failed",
-            }
-            out = {
-                "ok": False,
-                "result": "failed",
-                "used_path": used_path,
-                "error_code": "verify_failed",
-                "failed_reason": str(exc)[:200],
-                "service_token_written": True,
-                "runtime_rebind_result": "ok",
-                "verify_result": "failed",
-            }
-            flow["result"] = "failed"
-            flow["finished_at"] = int(time.time() * 1000)
-            self._record_short_session_rebuild_state(out)
-            self._record_auth_recovery_flow_state(flow)
-            return out
-
     def _get_auth_data(self) -> dict:
-        """读取认证数据"""
+        """Read canonical auth material, dropping malformed/empty credential fields."""
         if self.token_store is not None:
             user_data = self.token_store.get()
         else:
@@ -2284,10 +2291,23 @@ class SimpleAuthManager:
             with open(self.auth_token_path, encoding="utf-8") as f:
                 user_data = json.loads(f.read())
 
-        required_fields = {"passToken", "userId"}
-        if not required_fields.issubset(user_data):
+        if not isinstance(user_data, dict):
             return {}
-        return user_data
+        auth_string_fields = {
+            "passToken", "userId", "deviceId", "cUserId", "psecurity",
+            "ssecurity", "serviceToken", "yetAnotherServiceToken",
+        }
+        normalized = dict(user_data)
+        for key in auth_string_fields:
+            value = normalized.get(key)
+            if key in normalized and (not isinstance(value, str) or not value.strip()):
+                normalized.pop(key, None)
+            elif isinstance(value, str):
+                normalized[key] = value.strip()
+
+        if not self._valid_pass_token(normalized.get("passToken")) or not normalized.get("userId"):
+            return {}
+        return normalized
 
     def _get_login_signature(self) -> str:
         """获取登录签名，用于检测是否需要重新登录"""
@@ -2595,6 +2615,7 @@ class SimpleAuthManager:
                     self._background_recovery_result = "ok"
                     self._background_recovery_error = ""
                     self._state = self.STATE_HEALTHY
+                    self._cooldown_until = 0.0
                     self.log.info("后台恢复成功")
                     result = "ok"
                 else:
@@ -2702,7 +2723,9 @@ class SimpleAuthManager:
         async with self._recovery_lock:
             self._recovery_inflight = False
             self._recovery_leader_ctx = ""
-            if result != "ok" and not self._last_manual_login_required_reason:
+            if result == "ok":
+                self._recovery_backoff_until_ts = 0.0
+            elif not self._last_manual_login_required_reason:
                 self._recovery_backoff_until_ts = time.time() + self._recovery_backoff_sec
             self.log.info(
                 f"auth_recovery_singleflight: role=leader action=finish result={result}"
@@ -2738,52 +2761,80 @@ class SimpleAuthManager:
 
     # ==================== 主动探测 ====================
 
-    async def keepalive_loop(self, interval_sec: int = 300):
-        """
-        Keepalive 循环
+    def _keepalive_gate(self) -> str:
+        if self._last_manual_login_required_reason:
+            return "manual_login_required"
+        if time.time() < self._cooldown_until:
+            return "cooldown"
+        if self._state == self.STATE_LOCKED and time.time() < self._locked_until:
+            return "locked"
+        return "none"
 
-        每隔 interval_sec 秒检查一次认证状态
-        如果发现问题，触发恢复；如果健康，尝试 Scheduled Refresh。
-        """
+    def _record_keepalive_round(self, *, ok: bool, gate: str, probe_sequence: int, exception: bool = False) -> None:
+        """Publish only finite enums, counters and booleans, never exception/response text."""
+        self._keepalive_probe_attempted = self._health_probe_sequence > probe_sequence
+        self._last_keepalive_probe_result = "ok" if ok else "exception" if exception else "ensure_auth_failed"
+        self._last_keepalive_probe_error = "" if ok else self._last_keepalive_probe_result
+        if ok:
+            self._keepalive_fail_streak = 0
+            if self._keepalive_degraded:
+                self._keepalive_degraded = False
+                self._keepalive_recovery_cooldown_ts = 0.0
+                self._keepalive_recovery_total += 1
+                self.log.info("Keepalive: 从退化状态恢复")
+        else:
+            self._keepalive_failure_total += 1
+            if self._keepalive_probe_attempted:
+                self._keepalive_probe_failure_total += 1
+            elif gate != "none":
+                self._keepalive_gate_skip_total += 1
+            self._keepalive_fail_streak += 1
+            if self._keepalive_fail_streak >= 3:
+                self._keepalive_degraded = True
+            self.log.warning("Keepalive: 认证不健康，等待恢复或门禁解除")
+        probe_result = self._last_health_probe_result if self._keepalive_probe_attempted else "not_attempted"
+        self._keepalive_diagnostic = {
+            "result": self._last_keepalive_probe_result,
+            "gate": gate if gate in {"none", "manual_login_required", "cooldown", "locked"} else "unknown",
+            "probe_attempted": self._keepalive_probe_attempted,
+            "probe_result": probe_result if probe_result in {"ok", "network_error", "auth_error", "not_attempted"} else "unknown",
+            "state": self._state if self._state in {self.STATE_HEALTHY, self.STATE_DEGRADED, self.STATE_LOCKED} else "unknown",
+            "fail_streak": self._keepalive_fail_streak,
+            "failure_total": self._keepalive_failure_total,
+            "probe_failure_total": self._keepalive_probe_failure_total,
+            "gate_skip_total": self._keepalive_gate_skip_total,
+            "recovery_total": self._keepalive_recovery_total,
+            "cooldown_remaining_seconds": max(0, int(self._cooldown_until - time.time())),
+            "degraded": self._keepalive_degraded,
+            "scheduled_refresh_suspended": bool(self._scheduled_refresh_suspended),
+        }
+        self.log.info("Keepalive diagnostic: %s", self._keepalive_diagnostic)
+
+    async def keepalive_loop(self, interval_sec: int = 300):
+        """Check runtime health once per round, then attempt the scheduled refresh."""
         while True:
             try:
                 await asyncio.sleep(interval_sec)
-
-                # 检查认证状态
-                if not await self.ensure_auth():
-                    self._last_keepalive_probe_result = "ensure_auth_failed"
-                    self._last_keepalive_probe_error = str(self._last_error or "")[:200]
-                    self._keepalive_fail_streak += 1
-                    if self._keepalive_fail_streak >= 3:
-                        self._keepalive_degraded = True
-                    self.log.warning("Keepalive: 认证不健康，触发恢复")
-                    # 不等待恢复完成，下一轮再检查
-                else:
-                    # ensure_auth(probe=True) already performed the one
-                    # active device_list probe for this keepalive round.
-                    self._keepalive_probe_attempted = True
-                    self._last_keepalive_probe_result = "ok"
-                    self._last_keepalive_probe_error = ""
+                gate = self._keepalive_gate()
+                probe_sequence = self._health_probe_sequence
+                self._keepalive_probe_attempted = False
+                try:
+                    ok = await self.ensure_auth()
+                except Exception:
+                    self._record_keepalive_round(ok=False, gate=gate, probe_sequence=probe_sequence, exception=True)
+                    continue
+                self._record_keepalive_round(ok=ok, gate=gate, probe_sequence=probe_sequence)
+                if ok:
                     now = time.time()
                     self._last_ok_ts = now
                     self._last_runtime_verify_ts = now
-                    # 恢复 keepalive 退化状态
-                    if self._keepalive_degraded:
-                        self._keepalive_degraded = False
-                        self._keepalive_fail_streak = 0
-                        self._keepalive_recovery_cooldown_ts = 0.0
-                        self.log.info("Keepalive: 从退化状态恢复")
-                    # Scheduled Refresh: 在健康状态时尝试计划内刷新
                     if self._state == self.STATE_HEALTHY:
                         try:
                             await self._maybe_scheduled_refresh()
-                        except Exception as e:
-                            self.log.warning(f"Keepalive scheduled refresh failed: {e}")
-
+                        except Exception:
+                            self.log.warning("Keepalive scheduled refresh failed: scheduled_refresh_exception")
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                self.log.error(f"Keepalive loop error: {e}")
 
     # ==================== API 兼容接口 ====================
 
@@ -2808,7 +2859,7 @@ class SimpleAuthManager:
                 "ok": False,
                 "result": "failed",
                 "error_code": "verify_failed",
-                "failed_reason": str(candidate.get("error") or "runtime verify failed"),
+                "failed_reason": "runtime_candidate_verification_failed",
                 "runtime_rebind_result": "skipped",
                 "verify_result": "failed",
                 "used_path": used_path,
@@ -2880,6 +2931,12 @@ class SimpleAuthManager:
         started_at = int(time.time() * 1000)
         preserve_healthy_runtime = state_before == self.STATE_HEALTHY
         token_store_reloaded = False
+        qr_scan_verified = bool(kwargs.get("qr_scan_verified", False)) and bool(
+            kwargs.get("rebind_current_auth", False)
+        ) and reason == "qrcode_login_success"
+        # Captured by the internal QR poller *after* its CAS commit; the shared
+        # TokenStore mirror is already new by the time this method is called.
+        qr_auth_snapshot = kwargs.get("qr_auth_snapshot")
         if self.token_store is not None:
             self.token_store.reload_from_disk()
             token_store_reloaded = True
@@ -2907,7 +2964,24 @@ class SimpleAuthManager:
             )
         success = bool(rebuild_out.get("ok"))
         if success:
-            self._mark_verified_runtime_recovered()
+            issued_at = (
+                qr_auth_snapshot.get("passTokenIssuedAt")
+                if isinstance(qr_auth_snapshot, dict) else None
+            )
+            new_qr_credential = bool(
+                qr_scan_verified
+                and isinstance(qr_auth_snapshot, dict)
+                and self._valid_pass_token(qr_auth_snapshot.get("passToken"))
+                and isinstance(issued_at, int) and not isinstance(issued_at, bool)
+                and 0 < issued_at <= int(time.time() * 1000)
+                and not env_override
+                and self.token_store is not None
+                and self.token_store.get_persisted() == qr_auth_snapshot
+                and self._get_auth_data().get("passToken") == qr_auth_snapshot["passToken"].strip()
+            )
+            self._mark_verified_runtime_recovered(
+                clear_scheduled_refresh=new_qr_credential
+            )
             self._last_recovery_result = "ok"
             self._last_recovery_stage = "verify"
             self._last_recovery_error_code = ""
@@ -3186,6 +3260,7 @@ class SimpleAuthManager:
             "keepalive_probe_attempted": self._keepalive_probe_attempted,
             "keepalive_probe_result": self._last_keepalive_probe_result,
             "keepalive_probe_error": self._last_keepalive_probe_error,
+            "keepalive_diagnostic": dict(self._keepalive_diagnostic),
             "background_recovery_attempted": self._background_recovery_attempted,
             "background_recovery_result": self._background_recovery_result,
             "background_recovery_error": self._background_recovery_error,
@@ -3370,6 +3445,12 @@ class SimpleAuthManager:
                 status_reason = "short_session_missing"
                 status_reason_detail = "short-lived session tokens missing"
                 status_mapping_source = "short_session_missing"
+        elif self._scheduled_refresh_suspended and self._scheduled_refresh_suspend_code in {
+            "credential_session_rejected", "interactive_captcha_challenge"
+        }:
+            status_reason = "persistent_auth_refresh_suspended"
+            status_reason_detail = "scheduled persistent auth refresh suspended; scan again to renew"
+            status_mapping_source = "scheduled_refresh_suspended"
         elif bool(snapshot.get("persistent_auth_available", False)) and bool(
             snapshot.get("short_session_available", False)
         ) and not bool(snapshot.get("runtime_auth_ready", False)):
@@ -3385,9 +3466,37 @@ class SimpleAuthManager:
             public_status = "failed"
         elif auth_mode in (self.STATE_HEALTHY, self.STATE_DEGRADED):
             public_status = "degraded"
+        if status_reason == "persistent_auth_refresh_suspended":
+            public_status = "degraded"
+
+        issued_at = None
+        age_seconds = None
+        auth_data = self._get_auth_data()
+        # Env override may supply a different passToken; disk timestamps cannot
+        # establish the age of that credential (nor can saveTime).
+        persisted = (
+            self.token_store.get_persisted()
+            if self.token_store is not None and hasattr(self.token_store, "get_persisted")
+            else auth_data
+        )
+        env_override = bool(os.getenv("AUTH_ACCESS_TOKEN") or os.getenv("AUTH_REFRESH_TOKEN"))
+        if not env_override and isinstance(persisted, dict) and persisted.get("passToken") == auth_data.get("passToken"):
+            raw = auth_data.get("passTokenIssuedAt")
+            now_ms = int(time.time() * 1000)
+            if isinstance(raw, int) and not isinstance(raw, bool) and 0 < raw <= now_ms:
+                issued_at = raw
+                age_seconds = (now_ms - raw) // 1000
+        warning = (
+            "refresh_suspended" if status_reason == "persistent_auth_refresh_suspended"
+            else "unknown_age" if auth_data.get("passToken") and issued_at is None
+            else ""
+        )
 
         return {
             "status": public_status,
+            "pass_token_issued_at": issued_at,
+            "pass_token_age_seconds": age_seconds,
+            "credential_warning": warning,
             "auth_mode": auth_mode,
             "status_reason": status_reason,
             "status_reason_detail": status_reason_detail,

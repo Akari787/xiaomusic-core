@@ -10,7 +10,7 @@ services:
     env_file:
       - .env
     environment:
-      TZ: Asia/Shanghai
+      TZ: Asia/Tokyo
       XIAOMUSIC_PUBLIC_PORT: 58090
       HTTP_AUTH_HASH: ${HTTP_AUTH_HASH:-}
       HTTP_AUTH_PASSWORD: ${HTTP_AUTH_PASSWORD:-}

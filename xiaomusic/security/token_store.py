@@ -237,6 +237,33 @@ class TokenStore:
                 persist_token,
             )
 
+    def commit_if_unchanged(
+        self, expected: dict[str, Any], new_token: dict[str, Any], reason: str = ""
+    ) -> bool:
+        """Atomically commit only if the canonical in-memory token still matches expected."""
+        if not isinstance(expected, dict) or not isinstance(new_token, dict):
+            raise TypeError("expected and new_token must be dict")
+        with self._lock:
+            if not self._loaded:
+                self._token = self._load_from_disk_unlocked()
+                self._loaded = True
+            if self._token != expected:
+                return False
+            old_token = deepcopy(self._token)
+            old_dirty = self._dirty
+            candidate = deepcopy(new_token)
+            try:
+                if bool(getattr(self.config, "persist_token", True)):
+                    self._atomic_write_unlocked(candidate)
+            except Exception:
+                self._token = old_token
+                self._dirty = old_dirty
+                raise
+            self._token = candidate
+            self._dirty = False
+            self._log("info", "TokenStore compare-and-commit complete reason=%s", reason or "")
+            return True
+
     def flush(self) -> None:
         with self._lock:
             persist_token = bool(getattr(self.config, "persist_token", True))

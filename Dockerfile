@@ -140,7 +140,7 @@ VOLUME /app/music
 EXPOSE 8090
 
 # 设置环境变量
-ENV TZ=Asia/Shanghai
+ENV TZ=Asia/Tokyo
 ENV PATH=/app/.venv/bin:/usr/local/bin:$PATH
 # Runtime secrets are injected via environment/.env:
 #   HTTP_AUTH_HASH (bcrypt hash) — takes priority

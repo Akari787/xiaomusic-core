@@ -460,7 +460,7 @@ async def test_dns_probe_failure_cools_down_without_login_and_recovers_by_reprob
     assert manager._last_health_probe_result == "network_error"
     assert manager._last_recovery_stage == "probe"
     assert manager._last_recovery_error_code == "network_error"
-    assert "Cannot connect to host" in manager._last_recovery_error_message
+    assert manager._last_recovery_error_message == "network_error"
     assert manager._cooldown_until > 0
     assert manager._last_manual_login_required_reason == ""
     assert manager._scheduled_refresh_suspended is True
@@ -648,7 +648,7 @@ async def test_scheduled_refresh_full_chain_never_calls_account_login(auth_manag
         assert await manager._maybe_scheduled_refresh() is True
 
     account_factory.assert_called()
-    account.login.assert_not_awaited()
+    assert account.login.__name__ == "_deny_implicit_login"
     assert manager.mina_service is candidate_mina
     assert token_store.get()["serviceToken"] == "new-service-token"
     assert int(token_store.get()["saveTime"]) == now * 1000
@@ -695,7 +695,7 @@ async def test_manual_reload_full_chain_never_calls_account_login(auth_manager):
         out = await manager.manual_reload_runtime(reason="ut-manual-atomic")
 
     assert out["refreshed"] is True
-    account.login.assert_not_awaited()
+    assert account.login.__name__ == "_deny_implicit_login"
     assert token_store.get()["serviceToken"] == "manual-service-token"
 
 
@@ -717,6 +717,151 @@ async def test_manual_reload_long_term_failure_maps_to_manual_login_required(aut
     assert out["long_term_expired"] is False
     public = manager.map_auth_public_status(runtime_auth_ready=False)
     assert public["status_reason"] == "manual_login_required"
+
+
+def test_get_auth_data_drops_malformed_empty_credentials(auth_manager):
+    manager, token_store = auth_manager
+    token_store._data.update({
+        "passToken": " pass ", "userId": "user-id", "deviceId": 17,
+        "ssecurity": None, "serviceToken": ["not", "a", "string"],
+        "cUserId": " c-user ",
+    })
+
+    data = manager._get_auth_data()
+
+    assert data["passToken"] == "pass"
+    assert data["userId"] == "user-id"
+    assert data["cUserId"] == "c-user"
+    assert "deviceId" not in data
+    assert "ssecurity" not in data
+    assert "serviceToken" not in data
+
+    token_store._data["passToken"] = "   "
+    assert manager._get_auth_data() == {}
+
+
+@pytest.mark.asyncio
+async def test_miaccount_boundary_disables_dependency_relogin(auth_manager, monkeypatch):
+    manager, _ = auth_manager
+    request = AsyncMock(side_effect=RuntimeError("401"))
+
+    class _Account:
+        def __init__(self, *args, **kwargs):  # noqa: ARG002
+            self.token = {}
+            self.mi_request = request
+
+    monkeypatch.setattr("xiaomusic.auth.MiAccount", _Account)
+    account = manager._new_isolated_mi_account(object(), "user-id", token={"userId": "user-id"})
+
+    with pytest.raises(RuntimeError, match="401"):
+        await account.mi_request("micoapi", "http://device-command", {}, {})
+
+    request.assert_awaited_once_with("micoapi", "http://device-command", {}, {}, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("writeback", [False, True])
+async def test_persistent_exchange_carries_rotated_pass_token_without_early_writeback(auth_manager, writeback):
+    manager, token_store = auth_manager
+    original = manager._get_auth_data()
+    rotated = "rotated-pass-token-secret"
+    account = MagicMock()
+    account.token = {}
+    account._serviceLogin = AsyncMock(return_value={
+        "code": 0,
+        "location": "https://account.example/callback?nonce=n1",
+        "nonce": "n1",
+        "ssecurity": "new-ssecurity",
+        "passToken": rotated,
+        "userId": original["userId"],
+    })
+    account._securityTokenService = AsyncMock(return_value="new-service-token")
+
+    with patch("xiaomusic.auth.MiAccount", return_value=account):
+        out = await manager._try_miaccount_persistent_auth_relogin(
+            before=original, reason="rotation-test", writeback=writeback
+        )
+
+    assert out["ok"] is True
+    assert out["auth_data"]["passToken"] == rotated
+    assert token_store.get_persisted()["passToken"] == original["passToken"]
+
+
+@pytest.mark.asyncio
+async def test_mijia_fallback_uses_candidate_store_not_canonical(auth_manager, monkeypatch):
+    manager, canonical_store = auth_manager
+    original = canonical_store.get_persisted()
+    observed = {}
+
+    class _FakeMiJiaAPI:
+        def __init__(self, auth_data_path=None, token_store=None):  # noqa: ARG002
+            observed["store"] = token_store
+
+        def rebuild_service_cookies_from_persistent_auth(self, sid):  # noqa: ARG002
+            candidate = observed["store"].get()
+            candidate.update({
+                "serviceToken": "mijia-candidate-service",
+                "yetAnotherServiceToken": "mijia-candidate-service",
+            })
+            observed["store"].save(candidate)
+            return {"ok": True, "used_path": "mijia_persistent_auth_login"}
+
+    monkeypatch.setattr("xiaomusic.qrcode_login.MiJiaAPI", _FakeMiJiaAPI)
+    out = await manager._try_mijia_persistent_auth_relogin()
+
+    assert out["ok"] is True
+    assert out["auth_data"]["serviceToken"] == "mijia-candidate-service"
+    assert canonical_store.get_persisted() == original
+
+
+@pytest.mark.asyncio
+async def test_persistent_exchange_accepts_pass_token_from_trusted_redirect_cookie(auth_manager):
+    from http.cookies import SimpleCookie
+
+    manager, token_store = auth_manager
+    original = manager._get_auth_data()
+    account = MagicMock()
+    account.token = {}
+    account.session.cookie_jar.filter_cookies.return_value = SimpleCookie(
+        "passToken=cookie-rotated-pass"
+    )
+    account._serviceLogin = AsyncMock(return_value={
+        "code": 0,
+        "location": "https://account.xiaomi.com/callback?nonce=n1",
+        "nonce": "n1",
+        "ssecurity": "new-ssecurity",
+    })
+    account._securityTokenService = AsyncMock(return_value="new-service-token")
+
+    with patch("xiaomusic.auth.MiAccount", return_value=account):
+        out = await manager._try_miaccount_persistent_auth_relogin(
+            before=original, reason="cookie-rotation", writeback=True
+        )
+
+    assert out["auth_data"]["passToken"] == "cookie-rotated-pass"
+    assert token_store.get_persisted() == original
+
+
+@pytest.mark.asyncio
+async def test_persistent_exchange_rejects_cross_user_and_redacts_response(auth_manager):
+    manager, token_store = auth_manager
+    original = manager._get_auth_data()
+    secret = "sensitive-response-pass-token"
+    account = MagicMock()
+    account.token = {}
+    account._serviceLogin = AsyncMock(return_value={
+        "code": 70016, "userId": "another-user", "passToken": secret,
+        "location": f"https://account.xiaomi.com/path?ticket={secret}",
+    })
+
+    with patch("xiaomusic.auth.MiAccount", return_value=account):
+        out = await manager._try_miaccount_persistent_auth_relogin(
+            before=original, reason="cross-user-test", writeback=True
+        )
+
+    assert out["error_code"] == "service_login_user_mismatch"
+    assert secret not in str(out)
+    assert token_store.get_persisted() == original
 
 
 @pytest.mark.asyncio
@@ -1282,7 +1427,7 @@ async def test_fast_path_binds_runtime_without_login(auth_manager):
     assert ok is True
     assert manager.mina_service is healthy
     assert manager._state == manager.STATE_HEALTHY
-    mock_account.return_value.login.assert_not_awaited()
+    assert mock_account.return_value.login.__name__ == "_deny_implicit_login"
     assert manager._last_fast_rebind_state.get("result") == "ok"
 
 
@@ -1453,10 +1598,13 @@ async def test_scheduled_challenge_keeps_healthy_and_suspends_network(
 
     manager.rebuild_short_session_from_persistent_auth.assert_awaited_once()
     public = manager.map_auth_public_status(runtime_auth_ready=True)
-    assert public["status"] == "ok"
+    assert public["status"] == "degraded"
+    assert public["status_reason"] == "persistent_auth_refresh_suspended"
+    assert public["credential_warning"] == "refresh_suspended"
+    assert public["runtime_auth_ready"] is True
     assert public["auth_mode"] == manager.STATE_HEALTHY
     manager._mark_verified_runtime_recovered()
-    assert manager._scheduled_refresh_suspended is False
+    assert manager._scheduled_refresh_suspended is True
 
 
 @pytest.mark.asyncio
@@ -1618,9 +1766,113 @@ async def test_scheduled_service_login_challenge_keeps_healthy_and_suspends(
         assert manager._state == manager.STATE_HEALTHY
         assert manager._scheduled_refresh_suspended is True
         assert manager.auth_debug_state()["long_term_expired"] is False
-        assert manager.map_auth_public_status(runtime_auth_ready=True)["status"] == "ok"
+        public = manager.map_auth_public_status(runtime_auth_ready=True)
+        assert public["status"] == "degraded"
+        assert public["status_reason"] == "persistent_auth_refresh_suspended"
+        assert public["runtime_auth_ready"] is True
         first_calls = account._serviceLogin.await_count
         assert await manager._maybe_scheduled_refresh() is False
 
     assert account._serviceLogin.await_count == first_calls == 1
     assert manager._scheduled_refresh_suspended is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["json", "account_cookie"])
+async def test_deleted_pass_token_never_enters_exchange_candidate(auth_manager, source):
+    from http.cookies import SimpleCookie
+
+    manager, store = auth_manager
+    before = manager._get_auth_data()
+    before["passTokenIssuedAt"] = 111
+    store._data = dict(before)
+    account = MagicMock()
+    account.token = {}
+    account.session.cookie_jar.filter_cookies.return_value = SimpleCookie(
+        'passToken=" DeLeTeD "' if source == "account_cookie" else ""
+    )
+    response = {
+        "code": 0, "location": "https://account.xiaomi.com/cb?nonce=n",
+        "nonce": "n", "ssecurity": "ss",
+    }
+    if source == "json":
+        response["passToken"] = " DeLeTeD "
+    account._serviceLogin = AsyncMock(return_value=response)
+    account._securityTokenService = AsyncMock(return_value="new-short")
+    with patch("xiaomusic.auth.MiAccount", return_value=account):
+        out = await manager._try_miaccount_persistent_auth_relogin(before=before)
+    if source == "json":
+        assert out["ok"] is False
+        assert out["error_code"] == "invalid_rotated_pass_token"
+    else:
+        assert out["ok"] is True
+        assert out["auth_data"]["passToken"] == before["passToken"]
+        assert out["auth_data"]["passTokenIssuedAt"] == 111
+    assert store.get_persisted() == before
+
+
+@pytest.mark.asyncio
+async def test_manual_short_rebind_and_fast_rebind_preserve_scheduled_suspension(auth_manager):
+    manager, _ = auth_manager
+    manager._scheduled_refresh_suspended = True
+    manager._scheduled_refresh_suspend_code = "credential_session_rejected"
+    manager._build_verified_runtime_candidate = AsyncMock(return_value={
+        "ok": True, "account": object(), "mina_service": _HealthyRuntime(),
+        "miio_service": object(), "session": None, "device_id": "device-id",
+    })
+    out = await manager.manual_reload_runtime(
+        reason="qrcode_login_success", rebind_current_auth=True
+    )
+    assert out["refreshed"] is True
+    assert manager._scheduled_refresh_suspended is True
+    assert manager.map_auth_public_status(runtime_auth_ready=True)["status"] == "degraded"
+
+    manager.mina_service = None
+    assert await manager.ensure_auth(force=True, reason="fast-rebind") is True
+    assert manager._scheduled_refresh_suspended is True
+    manager.rebuild_short_session_from_persistent_auth = AsyncMock()
+    assert await manager._maybe_scheduled_refresh() is False
+    manager.rebuild_short_session_from_persistent_auth.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rotated", [False, True])
+async def test_atomic_short_session_refresh_commits_issued_age_only_on_rotation(
+    auth_manager, rotated, tmp_path
+):
+    from xiaomusic.security.token_store import TokenStore
+
+    manager, _ = auth_manager
+    store = TokenStore(tmp_path / "auth.json")
+    before = manager._get_auth_data()
+    before["passTokenIssuedAt"] = int(time.time() * 1000) - 10_000
+    store.save(before)
+    manager.token_store = store
+    manager._scheduled_refresh_suspended = True
+    manager._scheduled_refresh_suspend_code = "credential_session_rejected"
+    account = MagicMock()
+    account.token = {}
+    account._serviceLogin = AsyncMock(return_value={
+        "code": 0, "location": "https://account.example/cb?nonce=n",
+        "nonce": "n", "ssecurity": "new-security",
+        "passToken": "rotated-pass" if rotated else before["passToken"],
+    })
+    account._securityTokenService = AsyncMock(return_value="new-short")
+    manager._build_verified_runtime_candidate = AsyncMock(return_value={
+        "ok": True, "account": account, "mina_service": _HealthyRuntime(),
+        "miio_service": object(), "session": None, "device_id": before["deviceId"],
+    })
+    with patch("xiaomusic.auth.MiAccount", return_value=account), patch(
+        "xiaomusic.auth.ClientSession"
+    ) as session:
+        session.return_value.close = AsyncMock()
+        out = await manager.rebuild_short_session_from_persistent_auth(reason="test-atomic")
+    assert out["ok"] is True
+    persisted = store.get_persisted()
+    assert persisted["serviceToken"] == "new-short"
+    if rotated:
+        assert persisted["passTokenIssuedAt"] > before["passTokenIssuedAt"]
+    else:
+        assert persisted["passTokenIssuedAt"] == before["passTokenIssuedAt"]
+    assert persisted["passToken"] == ("rotated-pass" if rotated else before["passToken"])
+    assert manager._scheduled_refresh_suspended is False

@@ -1,0 +1,11 @@
+.git
+_git-history
+.local
+.env
+.env.*
+conf
+music
+**/node_modules
+**/__pycache__
+.venv
+.pytest_cache

@@ -35,7 +35,8 @@ import {
   buildLinkPlayRequest,
   buildOnlineSearchPlayRequest,
 } from "../services/playbackRequestBuilder";
-import { fetchAuthStatus, logoutAuth as logoutAuthRequest, reloadAuthRuntime } from "../services/auth";
+import { fetchAuthStatus, logoutAuth as logoutAuthRequest, reloadAuthRuntime, type AuthStatus } from "../services/auth";
+import { credentialAgeText } from "../services/credentialAge";
 import {
   cleanTempDir as cleanTempDirRequest,
   fetchPlaylistJson,
@@ -66,13 +67,6 @@ type Device = {
 };
 
 type OnlineSearchItem = OnlineSearchItemData;
-
-type AuthStatus = {
-  token_valid?: boolean;
-  runtime_auth_ready?: boolean;
-  login_in_progress?: boolean;
-  last_error?: string;
-};
 
 export type PendingSelection = {
   playlist: string | null;
@@ -1344,8 +1338,14 @@ export function HomePage() {
   const authLoggedIn = Boolean(authStatus.token_valid);
   const authReady = Boolean(authStatus.runtime_auth_ready);
   const authInProgress = Boolean(authStatus.login_in_progress);
-  const authStatusLabel = authReady ? "已登录" : authLoggedIn ? "登录待恢复" : "未登录";
-  const authStatusClass = authReady ? "ok" : "warn";
+  const renewalSuspended = authStatus.status_reason === "persistent_auth_refresh_suspended"
+    || authStatus.credential_warning === "refresh_suspended";
+  const authStatusLabel = renewalSuspended ? "续期已暂停" : authReady ? "已登录" : authLoggedIn ? "登录待恢复" : "未登录";
+  const authStatusClass = authReady && !renewalSuspended ? "ok" : "warn";
+  const authWarningText = renewalSuspended
+    ? `长期凭据自动续期受阻；当前运行时${authReady ? "仍可用" : "不可用"}，请主动重新扫码。`
+    : "";
+  const authAgeText = credentialAgeText(authStatus);
   const { selectedThemeId, activeLayout, customThemes, setTheme, uploadThemePackage, validationError } =
     useTheme();
 
@@ -2810,9 +2810,7 @@ export function HomePage() {
           <h3 className="card-title">认证登录</h3>
           <div className="card-content">
             <div className="component-button-group">
-              {!authLoggedIn || authInProgress ? (
-                <button onClick={() => void getQrcode()}>{authInProgress ? "重新获取二维码" : "获取二维码"}</button>
-              ) : null}
+              <button onClick={() => void getQrcode()}>{authInProgress ? "重新获取二维码" : "获取二维码"}</button>
               {authLoggedIn && !authReady ? (
                 <button onClick={() => void refreshAuthRuntime()}>刷新运行时</button>
               ) : null}
@@ -2822,6 +2820,8 @@ export function HomePage() {
               <span className="auth-label">登录状态</span>
               <span className={`status-pill ${authStatusClass}`}>{authStatusLabel}</span>
             </div>
+            {authWarningText ? <p className="auth-hint" role="status">⚠️ {authWarningText}</p> : null}
+            {authAgeText ? <p className="auth-hint">{authAgeText}</p> : null}
             {!authLoggedIn || authInProgress ? (
               <p className="auth-hint">{qrcodeExpireAt ? `请使用米家 App 扫码（约 ${qrcodeRemain}s）` : qrcodeStatus}</p>
             ) : null}

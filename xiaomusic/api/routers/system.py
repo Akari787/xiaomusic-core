@@ -176,8 +176,12 @@ async def get_logint_status(api: MiJiaAPI, lp: str):
 
         # QR 登录已将新 auth 写入磁盘；先 reload 并用其中现有 short session
         # 构建、验证、原子替换 runtime。这里严禁再次做 passToken exchange/login。
+        # The QR object owns the exact generation it just CAS-committed. Do not
+        # read a "previous" token from the shared store here: it is already new.
+        qr_auth_snapshot = dict(api.auth_data) if isinstance(getattr(api, "auth_data", None), dict) else None
         refreshed = await am.manual_reload_runtime(
-            reason="qrcode_login_success", rebind_current_auth=True
+            reason="qrcode_login_success", rebind_current_auth=True,
+            qr_scan_verified=True, qr_auth_snapshot=qr_auth_snapshot,
         )
         if not bool(refreshed.get("refreshed")) or not bool(
             refreshed.get("runtime_auth_ready")
@@ -261,13 +265,15 @@ async def _build_auth_status_payload() -> dict:
         else:
             j = {}
         st = j.get("serviceToken") or j.get("yetAnotherServiceToken")
+        pass_token = j.get("passToken")
+        pass_token_valid = isinstance(pass_token, str) and bool(pass_token.strip()) and pass_token.strip().lower() != "deleted"
         persistent_auth_available = bool(
-            j.get("userId") and j.get("passToken") and j.get("deviceId")
+            j.get("userId") and pass_token_valid and j.get("deviceId")
         )
         short_session_available = bool(st)
         # token_valid/cloud_available describe the current short session only;
         # persistent_auth_available separately means the app can exchange a new ticket.
-        token_valid = bool(j.get("userId") and j.get("passToken") and j.get("ssecurity") and st)
+        token_valid = bool(j.get("userId") and pass_token_valid and j.get("ssecurity") and st)
     except Exception:
         token_valid = False
         persistent_auth_available = False
@@ -339,6 +345,9 @@ async def _build_auth_status_payload() -> dict:
         "status_reason": public_status.get("status_reason", "unknown"),
         "status_reason_detail": public_status.get("status_reason_detail", ""),
         "status_mapping_source": public_status.get("status_mapping_source", "unknown"),
+        "pass_token_issued_at": public_status.get("pass_token_issued_at"),
+        "pass_token_age_seconds": public_status.get("pass_token_age_seconds"),
+        "credential_warning": public_status.get("credential_warning", ""),
         "manual_login_required_reason": public_status.get("manual_login_required_reason", ""),
         "runtime_not_ready_reason": public_status.get("runtime_not_ready_reason", ""),
         "recovery_failure_count": public_status.get(

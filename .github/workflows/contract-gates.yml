@@ -34,6 +34,24 @@ jobs:
           tests/unit/test_site_media_source_plugin.py
           tests/unit/test_local_library_source_plugin.py
 
+      - name: Run authentication regression tests
+        run: >-
+          python -m pytest -q
+          tests/test_auth_credential_warning.py
+          tests/test_auth_runtime_stability.py
+          tests/test_auth_simple.py
+          tests/test_auth_refresh_api.py
+          tests/test_qrcode_auth_rebind.py
+          tests/test_qrcode_login_resilience.py
+          tests/test_token_store_atomic.py
+          tests/test_auth_pass_token_observation_integration.py
+          tests/test_miaccount_401_guard_integration.py
+          tests/test_sitecustomize_redaction.py
+          tests/test_api_v1_auth_status.py
+          tests/test_api_v1_debug_auth_state.py
+          tests/test_system_diagnostics.py
+          tests/unit/test_auth_short_session_rebuild.py
+
       - name: Setup Node
         uses: actions/setup-node@v5
         with:

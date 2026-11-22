@@ -8,7 +8,10 @@ export type AuthStatusReason =
   | "short_session_missing"
   | "short_session_rebuild_failed"
   | "runtime_not_ready"
-  | "manual_login_required";
+  | "manual_login_required"
+  | "persistent_auth_refresh_suspended";
+
+export type CredentialWarning = "unknown_age" | "approaching_expiry" | "refresh_suspended" | "";
 
 export interface AuthStatus {
   success?: boolean;
@@ -27,6 +30,9 @@ export interface AuthStatus {
   auth_lock_until?: number | null;
   auth_lock_reason?: string;
   status_reason?: AuthStatusReason;
+  pass_token_issued_at?: number | null;
+  pass_token_age_seconds?: number | null;
+  credential_warning?: CredentialWarning;
   status_reason_detail?: string;
   rebuild_failed?: boolean;
   rebuild_error_code?: string;
