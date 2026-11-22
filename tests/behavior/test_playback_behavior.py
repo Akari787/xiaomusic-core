@@ -232,10 +232,9 @@ async def test_persistent_dispatch_failure_advances_then_degrades(rig_factory):
         assert timeline.count("tts") == 1
         before_tts = timeline[: timeline.index("tts")]
         assert sum(e.endswith("!timeout") for e in before_tts) == 5
-        # Known quirk (to be removed with the failure-path unification): the
-        # TTS helper "resumes" playback afterwards, adding one more attempt.
+        # The announcement must not be followed by another attempt.
         after_tts = timeline[timeline.index("tts") + 1 :]
-        assert sum(e.endswith("!timeout") for e in after_tts) <= 1
+        assert not any(e.endswith("!timeout") or e.startswith("play:") for e in after_tts), timeline
         assert rig.state().phase == PlaybackPhase.FAILED
 
         settled = len(rig.speaker.commands)

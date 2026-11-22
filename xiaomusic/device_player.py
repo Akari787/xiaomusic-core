@@ -4561,7 +4561,9 @@ class XiaoMusicDevice:
             if not self._degraded_notified:
                 self._degraded_notified = True
                 try:
-                    await self.do_tts("播放失败过多，已停止自动切歌，请稍后再试")
+                    # Announce only. do_tts() would "resume" playback afterwards
+                    # (check_replay), contradicting the announcement.
+                    await self.text_to_speech("播放失败过多，已停止自动切歌，请稍后再试")
                 except Exception:
                     pass
                 if sid != self._play_session_id or self._is_lifecycle_token_stale(token):

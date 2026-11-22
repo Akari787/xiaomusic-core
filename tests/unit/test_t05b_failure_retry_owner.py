@@ -645,7 +645,7 @@ async def test_J_degraded_one_tts_no_retry():
     d._play_failed_cnt = 4
     d._play_fail_first_ts = time.time() - 5
     tts_calls: list[str] = []
-    d.do_tts = lambda msg: tts_calls.append(msg) or _async_none()
+    d.text_to_speech = lambda msg: tts_calls.append(msg) or _async_none()
 
     # 5th failure → degraded
     await d._handle_play_failure(name="j", sid=1, reason="r", token=token)
@@ -683,7 +683,7 @@ async def test_K_sin_stop_via_arbiter():
         )
     )
     d._invalidate_manual_navigation = lambda reason: None
-    d.do_tts = lambda msg: _async_none()
+    d.text_to_speech = lambda msg: _async_none()
     stop_done_evt = asyncio.Event()
 
     async def _tracked_stop_with_event(payload):

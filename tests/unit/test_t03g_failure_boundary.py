@@ -679,7 +679,7 @@ async def test_degraded_tts_stale_no_retry():
         tts_entered.set()
         await asyncio.wait_for(tts_release.wait(), timeout=5.0)
 
-    d.do_tts = _blocking_tts
+    d.text_to_speech = _blocking_tts
 
     # Enter DISPATCHING for 5th failure (begin_play_request preserves failure)
     token5 = _enter_dispatching(d)
