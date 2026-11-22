@@ -1,4 +1,8 @@
-## 未发布
+## v1.1.9 (2026-11-22)
+
+> 包含尚未单独发布的 v1.1.8 全部改动（见下方 v1.1.8 一节）。
+>
+> **升级注意**：Jellyfin 不再使用 API key。升级后在 WebUI 设置页用 Jellyfin 用户名密码登录一次，歌单才会恢复同步；旧的 `jellyfin_api_key` / `jellyfin_user_id` 配置会被忽略。
 
 ### 播放
 
@@ -11,6 +15,10 @@
 - Jellyfin 12.4 起拒绝旧式 `X-Emby-Token` 请求头，导致歌单同步持续 401；API 请求改用标准 `Authorization: MediaBrowser` 头。
 - 新增定时歌单同步（`jellyfin_sync_interval_minutes`，默认 30，0 关闭），登录成功后立即同步一次。
 - 同步遇到 401 或单个歌单拉取失败时整次中止并保留旧歌单，不再静默丢弃歌单。
+
+### CI
+
+- Contract Gates 安装 `httpx`：starlette 1.10 的测试客户端需要它，缺失时测试在收集阶段即失败。
 
 ## v1.1.8 (2026-11-22)
 
