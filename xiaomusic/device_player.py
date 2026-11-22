@@ -4309,6 +4309,37 @@ class XiaoMusicDevice:
             self.log.exception(f"Execption {e}")
         return ret
 
+    @staticmethod
+    def _build_music_queue_payload(
+        entries: list[tuple[str, str]], first_audio_id: str, start_index: int = 0
+    ) -> dict:
+        """player_play_music payload with several audio items (same shape as
+        miservice play_by_music_url, which only ever sends one). Item i gets
+        audio_id first_audio_id + i; start_index selects startaudioid.
+        Verified on OH2P: the speaker advances through the items locally and
+        honours startaudioid (ADR-0007)."""
+        base = int(first_audio_id) if str(first_audio_id).isdigit() else 1582971365183456177
+        audio_items = [
+            {
+                "item_id": {
+                    "audio_id": str(base + i),
+                    "cp": {"album_id": "-1", "episode_index": 0, "id": "355454500", "name": "xiaowei"},
+                },
+                "stream": {"url": url},
+            }
+            for i, (_name, url) in enumerate(entries)
+        ]
+        music = {
+            "payload": {
+                "audio_type": "",
+                "audio_items": audio_items,
+                "list_params": {"listId": "-1", "loadmore_offset": 0, "origin": "xiaowei", "type": "MUSIC"},
+            },
+            "play_behavior": "REPLACE_ALL",
+        }
+        start = min(max(int(start_index), 0), max(len(audio_items) - 1, 0))
+        return {"startaudioid": str(base + start), "music": json.dumps(music)}
+
     async def _get_audio_id(self, name):
         """获取音频ID"""
         audio_id = self.config.use_music_audio_id or "1582971365183456177"

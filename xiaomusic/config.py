@@ -256,6 +256,11 @@ class Config:
     auto_next_preplay_stop: bool = (
         os.getenv("XIAOMUSIC_AUTO_NEXT_PREPLAY_STOP", "false").lower() == "true"
     )
+    # EXPERIMENT (default off): enables /api/experiment/speaker for probing
+    # speaker-side queue behavior on the test server (see ADR-0007).
+    enable_playback_experiments: bool = (
+        os.getenv("XIAOMUSIC_ENABLE_PLAYBACK_EXPERIMENTS", "false").lower() == "true"
+    )
     # 目录监控配置
     enable_file_watch: bool = (
         os.getenv("XIAOMUSIC_ENABLE_FILE_WATCH", "false").lower() == "true"

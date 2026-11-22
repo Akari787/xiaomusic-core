@@ -568,6 +568,90 @@ async def jellyfin_logout():
     return api_response.ok(_jellyfin_login_fields(), contract="raw")
 
 
+_EXPERIMENT_AUDIO_ID_BASE = 1582971365183456177
+
+
+@router.post("/api/experiment/speaker")
+async def experiment_speaker(request: Request):
+    """EXPERIMENT ONLY (enable_playback_experiments). Probe speaker-side
+    queue behavior: queue / operation / status / loop. Whitelisted ubus
+    methods only; goes through the existing auth runtime."""
+    if not bool(getattr(config, "enable_playback_experiments", False)):
+        raise HTTPException(status_code=404, detail="Not Found")
+    from xiaomusic.device_player import XiaoMusicDevice
+
+    body = json.loads((await request.body()).decode("utf-8") or "{}")
+    op = str(body.get("op") or "")
+    device_id = config.get_one_device_id()
+    am = xiaomusic.auth_manager
+
+    async def ubus(method, path, message, ctx):
+        return await am.mina_call(
+            "ubus_request", device_id, method, path, message, retry=1, ctx=f"experiment_{ctx}"
+        )
+
+    if op == "queue":
+        playlist = str(body.get("playlist") or "")
+        first = int(body.get("first", 0))
+        count = max(1, min(int(body.get("count", 3)), 500))
+        start = int(body.get("start", 0))
+        use_proxy = bool(body.get("proxy", False))
+        entries = []
+        raw_urls = body.get("urls")
+        if isinstance(raw_urls, list) and raw_urls:
+            # Arbitrary sources (local files, plain HTTP servers, streams).
+            entries = [(f"url{i}", str(u)) for i, u in enumerate(raw_urls[:500])]
+        else:
+            names = list(xiaomusic.music_library.music_list.get(playlist, []))[first : first + count]
+            if not names:
+                raise HTTPException(status_code=400, detail="empty selection")
+            for name in names:
+                url, _origin = await xiaomusic.music_library.get_music_url(name)
+                if use_proxy and "/proxy/" not in url:
+                    url = xiaomusic.music_library.get_proxy_url(url, name=name)
+                entries.append((name, url))
+        payload = XiaoMusicDevice._build_music_queue_payload(
+            entries, str(_EXPERIMENT_AUDIO_ID_BASE), start_index=start
+        )
+        log.info(
+            "experiment_queue count=%d start=%d proxy=%s payload_bytes=%d",
+            len(entries), start, use_proxy, len(payload["music"]),
+        )
+        t0 = time.time()
+        ret = await ubus("player_play_music", "mediaplayer", payload, "queue")
+        return {
+            "ret": ret,
+            "call_s": round(time.time() - t0, 3),
+            "items": [
+                {"index": i, "audio_id": str(_EXPERIMENT_AUDIO_ID_BASE + i), "name": n}
+                for i, (n, _u) in enumerate(entries)
+            ],
+        }
+    if op == "operation":
+        action = str(body.get("action") or "")
+        if action not in {"next", "prev", "play", "pause", "stop"}:
+            raise HTTPException(status_code=400, detail="bad action")
+        t0 = time.time()
+        ret = await ubus(
+            "player_play_operation", "mediaplayer",
+            {"action": action, "media": str(body.get("media") or "app_ios")}, f"op_{action}",
+        )
+        return {"ret": ret, "call_s": round(time.time() - t0, 3)}
+    if op == "status":
+        ret = await ubus(
+            "player_get_play_status", "mediaplayer",
+            {"media": str(body.get("media") or "app_ios")}, "status",
+        )
+        return {"ret": ret}
+    if op == "loop":
+        ret = await ubus(
+            "player_set_loop", "mediaplayer",
+            {"media": str(body.get("media") or "common"), "type": int(body.get("type", 1))}, "loop",
+        )
+        return {"ret": ret}
+    raise HTTPException(status_code=400, detail="unknown op")
+
+
 @router.post("/api/jellyfin/sync")
 async def jellyfin_sync():
     ret = await xiaomusic.online_music_service.sync_jellyfin_music_lists()
