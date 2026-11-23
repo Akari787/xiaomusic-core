@@ -157,9 +157,11 @@ SpeakerClient（新增，唯一调用小米云的地方）
    - 实现：`xiaomusic/speaker_queue.py` 生成窗口；`device_player` 在 `group_player_play` 中按窗口下发（`player_play_music`），StreamGateway 的拉流事件驱动跟随（`follow_track`，保持 PLAYING，不新增生命周期编号）；哨兵为代码生成的 60 s 静音 MP3（`/stream/v1/…/silence/60`，序号 = 续接起点）。窗口大小 `queue_window_size`（环境变量 `XIAOMUSIC_QUEUE_WINDOW_SIZE`，默认 20，0 = 逐首）。
    - 兜底计时器在预期结束后 8 s 才触发（单曲循环时不设）；改播放模式时立即改 `loop_type`，下一次拉流时若音箱所在曲目正是新模式要的下一首就直接跟随，否则重发。
    - 实测（OH2P）：`loop_type` 在替换队列后保持不变，只在变化时发送；`loop_type=0` 时音箱每次重播都会重新拉流（用来重置进度）；窗口续接的静音间隔约 1 s；改为单曲播放后，音箱进入下一首时由服务端停止，停止命令本身约 2.5 s。
-   - 本步顺带落实决策 1 的旧入口部分：`update_playlist` 不再按歌名排序。v1 API 播放的第一首仍逐首下发（URL 为 `/api/proxy/plugin-url`），从下一首起进入队列，第 5 步合并。
+   - 本步顺带落实决策 1 的旧入口部分：`update_playlist` 不再按歌名排序。v1 API 播放的第一首当时仍逐首下发，已在第 5 步合并。
 4. **PlaybackFollower**：当前曲目改由 TrackFetched 驱动；删除逐首计时切歌、开播确认轮询，以及外部链接路径的那一套独立状态；同时删除只为计时器服务的配置 `auto_next_confirm_*`、`auto_next_preplay_stop`（2026-11-22 已从设置页撤下），以及固定的切歌提前量 `TRACK_END_LEAD_SEC`（2026-11-22 取代了 `delay_sec`）。
 5. **合并入口**：API（外部链接）和本地歌单都走“生成队列 → 下发 → 跟随”这一条路径；`site_media` 的中转移入 StreamGateway。
+   - ✅ 入口合并（2026-11-23）：带歌单上下文的 v1 API 播放（WebUI）从第一首起按窗口下发。API 交来的投递地址（`/api/proxy/plugin-url`）网关不解析，当前曲改用歌单条目自己的地址（同一首，经网关）。没有歌单上下文的单独链接仍单首下发。实测（随机模式）：第一首即下发 20 首窗口，音箱本地切歌后服务端同秒跟随。
+   - ⏸ `site_media` 中转移入 StreamGateway：待定。现状是曲库歌单里的网络歌曲走 `/proxy`，不经过 `site_media`；`site_media`（YouTube 等）只用于单独链接的一次性播放，单首下发，`/relay/stream` 工作正常。移入网关目前只换来“重启后地址仍有效”。
 6. **拆分与清理**：`device_player.py` 拆成 DevicePlayer / SpeakerQueue / PlaybackFollower；把 sid / LifecycleToken / 手动切歌代际 / barrier 收敛为每个队列的版本号；删除暂停/恢复（见“不提供暂停 / 恢复”）；用行为测试替换绑定内部实现的单元测试。
 
 ## 待确认问题
