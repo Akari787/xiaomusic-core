@@ -100,8 +100,11 @@ class FakeSpeaker:
             if not title_at_call:
                 # A one-off external URL has no current track until it starts;
                 # raw harness URLs carry the song name.
-                m = re.search(r"/Audio/([^/]+)/stream", url)
-                title_at_call = m.group(1) if m else ""
+                if self.gateway is not None and "/stream/v1/" in url:
+                    title_at_call = self._title(self._ref(url))
+                else:
+                    m = re.search(r"/Audio/([^/]+)/stream", url)
+                    title_at_call = m.group(1) if m else ""
             self.commands.append(Command("play", url, title_at_call))
             self.playing_url = url
             self.paused = False

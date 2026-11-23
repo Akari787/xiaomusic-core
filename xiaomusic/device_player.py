@@ -1545,7 +1545,11 @@ class XiaoMusicDevice:
         failure_token = attempt_token
         try:
             try:
-                ret = await self.group_player_play(url)
+                queue_name = self._external_queue_name()
+                if queue_name:
+                    ret = await self.group_player_play(url, queue_name)
+                else:
+                    ret = await self.group_player_play(url)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -3744,6 +3748,17 @@ class XiaoMusicDevice:
             return None
         return queue
 
+    def _external_queue_name(self) -> str:
+        """Current playlist item after a v1 API play bootstrapped a playlist
+        session, so that play goes through queue dispatch as well
+        (ADR-0007 step 5). "" for a one-off URL without playlist context:
+        on_external_url_play clears the session before bootstrapping."""
+        names = self._get_playlist_names()
+        index = self._current_index
+        if 0 <= index < len(names) and names[index] == self.get_cur_music():
+            return names[index]
+        return ""
+
     async def _queue_item_url(self, name: str) -> str:
         """URL for a non-current window item, or "" to end the window there.
 
@@ -3797,6 +3812,16 @@ class XiaoMusicDevice:
                 if item_url
                 else ""
             )
+            if i == index and (not wrapped or wrapped == item_url):
+                # The v1 API hands over a delivery URL (/api/proxy/plugin-url)
+                # the gateway does not parse; the playlist item's own address
+                # is the same track and is served by the gateway.
+                item_url = await self._queue_item_url(names[i])
+                wrapped = (
+                    gateway.wrap(item_url, did=self.did, queue=queue_id, index=i)
+                    if item_url
+                    else ""
+                )
             if not wrapped or wrapped == item_url:
                 if i == index:
                     return None

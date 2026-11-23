@@ -211,18 +211,34 @@ async def test_lost_fetch_falls_back_to_the_timer(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_api_play_hands_over_to_queue_dispatch_at_the_next_track(monkeypatch, tmp_path):
-    """The v1 API path still dispatches its first track alone (merged in a
-    later ADR-0007 step); from the next track on the speaker owns the queue."""
+async def test_api_play_with_playlist_context_dispatches_a_queue(monkeypatch, tmp_path):
+    """The v1 API path (WebUI) goes through queue dispatch from its first
+    track (ADR-0007 step 5); the delivery URL is replaced by the playlist
+    item's gateway address."""
     rig = build_rig(monkeypatch, tmp_path, playlists=FOUR, queue=True)
     try:
         await rig.play_url("b", "L")
-        await rig.wait_until(lambda: len(rig.speaker.heard()) >= 2, player_seconds=2 * SONG + 10)
+        await rig.wait_until(lambda: len(rig.speaker.heard()) >= 2, player_seconds=2 * SONG)
         await rig.settle(5)
 
-        assert rig.speaker.played() == ["b"]
-        assert rig.speaker.queues() == [["c", "d", "a", "b"]]
-        assert rig.player.get_cur_music() == "d"
+        assert rig.speaker.played() == []  # no single-track dispatch
+        assert rig.speaker.queues() == [["b", "c", "d", "a"]]
+        assert rig.speaker.heard()[:2] == ["b", "c"]
+        assert rig.player.get_cur_music() == "c"
+        assert rig.state().phase == PlaybackPhase.PLAYING
+    finally:
+        await rig.close()
+
+
+@pytest.mark.asyncio
+async def test_api_play_without_playlist_context_stays_a_single_track(monkeypatch, tmp_path):
+    rig = build_rig(monkeypatch, tmp_path, playlists=FOUR, queue=True)
+    try:
+        await rig.play_url("c")
+        await rig.settle(SONG + 15)
+
+        assert rig.speaker.queues() == []
+        assert rig.speaker.played() == ["c"]
     finally:
         await rig.close()
 
