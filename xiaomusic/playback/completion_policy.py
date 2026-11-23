@@ -1,15 +1,15 @@
 """Pure completion policy module (T05-A).
 
-ObservationKind: what the confirmer observed.
-ConfirmationObservation: frozen observation data.
-map_to_observation: pure function mapping raw bool|None|exception → observation.
+decide_failure_action: what to do after a failed play attempt.
+(The start-confirmation observations were removed with status polling in
+ADR-0007 step 4: a start is confirmed by the speaker's fetch.)
 
 No I/O. No tasks. No device_player references. No time (caller passes it).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -27,45 +27,6 @@ class FailureDecision:
     delay: float = 0.0
     failure_count: int = 0
     reason: str = ""
-
-
-class ObservationKind(str, Enum):
-    STARTED = "started"
-    NOT_STARTED = "not_started"
-    UNKNOWN = "unknown"
-
-
-@dataclass(frozen=True)
-class ConfirmationObservation:
-    """Frozen observation produced by the background confirmer.
-
-    kind: what was observed about playback start.
-    observed_at: monotonic timestamp provided by the caller.
-    raw_value: the original bool|None|Exception value that produced this.
-    source: label describing how the observation was formed
-            (e.g. "first_probe", "grace_retry", "exception").
-    """
-
-    kind: ObservationKind
-    observed_at: float
-    raw_value: bool | None | Exception | None = field(
-        default=None, compare=False
-    )
-    source: str = ""
-
-    def __repr__(self) -> str:
-        raw_repr: str
-        if isinstance(self.raw_value, Exception):
-            raw_repr = type(self.raw_value).__name__
-        else:
-            raw_repr = repr(self.raw_value)
-        return (
-            f"ConfirmationObservation("
-            f"kind={self.kind.value}, "
-            f"at={self.observed_at:.3f}, "
-            f"raw={raw_repr}, "
-            f"source={self.source!r})"
-        )
 
 
 def decide_failure_action(
@@ -90,30 +51,3 @@ def decide_failure_action(
         action = FailureAction.NONE
     delay = min(2 ** max(count - 1, 0), 8)
     return FailureDecision(action, float(delay), count, reason)
-
-
-def map_to_observation(
-    raw: bool | None | Exception,
-    observed_at: float,
-    source: str = "",
-) -> ConfirmationObservation:
-    """Pure mapping from confirmer result to observation.
-
-    - True  → STARTED
-    - False → NOT_STARTED
-    - None  → UNKNOWN
-    - Exception → UNKNOWN
-    """
-    if raw is True:
-        kind = ObservationKind.STARTED
-    elif raw is False:
-        kind = ObservationKind.NOT_STARTED
-    else:
-        kind = ObservationKind.UNKNOWN
-
-    return ConfirmationObservation(
-        kind=kind,
-        observed_at=observed_at,
-        raw_value=None if isinstance(raw, Exception) else raw,
-        source=source,
-    )

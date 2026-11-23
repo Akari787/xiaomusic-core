@@ -72,7 +72,6 @@ def _build_coordinator(
     plugin: SourcePlugin,
     *,
     transport: Transport,
-    status_provider=None,
     proxy_builder=None,
 ) -> PlaybackCoordinator:
     source_registry = SourceRegistry()
@@ -108,7 +107,6 @@ def _build_coordinator(
         ),
         transport_router=router,
         max_resolve_retry=1,
-        playback_status_provider=status_provider,
     )
 
 
@@ -218,7 +216,6 @@ def _make_device() -> XiaoMusicDevice:
     d._refresh_runtime_volume = lambda context="": _noop_return_false
     d._start_duration_probe = lambda name, sid, **kw: None
     d.set_next_music_timeout = lambda sec, token=None: _noop()
-    d._schedule_playing_status_probe = lambda sid, name: None
     d._find_playlist_index = lambda *a, **kw: -1
     d.get_if_xiaoai_is_playing = _noop_return_false
     d._play = _noop_return_false
@@ -237,9 +234,6 @@ def _make_device() -> XiaoMusicDevice:
 
     d._execute_group_stop = _execute_group_stop
     d._mark_play_started = _noop_return_false
-    d._schedule_playback_confirmation = lambda **kw: None
-    d._confirm_playback_started = lambda name, sid: _noop_return_false
-    d._try_proxy_fallback = _noop_return_false
     d._handle_play_failure = _noop
     d._log_measure = lambda msg: None
     d._bootstrap_playlist_session_for_external_url = lambda context: None
@@ -252,18 +246,9 @@ def _make_device() -> XiaoMusicDevice:
 
 
 @pytest.mark.asyncio
-async def test_A_deferred_receipt_fast_return_provider_zero_calls():
-    """Transport returns deferred receipt.  status_provider is blocked;
-    Coordinator.play returns quickly.  provider_calls == 0,
-    attempt started=None, accepted=True."""
-
-    block_event = asyncio.Event()
-    provider_calls: list[int] = []
-
-    async def _blocked_provider(device_id: str) -> dict:
-        provider_calls.append(1)
-        await asyncio.wait_for(block_event.wait(), timeout=5.0)
-        return {"status": 1}
+async def test_A_deferred_receipt_fast_return():
+    """Transport returns deferred receipt.  Coordinator.play returns quickly
+    with attempt started=None, accepted=True."""
 
     class _DeferredTransport(Transport):
         name = "mina"
@@ -298,22 +283,16 @@ async def test_A_deferred_receipt_fast_return_provider_zero_calls():
             stream_url="https://x/a.mp3", expires_at=None, is_live=False,
         )
     )
-    coordinator = _build_coordinator(
-        plugin, transport=_DeferredTransport(), status_provider=_blocked_provider,
+    coordinator = _build_coordinator(plugin, transport=_DeferredTransport())
+
+    out = await asyncio.wait_for(
+        coordinator.play(
+            MediaRequest(request_id="r1", source_hint="cycling",
+                         query="x", device_id="d1")
+        ),
+        timeout=0.2,
     )
 
-    try:
-        out = await asyncio.wait_for(
-            coordinator.play(
-                MediaRequest(request_id="r1", source_hint="cycling",
-                             query="x", device_id="d1")
-            ),
-            timeout=0.2,
-        )
-    finally:
-        block_event.set()
-
-    assert provider_calls == [], f"provider should be zero, got {len(provider_calls)}"
     assert out["outcome"].accepted is True
     assert out["outcome"].started is None
     assert out["outcome"].attempts[0].accepted is True
@@ -326,15 +305,10 @@ async def test_A_deferred_receipt_fast_return_provider_zero_calls():
 
 
 @pytest.mark.asyncio
-async def test_B_legacy_no_receipt_provider_called():
-    """Transport returns ordinary dict (no ret.accepted).  provider is called
-    and its result becomes attempt.started."""
-
-    provider_called = asyncio.Event()
-
-    async def _provider(device_id: str) -> dict:
-        provider_called.set()
-        return {"status": 1}
+async def test_B_legacy_no_receipt_start_is_unknown_and_passes():
+    """Transport returns ordinary dict (no ret.accepted).  The coordinator no
+    longer polls status (ADR-0007 step 4: the device confirms the start from
+    the speaker's fetch): started stays unknown and the attempt passes."""
 
     class _LegacyTransport(Transport):
         name = "mina"
@@ -369,9 +343,7 @@ async def test_B_legacy_no_receipt_provider_called():
             stream_url="https://x/a.mp3",
         )
     )
-    coordinator = _build_coordinator(
-        plugin, transport=_LegacyTransport(), status_provider=_provider,
-    )
+    coordinator = _build_coordinator(plugin, transport=_LegacyTransport())
 
     out = await asyncio.wait_for(
         coordinator.play(
@@ -381,8 +353,9 @@ async def test_B_legacy_no_receipt_provider_called():
         timeout=5.0,
     )
 
-    assert provider_called.is_set()
-    assert out["outcome"].attempts[0].started is True
+    assert out["outcome"].attempts[0].accepted is True
+    assert out["outcome"].attempts[0].started is None
+    assert len(out["outcome"].attempts) == 1
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -392,15 +365,9 @@ async def test_B_legacy_no_receipt_provider_called():
 
 @pytest.mark.asyncio
 async def test_C_explicit_false_fallback_triggered():
-    """First transport returns deferred accepted=False.  Provider not called.
+    """First transport returns deferred accepted=False.
     Fallback (proxy) path tried; second transport returns deferred true.
     Outcome fallback_triggered=True."""
-
-    provider_calls: list[int] = []
-
-    async def _provider(device_id: str) -> dict:
-        provider_calls.append(1)
-        return {"status": 1}
 
     class _FailThenDeferredTransport(Transport):
         name = "mina"
@@ -447,7 +414,6 @@ async def test_C_explicit_false_fallback_triggered():
     coordinator = _build_coordinator(
         plugin,
         transport=transport,
-        status_provider=_provider,
         proxy_builder=lambda url, name: f"http://127.0.0.1:58090/proxy?name={name}",
     )
 
@@ -459,7 +425,6 @@ async def test_C_explicit_false_fallback_triggered():
         timeout=5.0,
     )
 
-    assert provider_calls == [], f"provider should be zero, got {provider_calls}"
     assert len(transport.urls) == 2
     # site_media source → proxy_first strategy
     has_direct = any(u.startswith("https://") for u in transport.urls)

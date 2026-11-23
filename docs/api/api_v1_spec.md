@@ -739,10 +739,7 @@ v1 通过两个接口暴露播放器权威状态：
 - `options.resolve_timeout_seconds: number | null`，可选
 - `options.no_cache: boolean`，可选，默认 `false`
 - `options.prefer_proxy: boolean`，可选，默认 `false`
-- `options.confirm_start: boolean`，可选，默认 `true`
-- `options.confirm_start_delay_ms: integer`，可选，最小 `0`
-- `options.confirm_start_retries: integer`，可选，最小 `0`
-- `options.confirm_start_interval_ms: integer`，可选，最小 `100`
+- `options.confirm_start`、`confirm_start_delay_ms`、`confirm_start_retries`、`confirm_start_interval_ms`：**已废弃**（2026-11-23），仍接受以兼容旧调用方，但不再起作用；开播由音箱拉流确认（ADR-0007 第 4 步）。
 - `options.source_payload: object | null`、`context_hint: object | null`、`media_id: string`、`id: string`、`title: string`、`start_position: integer`，按来源语义可选
 - `prefer_codec`、`search_key` 等未声明字段不得发送或接受。
 

@@ -153,12 +153,6 @@ def _make_device() -> XiaoMusicDevice:
     d.do_tts = _noop
     d.cancel_group_next_timer = _noop
     d.cancel_next_timer = _noop
-    d._get_auto_next_confirm_profile = lambda: {
-        "delay_sec": 0.01,
-        "retries": 0,
-        "interval_sec": 0.01,
-    }
-
     def _log_measure(*args, **kwargs):
         pass
 

@@ -361,17 +361,13 @@ def real_device():
 
 @pytest.mark.asyncio
 async def test_h_stop_during_confirmation_reaches_stopped(real_device):
+    """A stop while waiting for the speaker's start fetch (ADR-0007 step 4)
+    reaches STOPPED, and the late start is never marked."""
     d = real_device
-    confirm_release = asyncio.Event()
     stop_finished = asyncio.Event()
-
-    _orig_schedule = d._schedule_playback_confirmation
+    started: list[int] = []
     _orig_stop = d.group_force_stop_xiaoai
 
-    # ── stub confirmation observer to enter blocked state ──
-    d._background_confirm_playback_started = lambda **kw: _event_wait(confirm_release)
-
-    # ── stub physical stop to signal completion ──
     async def _stop_with_event(*a, **kw):
         result = await _orig_stop(*a, **kw)
         stop_finished.set()
@@ -379,30 +375,23 @@ async def test_h_stop_during_confirmation_reaches_stopped(real_device):
 
     d.group_force_stop_xiaoai = _stop_with_event
 
-    # Real scheduling entry point
-    token = d._capture_lifecycle_token()
-    d._schedule_playback_confirmation(
-        name="song-a", sid=d._play_session_id, cur_playlist="全部",
-        origin_url="http://a", current_url="http://a", fast_stop=False,
-        token=token,
-    )
+    async def _on_started():
+        started.append(1)
 
-    # Wait for confirmation task to start running
+    sid = d._play_session_id
+    d._expect_start_fetch(sid, str(sid), 0)
+    token = d._capture_lifecycle_token()
+    await d._confirm_when_fetched(name="song-a", sid=sid, token=token, on_started=_on_started)
+
     conf_task = d._playback_tasks.get_task(TaskKind.PLAYBACK_CONFIRMATION)
     assert conf_task is not None
 
-    # Public stop — goes through arbiter, real _execute_stop_intent
     await d.stop()
-
-    # Wait for physical stop to complete (signalled from stubbed leaf)
     await _event_wait(stop_finished)
-
-    # Release confirmation (it will be cancelled by bump)
-    confirm_release.set()
     await asyncio.wait_for(asyncio.gather(conf_task, return_exceptions=True), _TIMEOUT)
 
     assert d.get_runtime_state().phase == PlaybackPhase.STOPPED
-    d._schedule_playback_confirmation = _orig_schedule
+    assert started == []
     await d.close_command_arbiter()
 
 

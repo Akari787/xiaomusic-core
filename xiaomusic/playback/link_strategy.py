@@ -188,17 +188,3 @@ class LinkPlaybackStrategy:
         if normalized.proxy_url:
             return normalized.proxy_url
         return normalized.direct_url
-
-    def should_jellyfin_auto_fallback(
-        self,
-        jellyfin_mode: str,
-        origin_url: str,
-        current_url: str,
-    ) -> bool:
-        mode = (jellyfin_mode or "auto").lower()
-        return bool(
-            mode == "auto"
-            and origin_url
-            and origin_url == current_url
-            and self.music_library.is_jellyfin_url(current_url)
-        )

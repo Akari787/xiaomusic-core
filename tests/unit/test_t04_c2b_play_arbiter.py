@@ -140,7 +140,6 @@ def _make_device() -> XiaoMusicDevice:
     d._refresh_runtime_volume = lambda context="": _noop_return_false
     d._start_duration_probe = lambda name, sid, **kw: None
     d.set_next_music_timeout = lambda sec, token=None: _noop()
-    d._schedule_playing_status_probe = lambda sid, name: None
     d._find_playlist_index = lambda *a, **kw: -1
     d.get_if_xiaoai_is_playing = _noop_return_false
     d._play = _noop_return_false
@@ -156,9 +155,6 @@ def _make_device() -> XiaoMusicDevice:
     d._bump_play_session = lambda reason="": _bump_sid(d)
     d._execute_group_stop = _noop_list
     d._mark_play_started = _noop_return_false
-    d._schedule_playback_confirmation = lambda **kw: None
-    d._confirm_playback_started = lambda name, sid: _noop_return_false
-    d._try_proxy_fallback = _noop_return_false
     d._handle_play_failure = _noop
     d._log_measure = lambda msg: None
     return d

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import copy
 import logging
-from collections.abc import Awaitable, Callable
 from typing import Any
 
 from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
@@ -37,15 +35,12 @@ class PlaybackCoordinator:
         delivery_adapter: DeliveryAdapter,
         transport_router: TransportRouter,
         max_resolve_retry: int = 1,
-        playback_status_provider: Callable[[str], Awaitable[dict[str, Any]]]
-        | None = None,
     ) -> None:
         self._source_registry = source_registry
         self._device_registry = device_registry
         self._delivery_adapter = delivery_adapter
         self._transport_router = transport_router
         self._max_resolve_retry = max_resolve_retry
-        self._playback_status_provider = playback_status_provider
 
     async def play(self, request: MediaRequest, device_id: str | None = None) -> dict:
         target_device_id = device_id or request.device_id
@@ -290,8 +285,10 @@ class PlaybackCoordinator:
             accepted = False
             started = None
         else:
+            # Without a device receipt the start is unknown; the device layer
+            # confirms it from the speaker's fetch (ADR-0007 step 4).
             accepted = bool(dispatch_result.ok)
-            started = await self._confirm_playback_started(device_id, request_context)
+            started = None
         attempt = PlaybackAttempt(
             path="proxy" if prepared.is_proxy else "direct",
             transport=dispatch_result.transport,
@@ -330,86 +327,3 @@ class PlaybackCoordinator:
             attempt.accepted and (attempt.started is True or attempt.started is None)
         )
 
-    async def _confirm_playback_started(
-        self, device_id: str, request_context: dict[str, Any]
-    ) -> bool | None:
-        if self._playback_status_provider is None:
-            return None
-        if request_context.get("confirm_start", True) is False:
-            return None
-
-        retries = max(0, int(request_context.get("confirm_start_retries", 2)))
-        delay_ms = max(0, int(request_context.get("confirm_start_delay_ms", 1200)))
-        interval_ms = max(
-            100, int(request_context.get("confirm_start_interval_ms", 600))
-        )
-
-        LOG.info(
-            "play_start_confirmation_attempted device_id=%s confirm_start=%s retries=%d delay_ms=%d interval_ms=%d",
-            device_id,
-            str(bool(request_context.get("confirm_start", True))).lower(),
-            retries,
-            delay_ms,
-            interval_ms,
-        )
-        await asyncio.sleep(delay_ms / 1000)
-        saw_true = False
-        saw_false = False
-        saw_drop_after_true = False
-        for idx in range(retries + 1):
-            try:
-                status = await self._playback_status_provider(device_id)
-            except Exception as exc:
-                LOG.warning(
-                    "core_chain status_probe_failed device_id=%s error=%s",
-                    device_id,
-                    exc.__class__.__name__,
-                )
-                return None
-            started = self._status_started(status)
-            if started is True:
-                saw_true = True
-            elif started is False:
-                if saw_true:
-                    saw_drop_after_true = True
-                saw_false = True
-            if idx < retries:
-                await asyncio.sleep(interval_ms / 1000)
-        if saw_drop_after_true:
-            LOG.info(
-                "play_start_confirmation_result device_id=%s started=false", device_id
-            )
-            return False
-        if saw_true:
-            LOG.info(
-                "play_start_confirmation_result device_id=%s started=true", device_id
-            )
-            return True
-        if saw_false:
-            LOG.info(
-                "play_start_confirmation_result device_id=%s started=false", device_id
-            )
-            return False
-        LOG.info(
-            "play_start_confirmation_result device_id=%s started=unknown", device_id
-        )
-        return None
-
-    @staticmethod
-    def _status_started(status: dict[str, Any]) -> bool | None:
-        raw = status.get("status")
-        if isinstance(raw, str):
-            normalized = raw.strip().lower()
-            if normalized in {"1", "playing", "streaming"}:
-                return True
-            if normalized in {"0", "paused", "stopped", "idle"}:
-                return False
-        if isinstance(raw, (int, float)):
-            if int(raw) == 1:
-                return True
-            if int(raw) == 0:
-                return False
-        is_playing = status.get("is_playing")
-        if isinstance(is_playing, bool):
-            return is_playing
-        return None

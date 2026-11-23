@@ -108,7 +108,6 @@ def _build_coordinator(
     plugin: SourcePlugin,
     *,
     transport: Transport | None = None,
-    status_provider=None,
     proxy_builder=None,
 ) -> PlaybackCoordinator:
     source_registry = SourceRegistry()
@@ -142,7 +141,6 @@ def _build_coordinator(
         delivery_adapter=DeliveryAdapter(expiry_skew_seconds=0, proxy_url_builder=proxy_builder),
         transport_router=router,
         max_resolve_retry=1,
-        playback_status_provider=status_provider,
     )
 
 
@@ -218,58 +216,3 @@ async def test_playback_coordinator_control_actions_and_probe_update():
     assert probe_out["reachability"].local_reachable is True
     assert probe_out["reachability"].last_probe_ts >= 1
 
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_playback_coordinator_fallback_to_proxy_when_direct_not_started():
-    plugin = _CyclingSourcePlugin(
-        outputs=[
-            ResolvedMedia(
-                media_id="m-site",
-                source="direct_url",
-                title="yt",
-                stream_url="https://googlevideo.example/v1.mp4",
-                expires_at=None,
-                is_live=False,
-            )
-        ]
-    )
-    transport = _RecordingTransportStub()
-
-    status_values = iter([{"status": 0}, {"status": 1}])
-
-    async def _status_provider(device_id: str) -> dict:
-        _ = device_id
-        return next(status_values)
-
-    coordinator = _build_coordinator(
-        plugin,
-        transport=transport,
-        status_provider=_status_provider,
-        proxy_builder=lambda url, name: f"http://127.0.0.1:58090/proxy?name={name}",
-    )
-
-    out = await coordinator.play(
-        MediaRequest(
-            request_id="r-proxy",
-            source_hint="cycling",
-            query="https://www.youtube.com/watch?v=iPnaF8Ngk3Q",
-            device_id="d1",
-            context={
-                "prefer_proxy": False,
-                "confirm_start_delay_ms": 0,
-                "confirm_start_interval_ms": 0,
-                "confirm_start_retries": 0,
-            },
-        )
-    )
-
-    assert out["ok"] is True
-    assert len(transport.urls) == 2
-    assert transport.urls[0].startswith("https://")
-    assert transport.urls[1].startswith("http://127.0.0.1:58090/proxy")
-    assert out["prepared_stream"].is_proxy is True
-    assert out["outcome"].fallback_triggered is True
-    # Context dict identity: same object passed to both transport calls
-    assert len(transport.contexts) >= 2
-    assert transport.contexts[0] is transport.contexts[1]

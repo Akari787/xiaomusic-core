@@ -115,9 +115,9 @@ WebUI 点击 next/previous 时不得：
 - `get_offset_duration()` 是纯查询，不得触发切歌或创建任务。
 - **队列下发**（ADR-0007 第 3 步，2026-11-23 起，支持 music API 的型号）：歌单曲目按窗口一次下发（默认 20 首），音箱自己切歌；StreamGateway 收到音箱拉取某一项时，服务端把当前曲目切到该项（`follow_track`）。窗口放完时音箱拉取静音哨兵，服务端以下一首为起点下发新窗口。此时 next timer 只做兜底，在预期结束后 8 s 才触发；单曲循环不设 timer。
 - 逐首路径（不支持 music API 的型号、`queue_window_size=0`、没有歌单上下文的单独链接、网关不处理的地址）：自动完成判定只在 next timer 到期路径执行；到期后**直接**推进下一首，不再查询音箱状态（2026-11-22 起：音箱在循环单项队列时总报告 playing，查询只会推迟切歌）。
-- 自动切歌默认不先停止（`auto_next_preplay_stop=false`）；手动操作和新播放仍先停止。
+- 自动切歌不先停止（2026-11-23 起固定，`auto_next_preplay_stop` 已删除）；手动操作和新播放仍先停止。
 - 顺序播放到歌单末尾时停止，不回到开头；单曲播放到期即停止。
-- 后台启动确认是观察路径：confirmation 不切歌、不取消 completion timer、不创建 retry；确认异常只形成安全 observation/log。
+- **开播确认**（ADR-0007 第 4 步）：经 StreamGateway 下发的曲目，以音箱拉取起始项作为开播确认，此后才进入 PLAYING，开播时间取拉流时间；`START_FETCH_TIMEOUT_SEC`（15 s）内未拉流按播放失败交给失败策略。网关不处理的地址（电台、站点中转）下发成功即视为开播。不再轮询音箱状态（`player_get_status`），也不再有 Jellyfin 直连失败改走代理的回退。
 - 失败由 `completion_policy` 决策，retry/auto-next 经过 Device arbiter，并由 `PlaybackTaskRegistry` 持有。
 - `_bump_play_session()` 不得取消当前正在执行导航的 task 自身。
 - 所有延迟回调在执行前必须校验 session ID 与 LifecycleToken，旧 session 回调直接丢弃。

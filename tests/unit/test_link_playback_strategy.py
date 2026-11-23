@@ -41,14 +41,3 @@ def test_link_strategy_build_proxy_url_uses_shared_music_library_path():
     out = s.build_proxy_url("https://example.com/live.m3u8", name="x")
     assert out.startswith("http://127.0.0.1:58090/proxy")
     assert lib.proxy_calls == [("https://example.com/live.m3u8", "x")]
-
-
-@pytest.mark.unit
-def test_link_strategy_detects_jellyfin_auto_fallback_candidate():
-    from xiaomusic.playback.link_strategy import LinkPlaybackStrategy  # noqa: PLC0415
-
-    s = LinkPlaybackStrategy(music_library=_FakeMusicLibrary(), log=None)
-    url = "http://192.168.0.4:30013/Audio/abc/stream.mp3?api_key=xx"
-    assert s.should_jellyfin_auto_fallback("auto", url, url)
-    assert not s.should_jellyfin_auto_fallback("on", url, url)
-    assert not s.should_jellyfin_auto_fallback("auto", url, "http://other")

@@ -315,3 +315,28 @@ async def test_single_loop_repeat_is_pushed_to_the_webui(monkeypatch, tmp_path):
         assert offset < 10
     finally:
         await rig.close()
+
+
+@pytest.mark.asyncio
+async def test_start_is_confirmed_by_the_fetch_and_a_missing_fetch_is_retried(
+    monkeypatch, tmp_path
+):
+    """ADR-0007 step 4: no status polling. The speaker accepted the queue but
+    never fetched it: after the fetch timeout the start counts as failed and
+    the failure policy retries."""
+    rig = build_rig(monkeypatch, tmp_path, playlists=FOUR, queue=True)
+    rig.speaker.drop_start_fetch = 1
+    try:
+        await rig.play_playlist("L", "a")
+        await rig.settle(5)
+        assert rig.state().phase != PlaybackPhase.PLAYING  # not started yet
+
+        await rig.wait_until(lambda: len(rig.speaker.heard()) >= 1, player_seconds=40)
+        await rig.settle(3)
+
+        assert "queue_not_started" in rig.speaker.timeline()
+        assert rig.speaker.queues()[-1][0] == "a"  # retried the same track
+        assert rig.speaker.heard()[0] == "a"
+        assert rig.state().phase == PlaybackPhase.PLAYING
+    finally:
+        await rig.close()

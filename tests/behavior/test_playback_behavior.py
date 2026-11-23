@@ -214,21 +214,6 @@ async def test_track_end_switches_without_status_round_trip(rig_factory):
 
 
 @pytest.mark.asyncio
-async def test_auto_advance_stop_can_be_turned_back_on(rig_factory):
-    """auto_next_preplay_stop=True restores the stop before auto-advance, for
-    hardware that will not switch without one."""
-    rig = rig_factory(config_overrides={"auto_next_preplay_stop": True})
-    try:
-        await rig.play_playlist("日语", "a")
-        await rig.wait_until(lambda: len(rig.speaker.played()) >= 2, player_seconds=SONG + 10)
-
-        assert rig.speaker.played() == ["a", "b"]
-        assert_stop_precedes_every_play(rig.speaker.timeline())
-    finally:
-        await rig.close()
-
-
-@pytest.mark.asyncio
 async def test_manual_next_still_stops_by_default(rig_factory):
     rig = rig_factory()
     try:
@@ -244,27 +229,6 @@ async def test_manual_next_still_stops_by_default(rig_factory):
 
 
 # ── failures ───────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_preplay_stop_timeout_retries_and_keeps_playing(rig_factory):
-    """Regression (2026-11-22 incident): a cloud timeout on the stop issued
-    before switching tracks stalled playback; the speaker kept looping.
-    Auto-advance no longer stops by default, so enable it to exercise the
-    path (it is still used when configured, and by manual switches/retries)."""
-    rig = rig_factory(config_overrides={"auto_next_preplay_stop": True})
-    try:
-        await rig.play_playlist("日语", "a")
-        await rig.settle(5)
-        rig.speaker.fail("player_stop", True)
-
-        await rig.settle(SONG + 10)
-
-        assert "player_stop!timeout" in rig.speaker.timeline()
-        assert rig.speaker.played() == ["a", "b"]
-        assert rig.state().phase == PlaybackPhase.PLAYING
-    finally:
-        await rig.close()
 
 
 @pytest.mark.asyncio

@@ -127,24 +127,6 @@ class Config:
         os.getenv("XIAOMUSIC_REMOVE_ID3TAG", "false").lower() == "true"
     )
     convert_to_mp3: bool = os.getenv("CONVERT_TO_MP3", "false").lower() == "true"
-    auto_next_confirm_delay_ms: int = int(
-        os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_DELAY_MS", "1000")
-    )
-    auto_next_confirm_retries: int = int(
-        os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_RETRIES", "2")
-    )
-    auto_next_confirm_interval_ms: int = int(
-        os.getenv("XIAOMUSIC_AUTO_NEXT_CONFIRM_INTERVAL_MS", "300")
-    )
-    # Send player_stop before dispatching the next track on timer-driven
-    # auto-advance. Off by default: play_by_music_url already replaces the
-    # speaker queue, and the stop is a cloud round trip measured at 1-5 s and
-    # up to 31 s on the OH2P, during which the speaker audibly restarts the
-    # finished track. Manual commands and retries always stop first. Turn this
-    # back on only for hardware that will not switch without a stop.
-    auto_next_preplay_stop: bool = (
-        os.getenv("XIAOMUSIC_AUTO_NEXT_PREPLAY_STOP", "false").lower() == "true"
-    )
     # Tracks per queue dispatch on hardware with the music API (ADR-0007
     # step 3): the speaker plays them in order by itself; a silent sentinel
     # at the end triggers the next dispatch. 0 = send one track at a time

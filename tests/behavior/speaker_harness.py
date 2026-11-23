@@ -78,6 +78,9 @@ class FakeSpeaker:
     # Indices (by position in a dispatched queue) whose fetch never reaches
     # the gateway, e.g. {1}: simulates a lost fetch.
     drop_fetch: set[int] = field(default_factory=set)
+    # The next N dispatched queues never fetch their start item (the speaker
+    # accepted the command but did not start).
+    drop_start_fetch: int = 0
     _queue_task: Any = None
 
     def fail(self, name: str, *pattern: bool) -> None:
@@ -153,6 +156,10 @@ class FakeSpeaker:
             self.commands.append(Command("queue", items[start]["stream"]["url"], ",".join(titles)))
             self._stop_queue()
             self.paused = False
+            if self.drop_start_fetch > 0:
+                self.drop_start_fetch -= 1
+                self.commands.append(Command("queue_not_started"))
+                return {"code": 0}
             self._queue_task = asyncio.get_running_loop().create_task(
                 self._run_queue(refs, start)
             )

@@ -2004,9 +2004,9 @@ class MusicLibrary:
             except Exception:
                 return False
 
-        # Jellyfin: play direct first; if the speaker does not start, the
-        # device layer retries the same track through /proxy (origin URL is
-        # returned for that). Everything else goes through /proxy.
+        # Jellyfin: return the direct URL; the device hands the speaker a
+        # StreamGateway address for it (ADR-0007), which fetches with the
+        # current token. Everything else goes through /proxy.
         if is_jellyfin_url(url):
             return url, url
         is_radio = self.is_web_radio_music(name)

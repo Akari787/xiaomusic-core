@@ -46,10 +46,7 @@
 | `resolve_timeout_seconds` | `float \| None` | `None` | 来源解析超时；`None` 时按来源自动回退（site_media=15，其他=8） |
 | `no_cache` | `bool` | `false` | 禁用来源缓存 |
 | `prefer_proxy` | `bool` | `false` | 优先走代理投递 |
-| `confirm_start` | `bool` | `true` | 播放确认开关 |
-| `confirm_start_delay_ms` | `int` | `1200` | 首次确认延迟（毫秒） |
-| `confirm_start_retries` | `int` | `2` | 确认重试次数 |
-| `confirm_start_interval_ms` | `int` | `600` | 重试间隔（毫秒，最小 100） |
+| `confirm_start*` | — | — | 已废弃（2026-11-23）：仍接受，不再起作用；开播由音箱拉流确认 |
 | `source_payload` | `dict \| None` | `None` | 来源插件扩展上下文 |
 | `media_id` | `str` | `""` | 兼容 `id` 字段的媒体标识 |
 | `title` | `str` | `""` | 媒体标题透传 |

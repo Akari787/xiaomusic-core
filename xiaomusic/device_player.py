@@ -27,11 +27,8 @@ from xiaomusic.const import (
 from xiaomusic.download_result import DownloadResult
 from xiaomusic.events import DEVICE_CONFIG_CHANGED, PLAYER_STATE_CHANGED
 from xiaomusic.playback.completion_policy import (
-    ConfirmationObservation,
     FailureAction,
-    ObservationKind,
     decide_failure_action,
-    map_to_observation,
 )
 from xiaomusic.playback.runtime_state import (
     LifecycleToken,
@@ -86,6 +83,10 @@ TRACK_END_LEAD_SEC = 2.0
 # at the track boundary (live-paced sources about 4 s later), so the fallback
 # waits this long past the expected end.
 QUEUE_FOLLOW_GRACE_SEC = 8.0
+# A dispatch through the StreamGateway counts as started when the speaker
+# fetches the start item (about 1 s after the cloud call returns on the
+# OH2P). No fetch within this time is a failed start.
+START_FETCH_TIMEOUT_SEC = 15.0
 
 
 class XiaoMusicDevice:
@@ -151,10 +152,6 @@ class XiaoMusicDevice:
 
         # Non-destructive completion tracking. The timer owns normal completion;
         # the background confirmation counter is diagnostic-only and never advances.
-        self._timer_expiry_false_count = 0
-        self._bg_confirm_false_count = 0
-        self._timer_expiry_playing_grace_count = 0
-        self._timer_expiry_unknown_grace_count = 0
         self._playlist_session_shuffled = False  # set by explicit context.shuffle, consumed by navigation
         self._manual_nav_lock = asyncio.Lock()
         self._manual_nav_generation = 0
@@ -1564,11 +1561,7 @@ class XiaoMusicDevice:
                     )
                     return
                 if self._external_play_dispatch_succeeded(fallback_ret):
-                    await self.on_external_url_play_started(
-                        context=internal_ctx,
-                        resolved=resolved,
-                        token=fallback_token,
-                    )
+                    await self._external_started_when_fetched(internal_ctx, resolved, fallback_token)
                     return
                 raise RuntimeError(
                     "direct and fallback external playback failed"
@@ -1583,11 +1576,7 @@ class XiaoMusicDevice:
                 return
 
             if self._external_play_dispatch_succeeded(ret):
-                await self.on_external_url_play_started(
-                    context=internal_ctx,
-                    resolved=resolved,
-                    token=attempt_token,
-                )
+                await self._external_started_when_fetched(internal_ctx, resolved, attempt_token)
                 return
 
             if not fallback_url:
@@ -1604,11 +1593,7 @@ class XiaoMusicDevice:
                 )
                 return
             if self._external_play_dispatch_succeeded(fallback_ret):
-                await self.on_external_url_play_started(
-                    context=internal_ctx,
-                    resolved=resolved,
-                    token=fallback_token,
-                )
+                await self._external_started_when_fetched(internal_ctx, resolved, fallback_token)
                 return
             raise RuntimeError(
                 "direct and fallback external playback failed"
@@ -2208,9 +2193,6 @@ class XiaoMusicDevice:
         self._play_failed_cnt = 0
         self._play_fail_first_ts = 0.0
         self._play_fail_last_reason = ""
-        self._timer_expiry_false_count = 0
-        self._timer_expiry_playing_grace_count = 0
-        self._timer_expiry_unknown_grace_count = 0
 
     def _bump_play_session(self, reason: str = "") -> int:
         self._play_session_id += 1
@@ -2219,10 +2201,6 @@ class XiaoMusicDevice:
         # Session-scoped: add-song work is invalidated by a new session.
         # STOP_TIMER (global) intentionally excluded — must survive bumps.
         registry.cancel_by_kinds(*ATTEMPT_SCOPED_KINDS, *SESSION_SCOPED_KINDS)
-        self._timer_expiry_false_count = 0
-        self._bg_confirm_false_count = 0
-        self._timer_expiry_playing_grace_count = 0
-        self._timer_expiry_unknown_grace_count = 0
         self.log.info(
             "play_session_bump(session_id=%s, reason=%s)",
             self._play_session_id,
@@ -2390,11 +2368,11 @@ class XiaoMusicDevice:
             )
             return False
         self._log_measure("before_group_force_stop_xiaoai")
-        # Only timer-driven auto-advance may skip the stop; manual commands
-        # and retries always clear the speaker first.
-        skip_preplay_stop = auto_advance and not bool(
-            getattr(self.config, "auto_next_preplay_stop", True)
-        )
+        # Automatic advances never stop first: the dispatch replaces the
+        # speaker queue anyway, and player_stop is a cloud round trip measured
+        # up to 31 s on the OH2P. Manual commands and retries clear the
+        # speaker first.
+        skip_preplay_stop = auto_advance
         try:
             if skip_preplay_stop:
                 self.log.info("auto_next_skip_preplay_stop name=%s", name)
@@ -2487,69 +2465,16 @@ class XiaoMusicDevice:
                 name,
             )
             return False
-        jellyfin_auto_candidate = self._is_jellyfin_auto_candidate(
-            current_url=url,
-            origin_url=origin_url,
-        )
-
         if all(ele is None for ele in results):
-            if jellyfin_auto_candidate:
-                proxy_url = await self._try_proxy_fallback(
-                    name=name,
-                    sid=sid,
-                    origin_url=origin_url,
-                    fast_stop=fast_stop,
-                    reason="player_play_failed",
-                    verify_started=not confirm_start_in_background,
-                )
-                if proxy_url:
-                    url = proxy_url
-                    results = ["proxy"]
-                    jellyfin_auto_candidate = False
-                    # ── Capture handoff token from _try_proxy_fallback ────────
-                    # _try_proxy_fallback internally called _start_track_attempt,
-                    # so attempt_id is now old+1.  Validate before accepting.
-                    handoff_token = self._capture_lifecycle_token()
-                    if (
-                        handoff_token.queue_session_id
-                        != _attempt_token.queue_session_id
-                        or handoff_token.command_generation
-                        != _attempt_token.command_generation
-                        or handoff_token.track_attempt_id
-                        != _attempt_token.track_attempt_id + 1
-                        or self._is_lifecycle_token_stale(handoff_token)
-                    ):
-                        self.log.info(
-                            "proxy_handoff_token_invalid"
-                            " old=(q=%s,c=%s,a=%s)"
-                            " handoff=(q=%s,c=%s,a=%s)",
-                            _attempt_token.queue_session_id,
-                            _attempt_token.command_generation,
-                            _attempt_token.track_attempt_id,
-                            handoff_token.queue_session_id,
-                            handoff_token.command_generation,
-                            handoff_token.track_attempt_id,
-                        )
-                        return False
-                    _attempt_token = handoff_token
-                else:
-                    await self._handle_play_failure(
-                        name=name,
-                        sid=sid,
-                        reason="player_play_failed",
-                        token=_attempt_token,
-                    )
-                    return False
-            else:
-                await self._handle_play_failure(
-                    name=name,
-                    sid=sid,
-                    reason="player_play_failed",
-                    token=_attempt_token,
-                )
-                return False
+            await self._handle_play_failure(
+                name=name,
+                sid=sid,
+                reason="player_play_failed",
+                token=_attempt_token,
+            )
+            return False
 
-        # ── Dispatch succeeded (direct or proxy): begin runtime confirmation ──
+        # ── Dispatch accepted: confirm once the speaker fetches the track ──
         try:
             self._begin_runtime_confirmation(updated_at=time.time())
         except TransitionError:
@@ -2559,236 +2484,23 @@ class XiaoMusicDevice:
             )
             return False
 
-        if confirm_start_in_background:
+        async def _started() -> None:
+            if not self._confirm_runtime_playing_for_attempt(
+                token=_attempt_token, updated_at=time.time()
+            ):
+                return
             await self._mark_play_started(
                 name=name,
                 sid=sid,
                 cur_playlist=cur_playlist,
                 token=_attempt_token,
-                measure_status=fast_stop,
                 navigation_generation=navigation_generation,
             )
-            self._schedule_playback_confirmation(
-                name=name,
-                sid=sid,
-                cur_playlist=cur_playlist,
-                origin_url=origin_url,
-                current_url=url,
-                fast_stop=fast_stop,
-                token=_attempt_token,
-            )
-            return True
 
-        started = await self._confirm_playback_started(name, sid)
-        self.log.info(
-            "play_start_confirmation_result(did=%s, session_id=%s, started=%s)",
-            self.did,
-            sid,
-            "unknown" if started is None else str(started).lower(),
-        )
-        if started is False:
-            if jellyfin_auto_candidate:
-                proxy_url = await self._try_proxy_fallback(
-                    name=name,
-                    sid=sid,
-                    origin_url=origin_url,
-                    fast_stop=fast_stop,
-                    reason="play_start_not_confirmed",
-                    verify_started=True,
-                )
-                if proxy_url:
-                    url = proxy_url
-                    jellyfin_auto_candidate = False
-                    # ── Capture handoff token from _try_proxy_fallback ────────
-                    # _try_proxy_fallback internally called _start_track_attempt,
-                    # so attempt_id is now old+1.  Validate before accepting.
-                    handoff_token = self._capture_lifecycle_token()
-                    if (
-                        handoff_token.queue_session_id
-                        != _attempt_token.queue_session_id
-                        or handoff_token.command_generation
-                        != _attempt_token.command_generation
-                        or handoff_token.track_attempt_id
-                        != _attempt_token.track_attempt_id + 1
-                        or self._is_lifecycle_token_stale(handoff_token)
-                    ):
-                        await self._handle_play_failure(
-                            name=name,
-                            sid=sid,
-                            reason="play_start_not_confirmed",
-                            token=_attempt_token,
-                        )
-                        return False
-                    _attempt_token = handoff_token
-                else:
-                    await self._handle_play_failure(
-                        name=name,
-                        sid=sid,
-                        reason="play_start_not_confirmed",
-                        token=_attempt_token,
-                    )
-                    return False
-            else:
-                await self._handle_play_failure(
-                    name=name,
-                    sid=sid,
-                    reason="play_start_not_confirmed",
-                    token=_attempt_token,
-                )
-                return False
-
-        # Even if the API call succeeds, the speaker may not be able to reach a
-        # direct Jellyfin URL. In auto mode, verify actual playback and fallback.
-        if jellyfin_auto_candidate:
-            await asyncio.sleep(1)
-            if sid == self._play_session_id:
-                try:
-                    if not await self.get_if_xiaoai_is_playing():
-                        proxy_url = await self._try_proxy_fallback(
-                            name=name,
-                            sid=sid,
-                            origin_url=origin_url,
-                            fast_stop=fast_stop,
-                            reason="not_playing",
-                            verify_started=True,
-                        )
-                        if proxy_url:
-                            url = proxy_url
-                except Exception:
-                    # If status check fails, keep the original success path.
-                    pass
-
-        # ── Confirm runtime PLAYING fact before marking ──
-        if not self._confirm_runtime_playing_for_attempt(
-            token=_attempt_token, updated_at=time.time()
-        ):
-            return False
-
-        await self._mark_play_started(
-            name=name,
-            sid=sid,
-            cur_playlist=cur_playlist,
-            token=_attempt_token,
-            measure_status=fast_stop,
+        await self._confirm_when_fetched(
+            name=name, sid=sid, token=_attempt_token, on_started=_started
         )
         return True
-
-    def _is_jellyfin_auto_candidate(self, *, current_url: str, origin_url: str) -> bool:
-        jellyfin_mode = "auto"
-        strategy = getattr(self.xiaomusic, "link_playback_strategy", None)
-        if strategy is not None:
-            return strategy.should_jellyfin_auto_fallback(
-                jellyfin_mode=jellyfin_mode,
-                origin_url=origin_url,
-                current_url=current_url,
-            )
-        return bool(
-            jellyfin_mode == "auto"
-            and origin_url
-            and origin_url == current_url
-            and self.xiaomusic.music_library.is_jellyfin_url(current_url)
-        )
-
-    async def _try_proxy_fallback(
-        self,
-        *,
-        name: str,
-        sid: int,
-        origin_url: str,
-        fast_stop: bool,
-        reason: str,
-        verify_started: bool,
-    ) -> str:
-        # Stale session: do not construct proxy, stop, attempt, or dispatch.
-        if sid != self._play_session_id:
-            self.log.info(
-                "proxy_fallback_stale(old_sid=%s, cur_sid=%s)",
-                sid,
-                self._play_session_id,
-            )
-            return ""
-
-        strategy = getattr(self.xiaomusic, "link_playback_strategy", None)
-        try:
-            if strategy is not None:
-                proxy_url = strategy.build_proxy_url(origin_url, name=name)
-            else:
-                proxy_url = self.xiaomusic.music_library.get_proxy_url(
-                    origin_url, name=name
-                )
-            if not proxy_url:
-                self.log.info("proxy_fallback_empty_url name=%s", name)
-                return ""
-
-            self.log.info(
-                "Jellyfin direct failed (%s), retry via proxy: %s",
-                reason,
-                proxy_url,
-            )
-            await self.group_force_stop_xiaoai(fast=fast_stop)
-            self._start_track_attempt(updated_at=time.time())
-            results2 = await self.group_player_play(proxy_url, name)
-            if all(ele is None for ele in results2):
-                return ""
-            if not verify_started:
-                return proxy_url
-            await asyncio.sleep(1)
-            if sid != self._play_session_id:
-                self.log.info(
-                    "timer_discard_due_to_sid_mismatch(old_sid=%s, cur_sid=%s)",
-                    sid,
-                    self._play_session_id,
-                )
-                return proxy_url
-            try:
-                if not await self.get_if_xiaoai_is_playing():
-                    return ""
-            except Exception:
-                pass
-            return proxy_url
-        except Exception as e:
-            self.log.warning("proxy fallback failed: %s", e)
-            return ""
-
-    def _schedule_playing_status_probe(self, *, sid: int, name: str) -> None:
-        async def _runner():
-            try:
-                for _ in range(6):
-                    await asyncio.sleep(0.25)
-                    if sid != self._play_session_id:
-                        return
-                    try:
-                        if await self.get_if_xiaoai_is_playing():
-                            now = time.time()
-                            anchor = getattr(self, "_measure_reset_t", None)
-                            since_timer = -1.0 if anchor is None else now - anchor
-                            self.log.info(
-                                "[measure] status_playing_observed t=%.3f dt_from_timer=%.3f session_id=%s name=%s",
-                                now,
-                                since_timer,
-                                sid,
-                                name,
-                            )
-                            return
-                    except Exception as exc:
-                        self.log.debug(
-                            "status_playing_probe_failed sid=%s name=%s err=%s",
-                            sid,
-                            name,
-                            exc,
-                        )
-                        return
-            except asyncio.CancelledError:
-                return
-            finally:
-                pass
-
-        self._ensure_playback_tasks().start(
-            TaskKind.STATUS_PROBE,
-            self._task_generation(sid=sid),
-            _runner(),
-            metadata={"name": name, "sid": sid},
-        )
 
     async def _mark_play_started(
         self,
@@ -2797,7 +2509,6 @@ class XiaoMusicDevice:
         sid: int,
         cur_playlist: str,
         token: LifecycleToken,
-        measure_status: bool = False,
         navigation_generation: int | None = None,
     ):
         def _is_current() -> bool:
@@ -2815,9 +2526,6 @@ class XiaoMusicDevice:
         self._clear_degraded_state()
 
         self.log.info(f"【{name}】已经开始播放了")
-        if measure_status:
-            self._schedule_playing_status_probe(sid=sid, name=name)
-
         # 记录歌曲开始播放的时间
         self._start_time = time.time()
         self._paused_time = 0
@@ -2866,500 +2574,6 @@ class XiaoMusicDevice:
         # 发布设备配置变更事件
         if self.event_bus:
             self.event_bus.publish(DEVICE_CONFIG_CHANGED)
-
-    def _schedule_playback_confirmation(
-        self,
-        *,
-        name: str,
-        sid: int,
-        cur_playlist: str,
-        origin_url: str,
-        current_url: str,
-        fast_stop: bool,
-        token: LifecycleToken | None = None,
-    ) -> None:
-        # Capture token now if not provided, so background always has a concrete one.
-        if token is None:
-            token = self._capture_lifecycle_token()
-        async def _runner():
-            try:
-                await self._background_confirm_playback_started(
-                    name=name,
-                    sid=sid,
-                    cur_playlist=cur_playlist,
-                    origin_url=origin_url,
-                    current_url=current_url,
-                    fast_stop=fast_stop,
-                    token=token,
-                )
-            except asyncio.CancelledError:
-                return
-            finally:
-                pass
-
-        self._ensure_playback_tasks().start(
-            TaskKind.PLAYBACK_CONFIRMATION,
-            self._task_generation(token, sid=sid),
-            _runner(),
-            metadata={"name": name, "sid": sid},
-        )
-
-    def _get_auto_next_confirm_profile(self) -> dict[str, float | int]:
-        delay_ms = max(
-            1000,  # 最低 1000ms，覆盖音箱 stop→play 过渡
-            int(getattr(self.config, "auto_next_confirm_delay_ms", 1000) or 0),
-        )
-        retries = max(
-            2,  # 最低 2 次重试
-            int(getattr(self.config, "auto_next_confirm_retries", 2) or 0),
-        )
-        interval_ms = max(
-            100,
-            int(getattr(self.config, "auto_next_confirm_interval_ms", 300) or 0),
-        )
-        return {
-            "delay_sec": delay_ms / 1000.0,
-            "retries": retries,
-            "interval_sec": interval_ms / 1000.0,
-        }
-
-    async def _wait_confirmation_grace(self) -> None:
-        """Wait 1.5s grace period before second confirmation probe.
-
-        Extracted for testability; tests may replace with Event-based waiter.
-        """
-        await asyncio.sleep(1.5)
-
-    async def _wait_jellyfin_confirmation_probe(self) -> None:
-        """Wait 1s before Jellyfin after-started status probe.
-
-        Extracted for testability; tests may replace with Event-based waiter.
-        """
-        await asyncio.sleep(1)
-
-    async def _apply_confirmation_observation(
-        self,
-        observation: "ConfirmationObservation",
-        *,
-        name: str,
-        sid: int,
-        cur_playlist: str,
-        origin_url: str,
-        current_url: str,
-        fast_stop: bool,
-        token: "LifecycleToken",
-        jellyfin_auto_candidate: bool,
-    ) -> None:
-        """Apply side effects based on confirmation observation (T05-A).
-
-        Hard gate: never cancels _next_timer, never submits via
-        IntentKind, never calls _play / _play_next.
-
-        Entry guard: sid must match _play_session_id and token must
-        be strict-current for ALL observation kinds.  Stale/sid-mismatch
-        → zero writes, zero I/O beyond the guard.
-        """
-        # ── Entry guard for ALL kinds: sid + strict token ──
-        if sid != self._play_session_id:
-            self.log.info(
-                "apply_obs_sid_mismatch did=%s kind=%s src_sid=%s cur_sid=%s",
-                self.did,
-                observation.kind.value,
-                sid,
-                self._play_session_id,
-            )
-            return
-        if self._is_lifecycle_token_stale(token):
-            self.log.info(
-                "apply_obs_token_stale did=%s kind=%s",
-                self.did,
-                observation.kind.value,
-            )
-            return
-
-        _now = time.time
-
-        if observation.kind == ObservationKind.STARTED:
-            # ── confirm runtime PLAYING ──
-            if not self._confirm_runtime_playing_for_attempt(
-                token=token, updated_at=_now()
-            ):
-                return
-            self._bg_confirm_false_count = 0
-
-            # ── Jellyfin after-started delayed probe ──
-            if jellyfin_auto_candidate:
-                await self._wait_jellyfin_confirmation_probe()
-                if sid != self._play_session_id:
-                    return
-                if self._is_lifecycle_token_stale(token):
-                    self.log.info(
-                        "bg_confirm_lifecycle_stale post_jellyfin_sleep did=%s",
-                        self.did,
-                    )
-                    return
-                try:
-                    is_playing = await self.get_if_xiaoai_is_playing()
-                except Exception:
-                    return
-                if self._is_lifecycle_token_stale(token):
-                    self.log.info(
-                        "bg_confirm_lifecycle_stale post_status did=%s", self.did
-                    )
-                    return
-                if not is_playing:
-                    proxy_url = await self._try_proxy_fallback(
-                        name=name,
-                        sid=sid,
-                        origin_url=origin_url,
-                        fast_stop=fast_stop,
-                        reason="not_playing",
-                        verify_started=True,
-                    )
-                    if proxy_url:
-                        handoff = self._capture_lifecycle_token()
-                        if (
-                            handoff.queue_session_id != token.queue_session_id
-                            or handoff.command_generation != token.command_generation
-                            or handoff.track_attempt_id != token.track_attempt_id + 1
-                            or self._is_lifecycle_token_stale(handoff)
-                        ):
-                            return
-                        if not self._confirm_runtime_playing_for_attempt(
-                            token=handoff, updated_at=_now()
-                        ):
-                            return
-                        await self._mark_play_started(
-                            name=name,
-                            sid=sid,
-                            cur_playlist=cur_playlist,
-                            token=handoff,
-                            measure_status=fast_stop,
-                        )
-            return
-
-        if observation.kind == ObservationKind.UNKNOWN:
-            self.log.info(
-                "apply_obs_unknown(did=%s, session_id=%s, name=%s, source=%s)",
-                self.did,
-                sid,
-                name,
-                observation.source,
-            )
-            # No state changes: preserve timer, no phase/failure/q/c/a changes,
-            # do not touch false count, no dispatch.
-            return
-
-        if observation.kind == ObservationKind.NOT_STARTED:
-            self._bg_confirm_false_count = 2
-            self.log.info(
-                "apply_obs_not_started(did=%s, session_id=%s, name=%s, count=%d)",
-                self.did,
-                sid,
-                name,
-                self._bg_confirm_false_count,
-            )
-            # Preserve timer.  No phase/failure/q/c/a changes.  No dispatch.
-
-            # ── Jellyfin first-false proxy fallback ──
-            if jellyfin_auto_candidate:
-                proxy_url = await self._try_proxy_fallback(
-                    name=name,
-                    sid=sid,
-                    origin_url=origin_url,
-                    fast_stop=fast_stop,
-                    reason="play_start_not_confirmed",
-                    verify_started=True,
-                )
-                if proxy_url:
-                    handoff = self._capture_lifecycle_token()
-                    if (
-                        handoff.queue_session_id != token.queue_session_id
-                        or handoff.command_generation != token.command_generation
-                        or handoff.track_attempt_id != token.track_attempt_id + 1
-                        or self._is_lifecycle_token_stale(handoff)
-                    ):
-                        self.log.info(
-                            "bg_confirm_lifecycle_stale post_fallback did=%s",
-                            self.did,
-                        )
-                        return
-                    if not self._confirm_runtime_playing_for_attempt(
-                        token=handoff, updated_at=_now()
-                    ):
-                        return
-                    await self._mark_play_started(
-                        name=name,
-                        sid=sid,
-                        cur_playlist=cur_playlist,
-                        token=handoff,
-                        measure_status=fast_stop,
-                    )
-                    self._bg_confirm_false_count = 0
-                    return
-                if self._is_lifecycle_token_stale(token):
-                    return
-            # Two explicit negative probes are authoritative for this attempt.
-            # Preserve lifecycle counters and the completion timer, but expose the
-            # failed start through the same runtime commit boundary.
-            if self.get_runtime_state().phase == PlaybackPhase.CONFIRMING:
-                self._report_runtime_failure(
-                    reason="play_start_not_confirmed",
-                    updated_at=_now(),
-                )
-            return
-
-    async def _background_confirm_playback_started(
-        self,
-        *,
-        name: str,
-        sid: int,
-        cur_playlist: str,
-        origin_url: str,
-        current_url: str,
-        fast_stop: bool,
-        token: LifecycleToken | None = None,
-    ) -> None:
-        """Background playback confirmation — T05-A refactor.
-
-        Forms observations via completion_policy and delegates side
-        effects to _apply_confirmation_observation.  This method
-        never cancels _next_timer, never submits AUTO_NEXT/RETRY,
-        and never calls _play/_play_next.
-        """
-        if token is None:
-            token = self._capture_lifecycle_token()
-        if self._is_lifecycle_token_stale(token):
-            self.log.info(
-                "bg_confirm_lifecycle_stale entry did=%s name=%s",
-                self.did,
-                name,
-            )
-            return
-
-        confirm_profile = self._get_auto_next_confirm_profile()
-        _now = time.time
-        try:
-            raw = await self._confirm_playback_started(
-                name,
-                sid,
-                delay_sec=float(confirm_profile["delay_sec"]),
-                retries=int(confirm_profile["retries"]),
-                interval_sec=float(confirm_profile["interval_sec"]),
-            )
-        except Exception as exc:
-            obs = map_to_observation(exc, observed_at=_now(), source="first_probe")
-            self.log.info(
-                "play_start_confirmation_error(did=%s, session_id=%s, name=%s)",
-                self.did,
-                sid,
-                name,
-                exc_info=True,
-            )
-            if sid != self._play_session_id:
-                return
-            if self._is_lifecycle_token_stale(token):
-                return
-            await self._apply_confirmation_observation(
-                obs,
-                name=name,
-                sid=sid,
-                cur_playlist=cur_playlist,
-                origin_url=origin_url,
-                current_url=current_url,
-                fast_stop=fast_stop,
-                token=token,
-                jellyfin_auto_candidate=False,
-            )
-            return
-
-        obs = map_to_observation(raw, observed_at=_now(), source="first_probe")
-        self.log.info(
-            "play_start_confirmation_result(did=%s, session_id=%s, started=%s background=true)",
-            self.did,
-            sid,
-            "unknown" if raw is None else str(raw).lower(),
-        )
-
-        # ── True / None ── no grace retry; delegate to handler directly ──
-        if raw is True or raw is None:
-            if sid != self._play_session_id:
-                self.log.info(
-                    "timer_discard_due_to_sid_mismatch(old_sid=%s, cur_sid=%s)",
-                    sid,
-                    self._play_session_id,
-                )
-                return
-            if self._is_lifecycle_token_stale(token):
-                self.log.info(
-                    "bg_confirm_lifecycle_stale post_confirm did=%s name=%s",
-                    self.did,
-                    name,
-                )
-                return
-            jellyfin_candidate = (
-                self._is_jellyfin_auto_candidate(
-                    current_url=current_url,
-                    origin_url=origin_url,
-                )
-                if raw is True
-                else False
-            )
-            await self._apply_confirmation_observation(
-                obs,
-                name=name,
-                sid=sid,
-                cur_playlist=cur_playlist,
-                origin_url=origin_url,
-                current_url=current_url,
-                fast_stop=fast_stop,
-                token=token,
-                jellyfin_auto_candidate=jellyfin_candidate,
-            )
-            return
-
-        # ── raw is False: first False → grace retry ──
-        if sid != self._play_session_id:
-            self.log.info(
-                "timer_discard_due_to_sid_mismatch(old_sid=%s, cur_sid=%s)",
-                sid,
-                self._play_session_id,
-            )
-            return
-        if self._is_lifecycle_token_stale(token):
-            self.log.info(
-                "bg_confirm_lifecycle_stale post_confirm did=%s name=%s",
-                self.did,
-                name,
-            )
-            return
-
-        jellyfin_auto_candidate = self._is_jellyfin_auto_candidate(
-            current_url=current_url,
-            origin_url=origin_url,
-        )
-
-        # Grace sleep 1.5s before second probe
-        await self._wait_confirmation_grace()
-        if sid != self._play_session_id:
-            return
-        if self._is_lifecycle_token_stale(token):
-            self.log.info(
-                "bg_confirm_lifecycle_stale post_grace_sleep did=%s", self.did
-            )
-            return
-
-        try:
-            raw2 = await self._confirm_playback_started(
-                name,
-                sid,
-                delay_sec=0.0,
-                retries=2,
-                interval_sec=0.5,
-            )
-        except Exception as exc2:
-            obs2 = map_to_observation(
-                exc2, observed_at=_now(), source="grace_retry"
-            )
-            self.log.info(
-                "bg_confirm_retry_failed(did=%s, session_id=%s, name=%s)",
-                self.did,
-                sid,
-                name,
-            )
-            if self._is_lifecycle_token_stale(token):
-                return
-            await self._apply_confirmation_observation(
-                obs2,
-                name=name,
-                sid=sid,
-                cur_playlist=cur_playlist,
-                origin_url=origin_url,
-                current_url=current_url,
-                fast_stop=fast_stop,
-                token=token,
-                jellyfin_auto_candidate=False,
-            )
-            return
-
-        if self._is_lifecycle_token_stale(token):
-            self.log.info(
-                "bg_confirm_lifecycle_stale post_retry did=%s", self.did
-            )
-            return
-
-        obs2 = map_to_observation(raw2, observed_at=_now(), source="grace_retry")
-        obs_jf = (
-            jellyfin_auto_candidate
-            and obs2.kind in (ObservationKind.NOT_STARTED, ObservationKind.STARTED)
-        )
-        await self._apply_confirmation_observation(
-            obs2,
-            name=name,
-            sid=sid,
-            cur_playlist=cur_playlist,
-            origin_url=origin_url,
-            current_url=current_url,
-            fast_stop=fast_stop,
-            token=token,
-            jellyfin_auto_candidate=obs_jf,
-        )
-
-    async def _confirm_playback_started(
-        self,
-        name: str,
-        sid: int,
-        *,
-        delay_sec: float = 1.2,
-        retries: int = 2,
-        interval_sec: float = 0.6,
-    ) -> bool | None:
-        """确认音箱已真正开始播放。"""
-        self.log.info(
-            "play_start_confirmation_attempted(did=%s, session_id=%s, retries=%d, delay_ms=%d, interval_ms=%d)",
-            self.did,
-            sid,
-            retries,
-            int(delay_sec * 1000),
-            int(interval_sec * 1000),
-        )
-        result = None
-        await asyncio.sleep(delay_sec)
-        saw_true = False
-        saw_false = False
-        saw_drop_after_true = False
-        for idx in range(retries + 1):
-            try:
-                started = await self.get_if_xiaoai_is_playing()
-            except Exception as e:
-                self.log.warning(
-                    "play_start_confirmation_probe_failed(did=%s, session_id=%s, error=%s)",
-                    self.did,
-                    sid,
-                    e.__class__.__name__,
-                )
-                result = None
-                break
-            if started:
-                saw_true = True
-            elif saw_true:
-                saw_drop_after_true = True
-                saw_false = True
-            else:
-                saw_false = True
-            if idx < retries:
-                await asyncio.sleep(interval_sec)
-        else:
-            if saw_drop_after_true:
-                result = False
-            elif saw_true:
-                result = True
-            elif saw_false:
-                result = False
-            else:
-                result = None
-        self._log_measure("after_confirm_playback_started")
-        return result
 
     async def pause_xiaoai(self, device_id):
         if not await self.get_if_xiaoai_is_playing(device_id):
@@ -3667,6 +2881,7 @@ class XiaoMusicDevice:
         device_id_list = self.xiaomusic.device_manager.get_group_device_id_list(
             self.group_name
         )
+        self._start_fetch = None
         queue = None
         if name:
             try:
@@ -3731,6 +2946,11 @@ class XiaoMusicDevice:
             self.log.warning("stream_gateway wrap failed: %s", type(exc).__name__)
             return url
         if speaker_url != url:
+            self._expect_start_fetch(
+                self._play_session_id,
+                str(self._play_session_id),
+                max(int(self._current_index), 0),
+            )
             self.log.info(
                 "stream_gateway dispatch did=%s queue=%s index=%s",
                 self.did,
@@ -3851,6 +3071,7 @@ class XiaoMusicDevice:
             # timer; "lead": the server must switch (after a mode change).
             "timer": "none" if loops_alone else "grace",
         }
+        self._expect_start_fetch(sid, queue_id, index)
         audio_id = await self._get_audio_id(name)
         payload = self._build_music_queue_payload(entries, str(audio_id), start_index=0)
         self.log.info(
@@ -3902,8 +3123,68 @@ class XiaoMusicDevice:
             self.log.exception(f"Execption {e}")
         return ret
 
+    def _expect_start_fetch(self, sid: int, queue_id: str, index: int) -> None:
+        """The next dispatch is gateway-served: its start is confirmed by the
+        speaker fetching (queue_id, index)."""
+        self._start_fetch = {"sid": sid, "queue": str(queue_id), "index": int(index), "fetched": False}
+
+    async def _confirm_when_fetched(self, *, name: str, sid: int, token, on_started) -> None:
+        """Run ``on_started`` once the speaker has fetched the dispatched start
+        item; report a failed start when it does not within
+        START_FETCH_TIMEOUT_SEC. Dispatches the gateway does not serve (radio,
+        site relay) have no such signal and count as started at once.
+        """
+        expected = getattr(self, "_start_fetch", None)
+        if not expected or expected["sid"] != sid or expected["fetched"]:
+            await on_started()
+            return
+
+        def _current() -> bool:
+            return sid == self._play_session_id and not self._is_lifecycle_token_stale(token)
+
+        async def _watch() -> None:
+            waited = 0.0
+            step = 0.25
+            while not expected["fetched"]:
+                if not _current():
+                    return
+                if waited >= START_FETCH_TIMEOUT_SEC:
+                    self.log.warning(
+                        "start_not_fetched did=%s session_id=%s name=%s", self.did, sid, name
+                    )
+                    await self._handle_play_failure(
+                        name=name, sid=sid, reason="start_not_fetched", token=token
+                    )
+                    return
+                await asyncio.sleep(step)
+                waited += step
+            if _current():
+                self.log.info(
+                    "start_fetched did=%s session_id=%s name=%s waited_s=%.2f",
+                    self.did,
+                    sid,
+                    name,
+                    waited,
+                )
+                await on_started()
+
+        self._ensure_playback_tasks().start(
+            TaskKind.PLAYBACK_CONFIRMATION,
+            self._task_generation(token, sid=sid),
+            _watch(),
+            metadata={"name": name, "sid": sid},
+        )
+
     def on_track_fetched(self, ref) -> None:
-        """StreamGateway listener: the speaker fetched an item of a window."""
+        """StreamGateway listener: the speaker fetched a dispatched item."""
+        expected = getattr(self, "_start_fetch", None)
+        if (
+            expected
+            and ref.source != SOURCE_SILENCE
+            and str(ref.queue) == expected["queue"]
+            and int(ref.index) == expected["index"]
+        ):
+            expected["fetched"] = True
         queue = self._active_queue()
         if queue is None or str(ref.queue) != str(queue["sid"]):
             self.log.info(
@@ -4296,6 +3577,18 @@ class XiaoMusicDevice:
 
         return request_token
 
+    async def _external_started_when_fetched(self, context, resolved, token) -> None:
+        title = str(
+            (resolved or {}).get("title") or (context or {}).get("title") or self.device.cur_music or ""
+        )
+
+        async def _started() -> None:
+            await self.on_external_url_play_started(context=context, resolved=resolved, token=token)
+
+        await self._confirm_when_fetched(
+            name=title, sid=self._play_session_id, token=token, on_started=_started
+        )
+
     async def on_external_url_play_started(
         self,
         context: dict | None = None,
@@ -4536,8 +3829,9 @@ class XiaoMusicDevice:
     ):
         """设置下一首歌曲的播放定时器。
 
-        到期后不直接切歌：先检查设备播放状态，连续两个 False 才切歌。
-        设备在播放或状态检查异常/未知时，按固定短宽限重新调度。
+        逐首下发时，到期即切到下一首（不查询音箱状态）。队列下发时
+        （ADR-0007）音箱自己切歌，这里只做兜底：推迟到预期结束后
+        QUEUE_FOLLOW_GRACE_SEC 才触发，音箱自己循环一首时不设定时器。
         """
         if token is None:
             token = self._capture_lifecycle_token()
@@ -4571,10 +3865,6 @@ class XiaoMusicDevice:
             )
             return False
 
-        # NOTE: Do NOT reset _timer_expiry_false_count here.
-        # It is only reset on success (_mark_play_started) or after two-False advance.
-        # Resetting here would cause infinite reschedule loops.
-
         async def _do_next():
             try:
                 await asyncio.sleep(sec)
@@ -4602,9 +3892,6 @@ class XiaoMusicDevice:
                 # audibly restart the finished track.
                 if not _token_is_current("advance"):
                     return
-                self._timer_expiry_false_count = 0
-                self._timer_expiry_unknown_grace_count = 0
-                self._timer_expiry_playing_grace_count = 0
                 from xiaomusic.playback.command_arbiter import IntentKind
                 self._submit_auto_retry(
                     IntentKind.AUTO_NEXT,

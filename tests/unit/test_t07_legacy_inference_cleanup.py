@@ -52,8 +52,7 @@ def test_last_cmd_is_not_state_failure_or_completion_authority():
     forbidden = (
         "_derive_transport_state",
         "_handle_play_failure",
-        "_background_confirm_playback_started",
-        "_apply_confirmation_observation",
+        "_confirm_when_fetched",
         "set_next_music_timeout",
     )
     for name in forbidden:

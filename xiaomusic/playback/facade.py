@@ -159,7 +159,6 @@ class PlaybackFacade:
             device_registry=device_registry,
             delivery_adapter=delivery_adapter,
             transport_router=router,
-            playback_status_provider=getattr(self.xiaomusic, "get_player_status", None),
         )
         self._core_registry_version = registry_version
         return self._core_coordinator
