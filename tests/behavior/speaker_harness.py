@@ -81,6 +81,9 @@ class FakeSpeaker:
     # The next N dispatched queues never fetch their start item (the speaker
     # accepted the command but did not start).
     drop_start_fetch: int = 0
+    # Refs of the most recently dispatched queue (lets tests replay a late
+    # fetch of an old window).
+    last_refs: list = field(default_factory=list)
     _queue_task: Any = None
 
     def fail(self, name: str, *pattern: bool) -> None:
@@ -153,6 +156,7 @@ class FakeSpeaker:
             refs = [self._ref(it["stream"]["url"]) for it in items]
             start = ids.index(message["startaudioid"])
             titles = [self._title(r) for r in refs]
+            self.last_refs = refs
             self.commands.append(Command("queue", items[start]["stream"]["url"], ",".join(titles)))
             self._stop_queue()
             self.paused = False
