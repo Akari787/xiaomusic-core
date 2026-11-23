@@ -36,7 +36,6 @@ def _make_device_via_new(device_id="did-test") -> XiaoMusicDevice:
     d._last_cmd = ""
     d.is_playing = False
     d._start_time = 0
-    d._paused_time = 0
     d._duration = 0
     d._play_failed_cnt = 0
     d._play_fail_first_ts = 0.0
@@ -771,15 +770,13 @@ def test_start_queue_session_called_only_in_on_external_url_play():
 
 def test_accept_command_called_only_in_allowed_funcs():
     """AST: _accept_command calls in on_external_url_play, _queue_manual_navigation,
-    stop, pause, _play_next, play, playlocal, _play_internal, submit_external_url_play.
+    stop, _play_next, play, playlocal, _play_internal, submit_external_url_play.
     submit_external_url_play may have 2 call sites (new-command branches).
     T04-C2b/C2c/C3b1 constraint."""
     _check_calls("_accept_command", {
         "on_external_url_play",
         "_queue_manual_navigation",
         "stop",
-        "pause",
-        "resume",
         "_play_next",
         "play",
         "playlocal",
@@ -1003,7 +1000,7 @@ async def _noop():
 async def _noop_list(fast=False):
     return [True]
 
-# ── stop / pause command generation ────────────────────────────────────
+# ── stop command generation ────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_stop_accepts_command():
@@ -1041,50 +1038,6 @@ async def test_stop_accepts_command():
 
     await d.stop(arg1="notts")
     await asyncio.wait_for(stop_done.wait(), timeout=5.0)
-
-    s = d.get_runtime_state()
-    assert s.command_generation == c_before + 1
-    assert s.queue_session_id == q_before
-    assert s.track_attempt_id == a_before
-    assert d._is_lifecycle_token_stale(token)
-    await d.close_command_arbiter()
-
-
-@pytest.mark.asyncio
-async def test_pause_accepts_command():
-    """pause() on PLAYING: bumps command, queue/attempt unchanged, token stale."""
-    d = _make_device_via_new()
-    d._start_queue_session(updated_at=1.0)
-    # Construct PLAYING: IDLE->RESOLVING->DISPATCHING->CONFIRMING->PLAYING
-    d._begin_runtime_play_request(
-        desired_track=TrackReference(
-            entity_id="e1", display_name="t", source="test"
-        ),
-        updated_at=2.0,
-    )
-    d._begin_runtime_play_dispatch(updated_at=3.0)
-    d._begin_runtime_confirmation(updated_at=4.0)
-    d._confirm_runtime_playing(updated_at=5.0)
-    d.cancel_group_next_timer = _noop
-    d.group_force_stop_xiaoai = _noop_list
-    d._invalidate_manual_navigation = lambda reason: None
-    d.event_bus = None
-    q_before = d.get_runtime_state().queue_session_id
-    c_before = d.get_runtime_state().command_generation
-    a_before = d.get_runtime_state().track_attempt_id
-    token = d._capture_lifecycle_token()
-
-    pause_done = asyncio.Event()
-    _orig_pause_1 = d._execute_pause_intent
-    async def _spy_pause_1(payload):
-        try:
-            await _orig_pause_1(payload)
-        finally:
-            pause_done.set()
-    d._execute_pause_intent = _spy_pause_1
-
-    await d.pause()
-    await asyncio.wait_for(pause_done.wait(), timeout=5.0)
 
     s = d.get_runtime_state()
     assert s.command_generation == c_before + 1
@@ -1180,64 +1133,6 @@ async def test_stop_exception_preserves_command_bump():
     assert isinstance(arb.last_error, TestError)
     await d.close_command_arbiter()
 
-
-@pytest.mark.asyncio
-async def test_pause_exception_preserves_command_bump():
-    """pause: physical exception -> arbiter.last_error, command still bumped, no fake completion."""
-    class TestError(Exception):
-        pass
-
-    d = _make_device_via_new()
-    d._start_queue_session(updated_at=1.0)
-    # Construct PLAYING via real wrapper chain: IDLE→RESOLVING→DISPATCHING→CONFIRMING→PLAYING
-    d._begin_runtime_play_request(
-        desired_track=TrackReference(
-            entity_id="e1", display_name="test-song", source="test"
-        ),
-        updated_at=2.0,
-    )
-    d._begin_runtime_play_dispatch(updated_at=3.0)
-    d._begin_runtime_confirmation(updated_at=4.0)
-    d._confirm_runtime_playing(updated_at=5.0)
-    async def _raise():
-        raise TestError("boom")
-    d.cancel_group_next_timer = _raise
-    d.group_force_stop_xiaoai = _noop_list
-    d._invalidate_manual_navigation = lambda reason: None
-    d.event_bus = None
-
-    q_before = d.get_runtime_state().queue_session_id
-    c_before = d.get_runtime_state().command_generation
-    a_before = d.get_runtime_state().track_attempt_id
-    token = d._capture_lifecycle_token()
-
-    # Wrap executor to signal completion
-    pause_exc_done = asyncio.Event()
-    _orig_pause_exc = d._execute_pause_intent
-    async def _spy_pause_exc(payload):
-        try:
-            await _orig_pause_exc(payload)
-        finally:
-            pause_exc_done.set()
-    d._execute_pause_intent = _spy_pause_exc
-
-    # pause() returns immediately (True), exception is caught by arbiter
-    result = await d.pause()
-    assert result is True
-    await asyncio.wait_for(pause_exc_done.wait(), timeout=5.0)
-
-    s = d.get_runtime_state()
-    assert s.command_generation == c_before + 1
-    assert s.queue_session_id == q_before
-    assert s.track_attempt_id == a_before
-    assert d._is_lifecycle_token_stale(token)
-    # Phase stays PAUSED (no event was fired, but phase already set by acceptance)
-    assert s.phase == PlaybackPhase.PAUSED
-    # Exception recorded in arbiter.last_error
-    arb = d._command_arbiter
-    assert arb is not None
-    assert isinstance(arb.last_error, TestError)
-    await d.close_command_arbiter()
 
 async def _fake_async_play(name="", **kw):
     pass
@@ -3129,7 +3024,6 @@ class TestBeginRuntimeConfirmation:
         PlaybackPhase.IDLE,
         PlaybackPhase.SWITCHING,
         PlaybackPhase.FAILED,
-        PlaybackPhase.PAUSED,
         PlaybackPhase.STOPPED,
     ])
     def test_non_dispatching_phases_rejected(self, phase):
@@ -3297,123 +3191,6 @@ class TestConfirmRuntimePlaying:
     def test_ids_unchanged(self):
         """queue_session_id, command_generation, track_attempt_id unchanged."""
         d = self._make_device_with_phase(PlaybackPhase.CONFIRMING)
-        s_before = d.get_runtime_state()
-
-        s = d._confirm_runtime_playing(updated_at=10.0)
-
-        assert s.queue_session_id == s_before.queue_session_id
-        assert s.command_generation == s_before.command_generation
-        assert s.track_attempt_id == s_before.track_attempt_id
-
-    # ── PAUSED -PLAYING (constructed via pure model path) ────────────
-
-    @staticmethod
-    def _make_device_paused() -> XiaoMusicDevice:
-        """Construct a genuine PAUSED state via pure model functions:
-
-        IDLE -RESOLVING -DISPATCHING -CONFIRMING -PLAYING -PAUSED.
-        No replace-based phase forgery -every transition is real.
-        """
-        from xiaomusic.playback.runtime_state import (
-            begin_confirm,
-            begin_play_dispatch,
-            begin_resolve,
-            begin_track_attempt,
-            confirm_playing,
-            pause,
-        )
-        d = _make_device_via_new()
-        s = d.get_runtime_state()
-        s = begin_resolve(
-            s,
-            desired_track=TrackReference(
-                entity_id="e1", display_name="test", source="test"
-            ),
-            updated_at=1.0,
-        )
-        s = begin_play_dispatch(s, updated_at=2.0)
-        s = begin_track_attempt(s, updated_at=3.0)
-        s = begin_confirm(s, updated_at=4.0)
-        s = confirm_playing(s, updated_at=5.0)
-        s = pause(s, updated_at=6.0)
-        d._set_runtime_state(s)
-        return d
-
-    def test_paused_to_playing(self):
-        """PAUSED -PLAYING: phase changes, IDs unchanged."""
-        d = self._make_device_paused()
-        s_before = d.get_runtime_state()
-        assert s_before.phase == PlaybackPhase.PAUSED
-
-        s = d._confirm_runtime_playing(updated_at=10.0)
-
-        assert s.phase == PlaybackPhase.PLAYING
-        assert s.queue_session_id == s_before.queue_session_id
-        assert s.command_generation == s_before.command_generation
-        assert s.track_attempt_id == s_before.track_attempt_id
-        assert s.updated_at == 10.0
-        assert s is d.get_runtime_state()
-
-    def test_paused_explicit_confirmed_track_overrides(self):
-        """PAUSED: confirmed_track explicit overrides desired_track."""
-        d = self._make_device_paused()
-        explicit = TrackReference(
-            entity_id="e99", display_name="custom", source="override"
-        )
-
-        s = d._confirm_runtime_playing(
-            confirmed_track=explicit, updated_at=10.0
-        )
-
-        assert s.confirmed_track == explicit
-        assert s.confirmed_track.entity_id == "e99"
-
-    def test_paused_none_confirmed_track_uses_desired(self):
-        """PAUSED: confirmed_track=None falls back to desired_track."""
-        d = self._make_device_paused()
-        desired = d.get_runtime_state().desired_track
-        assert desired is not None
-
-        s = d._confirm_runtime_playing(updated_at=10.0)
-
-        assert s.confirmed_track == desired
-
-    def test_paused_expected_end_at_written(self):
-        """PAUSED: expected_end_at is written to state."""
-        d = self._make_device_paused()
-
-        s = d._confirm_runtime_playing(expected_end_at=180.5, updated_at=10.0)
-
-        assert s.expected_end_at == 180.5
-
-    def test_paused_failure_cleared(self):
-        """PAUSED: failure is set to None after confirm_playing."""
-        d = self._make_device_paused()
-        from dataclasses import replace
-
-        from xiaomusic.playback.runtime_state import FailureState
-        s_with_failure = replace(
-            d.get_runtime_state(),
-            failure=FailureState(count=3, reason="prev_failure"),
-        )
-        d._set_runtime_state(s_with_failure)
-
-        s = d._confirm_runtime_playing(updated_at=10.0)
-
-        assert s.failure is None
-
-    def test_paused_desired_preserved(self):
-        """PAUSED: desired_track is preserved across transition."""
-        d = self._make_device_paused()
-        desired_before = d.get_runtime_state().desired_track
-
-        s = d._confirm_runtime_playing(updated_at=10.0)
-
-        assert s.desired_track == desired_before
-
-    def test_paused_ids_unchanged(self):
-        """PAUSED: queue_session_id, command_generation, track_attempt_id unchanged."""
-        d = self._make_device_paused()
         s_before = d.get_runtime_state()
 
         s = d._confirm_runtime_playing(updated_at=10.0)
@@ -4734,7 +4511,6 @@ async def test_e2_d_refresh_volume_stale_skips_duration_event_timer(mutation_fn)
     d._duration = 0
     d.is_playing = False
     d._start_time = 0
-    d._paused_time = 0
     d._last_cmd = ""
     d._duration_probe_task = None
     d._next_timer = None
@@ -4826,7 +4602,6 @@ async def test_e2_e_duration_fetch_stale_no_duration_event_timer(mutation_fn):
     d._duration = 0
     d.is_playing = False
     d._start_time = 0
-    d._paused_time = 0
     d._last_cmd = ""
     d._duration_probe_task = None
     d._next_timer = None
@@ -4922,7 +4697,6 @@ async def test_e2_f_duration_zero_probe_receives_token():
     d._duration = 0
     d.is_playing = False
     d._start_time = 0
-    d._paused_time = 0
     d._last_cmd = ""
     d._duration_probe_task = None
     d._next_timer = None
@@ -4987,7 +4761,6 @@ async def test_e2_g_duration_normal_timer_receives_token():
     d._duration = 0
     d.is_playing = False
     d._start_time = 0
-    d._paused_time = 0
     d._last_cmd = ""
     d._duration_probe_task = None
     d._next_timer = None
@@ -5039,7 +4812,7 @@ async def test_e2_g_duration_normal_timer_receives_token():
 
 
 # ══════════════════════════════════════════════════════════════════════->?
-# T03-F: pause / stop runtime phase wiring ->?real integration tests A–G
+# T03-F: stop runtime phase wiring ->?real integration tests A–G
 # ══════════════════════════════════════════════════════════════════════->?
 
 
@@ -5071,185 +4844,7 @@ def _make_playing_device_for_pause_stop() -> XiaoMusicDevice:
     return d
 
 
-# T03-F: pause / stop runtime phase wiring (adapted for deferred executor)
-
-
-@pytest.mark.asyncio
-async def test_a_playing_pause_visible_paused_during_cancel_await():
-    """A: pause() returns True with PAUSED phase; physical work in arbiter.
-
-    command+1, stable session id, group once, one PAUSED event.
-    Physical work remains deferred to the executor."""
-    cancel_entered = asyncio.Event()
-    cancel_release = asyncio.Event()
-
-    d = _make_playing_device_for_pause_stop()
-
-    async def _block_cancel():
-        cancel_entered.set()
-        await asyncio.wait_for(cancel_release.wait(), timeout=5.0)
-
-    d.cancel_group_next_timer = _block_cancel
-
-    group_calls = 0
-    async def _spy_group(fast=False):
-        nonlocal group_calls
-        group_calls += 1
-        return [True]
-    d.group_pause_xiaoai = _spy_group
-
-    events = []
-    event_done = asyncio.Event()
-    class _Bus:
-        def publish(self, event_type, **kw):
-            events.append(event_type)
-            event_done.set()
-    d.event_bus = _Bus()
-
-    c_before = d.get_runtime_state().command_generation
-    sid_before = d._play_session_id
-
-    try:
-        # pause() returns immediately with PAUSED phase
-        result = await d.pause()
-        assert result is True
-        s = d.get_runtime_state()
-        assert s.phase == PlaybackPhase.PAUSED, f"expected PAUSED, got {s.phase}"
-        assert s.command_generation == c_before + 1
-        assert d._play_session_id == sid_before
-        assert d.is_playing is False
-
-        # Arbiter executor starts; blocks on cancel
-        await asyncio.wait_for(cancel_entered.wait(), timeout=5.0)
-
-        # During cancel await: phase already PAUSED (set by acceptance)
-        s = d.get_runtime_state()
-        assert s.phase == PlaybackPhase.PAUSED
-
-        # Release cancel; executor proceeds to the dedicated pause toggle.
-        cancel_release.set()
-        for _ in range(100):
-            if group_calls == 1:
-                break
-            await asyncio.sleep(0)
-
-        assert group_calls == 1
-        assert events.count(PLAYER_STATE_CHANGED) == 1
-    finally:
-        cancel_release.set()
-        await d.close_command_arbiter()
-
-
-@pytest.mark.asyncio
-async def test_b_pause_cancel_await_new_barrier_sid_stale_no_group():
-    """B: pause accepted, but new barrier bumps sid before executor runs.
-
-    The PAUSED acceptance event remains; stale physical work does not add
-    another event or submit a toggle.
-    """
-    cancel_entered = asyncio.Event()
-    cancel_release = asyncio.Event()
-
-    d = _make_playing_device_for_pause_stop()
-
-    async def _block_cancel():
-        cancel_entered.set()
-        await asyncio.wait_for(cancel_release.wait(), timeout=5.0)
-
-    d.cancel_group_next_timer = _block_cancel
-
-    group_calls = 0
-    async def _spy_group(fast=False):
-        nonlocal group_calls
-        group_calls += 1
-        return [True]
-    d.group_pause_xiaoai = _spy_group
-
-    events = []
-    class _Bus:
-        def publish(self, event_type, **kw):
-            events.append(event_type)
-    d.event_bus = _Bus()
-
-    try:
-        # Wrap executor to signal completion
-        exec_done_e = asyncio.Event()
-        _orig_exec_e = d._execute_pause_intent
-        async def _spy_exec_e(payload):
-            try:
-                await _orig_exec_e(payload)
-            finally:
-                exec_done_e.set()
-        d._execute_pause_intent = _spy_exec_e
-
-        # pause() returns immediately
-        result = await d.pause()
-        assert result is True
-        assert d.get_runtime_state().phase == PlaybackPhase.PAUSED
-
-        # Arbiter executor starts; blocks on cancel
-        await asyncio.wait_for(cancel_entered.wait(), timeout=5.0)
-
-        # Simulate new barrier arriving: bump sid (new STOP/PAUSE)
-        d._bump_play_session(reason="new_barrier")
-
-        # Release cancel; executor detects barrier stale (sid mismatch)
-        cancel_release.set()
-        await asyncio.wait_for(exec_done_e.wait(), timeout=5.0)
-
-        assert group_calls == 0
-        assert events.count(PLAYER_STATE_CHANGED) == 1
-        # Phase stays PAUSED (from acceptance)
-        assert d.get_runtime_state().phase == PlaybackPhase.PAUSED
-    finally:
-        cancel_release.set()
-        await d.close_command_arbiter()
-
-
-@pytest.mark.asyncio
-async def test_c_idle_pause_zero_writes_no_side_effects():
-    """C: IDLE pause zero lifecycle writes, returns False, no arbiter."""
-    d = _make_device_via_new()
-    d._invalidate_manual_navigation = lambda reason: None
-
-    cancel_calls = 0
-    async def _spy_cancel():
-        nonlocal cancel_calls
-        cancel_calls += 1
-    d.cancel_group_next_timer = _spy_cancel
-
-    group_calls = 0
-    async def _spy_group(fast=False):
-        nonlocal group_calls
-        group_calls += 1
-        return [True]
-    d.group_force_stop_xiaoai = _spy_group
-
-    events = []
-    class _Bus:
-        def publish(self, event_type, **kw):
-            events.append(event_type)
-    d.event_bus = _Bus()
-
-    c_before = d.get_runtime_state().command_generation
-    q_before = d.get_runtime_state().queue_session_id
-    a_before = d.get_runtime_state().track_attempt_id
-    sid_before = d._play_session_id
-    is_playing_before = d.is_playing
-
-    result = await d.pause()
-
-    assert result is False
-    assert d.get_runtime_state().command_generation == c_before
-    assert d.get_runtime_state().queue_session_id == q_before
-    assert d.get_runtime_state().track_attempt_id == a_before
-    assert d._play_session_id == sid_before
-    assert d.is_playing == is_playing_before
-    # No arbiter created (no submit on False)
-    assert d._command_arbiter is None
-    assert cancel_calls == 0
-    assert group_calls == 0
-    assert PLAYER_STATE_CHANGED not in events
+# T03-F: stop runtime phase wiring (adapted for deferred executor)
 
 
 @pytest.mark.asyncio
@@ -5453,89 +5048,6 @@ async def test_f_idle_stopped_stop_zero_writes(phase):
     assert cancel_calls == 0
     assert group_calls == 0
     assert PLAYER_STATE_CHANGED not in events
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mutation_fn", ["command", "queue", "attempt", "sid"])
-async def test_g_pause_cancel_await_single_dimension_stale(mutation_fn):
-    """G: pause acceptance is visible before physical execution.
-
-    A lifecycle mutation may stale the physical toggle, but cannot retract
-    the single PAUSED acceptance event.
-    """
-    cancel_entered = asyncio.Event()
-    cancel_release = asyncio.Event()
-
-    d = _make_playing_device_for_pause_stop()
-
-    async def _block_cancel():
-        cancel_entered.set()
-        await asyncio.wait_for(cancel_release.wait(), timeout=5.0)
-
-    d.cancel_group_next_timer = _block_cancel
-
-    group_calls = 0
-    async def _spy_group(fast=False):
-        nonlocal group_calls
-        group_calls += 1
-        return [True]
-    d.group_pause_xiaoai = _spy_group
-
-    events = []
-    class _Bus:
-        def publish(self, event_type, **kw):
-            events.append(event_type)
-    d.event_bus = _Bus()
-
-    try:
-        # Wrap executor to signal completion
-        pause_bar_done = asyncio.Event()
-        _orig_pause_bar = d._execute_pause_intent
-        async def _spy_pause_bar(payload):
-            try:
-                await _orig_pause_bar(payload)
-            finally:
-                pause_bar_done.set()
-        d._execute_pause_intent = _spy_pause_bar
-
-        # pause() returns immediately
-        result = await d.pause()
-        assert result is True
-        assert d.get_runtime_state().phase == PlaybackPhase.PAUSED
-
-        # Arbiter executor starts; enters cancel
-        await asyncio.wait_for(cancel_entered.wait(), timeout=5.0)
-
-        # Mutate a single lifecycle dimension
-        if mutation_fn == "command":
-            d._accept_command(updated_at=time.time())
-        elif mutation_fn == "queue":
-            d._start_queue_session(updated_at=time.time())
-        elif mutation_fn == "attempt":
-            from xiaomusic.playback.runtime_state import begin_track_attempt
-            d._set_runtime_state(
-                begin_track_attempt(d.get_runtime_state(), updated_at=time.time())
-            )
-        elif mutation_fn == "sid":
-            d._bump_play_session(reason="test")
-
-        # Release cancel; executor proceeds based on barrier guard
-        cancel_release.set()
-        await asyncio.wait_for(pause_bar_done.wait(), timeout=5.0)
-
-        if mutation_fn == "command":
-            # command-only bump does NOT stale the barrier →completes normally
-            assert group_calls == 1
-            assert events.count(PLAYER_STATE_CHANGED) == 1
-        else:
-            # queue/attempt/sid →barrier stale, skips physical toggle only
-            assert group_calls == 0
-            assert events.count(PLAYER_STATE_CHANGED) == 1
-        # Phase stays PAUSED (set by acceptance)
-        assert d.get_runtime_state().phase == PlaybackPhase.PAUSED
-    finally:
-        cancel_release.set()
-        await d.close_command_arbiter()
 
 
 @pytest.mark.asyncio
@@ -6239,7 +5751,7 @@ class TestT04bGate:
 
 
 # ══════════════════════════════════════════════════════════════════->?
-# T04-C1: stop/pause via Command Arbiter (sync acceptance, async physical)
+# T04-C1: stop via Command Arbiter (sync acceptance, async physical)
 # ══════════════════════════════════════════════════════════════════->?
 
 
@@ -6263,17 +5775,6 @@ def _make_t04c1_device(device_id="did-t04c1", phase=PlaybackPhase.PLAYING):
         d._begin_runtime_play_dispatch(updated_at=2.0)
         d._begin_runtime_confirmation(updated_at=3.0)
         d._confirm_runtime_playing(updated_at=4.0)
-    elif phase == PlaybackPhase.PAUSED:
-        d._begin_runtime_play_request(
-            desired_track=TrackReference(
-                entity_id="e1", display_name="test-song", source="test"
-            ),
-            updated_at=1.0,
-        )
-        d._begin_runtime_play_dispatch(updated_at=2.0)
-        d._begin_runtime_confirmation(updated_at=3.0)
-        d._confirm_runtime_playing(updated_at=4.0)
-        d._pause_runtime(updated_at=5.0)
     return d
 
 
@@ -6329,53 +5830,6 @@ async def test_t04c1_a_stop_returns_phase_stopping_group_not_released():
 
         assert d.get_runtime_state().phase == PlaybackPhase.STOPPED
         assert len(events_fired) == 2
-        assert events_fired[0]["device_id"] == d.did
-    finally:
-        group_stop_done.set()
-        await d.close_command_arbiter()
-
-
-# ── Scenario B: pause return -> phase PAUSED, event after executor ──
-
-@pytest.mark.asyncio
-async def test_t04c1_b_pause_returns_phase_paused_event_once():
-    """B: pause acceptance publishes PAUSED once; physical toggle is deferred."""
-    d = _make_t04c1_device(phase=PlaybackPhase.PLAYING)
-
-    group_stop_called = asyncio.Event()
-    group_stop_done = asyncio.Event()
-
-    async def _blocking_group_stop():
-        group_stop_called.set()
-        await asyncio.wait_for(group_stop_done.wait(), timeout=5)
-        return [True]
-
-    d.group_pause_xiaoai = _blocking_group_stop
-    d.cancel_group_next_timer = _noop
-    d._invalidate_manual_navigation = lambda reason: None
-    events_fired = []
-    event_done = asyncio.Event()
-    d.event_bus = types.SimpleNamespace(
-        publish=lambda event_type, **kw: (
-            events_fired.append(kw),
-            event_done.set(),
-        )
-    )
-
-    try:
-        result = await d.pause()
-        assert result is True
-        assert d.get_runtime_state().phase == PlaybackPhase.PAUSED
-        assert d.is_playing is False
-
-        # Physical work is separately blocked; acceptance event is already visible.
-        await asyncio.wait_for(group_stop_called.wait(), timeout=5)
-        assert len(events_fired) == 1
-
-        # Release physical toggle; no duplicate PAUSED event is allowed.
-        group_stop_done.set()
-        await asyncio.sleep(0)
-        assert len(events_fired) == 1
         assert events_fired[0]["device_id"] == d.did
     finally:
         group_stop_done.set()
@@ -6518,127 +5972,6 @@ async def test_t04c1_d_manual_play_blocked_stop_pending():
         await d.close_command_arbiter()
 
 
-# ── Scenario E: pause pending -> stop overrides, final STOPPED ──
-
-@pytest.mark.asyncio
-async def test_t04c1_e_pause_pending_stop_overrides():
-    """E: a pending pause is superseded by stop; final state is STOPPED."""
-    d = _make_t04c1_device(phase=PlaybackPhase.PLAYING)
-    d.do_tts = lambda v: None
-
-    # Block first intent to force pending
-    block_first = asyncio.Event()
-    first_started = asyncio.Event()
-    call_order = []
-
-    async def _group_stop():
-        call_order.append("group_stop")
-        if not first_started.is_set():
-            first_started.set()
-            await asyncio.wait_for(block_first.wait(), timeout=5)
-        return [True]
-    d.group_pause_xiaoai = _group_stop
-    d.cancel_group_next_timer = _noop
-    d._invalidate_manual_navigation = lambda reason: None
-    events_fired = []
-    event_done = asyncio.Event()
-    d.event_bus = types.SimpleNamespace(
-        publish=lambda event_type, **kw: (
-            events_fired.append(kw),
-            event_done.set(),
-        )
-    )
-
-    try:
-        # Submit pause -> executor starts, blocks
-        await d.pause()
-        await asyncio.wait_for(first_started.wait(), timeout=5)
-        assert d.get_runtime_state().phase == PlaybackPhase.PAUSED
-
-        # Submit stop -> replaces pending pause
-        result = await d.stop(arg1="notts")
-        assert result is True
-        assert d.get_runtime_state().phase == PlaybackPhase.STOPPING
-
-        # Release first (pause) -> then stop executor runs. The event bus
-        # already carried STOPPING acceptance, so observe the final phase.
-        block_first.set()
-        for _ in range(100):
-            if d.get_runtime_state().phase == PlaybackPhase.STOPPED:
-                break
-            await asyncio.sleep(0)
-        # Final phase is STOPPED (stop completed, pause was overridden)
-        assert d.get_runtime_state().phase == PlaybackPhase.STOPPED
-    finally:
-        block_first.set()
-        await d.close_command_arbiter()
-
-
-# ── Scenario F: stop pending, pause rejected (zero writes), stop completes ──
-
-@pytest.mark.asyncio
-async def test_t04c1_f_stop_pending_pause_rejected():
-    """F: stop pending/active; pause rejected (False) with zero lifecycle writes.
-
-    pause() on STOPPING returns False without bumping command/sid.  The
-    stop executor's token remains current, so after group_stop completes
-    the executor proceeds to complete_stop →STOPPED and fires event.
-    """
-    d = _make_t04c1_device(phase=PlaybackPhase.PLAYING)
-    d.do_tts = lambda v: None
-
-    block_stop = asyncio.Event()
-    stop_started = asyncio.Event()
-    stop_completed = asyncio.Event()
-
-    async def _group_stop():
-        if not stop_started.is_set():
-            stop_started.set()
-            await asyncio.wait_for(block_stop.wait(), timeout=5)
-        stop_completed.set()
-        return [True]
-    d.group_force_stop_xiaoai = _group_stop
-    d.cancel_group_next_timer = _noop
-    d._invalidate_manual_navigation = lambda reason: None
-    events_fired = []
-    event_done = asyncio.Event()
-    d.event_bus = types.SimpleNamespace(
-        publish=lambda event_type, **kw: (
-            events_fired.append(kw),
-            event_done.set(),
-        )
-    )
-
-    try:
-        # Submit stop; executor starts, blocks on group
-        await d.stop(arg1="notts")
-        c_after_stop = d.get_runtime_state().command_generation
-        sid_after_stop = d._play_session_id
-        await asyncio.wait_for(stop_started.wait(), timeout=5)
-        assert d.get_runtime_state().phase == PlaybackPhase.STOPPING
-
-        # Submit pause; rejected (phase is STOPPING), zero lifecycle writes
-        result = await d.pause()
-        assert result is False
-        # command and sid unchanged by rejected pause
-        assert d.get_runtime_state().command_generation == c_after_stop
-        assert d._play_session_id == sid_after_stop
-        assert d.get_runtime_state().phase == PlaybackPhase.STOPPING
-
-        # Release stop; executor completes -> STOPPED + event
-        block_stop.set()
-        await asyncio.wait_for(stop_completed.wait(), timeout=5)
-        # Wait for complete_stop and event
-        await asyncio.wait_for(event_done.wait(), timeout=5)
-
-        assert d.get_runtime_state().phase == PlaybackPhase.STOPPED
-        assert len(events_fired) == 2  # STOPPING acceptance + STOPPED completion
-        assert events_fired[0]["device_id"] == d.did
-    finally:
-        block_stop.set()
-        await d.close_command_arbiter()
-
-
 # ── Scenario G: executor exception -> last_error, no fake completion ──
 
 @pytest.mark.asyncio
@@ -6690,7 +6023,7 @@ async def test_t04c1_g_executor_exception_reports_visible_failure():
         await d.close_command_arbiter()
 
 
-# ── Scenario H: IDLE/STOPPED stop no submit; non-PLAYING pause no submit ──
+# ── Scenario H: IDLE/STOPPED stop no submit ──
 
 @pytest.mark.asyncio
 async def test_t04c1_h_idle_stopped_stop_no_submit():
@@ -6723,58 +6056,6 @@ async def test_t04c1_h_idle_stopped_stop_no_submit():
         # Zero lifecycle writes: command unchanged
         assert d.get_runtime_state().command_generation == c_before
         # No arbiter created
-        assert d._command_arbiter is None
-
-
-@pytest.mark.asyncio
-async def test_t04c1_h_non_playing_pause_no_submit():
-    """H: non-PLAYING/non-PAUSED pause returns False, no arbiter submit, zero writes."""
-    for phase in (PlaybackPhase.IDLE, PlaybackPhase.STOPPED, PlaybackPhase.STOPPING, PlaybackPhase.FAILED):
-        d = _make_device_via_new()
-        if phase == PlaybackPhase.STOPPED:
-            d._begin_runtime_play_request(
-                desired_track=TrackReference(
-                    entity_id="e1", display_name="t", source="test"
-                ),
-                updated_at=1.0,
-            )
-            d._begin_runtime_play_dispatch(updated_at=2.0)
-            d._begin_runtime_confirmation(updated_at=3.0)
-            d._confirm_runtime_playing(updated_at=4.0)
-            d._begin_runtime_stop(updated_at=5.0)
-            d._complete_runtime_stop(updated_at=6.0)
-        elif phase == PlaybackPhase.STOPPING:
-            d._begin_runtime_play_request(
-                desired_track=TrackReference(
-                    entity_id="e1", display_name="t", source="test"
-                ),
-                updated_at=1.0,
-            )
-            d._begin_runtime_play_dispatch(updated_at=2.0)
-            d._begin_runtime_confirmation(updated_at=3.0)
-            d._confirm_runtime_playing(updated_at=4.0)
-            d._begin_runtime_stop(updated_at=5.0)
-        elif phase == PlaybackPhase.FAILED:
-            d._begin_runtime_play_request(
-                desired_track=TrackReference(
-                    entity_id="e1", display_name="t", source="test"
-                ),
-                updated_at=1.0,
-            )
-            d._begin_runtime_play_dispatch(updated_at=2.0)
-            d._begin_runtime_confirmation(updated_at=3.0)
-            d._confirm_runtime_playing(updated_at=4.0)
-            d._report_runtime_failure(reason="test", updated_at=5.0)
-
-        d.cancel_group_next_timer = _noop
-        d.group_force_stop_xiaoai = _noop_list
-        d._invalidate_manual_navigation = lambda reason: None
-        d.event_bus = None
-
-        c_before = d.get_runtime_state().command_generation
-        result = await d.pause()
-        assert result is False
-        assert d.get_runtime_state().command_generation == c_before
         assert d._command_arbiter is None
 
 
@@ -6907,46 +6188,7 @@ async def test_t04c1_arbiter_finally_close_no_worker_leaks():
     assert arb._worker_task.done()  # noqa: SLF001
 
 
-# ── Pause idempotent: PAUSED phase already, still submits ─────────────
-
-@pytest.mark.asyncio
-async def test_t04c1_pause_idempotent_no_submit():
-    """pause() on PAUSED is a true no-op: no command or physical submit."""
-    d = _make_t04c1_device(phase=PlaybackPhase.PAUSED)
-    d.cancel_group_next_timer = _noop
-    d.group_force_stop_xiaoai = _noop_list
-    d._invalidate_manual_navigation = lambda reason: None
-    d.event_bus = None
-
-    c_before = d.get_runtime_state().command_generation
-    result = await d.pause()
-    assert result is True
-    assert d.get_runtime_state().phase == PlaybackPhase.PAUSED
-    assert d.get_runtime_state().command_generation == c_before
-    assert d._command_arbiter is None
-
-
 # ── Explicit zero-write tests (requirement 5) ───────────────────────────
-
-@pytest.mark.asyncio
-async def test_t04c1_idle_pause_zero_writes():
-    """IDLE pause returns False, zero lifecycle writes, no arbiter."""
-    d = _make_device_via_new()
-    d.cancel_group_next_timer = _noop
-    d.group_force_stop_xiaoai = _noop_list
-    d._invalidate_manual_navigation = lambda reason: None
-    d.event_bus = None
-
-    c_before = d.get_runtime_state().command_generation
-    sid_before = d._play_session_id
-
-    result = await d.pause()
-    assert result is False
-    # Zero writes: command and sid unchanged
-    assert d.get_runtime_state().command_generation == c_before
-    assert d._play_session_id == sid_before
-    assert d._command_arbiter is None
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", [PlaybackPhase.IDLE, PlaybackPhase.STOPPED])

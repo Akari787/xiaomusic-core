@@ -80,7 +80,6 @@ def _make_device() -> XiaoMusicDevice:
     d._last_cmd = ""
     d.is_playing = False
     d._start_time = 0
-    d._paused_time = 0
     d._duration = 0
     d._play_failed_cnt = 0
     d._play_fail_first_ts = 0.0
@@ -413,52 +412,6 @@ async def test_E_play_active_stop_accepted_old_play_stale():
 # ══════════════════════════════════════════════════════════════════════
 # Test F: PAUSE → PLAY sequence PAUSE, PLAY
 # ══════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_F_pause_then_play_sequence():
-    """Submit PAUSE then PLAY → PAUSE executes first (barrier),
-    then PLAY after.  Execution order: PAUSE, PLAY."""
-    d = _make_playing_device()
-
-    executed: list[str] = []
-    pause_started = asyncio.Event()
-    pause_block = asyncio.Event()
-    pause_done = asyncio.Event()
-
-    async def _blocked_pause(payload):
-        executed.append("pause")
-        pause_started.set()
-        await asyncio.wait_for(pause_block.wait(), timeout=5.0)
-        if d.event_bus:
-            d.event_bus.publish(PLAYER_STATE_CHANGED, device_id=d.did)
-        pause_done.set()
-
-    d._execute_pause_intent = _blocked_pause
-
-    play_executed = asyncio.Event()
-    async def _spy_play(name="", search_key="", **kw):
-        executed.append("play")
-        play_executed.set()
-        return True
-    d._play = _spy_play
-
-    try:
-        assert await d.pause() is True
-        assert await d.play(name="X") is True
-
-        arb = d._command_arbiter
-        assert arb.after_barrier_sequence is not None
-
-        await asyncio.wait_for(pause_started.wait(), timeout=5.0)
-        pause_block.set()
-        await asyncio.wait_for(pause_done.wait(), timeout=5.0)
-        await asyncio.wait_for(play_executed.wait(), timeout=5.0)
-
-        assert executed == ["pause", "play"]
-    finally:
-        pause_block.set()
-        await d.close_command_arbiter()
 
 
 # ══════════════════════════════════════════════════════════════════════

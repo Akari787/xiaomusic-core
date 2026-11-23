@@ -11,8 +11,6 @@ class TransportPolicy:
             "next": ["mina"],
             "volume": ["mina"],
             "stop": ["mina"],
-            "pause": ["mina"],
-            "resume": ["mina"],
             "probe": ["mina"],
         }
 

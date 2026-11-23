@@ -117,8 +117,6 @@ class DeviceRegistry:
             next=["mina"],
             volume=["mina"],
             stop=["mina"],
-            pause=["mina"],
-            resume=["mina"],
             probe=["mina"],
         )
         self.register_device(profile, reachability, capability)

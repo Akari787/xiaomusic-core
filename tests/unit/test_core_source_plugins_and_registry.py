@@ -9,7 +9,9 @@ import pytest
 
 from xiaomusic.adapters.sources.direct_url_source_plugin import DirectUrlSourcePlugin
 from xiaomusic.adapters.sources.jellyfin_source_plugin import JellyfinSourcePlugin
-from xiaomusic.adapters.sources.local_library_source_plugin import LocalLibrarySourcePlugin
+from xiaomusic.adapters.sources.local_library_source_plugin import (
+    LocalLibrarySourcePlugin,
+)
 from xiaomusic.adapters.sources.site_media_source_plugin import SiteMediaSourcePlugin
 from xiaomusic.core.delivery.delivery_adapter import DeliveryAdapter
 from xiaomusic.core.models.media import MediaRequest

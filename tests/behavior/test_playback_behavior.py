@@ -160,43 +160,6 @@ async def test_stop_clears_speaker_and_cancels_auto_advance(rig_factory):
 
 
 @pytest.mark.asyncio
-async def test_pause_then_resume_toggles_speaker(rig_factory):
-    rig = rig_factory()
-    try:
-        await rig.play_playlist("日语", "a")
-        await rig.settle(5)
-        before = len(rig.speaker.commands)
-
-        assert await rig.player.pause() is True
-        await rig.settle(5)
-        assert rig.state().phase == PlaybackPhase.PAUSED
-
-        assert await rig.player.resume() is True
-        await rig.settle(5)
-        assert rig.state().phase == PlaybackPhase.PLAYING
-
-        assert rig.speaker.timeline()[before:] == ["pause", "pause"]
-        assert rig.speaker.played() == ["a"]  # resume never re-dispatches
-    finally:
-        await rig.close()
-
-
-@pytest.mark.asyncio
-async def test_pause_cancels_track_end_advance(rig_factory):
-    rig = rig_factory()
-    try:
-        await rig.play_playlist("日语", "a")
-        await rig.settle(5)
-        assert await rig.player.pause() is True
-        await rig.settle(2 * SONG)
-
-        assert rig.speaker.played() == ["a"]
-        assert rig.state().phase == PlaybackPhase.PAUSED
-    finally:
-        await rig.close()
-
-
-@pytest.mark.asyncio
 async def test_track_end_switches_without_status_round_trip(rig_factory):
     """The switch at track end must not wait on a speaker status query:
     while the server waits, the speaker audibly restarts the finished track."""

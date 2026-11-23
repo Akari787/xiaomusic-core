@@ -167,7 +167,6 @@ async def test_manual_play_next_stages_target_index_and_resets_progress_before_d
     d._current_index = 0
     d.is_playing = True
     d._start_time = 123.0
-    d._paused_time = 5.0
     d._duration = 99.0
     d._runtime_state = PlaybackRuntimeState()
     d._command_arbiter = None
@@ -208,7 +207,6 @@ async def test_manual_play_next_stages_target_index_and_resets_progress_before_d
         assert d._current_index == 1
         assert d.is_playing is False
         assert d._start_time == 0
-        assert d._paused_time == 0
         assert d._duration == 0
         assert d._last_cmd == "play_next"
     finally:

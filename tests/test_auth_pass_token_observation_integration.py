@@ -3,7 +3,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 _CHILD = r'''
 import asyncio
 import logging

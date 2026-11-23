@@ -17,7 +17,6 @@ class PlaybackPhase(str, Enum):
     DISPATCHING = "dispatching"
     CONFIRMING = "confirming"
     PLAYING = "playing"
-    PAUSED = "paused"
     STOPPED = "stopped"
     STOPPING = "stopping"
     FAILED = "failed"
@@ -94,7 +93,6 @@ _ACTIVE_ATTEMPT = {
     PlaybackPhase.DISPATCHING,
     PlaybackPhase.CONFIRMING,
     PlaybackPhase.PLAYING,
-    PlaybackPhase.PAUSED,
 }
 
 # ── legal transition table ─────────────────────────────────────────────
@@ -105,8 +103,7 @@ _LEGAL = {
     PlaybackPhase.SWITCHING: {PlaybackPhase.RESOLVING, PlaybackPhase.STOPPING, PlaybackPhase.FAILED},
     PlaybackPhase.DISPATCHING: {PlaybackPhase.CONFIRMING, PlaybackPhase.STOPPING, PlaybackPhase.FAILED},
     PlaybackPhase.CONFIRMING: {PlaybackPhase.PLAYING, PlaybackPhase.SWITCHING, PlaybackPhase.STOPPING, PlaybackPhase.FAILED},
-    PlaybackPhase.PLAYING: {PlaybackPhase.PAUSED, PlaybackPhase.SWITCHING, PlaybackPhase.STOPPING, PlaybackPhase.FAILED},
-    PlaybackPhase.PAUSED: {PlaybackPhase.PLAYING, PlaybackPhase.SWITCHING, PlaybackPhase.STOPPING, PlaybackPhase.FAILED},
+    PlaybackPhase.PLAYING: {PlaybackPhase.SWITCHING, PlaybackPhase.STOPPING, PlaybackPhase.FAILED},
     PlaybackPhase.STOPPING: {PlaybackPhase.STOPPED, PlaybackPhase.STOPPING, PlaybackPhase.FAILED},
     PlaybackPhase.STOPPED: {PlaybackPhase.IDLE, PlaybackPhase.RESOLVING},
     PlaybackPhase.FAILED: {PlaybackPhase.IDLE, PlaybackPhase.FAILED, PlaybackPhase.STOPPING},
@@ -160,11 +157,11 @@ def begin_switch(
     """Begin switching from current track to a new desired track.
 
     Replaces desired_track, preserves confirmed_track for UI until new track
-    is confirmed. Clears expected_end_at. Only from PLAYING/PAUSED/CONFIRMING.
+    is confirmed. Clears expected_end_at. Only from PLAYING/CONFIRMING.
     """
-    if state.phase not in {PlaybackPhase.PLAYING, PlaybackPhase.PAUSED, PlaybackPhase.CONFIRMING}:
+    if state.phase not in {PlaybackPhase.PLAYING, PlaybackPhase.CONFIRMING}:
         raise TransitionError(
-            f"begin_switch requires PLAYING/PAUSED/CONFIRMING, got {state.phase.value}"
+            f"begin_switch requires PLAYING/CONFIRMING, got {state.phase.value}"
         )
     return replace(
         state,
@@ -186,7 +183,7 @@ def begin_play_request(
 
     Phase mapping:
       IDLE / STOPPED / FAILED / RESOLVING / DISPATCHING → RESOLVING
-      PLAYING / PAUSED / CONFIRMING / SWITCHING → SWITCHING
+      PLAYING / CONFIRMING / SWITCHING → SWITCHING
       STOPPING → TransitionError
 
     Common rules:
@@ -207,7 +204,6 @@ def begin_play_request(
     }
     _switching_phases = {
         PlaybackPhase.PLAYING,
-        PlaybackPhase.PAUSED,
         PlaybackPhase.CONFIRMING,
         PlaybackPhase.SWITCHING,
     }
@@ -382,32 +378,6 @@ def complete_stop(
         phase=PlaybackPhase.STOPPED,
         transition_reason="complete_stop",
         expected_end_at=None,
-        updated_at=updated_at,
-    )
-
-
-def pause(
-    state: PlaybackRuntimeState,
-    *,
-    updated_at: float,
-) -> PlaybackRuntimeState:
-    return _transition(
-        state,
-        PlaybackPhase.PAUSED,
-        reason="pause",
-        updated_at=updated_at,
-    )
-
-
-def resume(
-    state: PlaybackRuntimeState,
-    *,
-    updated_at: float,
-) -> PlaybackRuntimeState:
-    return _transition(
-        state,
-        PlaybackPhase.PLAYING,
-        reason="resume",
         updated_at=updated_at,
     )
 

@@ -329,9 +329,9 @@ Forbidden / Removed：
 
 ## 5. 正式白名单接口
 
-本版本正式白名单接口共 24 个：
+本版本正式白名单接口共 22 个：
 
-> `control/pause` 与 `control/resume` 计划在 ADR-0007 第 6 步删除（项目不提供暂停/恢复，且 OH2P 实测无法原地恢复），届时白名单改为 22 个。删除前它们保持现状，不再扩展；新调用方不要使用。
+> 2026-11-23 起删除 `control/pause` 与 `control/resume`（ADR-0007 第 6 步：项目不提供暂停/恢复，OH2P 实测也无法原地恢复）。
 
 ### 5.1 播放与解析
 
@@ -341,33 +341,31 @@ Forbidden / Removed：
 ### 5.2 控制
 
 3. `POST /api/v1/control/stop`
-4. `POST /api/v1/control/pause`（计划移除）
-5. `POST /api/v1/control/resume`（计划移除）
-6. `POST /api/v1/control/volume`
-7. `POST /api/v1/control/probe`
-8. `POST /api/v1/control/previous`
-9. `POST /api/v1/control/next`
-10. `POST /api/v1/control/play-mode`
-11. `POST /api/v1/control/shutdown-timer`
+4. `POST /api/v1/control/volume`
+5. `POST /api/v1/control/probe`
+6. `POST /api/v1/control/previous`
+7. `POST /api/v1/control/next`
+8. `POST /api/v1/control/play-mode`
+9. `POST /api/v1/control/shutdown-timer`
 
 ### 5.3 音乐库
 
-12. `POST /api/v1/library/favorites/add`
-13. `POST /api/v1/library/favorites/remove`
-14. `POST /api/v1/library/refresh`
-15. `GET /api/v1/library/playlists`
-16. `GET /api/v1/library/music-info`
+10. `POST /api/v1/library/favorites/add`
+11. `POST /api/v1/library/favorites/remove`
+12. `POST /api/v1/library/refresh`
+13. `GET /api/v1/library/playlists`
+14. `GET /api/v1/library/music-info`
 
 ### 5.4 查询
 
-17. `GET /api/v1/devices`
-18. `GET /api/v1/system/status`
-19. `GET /api/v1/system/settings`
-20. `POST /api/v1/system/settings`
-21. `POST /api/v1/system/settings/item`
-22. `GET /api/v1/search/online`
-23. `GET /api/v1/player/state`
-24. `GET /api/v1/player/stream`
+15. `GET /api/v1/devices`
+16. `GET /api/v1/system/status`
+17. `GET /api/v1/system/settings`
+18. `POST /api/v1/system/settings`
+19. `POST /api/v1/system/settings/item`
+20. `GET /api/v1/search/online`
+21. `GET /api/v1/player/state`
+22. `GET /api/v1/player/stream`
 
 ---
 
@@ -394,8 +392,6 @@ Class A 接口：
 - `POST /api/v1/control/stop`
 - `POST /api/v1/control/previous`
 - `POST /api/v1/control/next`
-- `POST /api/v1/control/pause`
-- `POST /api/v1/control/resume`
 - `POST /api/v1/control/volume`
 - `POST /api/v1/control/probe`
 
@@ -682,8 +678,6 @@ v1 通过两个接口暴露播放器权威状态：
 |---|---|---|---|---|---|
 | `POST /api/v1/play` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport`，可含 `data.source_plugin`, `data.extra` | 必须有 `error_code`, `stage`；设备动作失败不得退化为模糊内部错误 | 唯一正式播放入口；承诺 `transport`，不承诺命令后 `transport_state` |
 | `POST /api/v1/control/stop` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
-| `POST /api/v1/control/pause` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
-| `POST /api/v1/control/resume` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
 | `POST /api/v1/control/volume` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
 | `POST /api/v1/control/probe` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
 | `POST /api/v1/control/previous` | A | 统一调度 / 分发链路 | `data.status`, `data.device_id`, `data.transport` | 同 Class A | 承诺 `transport`，不承诺命令后 `transport_state` |
@@ -820,31 +814,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 成功响应必须包含 `data.status=accepted`、`data.action=stop` 和 `data.transport`。这只承诺 stop 已被接受，不承诺播放器已完成物理停止；调用方须通过状态通道确认 runtime phase/`transport_state == "stopped"`。
 
-### 12.4 `POST /api/v1/control/pause`（计划移除）
-
-用途：暂停当前播放。计划在 ADR-0007 第 6 步删除。
-
-最小请求体：
-
-```json
-{ "device_id": "<device_id>" }
-```
-
-成功响应必须包含 `data.status=accepted`、`data.action=pause` 和 `data.transport`。成功响应不承诺播放器已达到 `paused` 状态，调用方须通过状态通道确认。
-
-### 12.5 `POST /api/v1/control/resume`（计划移除）
-
-用途：恢复当前播放。OH2P 上实际不生效；计划在 ADR-0007 第 6 步删除。
-
-最小请求体：
-
-```json
-{ "device_id": "<device_id>" }
-```
-
-成功响应必须包含 `data.status=accepted`、`data.action=resume` 和 `data.transport`。成功响应不承诺播放器已达到 `playing` 状态，调用方须通过状态通道确认。
-
-### 12.6 `POST /api/v1/control/volume`
+### 12.4 `POST /api/v1/control/volume`
 
 用途：设置设备音量。
 
@@ -864,7 +834,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 成功响应必须包含 `data.transport`。
 
-### 12.7 `POST /api/v1/control/probe`
+### 12.5 `POST /api/v1/control/probe`
 
 用途：执行设备可用性探测。
 
@@ -876,7 +846,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 成功响应必须包含 `data.transport`。
 
-### 12.8 `POST /api/v1/control/previous`
+### 12.6 `POST /api/v1/control/previous`
 
 用途：切到上一首。
 
@@ -890,7 +860,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 调用方只允许表达“上一首”意图，不得根据页面歌曲列表自行计算目标曲目后调用 `POST /api/v1/play`。当存在 xiaomusic 管理的歌单 session 时，本操作必须消费该 session 的当前队列快照。
 
-### 12.9 `POST /api/v1/control/next`
+### 12.7 `POST /api/v1/control/next`
 
 用途：切到下一首。
 
@@ -904,7 +874,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 调用方只允许表达“下一首”意图，不得根据页面歌曲列表自行计算目标曲目后调用 `POST /api/v1/play`。当存在 xiaomusic 管理的歌单 session 时，本操作必须消费该 session 的当前队列快照；不得隐式建立新 session 或重新洗牌。
 
-### 12.10 `POST /api/v1/control/play-mode`
+### 12.8 `POST /api/v1/control/play-mode`
 
 用途：设置播放模式。
 
@@ -927,7 +897,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 该接口不承诺 `data.transport`。
 
-### 12.11 `POST /api/v1/control/shutdown-timer`
+### 12.9 `POST /api/v1/control/shutdown-timer`
 
 用途：设置停止播放定时器。
 
@@ -947,7 +917,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 该接口不承诺 `data.transport`。
 
-### 12.12 `POST /api/v1/library/favorites/add`
+### 12.10 `POST /api/v1/library/favorites/add`
 
 用途：将歌曲加入收藏。
 
@@ -967,7 +937,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 该接口不承诺 `data.transport`。
 
-### 12.13 `POST /api/v1/library/favorites/remove`
+### 12.11 `POST /api/v1/library/favorites/remove`
 
 用途：将歌曲移出收藏。
 
@@ -975,7 +945,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 该接口不承诺 `data.transport`。
 
-### 12.14 `POST /api/v1/library/refresh`
+### 12.12 `POST /api/v1/library/refresh`
 
 用途：刷新音乐库或歌单索引。
 
@@ -987,7 +957,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 该接口不承诺 `data.transport`。
 
-### 12.15 `GET /api/v1/library/playlists`
+### 12.13 `GET /api/v1/library/playlists`
 
 用途：获取播放上下文所需的歌单与歌曲列表。
 
@@ -998,7 +968,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 查询错误应返回结构化 `error_code/stage`，推荐归类为 `library` 或 `request`。
 
-### 12.16 `GET /api/v1/library/music-info`
+### 12.14 `GET /api/v1/library/music-info`
 
 用途：获取单曲的最小上下文信息。
 
@@ -1018,7 +988,7 @@ v1 通过两个接口暴露播放器权威状态：
 - `data.error_code = E_INVALID_REQUEST`
 - `data.stage = request`
 
-### 12.17 `GET /api/v1/devices`
+### 12.15 `GET /api/v1/devices`
 
 用途：读取 configured-known 设备快照；读取不会触发设备刷新、认证探测或 runtime 重建。
 
@@ -1040,7 +1010,7 @@ v1 通过两个接口暴露播放器权威状态：
 
 设备列表只包含 `config.devices` 中的 DID；账号下未配置设备不会出现在列表中。
 
-### 12.18 `GET /api/v1/system/status`
+### 12.16 `GET /api/v1/system/status`
 
 用途：获取系统状态。
 
@@ -1051,7 +1021,7 @@ v1 通过两个接口暴露播放器权威状态：
 - `data.devices_count`（configured-known 数量）
 - `data.runtime_devices_count`（当前 runtime mapping 数量）
 
-### 12.19 `GET /api/v1/system/settings`
+### 12.17 `GET /api/v1/system/settings`
 
 用途：获取 WebUI 当前所需的最小系统设置与设备联动信息。
 
@@ -1067,7 +1037,7 @@ v1 通过两个接口暴露播放器权威状态：
 - `data.device_ids` 为当前已选择设备 DID 列表
 - `data.devices` 为可供设置页勾选的设备列表
 
-### 12.20 `POST /api/v1/system/settings`
+### 12.18 `POST /api/v1/system/settings`
 
 用途：保存设置页当前配置。
 
@@ -1085,7 +1055,7 @@ v1 通过两个接口暴露播放器权威状态：
 - `data.status`
 - `data.saved`
 
-### 12.21 `POST /api/v1/system/settings/item`
+### 12.19 `POST /api/v1/system/settings/item`
 
 用途：更新单个设置项。
 
@@ -1110,7 +1080,7 @@ v1 通过两个接口暴露播放器权威状态：
 - `data.error_code = E_INVALID_REQUEST`
 - `data.stage = request`
 
-### 12.22 `GET /api/v1/search/online`
+### 12.20 `GET /api/v1/search/online`
 
 用途：执行在线搜索，返回 WebUI 当前所需的最小搜索结果集合。
 
@@ -1143,7 +1113,7 @@ v1 通过两个接口暴露播放器权威状态：
 - `data.error_code = E_INVALID_REQUEST`
 - `data.stage = request`
 
-### 12.23 `GET /api/v1/player/state`
+### 12.21 `GET /api/v1/player/state`
 
 用途：获取当前设备的权威播放状态快照。
 
@@ -1162,7 +1132,7 @@ v1 通过两个接口暴露播放器权威状态：
 | `device_id` | `string` | 当前状态所属设备 ID |
 | `revision` | `integer` | 状态版本号，单设备维度单调递增 |
 | `play_session_id` | `string` | 当前播放会话唯一标识 |
-| `transport_state` | `string` | 播放传输状态枚举值（`idle` / `starting` / `switching` / `playing` / `paused` / `stopped` / `error`） |
+| `transport_state` | `string` | 播放传输状态枚举值（`idle` / `starting` / `switching` / `playing` / `stopped` / `error`） |
 | `track` | `object \| null` | 当前曲目信息，含 `track.id`（稳定身份标识）与 `track.title` |
 | `context` | `object \| null` | 播放上下文信息，含 `context.id`、`context.name`、`context.current_index` |
 | `position_ms` | `integer` | 当前播放位置（毫秒） |
@@ -1206,7 +1176,7 @@ v1 通过两个接口暴露播放器权威状态：
 - 查询失败必须返回结构化错误，`stage` 应为 `system` 或 `request`。
 - 兼容字段说明见第 13 章。
 
-### 12.24 `GET /api/v1/player/stream`
+### 12.22 `GET /api/v1/player/stream`
 
 用途：通过 SSE（Server-Sent Events）持续推送当前设备的播放状态事件流。
 

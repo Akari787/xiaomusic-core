@@ -33,9 +33,7 @@ from xiaomusic.playback.runtime_state import (
     follow_track,
     new_queue_session,
     next_command,
-    pause,
     report_failure,
-    resume,
     update_observation,
 )
 
@@ -60,7 +58,7 @@ def _playing_state() -> PlaybackRuntimeState:
 
 def test_phase_enum_has_all_values():
     expected = {"idle", "resolving", "switching", "dispatching", "confirming",
-                "playing", "paused", "stopped", "stopping", "failed"}
+                "playing", "stopped", "stopping", "failed"}
     actual = {e.value for e in PlaybackPhase}
     assert actual == expected
 
@@ -150,16 +148,6 @@ def test_confirming_to_failed():
     assert s.failure.count == 1
 
 
-def test_playing_to_paused():
-    s = pause(_playing_state(), updated_at=1.0)
-    assert s.phase == PlaybackPhase.PAUSED
-
-
-def test_paused_to_playing():
-    s = resume(pause(_playing_state(), updated_at=1.0), updated_at=2.0)
-    assert s.phase == PlaybackPhase.PLAYING
-
-
 # ── switching ──────────────────────────────────────────────────────────
 
 def test_playing_to_switching():
@@ -217,11 +205,6 @@ def test_stopped_cannot_begin_switch():
         begin_switch(PlaybackRuntimeState(phase=PlaybackPhase.STOPPED), desired_track=_tr("e1", "x"), updated_at=1.0)
 
 
-def test_paused_can_begin_switch():
-    s = begin_switch(pause(_playing_state(), updated_at=1.0), desired_track=_tr("e2", "new"), updated_at=2.0)
-    assert s.phase == PlaybackPhase.SWITCHING
-
-
 def test_confirming_can_begin_switch():
     s = PlaybackRuntimeState(phase=PlaybackPhase.CONFIRMING, desired_track=_tr("e1", "old"), confirmed_track=_tr("e1", "old"))
     s2 = begin_switch(s, desired_track=_tr("e2", "new"), updated_at=1.0)
@@ -232,7 +215,7 @@ def test_confirming_can_begin_switch():
 
 def test_begin_stop_from_active():
     for p in (PlaybackPhase.RESOLVING, PlaybackPhase.SWITCHING, PlaybackPhase.DISPATCHING, PlaybackPhase.CONFIRMING,
-              PlaybackPhase.PLAYING, PlaybackPhase.PAUSED, PlaybackPhase.FAILED):
+              PlaybackPhase.PLAYING, PlaybackPhase.FAILED):
         s = begin_stop(PlaybackRuntimeState(phase=p), updated_at=1.0)
         assert s.phase == PlaybackPhase.STOPPING
 
@@ -306,7 +289,7 @@ def test_failed_stop_complete_preserves_failure_clears_expected_end():
 
 def test_report_failure_from_active():
     for p in (PlaybackPhase.RESOLVING, PlaybackPhase.DISPATCHING, PlaybackPhase.CONFIRMING,
-              PlaybackPhase.PLAYING, PlaybackPhase.PAUSED):
+              PlaybackPhase.PLAYING):
         s = report_failure(PlaybackRuntimeState(phase=p), reason="err", updated_at=1.0)
         assert s.phase == PlaybackPhase.FAILED
 
@@ -360,12 +343,6 @@ def test_clear_state_from_playing_raises():
     (PlaybackPhase.PLAYING, begin_resolve, {"updated_at": 1.0}),
     (PlaybackPhase.IDLE, begin_dispatch, {"updated_at": 1.0}),
     (PlaybackPhase.IDLE, begin_confirm, {"updated_at": 1.0}),
-    (PlaybackPhase.IDLE, pause, {"updated_at": 1.0}),
-    (PlaybackPhase.RESOLVING, pause, {"updated_at": 1.0}),
-    (PlaybackPhase.PAUSED, pause, {"updated_at": 1.0}),
-    (PlaybackPhase.IDLE, resume, {"updated_at": 1.0}),
-    (PlaybackPhase.RESOLVING, resume, {"updated_at": 1.0}),
-    (PlaybackPhase.PLAYING, resume, {"updated_at": 1.0}),
     (PlaybackPhase.IDLE, complete_stop, {"updated_at": 1.0}),
     (PlaybackPhase.STOPPED, begin_stop, {"updated_at": 1.0}),
 ])
@@ -591,7 +568,6 @@ _RESOLVING_PHASES = [
 ]
 _SWITCHING_PHASES = [
     PlaybackPhase.PLAYING,
-    PlaybackPhase.PAUSED,
     PlaybackPhase.CONFIRMING,
     PlaybackPhase.SWITCHING,
 ]
@@ -607,7 +583,7 @@ def test_begin_play_request_to_resolving(phase: PlaybackPhase):
 
 @pytest.mark.parametrize("phase", _SWITCHING_PHASES)
 def test_begin_play_request_to_switching(phase: PlaybackPhase):
-    """PLAYING/PAUSED/CONFIRMING/SWITCHING → SWITCHING."""
+    """PLAYING/CONFIRMING/SWITCHING → SWITCHING."""
     s = _rich_state(phase)
     s2 = begin_play_request(s, desired_track=_new_track, updated_at=200.0)
     _assert_common_fields(s2, _new_track, PlaybackPhase.SWITCHING)
@@ -676,7 +652,6 @@ _OTHER_8_PHASES = [
     PlaybackPhase.DISPATCHING,
     PlaybackPhase.CONFIRMING,
     PlaybackPhase.PLAYING,
-    PlaybackPhase.PAUSED,
     PlaybackPhase.STOPPED,
     PlaybackPhase.STOPPING,
     PlaybackPhase.FAILED,

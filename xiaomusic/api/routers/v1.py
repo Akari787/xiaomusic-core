@@ -259,42 +259,6 @@ async def api_v1_control_stop(data: ControlRequest):
         )
 
 
-@router.post("/api/v1/control/pause")
-async def api_v1_control_pause(data: ControlRequest):
-    request_id = _next_request_id(data.request_id)
-    try:
-        out = await _get_facade().pause(data.device_id, request_id=request_id)
-        return _api_ok(
-            {k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id
-        )
-    except Exception as exc:
-        return _map_public_endpoint_exception(
-            exc,
-            request_id,
-            default_error_code="E_PAUSE_OPERATION_FAILED",
-            default_stage="dispatch",
-            default_message="pause operation failed",
-        )
-
-
-@router.post("/api/v1/control/resume")
-async def api_v1_control_resume(data: ControlRequest):
-    request_id = _next_request_id(data.request_id)
-    try:
-        out = await _get_facade().resume(data.device_id, request_id=request_id)
-        return _api_ok(
-            {k: v for k, v in out.items() if k != REQUEST_ID}, request_id=request_id
-        )
-    except Exception as exc:
-        return _map_public_endpoint_exception(
-            exc,
-            request_id,
-            default_error_code="E_RESUME_OPERATION_FAILED",
-            default_stage="dispatch",
-            default_message="resume operation failed",
-        )
-
-
 @router.post("/api/v1/control/volume")
 async def api_v1_control_volume(data: VolumeRequest):
     request_id = _next_request_id(data.request_id)

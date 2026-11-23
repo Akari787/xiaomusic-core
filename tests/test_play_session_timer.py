@@ -46,7 +46,6 @@ def _build_device_for_timer_tests():
     d._playback_confirm_task = None
     d._playback_status_probe_task = None
     d._start_time = 0
-    d._paused_time = 0
     d._duration = 0
     d._last_volume = 0
     d.event_bus = None
@@ -242,7 +241,6 @@ async def test_near_end_with_stale_timer_triggers_autonext_guard_when_idle(monke
     d = _build_device_for_timer_tests()
     d._duration = 10.0
     d._start_time = time.time() - 9.5
-    d._paused_time = 0.0
     d._timer_expiry_false_count = 0
     d._last_cmd = "play"
 
@@ -290,7 +288,6 @@ async def test_external_url_play_resets_local_progress_state():
     d = _build_device_for_timer_tests()
     d._duration = 120.0
     d._start_time = time.time() - 20.0
-    d._paused_time = 2.0
     d._last_cmd = "play"
     d.device.cur_music = "old-song"
     d._play_list_items = [
@@ -308,7 +305,6 @@ async def test_external_url_play_resets_local_progress_state():
     assert d.is_playing is False
     assert d._duration == 0
     assert d._start_time == 0
-    assert d._paused_time == 0
     assert d._current_index == -1
     assert d._play_list_items == []
     assert d.device.cur_music == ""
@@ -720,7 +716,6 @@ async def test_autonext_guard_respects_still_playing_check(monkeypatch):
     d = _build_device_for_timer_tests()
     d._duration = 10.0
     d._start_time = time.time() - 26.0
-    d._paused_time = 0.0
     d._next_timer = None
     d._last_cmd = "play"
     d.is_playing = True

@@ -31,14 +31,6 @@ class Transport(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def pause(self, device_id: str) -> dict[str, Any]:
-        raise NotImplementedError
-
-    async def resume(self, device_id: str) -> dict[str, Any]:
-        """Resume capability; concrete transports should implement it."""
-        raise NotImplementedError
-
-    @abstractmethod
     async def set_volume(self, device_id: str, volume: int) -> dict[str, Any]:
         raise NotImplementedError
 

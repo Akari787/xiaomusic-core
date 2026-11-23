@@ -288,7 +288,7 @@ async def test_idle_restart_after_completion():
         assert calls == [1]
         assert arb.active_sequence is None
 
-        arb.submit(IntentKind.PAUSE)
+        arb.submit(IntentKind.STOP)
         await asyncio.wait_for(done_2.wait(), timeout=2.0)
         assert calls == [1, 2]
         assert arb.active_sequence is None
@@ -340,7 +340,7 @@ async def test_two_arbiters_independent():
 
         # submit while both blocked
         arb_a.submit(IntentKind.STOP)
-        arb_b.submit(IntentKind.PAUSE)
+        arb_b.submit(IntentKind.STOP)
 
         block_a.set()
         await asyncio.wait_for(started_a2.wait(), timeout=2.0)
@@ -676,51 +676,6 @@ async def test_barrier_latest_wins_and_clears_after():
 
 
 @pytest.mark.asyncio
-async def test_barrier_pause_is_also_barrier():
-    """PAUSE is a barrier kind just like STOP."""
-    executed: list[int] = []
-    play_started = asyncio.Event()
-    block_play = asyncio.Event()
-    pause_started = asyncio.Event()
-    block_pause = asyncio.Event()
-    pause_done = asyncio.Event()
-
-    async def _exec(intent: PlaybackIntent) -> None:
-        executed.append(intent.sequence)
-        if intent.kind == IntentKind.PLAY:
-            play_started.set()
-            await asyncio.wait_for(block_play.wait(), timeout=2.0)
-        else:
-            pause_started.set()
-            await asyncio.wait_for(block_pause.wait(), timeout=2.0)
-            pause_done.set()
-
-    arb = DeviceCommandArbiter(_exec)
-    try:
-        arb.submit(IntentKind.PLAY)
-        await asyncio.wait_for(play_started.wait(), timeout=2.0)
-
-        arb.submit(IntentKind.NEXT)  # regular pending
-        assert arb.pending_sequence == 2
-
-        arb.submit(IntentKind.PAUSE)  # barrier replaces regular pending
-        assert arb.pending_sequence == 3
-        assert arb.after_barrier_sequence is None
-
-        block_play.set()
-        await asyncio.wait_for(pause_started.wait(), timeout=2.0)
-
-        block_pause.set()
-        await asyncio.wait_for(pause_done.wait(), timeout=2.0)
-
-        assert executed == [1, 3]
-    finally:
-        block_play.set()
-        block_pause.set()
-        await arb.close()
-
-
-@pytest.mark.asyncio
 async def test_close_clears_barrier_and_after():
     """Close with pending barrier + after_barrier: both cleared, neither exec."""
     executed: list[int] = []
@@ -849,8 +804,8 @@ async def test_regular_no_barrier_normal_latest_pending():
 
         arb.submit(IntentKind.NEXT)
         arb.submit(IntentKind.PREVIOUS)
-        arb.submit(IntentKind.RESUME)
-        # No barrier → normal latest-pending, RESUME survives
+        arb.submit(IntentKind.RETRY)
+        # No barrier → normal latest-pending, RETRY survives
         assert arb.pending_sequence == 4
         assert arb.after_barrier_sequence is None
 
@@ -929,54 +884,3 @@ async def test_after_barrier_sequence_property_readonly():
         block_play.set()
         await arb.close()
 
-
-@pytest.mark.asyncio
-async def test_cancel_pending_resume_and_active_resume_then_pause_barrier():
-    """A queued RESUME can be cancelled; an active one is followed by PAUSE."""
-    started = asyncio.Event()
-    play_started = asyncio.Event()
-    release = asyncio.Event()
-    play_release = asyncio.Event()
-    executed: list[IntentKind] = []
-
-    async def _exec(intent: PlaybackIntent) -> None:
-        executed.append(intent.kind)
-        if intent.kind == IntentKind.PLAY:
-            play_started.set()
-            await play_release.wait()
-        elif intent.kind == IntentKind.RESUME:
-            started.set()
-            await release.wait()
-
-    arb = DeviceCommandArbiter(_exec)
-    try:
-        # Keep a regular intent active so RESUME remains pending.
-        arb.submit(IntentKind.PLAY)
-        await asyncio.wait_for(play_started.wait(), timeout=2.0)
-        arb.submit(IntentKind.RESUME)
-        assert arb.pending_kind == IntentKind.RESUME
-        assert arb.cancel_pending(IntentKind.RESUME) is True
-        assert arb.pending_kind is None
-        play_release.set()
-        for _ in range(100):
-            if arb.active_kind is None:
-                break
-            await asyncio.sleep(0)
-
-        # Active RESUME cannot be killed; PAUSE becomes the ordered barrier.
-        arb.submit(IntentKind.RESUME)
-        await asyncio.wait_for(started.wait(), timeout=2.0)
-        assert arb.active_kind == IntentKind.RESUME
-        arb.submit(IntentKind.PAUSE)
-        assert arb.pending_kind == IntentKind.PAUSE
-        release.set()
-        play_release.set()
-        for _ in range(100):
-            if executed[-1:] == [IntentKind.PAUSE]:
-                break
-            await asyncio.sleep(0)
-        assert executed[-1] == IntentKind.PAUSE
-    finally:
-        release.set()
-        play_release.set()
-        await arb.close()

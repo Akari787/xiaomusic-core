@@ -91,7 +91,6 @@ def _build_coordinator(
             previous=["mina"],
             next=["mina"],
             stop=["mina"],
-            pause=["mina"],
             volume=["mina"],
             probe=["mina"],
         ),
@@ -145,7 +144,6 @@ def _make_device() -> XiaoMusicDevice:
     d._last_cmd = ""
     d.is_playing = False
     d._start_time = 0
-    d._paused_time = 0
     d._duration = 0
     d._play_failed_cnt = 0
     d._play_fail_first_ts = 0.0

@@ -5,8 +5,8 @@ import json
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from xiaomusic.api.routers import music
 from xiaomusic.api import websocket as ws_router
+from xiaomusic.api.routers import music
 
 
 class _Facade:

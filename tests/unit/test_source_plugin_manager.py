@@ -10,7 +10,6 @@ from xiaomusic.core.models.media import MediaRequest
 from xiaomusic.managers.source_plugin_manager import SourcePluginManager
 from xiaomusic.playback.facade import PlaybackFacade
 
-
 PLUGIN_SOURCE = (
     "from xiaomusic.core.source import SourcePlugin\n"
     "from xiaomusic.core.models.media import ResolvedMedia\n"

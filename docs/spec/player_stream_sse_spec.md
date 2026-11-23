@@ -217,7 +217,7 @@ data: {"error_code": "<ERROR_CODE>", "message": "<说明>"}
 以下任何情况发生时，服务端必须推送一条新的 `player_state` 事件。这些情况与投影规范第 6.2 节定义的 `revision` 递增触发条件完全对应：
 
 - **曲目切换**：当前播放曲目切换到另一首，`play_session_id` 发生变化。
-- **传输状态变化**：`transport_state` 枚举值发生任何变化，包括但不限于 `playing → switching`、`switching → playing`、`playing → paused`、`paused → playing`、`playing → stopped`、任意状态 → `error`。
+- **传输状态变化**：`transport_state` 枚举值发生任何变化，包括但不限于 `playing → switching`、`switching → playing`、`playing → stopped`、任意状态 → `error`。
 - **播放会话变化**：`play_session_id` 发生变化的任何场景。
 - **曲目身份变化**：`track.id` 发生变化。
 - **上下文变化**：`context.id` 或 `context.current_index` 发生变化。

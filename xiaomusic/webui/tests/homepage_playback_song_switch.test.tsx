@@ -67,8 +67,6 @@ vi.mock("../src/services/v1Api", () => ({
   updateSystemSettingItem: vi.fn(),
   setVolume: vi.fn(),
   stop: vi.fn(),
-  pause: vi.fn(),
-  resume: vi.fn(),
 }));
 
 vi.mock("../src/theme/ThemeProvider", () => ({

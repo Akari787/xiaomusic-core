@@ -5,7 +5,12 @@ from pydantic import ValidationError
 
 from xiaomusic.api.models import PlayRequest, VolumeRequest
 from xiaomusic.api.routers import v1
-from xiaomusic.core.errors import DeviceNotFoundError, InvalidRequestError, SourceResolveError, TransportError
+from xiaomusic.core.errors import (
+    DeviceNotFoundError,
+    InvalidRequestError,
+    SourceResolveError,
+    TransportError,
+)
 
 
 @pytest.mark.asyncio

@@ -223,7 +223,6 @@
 
 - 播放新曲目（无论来源）
 - 曲目自动切换（下一首、上一首）
-- 暂停、恢复
 - 停止
 - 播放器进入或退出错误状态
 - 曲目切换过程中的 `transport_state` 变化（如从 `playing` 变为 `switching`）
@@ -259,8 +258,6 @@
 
 以下情况不得生成新的 `play_session_id`：
 
-- 对当前曲目执行暂停
-- 对当前暂停曲目执行恢复
 - 仅调整音量
 
 ### 7.3 消费约束
@@ -286,7 +283,6 @@
 | `starting` | 正在启动播放（首次解析、准备流、下发命令中），尚未确认设备侧开始播放 |
 | `switching` | 正在从当前曲目切换到下一曲目，过渡期间 |
 | `playing` | 设备侧已确认正在播放 |
-| `paused` | 设备侧已确认处于暂停状态（计划随暂停/恢复一起移除，见 ADR-0007） |
 | `stopped` | 设备侧已确认停止 |
 | `error` | 播放器进入明确的异常状态，不可自动恢复 |
 
@@ -309,10 +305,6 @@
 **`playing`**：
 - 设备侧已确认当前正在播放，`track` 必须非空，`track.id` 必须稳定。
 - `position_ms` 反映观测到的播放位置。
-
-**`paused`**：
-- 设备侧已确认当前处于暂停状态，`track` 必须非空，`track.id` 必须与暂停前保持一致。
-- `position_ms` 应保持在暂停时刻的观测值，不再推进。
 
 **`stopped`**：
 - 播放已明确停止。`track` 可以保留最后播放曲目信息，也可以为 `null`，具体由实现决定并保持一致。
@@ -394,7 +386,7 @@
 前端允许在 `snapshot_at_ms` 基础上，使用本地时钟对 `position_ms` 做线性插值，使进度条展示更平滑。插值规则如下：
 
 - 仅在 `transport_state == "playing"` 时允许做正向插值。
-- `transport_state` 为 `paused`、`switching`、`starting`、`stopped`、`idle`、`error` 时，不得推进进度。
+- `transport_state` 为 `switching`、`starting`、`stopped`、`idle`、`error` 时，不得推进进度。
 - 插值时长不得超过两次状态快照之间的合理间隔（建议不超过 5 秒）；超出后应停止推进，等待下一次快照。
 - 收到新快照后，无论插值结果如何，必须立即以新快照的 `position_ms` 为准。
 
@@ -466,7 +458,6 @@
 | 判断切歌是否已完成 | `play_session_id` 变化且 `transport_state == "playing"` |
 | 更新进度条初始值 | `position_ms`（以 `snapshot_at_ms` 为观测基准） |
 | 判断是否正在切歌 | `transport_state == "switching"` |
-| 判断是否处于暂停 | `transport_state == "paused"` |
 | 判断播放器是否出错 | `transport_state == "error"` |
 | 丢弃过期状态 | `revision` 比较 |
 

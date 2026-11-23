@@ -138,10 +138,6 @@ class TransportRouter:
             return await transport.previous(device_id)
         if action == "next":
             return await transport.next(device_id)
-        if action == "pause":
-            return await transport.pause(device_id)
-        if action == "resume":
-            return await transport.resume(device_id)
         if action == "volume":
             if volume is None:
                 raise TransportError("volume is required for set_volume")

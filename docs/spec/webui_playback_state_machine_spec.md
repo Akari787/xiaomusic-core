@@ -180,7 +180,7 @@
 前端在渲染时必须按以下字段优先级顺序做决策：
 
 1. 首先读取 `transport_state`，确定当前所处的传输阶段。
-2. 基于 `transport_state` 决定 UI 大状态（播放中、暂停、切歌中、加载中、空闲、出错）。
+2. 基于 `transport_state` 决定 UI 大状态（播放中、切歌中、加载中、空闲、出错）。
 3. 在大状态确定后，读取 `play_session_id` 判断当前 session 是否已切换（驱动 UI 切换动作）。
 4. 读取 `track.id` 驱动歌单选中项同步与进度条绑定。
 5. 读取 `track.title` 作为展示文本（标题展示）。
@@ -214,14 +214,6 @@
 - 歌单选中项：以 `track.id` 为依据，将歌单列表中对应项高亮。
 - 进度条：基于 `position_ms` 和 `snapshot_at_ms` 进行进度插值（见第 9 节）。
 - 若此时 `play_session_id` 相比上一次 `playing` 状态发生了变化，必须触发完整 UI 切换（标题更新、进度归零、选中项重定位）。
-
-#### `paused`
-
-> 计划随暂停/恢复一起移除（见 ADR-0007）；页面没有暂停入口，只在服务端返回该值时展示。
-
-- 展示：暂停状态。展示 `track.title`，进度条静止，不推进插值。
-- 歌单选中项：保持当前 `track.id` 对应项高亮。
-- 禁止行为：不得以任何本地逻辑推断"暂停时间够长是否视为停止"。
 
 #### `stopped`
 
@@ -282,7 +274,7 @@
 
 ### 7.2 同一 session 内的状态变化
 
-当 `play_session_id` 未变化时，收到新快照表示同一曲目的状态更新（如暂停、恢复、进度推进）。此时：
+当 `play_session_id` 未变化时，收到新快照表示同一曲目的状态更新（如进度推进、音量变化）。此时：
 
 - 不得重置进度条（除非 `position_ms` 明显回退，表示后端发生了 seek）。
 - 不得更新歌单选中项（已在 `playing` 状态时定位完成）。
@@ -308,7 +300,7 @@
 歌单选中项应在以下时机更新：
 
 - `play_session_id` 发生变化，且新快照的 `transport_state` 为 `playing`（切歌已确认完成）。
-- 页面首次加载收到初始快照，且 `transport_state` 为 `playing` 或 `paused`。
+- 页面首次加载收到初始快照，且 `transport_state` 为 `playing`。
 
 在以下时机不得更新歌单选中项：
 
@@ -343,7 +335,7 @@
 进度插值的约束：
 
 - 仅在 `transport_state == "playing"` 时允许正向插值。
-- `transport_state` 为 `paused`、`switching`、`starting`、`stopped`、`idle`、`error` 时，不得推进插值，进度条应静止。
+- `transport_state` 为 `switching`、`starting`、`stopped`、`idle`、`error` 时，不得推进插值，进度条应静止。
 - 插值时长不得超过两次快照之间的合理间隔（建议不超过 5 秒）；超出后停止推进，等待下一次快照。
 - 插值结果不得上报或写回服务端。
 
@@ -433,7 +425,7 @@ SSE 重连成功并收到初始 `player_state` 事件后，前端必须：
 
 | 操作 | 正确依据 | 禁止依据 |
 |---|---|---|
-| 判断当前播放状态（是否播放中、暂停等） | `serverState.transport_state` | `is_playing` 布尔值；本地计时器是否运行 |
+| 判断当前播放状态（是否播放中、停止等） | `serverState.transport_state` | `is_playing` 布尔值；本地计时器是否运行 |
 | 判断当前正在播放哪首歌曲 | `serverState.play_session_id` + `serverState.track.id` | `track.title` 文本；本地记忆的 `rememberedPlayingSong` |
 | 展示曲目标题 | `serverState.track.title` | 本地缓存的旧标题；`pendingTitle`；`localPlaybackSong` |
 | 歌单选中项高亮定位 | `serverState.track.id` 与列表项 ID 对照 | `track.title` 字符串匹配；`context.current_index` 直接作为数组下标 |
@@ -506,7 +498,7 @@ SSE 重连成功并收到初始 `player_state` 事件后，前端必须：
 
 ### 14.3 状态一致性
 
-- UI 展示的播放状态（播放中、暂停、停止等）必须与 `serverState.transport_state` 严格对应，不出现前端本地状态与服务端状态不一致的情况。
+- UI 展示的播放状态（播放中、停止等）必须与 `serverState.transport_state` 严格对应，不出现前端本地状态与服务端状态不一致的情况。
 - 进度条的位置必须与 `serverState.position_ms` 保持一致（允许插值误差不超过 1 秒），不得因本地计时器漂移而与服务端进度偏差超过合理阈值。
 
 ### 14.4 SSE 与降级

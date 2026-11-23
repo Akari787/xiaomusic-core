@@ -293,7 +293,6 @@ def real_device():
     d._last_cmd = "play"
     d.is_playing = True
     d._start_time = 0.0
-    d._paused_time = 0.0
     d._duration = 0.0
 
     d.device = SimpleNamespace(

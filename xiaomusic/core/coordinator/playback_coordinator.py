@@ -141,12 +141,6 @@ class PlaybackCoordinator:
     async def next(self, device_id: str) -> dict:
         return await self._dispatch_action("next", device_id)
 
-    async def pause(self, device_id: str) -> dict:
-        return await self._dispatch_action("pause", device_id)
-
-    async def resume(self, device_id: str) -> dict:
-        return await self._dispatch_action("resume", device_id)
-
     async def set_volume(self, device_id: str, volume: int) -> dict:
         return await self._dispatch_action("volume", device_id, volume=volume)
 

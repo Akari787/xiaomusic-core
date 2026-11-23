@@ -7,9 +7,9 @@ from the same event loop that owns the arbiter.  Cross-thread usage is not
 supported.  All internal state transitions happen on the submitting thread /
 event loop; no locks are needed.
 
-**Barrier semantics**: STOP and PAUSE are barrier kinds. When a barrier is
-pending or active, new regular intents (PLAY/NEXT/PREVIOUS/AUTO_NEXT/RESUME/
-RETRY) cannot replace it; they are buffered in an ``_after_barrier`` slot
+**Barrier semantics**: STOP is the barrier kind. When a barrier is
+pending or active, new regular intents (PLAY/NEXT/PREVIOUS/AUTO_NEXT/RETRY)
+cannot replace it; they are buffered in an ``_after_barrier`` slot
 (latest-wins).  A new barrier always replaces any prior pending barrier and
 clears the after-barrier slot.  After a barrier completes, the worker
 immediately executes the latest buffered after-barrier intent.
@@ -32,8 +32,6 @@ class IntentKind(str, Enum):
     PREVIOUS = "previous"
     AUTO_NEXT = "auto_next"
     STOP = "stop"
-    PAUSE = "pause"
-    RESUME = "resume"
     RETRY = "retry"
 
 
@@ -77,7 +75,7 @@ class DeviceCommandArbiter:
     Guarantees:
     * At most one ``executor(intent)`` call in flight at any time.
     * ``submit()`` returns immediately — never awaits the executor.
-    * **Barrier ordering**: STOP / PAUSE are barriers.  A barrier always
+    * **Barrier ordering**: STOP is a barrier.  A barrier always
       replaces any pending regular intent and clears buffered after-barrier
       work.  Regular intents arriving while a barrier is pending or active
       are buffered in a single ``_after_barrier`` slot (latest-wins) and
@@ -185,8 +183,8 @@ class DeviceCommandArbiter:
 
     @staticmethod
     def _is_barrier(kind: IntentKind) -> bool:
-        """Return True for STOP / PAUSE — the barrier kinds."""
-        return kind in (IntentKind.STOP, IntentKind.PAUSE)
+        """Return True for STOP — the barrier kind."""
+        return kind == IntentKind.STOP
 
     def submit(
         self,
@@ -197,8 +195,8 @@ class DeviceCommandArbiter:
 
         Never awaits the executor.  Barrier-aware routing:
 
-        * **Barrier (STOP/PAUSE)**: always replaces ``_pending`` and
-          clears ``_after_barrier`` (latest STOP/PAUSE wins).
+        * **Barrier (STOP)**: always replaces ``_pending`` and
+          clears ``_after_barrier`` (latest STOP wins).
         * **Regular**: if a barrier is pending or active the intent
           lands in ``_after_barrier`` (latest-wins); otherwise normal
           latest-pending in ``_pending``.

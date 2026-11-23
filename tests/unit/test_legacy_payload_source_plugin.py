@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from xiaomusic.adapters.sources.legacy_payload_source_plugin import LegacyPayloadSourcePlugin
+from xiaomusic.adapters.sources.legacy_payload_source_plugin import (
+    LegacyPayloadSourcePlugin,
+)
 
 
 def test_legacy_payload_source_plugin_prefers_playlist_item_id_and_entity_id() -> None:

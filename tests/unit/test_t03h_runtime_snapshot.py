@@ -25,9 +25,6 @@ from xiaomusic.playback.runtime_state import (
     confirm_playing,
     report_failure,
 )
-from xiaomusic.playback.runtime_state import (
-    pause as pause_reducer,
-)
 
 # ── helpers ────────────────────────────────────────────────────────────
 
@@ -75,9 +72,6 @@ def _build(
     if phase == PlaybackPhase.PLAYING:
         return s
 
-    if phase == PlaybackPhase.PAUSED:
-        return pause_reducer(s, updated_at=4.0)
-
     if phase == PlaybackPhase.STOPPING:
         return begin_stop(s, updated_at=4.0)
 
@@ -109,7 +103,6 @@ _PHASE_TP_MAP: dict[PlaybackPhase, str] = {
     PlaybackPhase.CONFIRMING: "starting",
     PlaybackPhase.SWITCHING: "switching",
     PlaybackPhase.PLAYING: "playing",
-    PlaybackPhase.PAUSED: "paused",
     PlaybackPhase.STOPPING: "stopping",
     PlaybackPhase.STOPPED: "stopped",
     PlaybackPhase.FAILED: "error",
@@ -166,14 +159,13 @@ async def test_a_phase_to_transport_state_mapping(phase: PlaybackPhase) -> None:
     )
 
 
-# ── B: PAUSED / STOPPED / FAILED — isplaying=True must not override ───
+# ── B: STOPPED / FAILED — isplaying=True must not override ───
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "phase,expected_ts",
     [
-        (PlaybackPhase.PAUSED, "paused"),
         (PlaybackPhase.STOPPED, "stopped"),
         (PlaybackPhase.FAILED, "error"),
     ],

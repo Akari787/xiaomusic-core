@@ -1227,8 +1227,6 @@ export function HomePage() {
     switch (serverState.transport_state) {
       case "playing":
         return visibleTitle ? `正在播放：${visibleTitle}` : "正在播放";
-      case "paused":
-        return visibleTitle ? `已暂停：${visibleTitle}` : "已暂停";
       case "starting":
         return visibleTitle ? `正在加载：${visibleTitle}` : "正在加载...";
       case "switching":

@@ -111,43 +111,6 @@ class MinaTransport(Transport):
             )
             raise
 
-    async def pause(self, device_id: str) -> dict[str, Any]:
-        start = time.perf_counter()
-        try:
-            player = self._xiaomusic.device_manager.devices[device_id]
-            accepted = await player.pause()
-            if not accepted:
-                raise TransportError("pause command rejected")
-            LOG.info(
-                "transport_action action=pause success=true latency_ms=%d device_id=%s",
-                int((time.perf_counter() - start) * 1000),
-                device_id,
-            )
-            return {"ret": "OK"}
-        except Exception:
-            LOG.warning(
-                "transport_action action=pause success=false latency_ms=%d device_id=%s",
-                int((time.perf_counter() - start) * 1000),
-                device_id,
-            )
-            raise
-
-    async def resume(self, device_id: str) -> dict[str, Any]:
-        start = time.perf_counter()
-        try:
-            player = self._xiaomusic.device_manager.devices[device_id]
-            accepted = await player.resume()
-            if not accepted:
-                raise TransportError("resume command rejected")
-            LOG.info(
-                "transport_action action=resume success=true latency_ms=%d device_id=%s",
-                int((time.perf_counter() - start) * 1000), device_id,
-            )
-            return {"ret": "OK"}
-        except Exception:
-            LOG.warning("transport_action action=resume success=false device_id=%s", device_id)
-            raise
-
     async def set_volume(self, device_id: str, volume: int) -> dict[str, Any]:
         start = time.perf_counter()
         try:

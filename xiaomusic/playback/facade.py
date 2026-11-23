@@ -794,34 +794,6 @@ class PlaybackFacade:
             "extra": {"dispatch": result["dispatch"].data},
         })
 
-    async def pause(
-        self, device_id: str, request_id: str | None = None
-    ) -> dict[str, Any]:
-        did = self._validate_device_id(device_id)
-        result = await self._core().pause(did)
-        return {
-            "status": "accepted",
-            "action": "pause",
-            DEVICE_ID: did,
-            "transport": result["transport"],
-            REQUEST_ID: str(request_id or uuid4().hex[:16]),
-            "extra": {"dispatch": result["dispatch"].data},
-        }
-
-    async def resume(
-        self, device_id: str, request_id: str | None = None
-    ) -> dict[str, Any]:
-        did = self._validate_device_id(device_id)
-        result = await self._core().resume(did)
-        return {
-            "status": "accepted",
-            "action": "resume",
-            DEVICE_ID: did,
-            "transport": result["transport"],
-            REQUEST_ID: str(request_id or uuid4().hex[:16]),
-            "extra": {"dispatch": result["dispatch"].data},
-        }
-
     async def set_volume(
         self,
         device_id: str,
@@ -962,7 +934,6 @@ class PlaybackFacade:
         PlaybackPhase.CONFIRMING: "starting",
         PlaybackPhase.SWITCHING: "switching",
         PlaybackPhase.PLAYING: "playing",
-        PlaybackPhase.PAUSED: "paused",
         PlaybackPhase.STOPPING: "stopping",
         PlaybackPhase.STOPPED: "stopped",
         PlaybackPhase.FAILED: "error",
@@ -980,7 +951,6 @@ class PlaybackFacade:
     # fallback to desired)
     _CONFIRMED_TRACK_PHASES: frozenset[PlaybackPhase] = frozenset({
         PlaybackPhase.PLAYING,
-        PlaybackPhase.PAUSED,
         PlaybackPhase.STOPPING,
         PlaybackPhase.STOPPED,
         PlaybackPhase.FAILED,

@@ -8,11 +8,9 @@ import {
   getSystemStatus,
   isApiOk,
   mapPluginName,
-  pause,
   play,
   probe,
   resolve,
-  resume,
   setVolume,
   stop,
   type ApiEnvelope,
@@ -93,19 +91,12 @@ export function ApiV1DebugPage() {
     setMessage(detailsText("解析并播放", out));
   }
 
-  async function runControl(action: "stop" | "pause" | "resume" | "probe") {
+  async function runControl(action: "stop" | "probe") {
     if (!activeDeviceId) {
       setMessage("请先选择设备");
       return;
     }
-    const out =
-      action === "stop"
-        ? await stop(activeDeviceId)
-        : action === "pause"
-          ? await pause(activeDeviceId)
-          : action === "resume"
-            ? await resume(activeDeviceId)
-            : await probe(activeDeviceId);
+    const out = action === "stop" ? await stop(activeDeviceId) : await probe(activeDeviceId);
     setControlResult(out);
     setMessage(detailsText(`控制-${action}`, out));
   }
@@ -205,12 +196,6 @@ export function ApiV1DebugPage() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button data-testid="stop-button" onClick={() => void runControl("stop")}>
             stop
-          </button>
-          <button data-testid="pause-button" onClick={() => void runControl("pause")}>
-            pause
-          </button>
-          <button data-testid="resume-button" onClick={() => void runControl("resume")}>
-            resume
           </button>
           <button data-testid="probe-button" onClick={() => void runControl("probe")}>
             probe

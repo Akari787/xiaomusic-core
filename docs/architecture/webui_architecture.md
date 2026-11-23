@@ -27,7 +27,7 @@ WebUI 当前使用的 Public API：
 - `POST /api/v1/system/settings`
 - `POST /api/v1/system/settings/item`
 - `POST /api/v1/play`
-- `POST /api/v1/control/*`（stop、next、previous、volume 等；页面不使用 pause / resume，二者计划移除）
+- `POST /api/v1/control/*`（stop、next、previous、volume 等；暂停/恢复已于 2026-11-23 删除）
 - `GET /api/v1/search/online`（仅使用服务端生成的 opaque `play_reference` 播放；不得以标题或搜索词回退）
 
 ### 1.2 Internal API（`/api/auth/*`、`/api/file/*`）

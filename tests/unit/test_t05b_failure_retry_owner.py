@@ -37,7 +37,6 @@ def _make_t05b_device(*, did: str = "t05b", play_type: int = PLAY_TYPE_ALL) -> X
     d._last_cmd = "play"
     d.is_playing = True
     d._start_time = 0
-    d._paused_time = 0
     d._duration = 0
     d._play_failed_cnt = 0
     d._play_fail_first_ts = 0.0

@@ -67,7 +67,7 @@ export interface PlayerStateContext {
   current_index: number | null;
 }
 
-export type TransportState = "idle" | "starting" | "switching" | "playing" | "paused" | "stopped" | "error";
+export type TransportState = "idle" | "starting" | "switching" | "playing" | "stopped" | "error";
 
 export interface PlayerStateData {
   // 新规范字段
@@ -337,14 +337,6 @@ export async function resolve(request: ResolveRequest): Promise<ApiEnvelope<Reso
 
 export async function stop(deviceId: string): Promise<ApiEnvelope<ControlData>> {
   return await safePost<ControlData>("/api/v1/control/stop", { device_id: deviceId });
-}
-
-export async function pause(deviceId: string): Promise<ApiEnvelope<ControlData>> {
-  return await safePost<ControlData>("/api/v1/control/pause", { device_id: deviceId });
-}
-
-export async function resume(deviceId: string): Promise<ApiEnvelope<ControlData>> {
-  return await safePost<ControlData>("/api/v1/control/resume", { device_id: deviceId });
 }
 
 export async function setVolume(deviceId: string, volume: number): Promise<ApiEnvelope<ControlData>> {

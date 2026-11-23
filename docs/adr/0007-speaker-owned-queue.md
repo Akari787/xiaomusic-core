@@ -141,7 +141,7 @@ SpeakerClient（新增，唯一调用小米云的地方）
 - 语音“暂停”维持现状，按停止处理（`keywords_stop`）。
 - 用户在音箱上手动暂停时，`status` 仍为 1，服务端看不出来；兜底计时器到点后若没有新的 TrackFetched，按“跟随丢失”处理。
 
-在第 6 步删除前，现有暂停/恢复代码保持原样，不修、不扩展。
+✅ 2026-11-23 已删除（第 6 步的第一部分）。语音控制此前已整体删除，上面关于语音“暂停”的一条不再适用。
 
 ### 不支持队列的硬件
 
@@ -165,6 +165,8 @@ SpeakerClient（新增，唯一调用小米云的地方）
    - ✅ 入口合并（2026-11-23）：带歌单上下文的 v1 API 播放（WebUI）从第一首起按窗口下发。API 交来的投递地址（`/api/proxy/plugin-url`）网关不解析，当前曲改用歌单条目自己的地址（同一首，经网关）。没有歌单上下文的单独链接仍单首下发。实测（随机模式）：第一首即下发 20 首窗口，音箱本地切歌后服务端同秒跟随。
    - ⏸ `site_media` 中转移入 StreamGateway：待定。现状是曲库歌单里的网络歌曲走 `/proxy`，不经过 `site_media`；`site_media`（YouTube 等）只用于单独链接的一次性播放，单首下发，`/relay/stream` 工作正常。移入网关目前只换来“重启后地址仍有效”。
 6. **拆分与清理**：`device_player.py` 拆成 DevicePlayer / SpeakerQueue / PlaybackFollower；把 sid / LifecycleToken / 手动切歌代际 / barrier 收敛为每个队列的版本号；删除暂停/恢复（见“不提供暂停 / 恢复”）；用行为测试替换绑定内部实现的单元测试。
+   - ✅ 删除暂停/恢复（2026-11-23）：v1 `control/pause` / `control/resume`（白名单 24 → 22）、`PlaybackPhase.PAUSED` 与 pause/resume 转换、arbiter 的 PAUSE/RESUME 意图（STOP 成为唯一屏障）、transport 与 coordinator/facade 的 pause/resume、设备层的执行函数和 `_paused_time`、WebUI 调试页按钮与 `paused` 状态。停止流程里的 `player_pause`（先暂停再停止）保留。
+   - 待做：按新架构重新设计 API（Akari 2026-11-23：只保留一个 play 接口，来源由路由判断；接口清单先给 Akari 审阅；Home Assistant 经 Node-RED 调用，需同步修改），以及拆分 `device_player.py`。
 
 ## 待确认问题
 

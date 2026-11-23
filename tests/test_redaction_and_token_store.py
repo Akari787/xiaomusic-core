@@ -1,9 +1,6 @@
 import io
 import json
 import logging
-import os
-
-import pytest
 
 from xiaomusic.security.logging import RedactingLogFormatter
 from xiaomusic.security.token_store import TokenStore

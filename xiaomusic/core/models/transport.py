@@ -11,8 +11,6 @@ class TransportCapabilityMatrix:
     next: list[str] = field(default_factory=list)
     volume: list[str] = field(default_factory=list)
     stop: list[str] = field(default_factory=list)
-    pause: list[str] = field(default_factory=list)
-    resume: list[str] = field(default_factory=list)
     probe: list[str] = field(default_factory=list)
 
     def by_action(self, action: str) -> list[str]:

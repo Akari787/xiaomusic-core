@@ -101,8 +101,6 @@ def test_register_routers_production_assembly(monkeypatch):
         "POST /api/v1/play",
         "POST /api/v1/resolve",
         "POST /api/v1/control/stop",
-        "POST /api/v1/control/pause",
-        "POST /api/v1/control/resume",
         "POST /api/v1/control/volume",
         "POST /api/v1/control/probe",
         "POST /api/v1/control/previous",

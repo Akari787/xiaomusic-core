@@ -5,7 +5,9 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-from xiaomusic.adapters.sources.local_library_source_plugin import LocalLibrarySourcePlugin
+from xiaomusic.adapters.sources.local_library_source_plugin import (
+    LocalLibrarySourcePlugin,
+)
 from xiaomusic.core.errors.source_errors import SourceResolveError
 from xiaomusic.core.models.media import MediaRequest
 

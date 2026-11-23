@@ -1,4 +1,3 @@
-import pytest
 
 from xiaomusic.relay.runtime import RelayRuntime
 

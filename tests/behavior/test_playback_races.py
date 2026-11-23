@@ -89,26 +89,6 @@ async def test_new_play_supersedes_play_still_dispatching(monkeypatch, tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_pause_while_switching_is_rejected_and_playback_continues(monkeypatch, tmp_path):
-    rig = build_rig(monkeypatch, tmp_path)
-    try:
-        await rig.play_playlist("日语", "a")
-        await rig.settle(5)
-        rig.speaker.latency = {"play_by_music_url": 3.0, "play_by_url": 3.0}
-
-        switching = asyncio.create_task(rig.player.play_next())
-        await rig.settle(1.0)
-        assert await rig.player.pause() is False
-        await switching
-        await rig.settle(5)
-
-        assert rig.speaker.played() == ["a", "b"]
-        assert rig.state().phase == PlaybackPhase.PLAYING
-    finally:
-        await rig.close()
-
-
-@pytest.mark.asyncio
 async def test_manual_next_cancels_pending_track_end_timer(monkeypatch, tmp_path):
     rig = build_rig(monkeypatch, tmp_path, playlists=FIVE)
     try:

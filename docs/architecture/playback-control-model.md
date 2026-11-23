@@ -178,7 +178,7 @@ xiaomusic-core 与本地播放器的关键差异是：播放设备位于远端�
 - 若 stop RPC 永久挂死，active owner 保持 fail-closed，后续 intent 不越过它；这是已知运维风险，只能通过 transport/设备侧恢复处理，不以软超时放行。
 - 外部 URL 与本地播放共用同一 exact stop 与 stale-token fence。facade probe 只观测；failure 仍是 unknown，不执行 physical-confirm、stop recovery 或放行逻辑，probe response 也不再提供 group-stop recovery extra 字段。
 - preplay stop 失败时本曲不下发，交给统一失败处理（`_handle_play_failure`）按重试/下一首策略继续；此时不以“音箱仍在播放”为由跳过重试（那只是上一首或单项队列在循环）。
-- 暂停/恢复不在产品范围内，将在 ADR-0007 第 6 步删除；在此之前不修、不扩展。
+- 暂停/恢复不在产品范围内，已于 2026-11-23 删除（接口、`PlaybackPhase.PAUSED`、arbiter 的 PAUSE/RESUME 意图）。停止仍是唯一的屏障命令。
 
 ## 10. 相关文档
 
