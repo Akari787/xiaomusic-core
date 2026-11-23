@@ -166,6 +166,7 @@ SpeakerClient（新增，唯一调用小米云的地方）
    - ⏸ `site_media` 中转移入 StreamGateway：待定。现状是曲库歌单里的网络歌曲走 `/proxy`，不经过 `site_media`；`site_media`（YouTube 等）只用于单独链接的一次性播放，单首下发，`/relay/stream` 工作正常。移入网关目前只换来“重启后地址仍有效”。
 6. **拆分与清理**：`device_player.py` 拆成 DevicePlayer / SpeakerQueue / PlaybackFollower；把 sid / LifecycleToken / 手动切歌代际 / barrier 收敛为每个队列的版本号；删除暂停/恢复（见“不提供暂停 / 恢复”）；用行为测试替换绑定内部实现的单元测试。
    - ✅ 删除暂停/恢复（2026-11-23）：v1 `control/pause` / `control/resume`（白名单 24 → 22）、`PlaybackPhase.PAUSED` 与 pause/resume 转换、arbiter 的 PAUSE/RESUME 意图（STOP 成为唯一屏障）、transport 与 coordinator/facade 的 pause/resume、设备层的执行函数和 `_paused_time`、WebUI 调试页按钮与 `paused` 状态。停止流程里的 `player_pause`（先暂停再停止）保留。
+   - ✅ 拆分 `device_player.py`（2026-11-23，第一步，行为不变）：4100 行拆为 `device_player.py`（编排，约 1170 行）和 `xiaomusic/player/` 下 8 个 mixin（lifecycle / playlist / queue_dispatch / follower / commands / failure / external_play / library_tasks）。先用 mixin 是为了让依赖私有方法的旧单元测试不变；守护测试改为扫描整个播放器包（`tests/player_source.py`）。改成对象组合、收敛 sid / LifecycleToken / 手动切歌代际为队列版本号，在后续步骤做。
    - 待做：按新架构重新设计 API（Akari 2026-11-23：只保留一个 play 接口，来源由路由判断；接口清单先给 Akari 审阅；Home Assistant 经 Node-RED 调用，需同步修改），以及拆分 `device_player.py`。
 
 ## 待确认问题

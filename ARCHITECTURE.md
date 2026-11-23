@@ -22,7 +22,7 @@ xiaomusic-core 是面向小米音箱的 Python 后端，负责播放编排、设
 | runtime | 生命周期与依赖装配 | `xiaomusic/xiaomusic.py` |
 | playback | 播放编排、控制意图、状态投影 | `xiaomusic/playback/`、`xiaomusic/core/` |
 | source | 媒体事实解析 | `xiaomusic/adapters/sources/`、`xiaomusic/core/source/` |
-| device | 设备命令与当前 session 队列 | `xiaomusic/device_manager.py`、`xiaomusic/device_player.py` |
+| device | 设备命令与当前 session 队列 | `xiaomusic/device_manager.py`、`xiaomusic/device_player.py`（编排）与 `xiaomusic/player/`（按职责拆分的 mixin：`lifecycle` 运行时状态与生命周期、`playlist` 歌单快照、`queue_dispatch` 窗口下发、`follower` 拉流跟随与开播确认、`commands` 命令仲裁与切歌、`failure` 失败策略、`external_play` API 点播入口、`library_tasks` 下载） |
 | auth | 持久认证、短会话与 runtime 恢复 | `xiaomusic/auth.py`、`xiaomusic/security/token_store.py` |
 | config | 配置对象与持久化 | `xiaomusic/config.py`、`xiaomusic/config_manager.py` |
 | relay | 站内流媒体中转 | `xiaomusic/relay/` |

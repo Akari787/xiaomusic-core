@@ -1036,15 +1036,10 @@ async def test_AST_external_physical_chain_only_in_executor():
     calls group_player_play for external URLs.  submit_external_url_play
     must NOT call group_player_play."""
     import ast
-    import os
 
-    src_path = os.path.join(
-        os.path.dirname(__file__), "..", "..", "xiaomusic", "device_player.py"
-    )
-    src_path = os.path.abspath(src_path)
+    from tests.player_source import player_source
 
-    with open(src_path, encoding="utf-8") as f:
-        source = f.read()
+    source = player_source()
 
     tree = ast.parse(source)
 

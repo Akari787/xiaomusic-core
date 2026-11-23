@@ -14,6 +14,7 @@ import types
 
 import pytest
 
+from tests.player_source import player_source_file
 from xiaomusic.const import PLAY_TYPE_ALL
 from xiaomusic.device_player import XiaoMusicDevice
 from xiaomusic.playback.runtime_state import (
@@ -685,7 +686,7 @@ def test_no_fixed_sleep_in_failure_path():
     """_handle_play_failure contains no time.sleep()."""
     import ast
 
-    with open("xiaomusic/device_player.py") as f:
+    with player_source_file() as f:
         tree = ast.parse(f.read())
 
     class SleepChecker(ast.NodeVisitor):
@@ -723,7 +724,7 @@ def test_report_runtime_failure_is_only_report_failure_caller():
     """AST: report_failure only called from _report_runtime_failure."""
     import ast
 
-    with open("xiaomusic/device_player.py") as f:
+    with player_source_file() as f:
         tree = ast.parse(f.read())
 
     class Checker(ast.NodeVisitor):
@@ -759,7 +760,7 @@ def test_play_playlocal_no_direct_await_play_or_play_internal():
     enters via arbiter executor → _execute_play_intent."""
     import ast
 
-    with open("xiaomusic/device_player.py") as f:
+    with player_source_file() as f:
         tree = ast.parse(f.read())
 
     class Checker(ast.NodeVisitor):

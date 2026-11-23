@@ -62,10 +62,13 @@ def test_last_cmd_is_not_state_failure_or_completion_authority():
 
 
 def test_device_has_no_manual_worker_or_bare_task_creation():
-    source = inspect.getsource(XiaoMusicDevice)
+    from tests.player_source import player_source
+
+    # The whole device player: device_player.py and its xiaomusic/player mixins.
+    source = player_source()
     assert "manual_worker" not in source
     assert "manual-only" not in source
-    for node in ast.walk(_tree_for(XiaoMusicDevice)):
+    for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             assert node.func.attr != "create_task"
 

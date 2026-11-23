@@ -691,7 +691,10 @@ def test_ast_zero_bare_event_wait_in_entire_file():
 
 
 def test_device_scope_has_no_bare_create_task_or_duplicate_owner_names():
-    source = inspect.getsource(XiaoMusicDevice)
+    from tests.player_source import player_source
+
+    # The whole device player: device_player.py and its xiaomusic/player mixins.
+    source = player_source()
     tree = ast.parse(source)
     assert not [
         node for node in ast.walk(tree)

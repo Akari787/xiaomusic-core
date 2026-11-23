@@ -356,6 +356,17 @@ def build_rig(
 
     scaled = _scaled_asyncio()
     monkeypatch.setattr(dp, "asyncio", scaled)
+    # XiaoMusicDevice is split into mixin modules (xiaomusic.player.*); every
+    # module that sleeps must run on scaled time too.
+    import importlib
+    import pkgutil
+
+    import xiaomusic.player as player_pkg
+
+    for info in pkgutil.iter_modules(player_pkg.__path__):
+        module = importlib.import_module(f"xiaomusic.player.{info.name}")
+        if hasattr(module, "asyncio"):
+            monkeypatch.setattr(module, "asyncio", scaled)
     monkeypatch.setattr(arbiter_mod, "asyncio", scaled)
     monkeypatch.setattr("xiaomusic.music_library.traverse_music_directory", lambda *a, **k: {})
 

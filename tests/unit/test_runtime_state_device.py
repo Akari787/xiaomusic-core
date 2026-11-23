@@ -11,6 +11,7 @@ import types
 import pytest
 
 import xiaomusic.device_player as dp
+from tests.player_source import player_relpaths, player_source_file
 from xiaomusic.config import Device
 from xiaomusic.const import PLAY_TYPE_ALL
 from xiaomusic.device_player import XiaoMusicDevice
@@ -178,7 +179,7 @@ def test_old_state_not_mutated_after_set():
 
 def test_runtime_state_writes_only_in_allowed_methods():
     """AST: _runtime_state + lifecycle IDs only set via _set_runtime_state."""
-    with open(dp.__file__) as f:
+    with player_source_file() as f:
         tree = ast.parse(f.read())
 
     LIFECYCLE_IDS = {"queue_session_id", "command_generation", "track_attempt_id"}
@@ -249,7 +250,7 @@ _REDUCER_WRAPPER_MAP = {
 def test_pause_stop_reducers_only_called_from_wrappers():
     """Each reducer (_pause_transition, begin_stop, complete_stop)
     must only be called from its designated wrapper method."""
-    with open(dp.__file__) as f:
+    with player_source_file() as f:
         tree = ast.parse(f.read())
 
     class ReducerCallChecker(ast.NodeVisitor):
@@ -651,7 +652,7 @@ def test_begin_runtime_play_dispatch_ids_unchanged():
 
 def test_begin_play_request_only_called_in_wrapper():
     """AST: begin_play_request is only called from _begin_runtime_play_request."""
-    with open(dp.__file__) as f:
+    with player_source_file() as f:
         tree = ast.parse(f.read())
 
     class CallChecker(ast.NodeVisitor):
@@ -687,7 +688,7 @@ def test_begin_play_request_only_called_in_wrapper():
 
 def test_begin_play_dispatch_only_called_in_wrapper():
     """AST: begin_play_dispatch is only called from _begin_runtime_play_dispatch."""
-    with open(dp.__file__) as f:
+    with player_source_file() as f:
         tree = ast.parse(f.read())
 
     class CallChecker(ast.NodeVisitor):
@@ -788,7 +789,7 @@ def test_accept_command_called_only_in_allowed_funcs():
 
 def _check_calls(method_name: str, allowed_funcs: set[str]):
     import ast as _ast
-    with open(dp.__file__) as f:
+    with player_source_file() as f:
         tree = _ast.parse(f.read())
 
     calls: list[tuple[int, str]] = []
@@ -1296,13 +1297,13 @@ def test_start_track_attempt_called_only_in_playmusic_and_play_url():
             self.generic_visit(n)
 
     calls: list[tuple[str, int, str]] = []
-    for fname in ["xiaomusic/device_player.py", "xiaomusic/xiaomusic.py"]:
+    for fname in [*player_relpaths(), "xiaomusic/xiaomusic.py"]:
         with open(fname) as f:
             _Visitor(fname, calls).visit(_ast.parse(f.read()))
 
     expected = {
         ("xiaomusic/device_player.py", "_playmusic"),
-        ("xiaomusic/device_player.py", "_execute_external_play_intent"),
+        ("xiaomusic/player/external_play.py", "_execute_external_play_intent"),
     }
     actual = {(c[0], c[2]) for c in calls}
     assert calls, "No _start_track_attempt calls"
@@ -3419,7 +3420,7 @@ async def test_playmusic_direct_sync_success_confirming_phase():
 
 def test_begin_confirm_called_only_in_begin_runtime_confirmation():
     """AST: begin_confirm is called exactly once, inside _begin_runtime_confirmation."""
-    with open(dp.__file__) as f:
+    with player_source_file() as f:
         tree = ast.parse(f.read())
 
     class BeginConfirmCallVisitor(ast.NodeVisitor):
@@ -3447,7 +3448,7 @@ def test_begin_confirm_called_only_in_begin_runtime_confirmation():
     visitor.visit(tree)
 
     assert len(visitor.calls) == 1, (
-        f"begin_confirm must be called exactly once in device_player.py, "
+        f"begin_confirm must be called exactly once in the device player, "
         f"got {len(visitor.calls)}: {visitor.calls}"
     )
     assert visitor.calls[0][1] == "_begin_runtime_confirmation", (
@@ -3458,7 +3459,7 @@ def test_begin_confirm_called_only_in_begin_runtime_confirmation():
 
 def test_confirm_playing_called_only_in_confirm_runtime_playing():
     """AST: confirm_playing is called exactly once, inside _confirm_runtime_playing."""
-    with open(dp.__file__) as f:
+    with player_source_file() as f:
         tree = ast.parse(f.read())
 
     class ConfirmPlayingCallVisitor(ast.NodeVisitor):
@@ -3486,7 +3487,7 @@ def test_confirm_playing_called_only_in_confirm_runtime_playing():
     visitor.visit(tree)
 
     assert len(visitor.calls) == 1, (
-        f"confirm_playing must be called exactly once in device_player.py, "
+        f"confirm_playing must be called exactly once in the device player, "
         f"got {len(visitor.calls)}: {visitor.calls}"
     )
     assert visitor.calls[0][1] == "_confirm_runtime_playing", (
@@ -5705,7 +5706,7 @@ class TestT04bGate:
 
     def test_no_manual_navigation_worker_defined(self):
         """No _manual_navigation_worker function in device_player."""
-        tree = ast.parse(open(dp.__file__).read())
+        tree = ast.parse(player_source_file().read())
         func_names = {
             node.name
             for node in ast.walk(tree)
@@ -5715,13 +5716,13 @@ class TestT04bGate:
 
     def test_no_manual_nav_worker_task_created(self):
         """No _manual_nav_worker_task assignment (create_task or =)."""
-        source = open(dp.__file__).read()
+        source = player_source_file().read()
         assert "_manual_nav_worker_task" not in source
 
     def test_manual_next_prev_physical_entry_only_via_arbiter(self):
         """play_next / play_prev are gateways to _queue_manual_navigation
         which submits to arbiter; no direct _play call in them."""
-        tree = ast.parse(open(dp.__file__).read())
+        tree = ast.parse(player_source_file().read())
 
         class _Checker(ast.NodeVisitor):
             def __init__(self):
