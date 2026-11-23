@@ -97,11 +97,19 @@ class CommandArbiterMixin:
             submit_payload.update(payload)
 
         try:
-            arbiter.submit(kind, submit_payload)
+            receipt = arbiter.submit(kind, submit_payload)
         except ArbiterClosedError:
             self.log.info(
                 "auto_retry_submit_arbiter_closed kind=%s",
                 kind,
+            )
+            return False
+        if not receipt.accepted:
+            # A user command is waiting; it decides what plays next (ADR-0008).
+            self.log.info(
+                "auto_retry_submit_refused_user_intent_waiting kind=%s reason=%s",
+                kind,
+                reason,
             )
             return False
 
@@ -410,6 +418,7 @@ class CommandArbiterMixin:
                 return False
             # Accept the control intent — bumps command_generation.
             self._accept_command(updated_at=time.time())
+            self._supersede_queue(reason=f"manual_{direction}")
             self._stage_playlist_navigation_transition(
                 name,
                 reason="play_next" if direction == "next" else "play_prev",

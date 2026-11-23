@@ -112,6 +112,18 @@ class QueueDispatchMixin:
             )
         return speaker_url
 
+    def _supersede_queue(self, *, reason: str) -> None:
+        """A user command was accepted: the window on the speaker no longer
+        decides what plays next. Its fetches are ignored from now on, so a
+        sentinel or local advance cannot trigger an automatic dispatch while
+        the user's command waits to run (ADR-0008)."""
+        queue = getattr(self, "_queue_dispatch", None)
+        if queue and not queue.get("superseded"):
+            queue["superseded"] = True
+            self.log.info(
+                "queue_superseded did=%s queue=%s reason=%s", self.did, queue.get("sid"), reason
+            )
+
     def _active_queue(self) -> dict | None:
         """The dispatched window if it belongs to the current play session."""
         queue = getattr(self, "_queue_dispatch", None)

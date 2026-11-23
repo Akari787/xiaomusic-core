@@ -186,6 +186,18 @@ class DeviceCommandArbiter:
         """Return True for STOP — the barrier kind."""
         return kind == IntentKind.STOP
 
+    @staticmethod
+    def _is_automatic(kind: IntentKind) -> bool:
+        """AUTO_NEXT / RETRY come from timers, fetches and the failure policy,
+        not from the user (ADR-0008)."""
+        return kind in (IntentKind.AUTO_NEXT, IntentKind.RETRY)
+
+    def _user_intent_waiting(self) -> bool:
+        return any(
+            intent is not None and not self._is_automatic(intent.kind)
+            for intent in (self._pending, self._after_barrier)
+        )
+
     def submit(
         self,
         kind: IntentKind,
@@ -201,10 +213,19 @@ class DeviceCommandArbiter:
           lands in ``_after_barrier`` (latest-wins); otherwise normal
           latest-pending in ``_pending``.
 
+        * **Automatic (AUTO_NEXT / RETRY)** never replaces a waiting user
+          intent (pending or after-barrier): it is refused
+          (``accepted=False``) and nothing changes (ADR-0008). It may still
+          be queued while a user intent is *executing* -- the failure policy
+          submits RETRY from inside a running PLAY.
+
         Must be called from the owning event loop; not thread-safe.
         """
         if self._closed:
             raise ArbiterClosedError("arbiter is closed")
+
+        if self._is_automatic(kind) and self._user_intent_waiting():
+            return IntentReceipt(accepted=False, sequence=-1)
 
         seq = self._next_seq
         self._next_seq += 1

@@ -97,6 +97,15 @@ class PlaybackFollowerMixin:
         ):
             expected["fetched"] = True
         queue = self._active_queue()
+        if queue is not None and queue.get("superseded"):
+            self.log.info(
+                "queue_fetch_ignored_superseded did=%s queue=%s index=%s source=%s",
+                ref.did,
+                ref.queue,
+                ref.index,
+                ref.source,
+            )
+            return
         if queue is None or str(ref.queue) != str(queue["sid"]):
             self.log.info(
                 "queue_fetch_ignored did=%s queue=%s index=%s cur_sid=%s",
@@ -117,7 +126,7 @@ class PlaybackFollowerMixin:
         from xiaomusic.playback.command_arbiter import IntentKind
 
         sid = queue["sid"]
-        if self._active_queue() is not queue:
+        if self._active_queue() is not queue or queue.get("superseded"):
             return
         names = self._get_playlist_names()
 

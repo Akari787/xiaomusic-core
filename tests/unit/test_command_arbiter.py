@@ -29,11 +29,14 @@ async def _noop(_intent: PlaybackIntent) -> None:
 
 @pytest.mark.asyncio
 async def test_all_intent_kinds_submit_and_return_receipt():
-    """Every currently defined IntentKind submits and returns a receipt."""
+    """Every currently defined IntentKind submits and returns a receipt.
+
+    Automatic kinds go first: they are refused once a user intent waits."""
     arb = DeviceCommandArbiter(_noop)
     try:
         receipts: list[IntentReceipt] = []
-        for kind in IntentKind:
+        automatic = [IntentKind.AUTO_NEXT, IntentKind.RETRY]
+        for kind in automatic + [k for k in IntentKind if k not in automatic]:
             rec = arb.submit(kind)
             assert isinstance(rec, IntentReceipt)
             assert rec.accepted is True
@@ -148,15 +151,16 @@ async def test_latest_pending_only_last_survives():
         assert arb.active_sequence == 1
 
         arb.submit(IntentKind.PREVIOUS, {"track": "B"})
-        arb.submit(IntentKind.AUTO_NEXT, {"track": "C"})
+        refused = arb.submit(IntentKind.AUTO_NEXT, {"track": "C"})
         arb.submit(IntentKind.NEXT, {"track": "D"})
 
-        assert arb.pending_sequence == 4  # only D survives
+        assert refused.accepted is False  # a user intent (B) was waiting
+        assert arb.pending_sequence == 3  # only D survives
 
         block_a.set()
         await asyncio.wait_for(d_started.wait(), timeout=2.0)
 
-        assert arb.active_sequence == 4
+        assert arb.active_sequence == 3
         assert received_d_payload == {"track": "D"}
     finally:
         block_a.set()
@@ -804,8 +808,8 @@ async def test_regular_no_barrier_normal_latest_pending():
 
         arb.submit(IntentKind.NEXT)
         arb.submit(IntentKind.PREVIOUS)
-        arb.submit(IntentKind.RETRY)
-        # No barrier → normal latest-pending, RETRY survives
+        arb.submit(IntentKind.PLAY)
+        # No barrier → normal latest-pending, the last PLAY survives
         assert arb.pending_sequence == 4
         assert arb.after_barrier_sequence is None
 
@@ -884,3 +888,92 @@ async def test_after_barrier_sequence_property_readonly():
         block_play.set()
         await arb.close()
 
+
+
+# ── ADR-0008: automatic intents never displace a waiting user intent ─────
+
+
+async def _blocked_arbiter():
+    started = asyncio.Event()
+    release = asyncio.Event()
+    executed: list[IntentKind] = []
+
+    async def _exec(intent: PlaybackIntent) -> None:
+        executed.append(intent.kind)
+        if len(executed) == 1:
+            started.set()
+            await asyncio.wait_for(release.wait(), timeout=2.0)
+
+    arb = DeviceCommandArbiter(_exec)
+    return arb, started, release, executed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto", [IntentKind.AUTO_NEXT, IntentKind.RETRY])
+@pytest.mark.parametrize("user", [IntentKind.NEXT, IntentKind.PREVIOUS, IntentKind.PLAY])
+async def test_automatic_intent_is_refused_while_user_intent_pending(auto, user):
+    arb, started, release, executed = await _blocked_arbiter()
+    try:
+        arb.submit(IntentKind.PLAY)
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+        waiting = arb.submit(user)
+        refused = arb.submit(auto)
+
+        assert refused.accepted is False
+        assert arb.pending_sequence == waiting.sequence
+        release.set()
+        await asyncio.sleep(0.05)
+        assert executed == [IntentKind.PLAY, user]
+    finally:
+        release.set()
+        await arb.close()
+
+
+@pytest.mark.asyncio
+async def test_automatic_intent_is_refused_while_user_intent_waits_behind_stop():
+    arb, started, release, executed = await _blocked_arbiter()
+    try:
+        arb.submit(IntentKind.STOP)
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+        after = arb.submit(IntentKind.PLAY)  # buffered behind the barrier
+        refused = arb.submit(IntentKind.AUTO_NEXT)
+
+        assert refused.accepted is False
+        assert arb.after_barrier_sequence == after.sequence
+    finally:
+        release.set()
+        await arb.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_is_accepted_while_the_user_intent_is_executing():
+    """The failure policy submits RETRY from inside a running PLAY."""
+    arb, started, release, executed = await _blocked_arbiter()
+    try:
+        arb.submit(IntentKind.PLAY)
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+        retry = arb.submit(IntentKind.RETRY)
+
+        assert retry.accepted is True
+        release.set()
+        await asyncio.sleep(0.05)
+        assert executed == [IntentKind.PLAY, IntentKind.RETRY]
+    finally:
+        release.set()
+        await arb.close()
+
+
+@pytest.mark.asyncio
+async def test_automatic_intent_replaces_an_automatic_one():
+    arb, started, release, executed = await _blocked_arbiter()
+    try:
+        arb.submit(IntentKind.PLAY)
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+        arb.submit(IntentKind.AUTO_NEXT)
+        latest = arb.submit(IntentKind.RETRY)
+
+        assert latest.accepted is True
+        assert arb.pending_sequence == latest.sequence
+    finally:
+        release.set()
+        await arb.close()

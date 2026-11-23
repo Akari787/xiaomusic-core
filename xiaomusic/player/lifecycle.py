@@ -407,6 +407,9 @@ class PlaybackLifecycleMixin:
         return generation == getattr(self, "_manual_nav_generation", 0)
 
     def _invalidate_manual_navigation(self, *, reason: str) -> None:
+        supersede = getattr(self, "_supersede_queue", None)
+        if supersede is not None:
+            supersede(reason=reason)
         self._ensure_manual_navigation_state()
         self._manual_nav_generation += 1
         self._manual_nav_target = None
