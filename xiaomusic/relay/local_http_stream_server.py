@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from urllib.parse import urlparse
 
 from xiaomusic.relay.session_manager import StreamSessionManager
@@ -77,11 +77,14 @@ class LocalHttpStreamServer:
                             time.sleep(0.02)
                     else:
                         while True:
-                            if outer._is_sid_closed(sid):
-                                break
+                            # Drain what is queued before honouring a close:
+                            # the end of the stream (up to 64 chunks, ~16 s
+                            # of audio) used to be dropped here.
                             try:
                                 data = queue.get(timeout=0.2)
                             except Empty:
+                                if outer._is_sid_closed(sid):
+                                    break
                                 continue
                             if data is None:
                                 break
@@ -122,6 +125,28 @@ class LocalHttpStreamServer:
             return True
         except Exception:
             return False
+
+    def push_bytes_wait(
+        self, sid: str, data: bytes, stop: threading.Event, step_seconds: float = 0.2
+    ) -> bool:
+        """Queue ``data``, waiting while the channel is full.
+
+        Returns False when the channel is closed or ``stop`` is set. Waiting
+        (instead of dropping) is the back pressure that keeps the relay
+        lossless: the source pump blocks, and ffmpeg in turn reads the
+        source more slowly.
+        """
+        while not stop.is_set():
+            with self._lock:
+                queue = self._channels.get(sid)
+                if queue is None or sid in self._closed_sids:
+                    return False
+            try:
+                queue.put(data, timeout=step_seconds)
+                return True
+            except Full:
+                continue
+        return False
 
     def close_stream_channel(self, sid: str) -> None:
         with self._lock:

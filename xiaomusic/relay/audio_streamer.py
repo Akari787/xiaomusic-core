@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import threading
 import time
@@ -11,6 +12,13 @@ from urllib.request import urlopen
 from xiaomusic.relay.local_http_stream_server import LocalHttpStreamServer
 from xiaomusic.relay.reconnect_policy import ReconnectPolicy
 from xiaomusic.relay.session_manager import StreamSessionManager
+
+LOG = logging.getLogger("xiaomusic.relay")
+
+# A push that waits longer than this means the speaker stopped reading for a
+# while; before 2026-11-23 that audio was dropped (heard as a jump ahead).
+BACKPRESSURE_REPORT_WAIT_SEC = 1.0
+BACKPRESSURE_LOG_INTERVAL_SEC = 60.0
 
 
 class AudioStreamer:
@@ -29,6 +37,7 @@ class AudioStreamer:
         self.source_read_timeout_seconds = source_read_timeout_seconds
         self.relay_mode = relay_mode
         self.on_stream_failed = on_stream_failed
+        self._backpressure: dict[str, dict] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._stop_flags: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
@@ -112,6 +121,14 @@ class AudioStreamer:
             raise
         finally:
             self.stream_server.close_stream_channel(sid)
+            stats = self._backpressure.pop(sid, None)
+            if stats:
+                LOG.info(
+                    "relay_backpressure_total sid=%s waits=%d waited_s=%.1f",
+                    sid,
+                    stats["waits"],
+                    stats["waited"],
+                )
             if failed and not stop_flag.is_set():
                 self.session_manager.update_state(sid, "failed", error_code="E_STREAM_START_FAILED")
                 if self.on_stream_failed is not None:
@@ -121,6 +138,29 @@ class AudioStreamer:
                         pass
             else:
                 self.session_manager.stop_session(sid)
+
+    def _push(self, sid: str, data: bytes, stop_flag: threading.Event) -> bool:
+        """Hand ``data`` to the stream channel without ever dropping it."""
+        started = time.monotonic()
+        ok = self.stream_server.push_bytes_wait(sid, data, stop_flag)
+        waited = time.monotonic() - started
+        if waited >= BACKPRESSURE_REPORT_WAIT_SEC:
+            stats = self._backpressure.setdefault(
+                sid, {"waits": 0, "waited": 0.0, "logged_at": 0.0}
+            )
+            stats["waits"] += 1
+            stats["waited"] += waited
+            now = time.monotonic()
+            if now - stats["logged_at"] >= BACKPRESSURE_LOG_INTERVAL_SEC:
+                LOG.info(
+                    "relay_backpressure sid=%s waits=%d waited_s=%.1f last_wait_s=%.1f",
+                    sid,
+                    stats["waits"],
+                    stats["waited"],
+                    waited,
+                )
+                stats["logged_at"] = now
+        return ok
 
     @staticmethod
     def _terminate_process(proc: subprocess.Popen) -> None:
@@ -149,8 +189,8 @@ class AudioStreamer:
                     data = resp.read(4096)
                     if not data:
                         return True
-                    if not self.stream_server.push_bytes(sid, data):
-                        time.sleep(0.01)
+                    if not self._push(sid, data, stop_flag):
+                        return False
             return False
         except Exception:
             return True
@@ -187,8 +227,8 @@ class AudioStreamer:
                 data = proc.stdout.read(4096)
                 if not data:
                     return True
-                if not self.stream_server.push_bytes(sid, data):
-                    time.sleep(0.01)
+                if not self._push(sid, data, stop_flag):
+                    return False
             return False
         except Exception:
             return True
