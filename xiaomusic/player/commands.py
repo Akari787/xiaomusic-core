@@ -423,9 +423,7 @@ class CommandArbiterMixin:
                 name,
                 reason="play_next" if direction == "next" else "play_prev",
             )
-            self._manual_nav_generation += 1
-            generation = self._manual_nav_generation
-            self._manual_nav_target = (generation, name)
+            generation = self.get_runtime_state().command_generation
             self.log.info(
                 "manual_nav_intent generation=%d direction=%s index=%d target=%s",
                 generation,

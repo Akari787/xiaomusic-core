@@ -115,8 +115,6 @@ class XiaoMusicDevice(
         # the background confirmation counter is diagnostic-only and never advances.
         self._playlist_session_shuffled = False  # set by explicit context.shuffle, consumed by navigation
         self._manual_nav_lock = asyncio.Lock()
-        self._manual_nav_generation = 0
-        self._manual_nav_target = None
         self._command_arbiter = None  # lazy per-device; created on first manual intent
 
         # T04-C2c: bounded internal context registry for external URL play

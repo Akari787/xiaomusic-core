@@ -398,23 +398,23 @@ class PlaybackLifecycleMixin:
     def _ensure_manual_navigation_state(self) -> None:
         if not hasattr(self, "_manual_nav_lock"):
             self._manual_nav_lock = asyncio.Lock()
-            self._manual_nav_generation = 0
-            self._manual_nav_target = None
 
     def _manual_navigation_is_current(self, generation: int | None) -> bool:
+        """A manual next/previous carries the command generation at which it
+        was accepted; any command accepted since then makes it stale
+        (ADR-0008 step 2: this replaces the separate navigation counter --
+        with automatic intents unable to displace a waiting user intent,
+        the only automatic intent accepted while a manual step runs is that
+        step's own failure retry)."""
         if generation is None:
             return True
-        return generation == getattr(self, "_manual_nav_generation", 0)
+        return generation == self.get_runtime_state().command_generation
 
     def _invalidate_manual_navigation(self, *, reason: str) -> None:
+        """A user command was accepted: the window on the speaker is no
+        longer authoritative. (Running manual steps become stale through
+        the command generation bump that comes with every acceptance.)"""
         supersede = getattr(self, "_supersede_queue", None)
         if supersede is not None:
             supersede(reason=reason)
-        self._ensure_manual_navigation_state()
-        self._manual_nav_generation += 1
-        self._manual_nav_target = None
-        self.log.info(
-            "manual_nav_invalidated generation=%d reason=%s",
-            self._manual_nav_generation,
-            reason,
-        )
+        self.log.info("user_command_accepted reason=%s", reason)
