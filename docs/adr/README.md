@@ -24,6 +24,7 @@ ADR 是决策历史。只有 **Accepted 且未被撤回或取代** 的记录可�
 | [0005 统一事件模型](0005-event-model.md) | Withdrawn | 未实施设计的历史记录，不约束当前代码 |
 | [0006 WebUI 播放请求与在线搜索引用边界](0006-webui-playback-contract.md) | Accepted | typed request 与 opaque play reference |
 | [0007 音箱持有播放队列，服务端跟随](0007-speaker-owned-queue.md) | Proposed | 队列下发、稳定流地址、按拉流请求跟随当前曲目（分步实施中） |
+| [0008 每台设备一个播放版本号](0008-playback-version.md) | Proposed | 把 sid / q / c / a / 切歌代际收敛为一个 version；受理与执行分开，修复自动切歌顶掉手动切歌的竞态 |
 
 ## 编写要求
 
